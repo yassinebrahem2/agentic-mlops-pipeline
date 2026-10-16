@@ -8,6 +8,16 @@ These rules apply to every session, whoever runs it and whatever agent they use.
 
 Design phase: no code yet, so no build, lint or test commands exist. Add them here once the backend and frontend are scaffolded.
 
+## Frontend commands
+
+Run from `frontend/`:
+- Install: `npm ci`
+- Dev server with hot reload (proxies `/api` to the backend on port 8765): `npm run dev`
+- Tests: `npm test` (one file: `npx vitest run src/path/File.test.tsx`)
+- Lint and format: `npm run lint`, `npm run format:check`
+- Build into the backend package: `npm run build`
+- Regenerate API types after the backend API changes: `npm run gen:api`
+
 ## Team workflow
 
 Roles:

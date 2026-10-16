@@ -1,0 +1,4 @@
+dist
+src/api/schema.d.ts
+src/components/ui
+openapi.json
