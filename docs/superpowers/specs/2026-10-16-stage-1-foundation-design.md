@@ -53,7 +53,16 @@ docs/
 
 Runtime: one process. `mlops-agents start` runs uvicorn with the FastAPI app, which serves the API and the built UI on one port and opens the browser (local mode only). Agent turns run as asyncio tasks in the same process. Live agent output reaches the browser over server-sent events. In development, Vite serves the UI with hot reload and proxies `/api` to the backend.
 
-Run modes (see roadmap): `local` (default) and `server` (`--server`). Server mode hides local folders, uses the encrypted key file, and does not open a browser.
+Run modes (see roadmap): `local` (default) and `server` (`--server`). Server mode hides local folders, uses the encrypted key file, and does not open a browser. Mode rules are enforced by the API, not only by the UI: in server mode the folder-browser and add-local endpoints refuse requests.
+
+Packaging: the UI is part of the Python package. Release wheels are built in CI with the frontend built into `mlops_agents/web/`, and users install from a wheel (`uv tool install <wheel or index>`), so users never need Node. Developers run `npm run build` (which outputs into `backend/src/mlops_agents/web/`) before running the backend without Vite. If the port is in use, `start` prints a clear error naming the port and the `--port` option.
+
+### Access and security
+
+Single user does not mean no login. The approach follows Jupyter:
+- Local mode binds to `127.0.0.1` only. At start the app generates a random access token and opens the browser at a URL carrying it; the UI exchanges it for an HttpOnly session cookie. Every API request without a valid session is refused.
+- The API checks the `Host` and `Origin` headers on every request (blocks other websites calling localhost and DNS rebinding). State-changing requests also require the cookie's CSRF token.
+- Server mode requires a password set at startup (`MLOPS_AGENTS_PASSWORD`, stored only as a hash); the login page exchanges it for the same session cookie. HTTPS is provided by a reverse proxy in front of the app; the docs say so.
 
 ## 2. Storage and workspace
 
@@ -67,24 +76,25 @@ Run modes (see roadmap): `local` (default) and `server` (`--server`). Server mod
 - `settings`: key/value app settings.
 
 `project.db`:
-- `sessions`: id, agent name, created_at, compacted_through (message id).
+- `sessions`: id, agent name, created_at, summary (compacted context, nullable), compacted_through (message id up to which `summary` covers).
 - `messages`: id, session_id, turn_id, author_kind (`user` | `agent` | `system`), author_name, from_agent (nullable, used from stage 2), parts (JSON: text, tool calls with inputs, tool results), status (`complete` | `streaming` | `interrupted` | `queued`), created_at.
 - `turns`: id, session_id, status (`queued` | `running` | `done` | `stopped` | `interrupted` | `failed`), started_at, ended_at, error.
 - `llm_calls`: id, turn_id, agent, model address, prompt_tokens, completion_tokens, latency_ms, created_at.
 - `project_settings`: key/value, including per-agent model overrides.
 - LangGraph checkpoint tables (created by the SQLite checkpointer).
 
-Source of truth: the `messages` table is what the UI shows (full history, authors, labels). LangGraph checkpoints are the agent's working state (compacted context). Both are written in the same turn. Checkpoints are pruned to the latest few per session.
+Source of truth: the `messages` table plus `sessions.summary`. At the start of every turn the runtime builds the model's context from the agent's definition, `sessions.summary`, and the messages after `compacted_through`. LangGraph checkpoints hold only the state of a turn in progress (stage 2 needs this to pause a turn for an approval and resume it); a turn's checkpoints are deleted when the turn ends. Because the context is rebuilt from messages, a message added by another agent in stage 2 is a plain insert.
 
 ### Access and migrations
 
-SQLAlchemy Core in async mode over aiosqlite. Every connection, including the checkpointer's, gets WAL, `busy_timeout` and foreign keys on. Migrations are numbered SQL files per database kind, applied when a database is opened, after an automatic backup of that file. Moving to Postgres later means changing the SQLAlchemy URL and switching to LangGraph's Postgres checkpointer.
+SQLAlchemy Core in async mode over aiosqlite. Every connection, including the checkpointer's, gets WAL, `busy_timeout` and foreign keys on. Migrations are numbered SQL files per database kind, applied when a database is opened. When migrations are pending, the file is backed up first. `backups/` keeps the most recent backups per database (default 10). Moving to Postgres later means changing the SQLAlchemy URL and switching to LangGraph's Postgres checkpointer.
 
 ### Workspace operations
 
 - Add local (local mode only): a backend folder browser lists directories on the machine running the app; a typed path also works. The folder must be a git repo; if it is not, the app offers `git init`. The project points at the folder in place; nothing is copied.
 - Add from GitHub: paste a URL or pick from the user's repositories. The app clones into `projects/<id>/repo/` with the default branch checked out.
-- Duplicate check: the same local path (canonicalized, case-insensitive on Windows) or the same GitHub owner/repo cannot be added twice.
+- Duplicate check: the same local path (canonicalized, case-insensitive on Windows) or the same GitHub owner/repo (case-insensitive) cannot be added twice.
+- Empty repo: a repo with no tracked files (for example right after `git init`) is added, but the project shows "commit your files first" and the Orchestrator says the same instead of answering from nothing.
 - Open: updates last_opened_at; for GitHub projects, fetches and fast-forwards the managed clone. The managed clone is never edited by the app.
 - Refresh: same fetch and fast-forward on demand.
 - Missing: a local project whose folder no longer exists, or is no longer a git repo, gets status `missing`; the user relinks it to a new path.
@@ -105,7 +115,7 @@ Keys: one keystore interface (save, read, delete) with two implementations. Loca
 
 Models: address `<provider>:<wire-model-id>`; fields: traits, context window (from the provider if it reports one, otherwise entered by the user), availability (`untested` | `verified` | `needs_attention`), detail. Adding a provider lists its models via `/models`, or the user types a model ID.
 
-Verification happens when a key or model is added: a small real request including a test tool call. Traits `tool_calling` and `streaming` are set from what the request proves, never declared. An invalid key or unreachable URL is reported then, with the reason. An agent refuses any model without verified `tool_calling`.
+Verification happens when a key or model is added: a small real request that makes a test tool call while streaming, the way the runtime calls models (provider quirks in streamed tool calls show up here). Traits `tool_calling` and `streaming` are set from what the request proves, never declared. An invalid key or unreachable URL is reported then, with the reason. An agent refuses any model without verified `tool_calling`, and a model cannot be assigned to an agent until its context window is known.
 
 Assignment: a default model per agent at app level; an optional per-agent override in a project's settings. An override pointing at a model that no longer exists shows a clear message asking the user to choose another.
 
@@ -117,7 +127,7 @@ Failure during work: rate limits are retried and rotated across the provider's k
 
 - Auth mode `gh`: if the GitHub CLI is installed and logged in, the user enables it with one click. The token is read from `gh auth token` each time it is needed, never copied, so a new `gh` login is picked up automatically.
 - Auth mode `token`: the user pastes a fine-grained personal access token; it is verified against the GitHub API and stored in the keystore.
-- Git commands receive the token per command (through `GIT_ASKPASS`), never in a remote URL, so it is never written to `.git/config`. Error text from git is scrubbed before it is shown or stored.
+- Git commands receive the token per command through `GIT_ASKPASS`, never in a remote URL, so it is never written to `.git/config`. On Windows `GIT_ASKPASS` points to a `.cmd` wrapper. Every git call disables other credential helpers and prompts (`-c credential.helper=`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`) so Git Credential Manager never opens a login window. Error text from git is scrubbed before it is shown or stored. A real GitHub clone is tested on Windows and Linux.
 - Stage 1 uses GitHub for: verifying the login, listing the user's repositories, cloning and fetching. PRs and issues come in stage 2.
 
 ## 5. Agent runtime
@@ -133,6 +143,9 @@ The loop is our own small LangGraph graph (model step, tool step, repeat until t
 - General tools follow Claude Code's names and argument shapes. Stage 1 ships Read, Glob and Grep.
 - Every tool registers its risk class (roadmap). Stage 1 tools are all `read`.
 - Repo file filter, applied inside every stage 1 tool: only git-tracked files; a denylist for secrets (`.env*`, `*.pem`, `*.key`, `id_rsa*`, credential files); paths are resolved and must stay inside the repo (no `..` or symlink escapes). From stage 2 the same filter defines what the sandbox mounts.
+- Tracked files come from `git ls-files`, cached per turn.
+- Arguments: Read (`file_path`, `offset`, `limit`), Glob (`pattern`, `path`), Grep (`pattern`, `path`, `glob`, `type`, `output_mode` content | files_with_matches | count, `-i`, `-n`, context lines `-A`/`-B`/`-C`, `head_limit`). Read handles text only: binary files are reported as binary, and undecodable bytes are replaced rather than failing.
+- Grep runs on a bundled ripgrep binary, with a pure-Python fallback when it is unavailable.
 - Output caps: a capped result says it was cut and how to narrow the request. Everything a tool returns, errors included, goes back into the agent's context.
 
 ### Orchestrator definition (stage 1)
@@ -149,9 +162,9 @@ Tools: Read, Glob, Grep. Chat on. Role: the project-level assistant that knows t
 
 Limits: a maximum number of steps per turn (default 25), configurable per agent and per project, including off.
 
-Compaction: when the conversation nears the model's context window, older turns are summarized into the agent's working state. The UI keeps the full history.
+Compaction: context size is measured from the token usage the provider reports for the previous call plus a character-based estimate for newer messages (some providers report no usage while streaming; then the estimate covers everything). When it nears the model's context window, older messages are summarized into `sessions.summary` and `compacted_through` moves forward. The UI keeps the full history.
 
-Recovery: the browser reconnects to the SSE stream and catches up from the last event it saw. On startup, any turn left `running` by a stopped process is marked `interrupted`.
+Recovery: each running turn keeps an in-memory buffer of numbered stream events. A browser that reconnects sends `Last-Event-ID` and receives the events it missed. After a turn ends the client reloads that turn's messages from the API. On startup, any turn left `running` by a stopped process is marked `interrupted`.
 
 ## 6. UI
 
