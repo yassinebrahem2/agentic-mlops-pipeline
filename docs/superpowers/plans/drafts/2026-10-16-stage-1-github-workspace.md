@@ -34,6 +34,8 @@
   - `api.py`: `RepoSummary(full_name, private, default_branch, description)`, `async get_login(http, token) -> str`, `async list_repos(http, token, *, limit=300) -> list[RepoSummary]`, `async get_repo(http, token, full_name) -> RepoSummary`.
   - `auth.py`: `GitHubStatus(mode: Literal["none", "gh", "token"], login: str | None, gh_available: bool)`, `class GhLike(Protocol)` (`available` property, `async token() -> str`), `GhCli(path: str | None = None)`, `GitHubAuth(databases, keystore, http, gh: GhLike)` with `async status()`, `async enable_gh()`, `async set_token(value)`, `async disconnect()`, `async token() -> str | None`, `async require_token() -> str`.
   - The `http` client (`httpx.AsyncClient`) for GitHub API calls is app-owned: created in the app's lifespan startup and closed at shutdown (api plan).
+  - `GitHubAuth.token()` raises `DomainError` for every failure, including a key store that cannot be read (`github_token_unreadable`; `KeyStoreError` messages never contain a key).
+  - GitHub answers are parsed with pydantic; an answer the app cannot read is `github_error`, never a crash.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -75,6 +77,8 @@ def _client() -> httpx.AsyncClient:
                     "description": "d",
                 },
             )
+        if request.url.path == "/repos/octo/broken":
+            return httpx.Response(200, json={"name": "no full_name"})
         return httpx.Response(404, json={"message": "Not Found"})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -102,6 +106,12 @@ async def test_get_repo_and_missing_repo() -> None:
     with pytest.raises(DomainError) as err:
         await get_repo(_client(), "good", "octo/nope")
     assert err.value.code == "github_repo_not_found"
+
+
+async def test_unreadable_answer() -> None:
+    with pytest.raises(DomainError) as err:
+        await get_repo(_client(), "good", "octo/broken")
+    assert err.value.code == "github_error"
 ```
 
 `backend/tests/integrations/test_github_auth.py`:
@@ -197,7 +207,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
@@ -232,12 +242,16 @@ async def _get(
     return response
 
 
-def _repo(item: dict[str, Any]) -> RepoSummary:
-    return RepoSummary(
-        full_name=str(item["full_name"]),
-        private=bool(item.get("private")),
-        default_branch=str(item.get("default_branch") or "main"),
-        description=item.get("description") if isinstance(item.get("description"), str) else None,
+class _User(BaseModel):
+    login: str
+
+
+_REPO_LIST = TypeAdapter(list[RepoSummary])
+
+
+def _unreadable() -> DomainError:
+    return DomainError(
+        "github_error", "GitHub answered with data this app cannot read. Try again.", status=502
     )
 
 
@@ -247,7 +261,10 @@ async def get_login(http: httpx.AsyncClient, token: str) -> str:
         raise DomainError(
             "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
         )
-    return str(response.json()["login"])
+    try:
+        return _User.model_validate(response.json()).login
+    except ValidationError:
+        raise _unreadable() from None
 
 
 async def list_repos(http: httpx.AsyncClient, token: str, *, limit: int = 300) -> list[RepoSummary]:
@@ -261,9 +278,12 @@ async def list_repos(http: httpx.AsyncClient, token: str, *, limit: int = 300) -
             raise DomainError(
                 "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
             )
-        items: list[dict[str, Any]] = response.json()
-        repos.extend(_repo(item) for item in items)
-        if len(items) < 100:
+        try:
+            page_repos = _REPO_LIST.validate_python(response.json())
+        except ValidationError:
+            raise _unreadable() from None
+        repos.extend(page_repos)
+        if len(page_repos) < 100:
             break
         page += 1
     return repos[:limit]
@@ -281,7 +301,10 @@ async def get_repo(http: httpx.AsyncClient, token: str, full_name: str) -> RepoS
         raise DomainError(
             "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
         )
-    return _repo(response.json())
+    try:
+        return RepoSummary.model_validate(response.json())
+    except ValidationError:
+        raise _unreadable() from None
 ```
 
 `backend/src/mlops_agents/integrations/github/auth.py`:
@@ -300,7 +323,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.clock import now_iso
-from mlops_agents.credentials import KeyStore
+from mlops_agents.credentials import KeyStore, KeyStoreError
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import get_login
 from mlops_agents.storage.databases import Databases
@@ -427,7 +450,14 @@ class GitHubAuth:
         if mode == "gh":
             return await self._gh.token()
         if mode == "token":
-            return await asyncio.to_thread(self._keys.get, GITHUB_KEYSTORE_REF)
+            try:
+                return await asyncio.to_thread(self._keys.get, GITHUB_KEYSTORE_REF)
+            except KeyStoreError as err:  # its messages never contain a key
+                raise DomainError(
+                    "github_token_unreadable",
+                    f"The saved GitHub token could not be read: {err}",
+                    status=503,
+                ) from None
         return None
 
     async def require_token(self) -> str:
@@ -496,6 +526,8 @@ git commit -m "feat(github): add GitHub API client and auth"
   - `models.py`: `ProjectSource = Literal["local", "github"]`, `ProjectStatus = Literal["ok", "missing", "empty", "clone_failed"]`, `Project(id, name, source, local_path, github_full_name, default_branch, status, status_detail, created_at, last_opened_at)`, `FolderEntry(name, path, is_git_repo)`, `FolderListing(path, parent, entries, roots)`.
   - `refs.py`: `path_key(path: Path) -> str`, `parse_github_ref(text: str) -> str`.
   - `WorkspaceService(settings, paths, databases, git: GitRunner, github: GitHubAuth, http: httpx.AsyncClient, *, remote_url: Callable[[str], str] = github_https_url)` with async `list_projects() -> list[Project]`, `get(project_id) -> Project`, `add_local(path_text, *, init_git=False) -> Project`, `add_github(ref_text) -> Project`, `open(project_id) -> Project`, `refresh(project_id) -> Project`, `relink(project_id, path_text) -> Project`, `remove(project_id) -> None`, `browse(path_text: str | None) -> FolderListing`, and sync `repo_root(project) -> Path`.
+  - The app builds the service's runner as `GitRunner(paths.bin, github.token)` (api plan). With the default `no_token`, cloning a private repository fails with no hint of the cause.
+  - When a fetch or clone fails, the service asks GitHub whether the token still works (`get_login`), because git's own message is localized and names no fix: a rejected token shows "GitHub rejected the token. Log in again with `gh auth login` or paste a new token in Integrations."
   - A refresh or clone that cannot get a GitHub token (gh logged out, token expired or revoked, GitHub disconnected) never raises: the project keeps its last downloaded copy, and `status_detail` says "Refresh failed: <reason>. The last downloaded copy is still used." (or "Cloning failed: <reason>. Use Refresh to try again.").
   - All filesystem checks (`is_dir`, `exists`, `resolve`, `expanduser`, `mkdir`, the Windows drive list) run in `asyncio.to_thread`.
   - Messages shown to users: `EMPTY_REPO_DETAIL = "The repository has no committed files yet. Commit your files first."` (the agent-runtime plan reuses it).
@@ -726,12 +758,14 @@ async def test_windows_path_spellings_are_the_same_project(
 ```python
 import asyncio
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 import pytest
 
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.credentials import KeyStoreError
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
@@ -740,6 +774,28 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.integrations.test_github_auth import FakeGh
+
+
+class BreakableKeyStore(MemoryKeyStore):
+    """A key store whose reads can be made to fail, like a locked or missing OS keyring."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.broken = False
+
+    def get(self, ref: str) -> str | None:
+        if self.broken:
+            raise KeyStoreError("The OS keyring is locked. Unlock it and try again.")
+        return super().get(ref)
+
+
+@dataclass
+class Harness:
+    svc: WorkspaceService
+    github: GitHubAuth
+    gh: FakeGh
+    keystore: BreakableKeyStore
+    revoked: set[str] = field(default_factory=set[str])
 
 
 def _bare_remote(tmp_path: Path, env: dict[str, str]) -> tuple[Path, Path]:
@@ -764,10 +820,12 @@ def _force_push_rewrite(work: Path, env: dict[str, str]) -> None:
         subprocess.run(["git", *args], cwd=work, env=env, check=True, capture_output=True)
 
 
-async def _service(
-    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, bare: Path
-) -> tuple[WorkspaceService, FakeGh]:
+async def _harness(paths: DataPaths, databases: Databases, bare: Path) -> Harness:
+    revoked: set[str] = set()
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization", "").removeprefix("Bearer ") in revoked:
+            return httpx.Response(401, json={"message": "Bad credentials"})
         if request.url.path == "/user":
             return httpx.Response(200, json={"login": "octo"})
         if request.url.path.lower() == "/repos/octo/demo":
@@ -776,6 +834,7 @@ async def _service(
         return httpx.Response(404, json={})
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    keystore = BreakableKeyStore()
     gh = FakeGh("gho_test")
     github = GitHubAuth(databases, keystore, http, gh)
     await github.enable_gh()
@@ -789,18 +848,14 @@ async def _service(
         http,
         remote_url=lambda _: bare.as_uri(),
     )
-    return service, gh
+    return Harness(service, github, gh, keystore, revoked)
 
 
 async def test_add_github_clones_into_app_data(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    git_env: dict[str, str],
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
 ) -> None:
     _, bare = _bare_remote(tmp_path, git_env)
-    svc, _ = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("https://github.com/octo/demo")
     assert (project.name, project.github_full_name, project.status) == ("Demo", "Octo/Demo", "ok")
     assert (svc.repo_root(project) / "README.md").read_text() == "first"
@@ -810,14 +865,10 @@ async def test_add_github_clones_into_app_data(
 
 
 async def test_refresh_survives_force_push(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    git_env: dict[str, str],
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
 ) -> None:
     work, bare = _bare_remote(tmp_path, git_env)
-    svc, _ = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("octo/demo")
     await asyncio.to_thread(_force_push_rewrite, work, git_env)
     refreshed = await svc.refresh(project.id)
@@ -826,14 +877,10 @@ async def test_refresh_survives_force_push(
 
 
 async def test_failed_refresh_keeps_the_last_copy(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    git_env: dict[str, str],
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
 ) -> None:
     _, bare = _bare_remote(tmp_path, git_env)
-    svc, _ = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("octo/demo")
     bare.rename(tmp_path / "gone.git")  # the remote is gone, like a deleted repo
     refreshed = await svc.refresh(project.id)
@@ -843,22 +890,50 @@ async def test_failed_refresh_keeps_the_last_copy(
     assert (svc.repo_root(project) / "README.md").read_text() == "first"
 
 
-async def test_gh_logout_after_add_keeps_the_last_copy(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    git_env: dict[str, str],
+async def test_revoked_pasted_token_says_what_to_do(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
 ) -> None:
     _, bare = _bare_remote(tmp_path, git_env)
-    svc, gh = await _service(paths, databases, keystore, bare)
-    project = await svc.add_github("octo/demo")
-    gh.value = None  # the user logged out of gh, or its token expired or was revoked
-    opened = await svc.open(project.id)
+    h = await _harness(paths, databases, bare)
+    await h.github.set_token("ghp_pasted")
+    project = await h.svc.add_github("octo/demo")
+    h.revoked.add("ghp_pasted")  # revoked or expired on github.com
+    bare.rename(tmp_path / "gone.git")  # so git's fetch fails as it would with the revoked token
+    opened = await h.svc.open(project.id)
+    assert opened.status == "ok"
+    assert opened.status_detail is not None
+    assert opened.status_detail.startswith("Refresh failed: GitHub rejected the token.")
+    assert "paste a new token" in opened.status_detail
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
+
+
+async def test_gh_logout_after_add_keeps_the_last_copy(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
+    _, bare = _bare_remote(tmp_path, git_env)
+    h = await _harness(paths, databases, bare)
+    project = await h.svc.add_github("octo/demo")
+    h.gh.value = None  # the user logged out of gh
+    opened = await h.svc.open(project.id)
     assert opened.status == "ok"
     assert opened.status_detail is not None
     assert opened.status_detail.startswith("Refresh failed: not logged in.")
-    assert (svc.repo_root(project) / "README.md").read_text() == "first"
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
+
+
+async def test_unreadable_key_store_keeps_the_last_copy(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
+    _, bare = _bare_remote(tmp_path, git_env)
+    h = await _harness(paths, databases, bare)
+    await h.github.set_token("ghp_pasted")
+    project = await h.svc.add_github("octo/demo")
+    h.keystore.broken = True
+    opened = await h.svc.open(project.id)
+    assert opened.status == "ok"
+    assert opened.status_detail is not None
+    assert opened.status_detail.startswith("Refresh failed: The saved GitHub token could not")
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
 ```
 
 `tests/integrations/__init__.py` exists (backend-core plan, Task 5), so `FakeGh` is importable from `tests.integrations.test_github_auth`.
@@ -963,7 +1038,7 @@ from mlops_agents.clock import now_iso
 from mlops_agents.config import RunMode, Settings
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
-from mlops_agents.integrations.github.api import get_repo
+from mlops_agents.integrations.github.api import get_login, get_repo
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitError, GitRunner
 from mlops_agents.paths import DataPaths
@@ -1184,7 +1259,7 @@ class WorkspaceService:
             reason = err.message.rstrip(".")
             return "clone_failed", f"Cloning failed: {reason}. Use Refresh to try again."
         if result.code != 0:
-            reason = result.stderr.strip() or "no output"
+            reason = (await self._failure_reason(result.stderr)).rstrip(".")
             return "clone_failed", f"Cloning failed: {reason}. Use Refresh to try again."
         return await self._status(target)
 
@@ -1231,7 +1306,7 @@ class WorkspaceService:
             await self._refresh_failed(project.id, target, err.message)
             return
         if fetch.code != 0:
-            await self._refresh_failed(project.id, target, fetch.stderr.strip() or "no output")
+            await self._refresh_failed(project.id, target, await self._failure_reason(fetch.stderr))
             return
         try:
             await self._git.run(
@@ -1249,7 +1324,7 @@ class WorkspaceService:
             )
             await self._git.run(["reset", "--hard", f"origin/{branch}"], cwd=target)
             await self._git.run(["clean", "-ffdx"], cwd=target)
-        except GitError as err:
+        except (GitError, DomainError) as err:  # set-head reads the token again
             status, detail = await self._status(target)
             await self._update(
                 project.id, status=status, status_detail=detail or f"Refresh failed: {err}"
@@ -1257,6 +1332,18 @@ class WorkspaceService:
             return
         status, detail = await self._status(target)
         await self._update(project.id, default_branch=branch, status=status, status_detail=detail)
+
+    async def _failure_reason(self, stderr: str) -> str:
+        """Why a fetch or clone failed. git's own text is localized and names no fix, so a
+        rejected token is detected by asking GitHub, whose message says what to do."""
+        try:
+            token = await self._github.token()
+            if token is not None:
+                await get_login(self._http, token)
+        except DomainError as err:
+            if err.code in ("github_token_rejected", "gh_not_logged_in", "github_token_unreadable"):
+                return err.message
+        return stderr.strip() or "no output"
 
     async def _refresh_failed(self, project_id: str, target: Path, reason: str) -> None:
         status, _ = await self._status(target)
