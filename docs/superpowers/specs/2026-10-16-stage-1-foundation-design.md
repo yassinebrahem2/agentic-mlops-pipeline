@@ -55,14 +55,16 @@ Runtime: one process. `mlops-agents start` runs uvicorn with the FastAPI app, wh
 
 Run modes (see roadmap): `local` (default) and `server` (`--server`). Server mode hides local folders, uses the encrypted key file, and does not open a browser. Mode rules are enforced by the API, not only by the UI: in server mode the folder-browser and add-local endpoints refuse requests.
 
-Packaging: the UI is part of the Python package. Release wheels are built in CI with the frontend built into `mlops_agents/web/`, and users install from a wheel (`uv tool install <wheel or index>`), so users never need Node. Developers run `npm run build` (which outputs into `backend/src/mlops_agents/web/`) before running the backend without Vite. If the port is in use, `start` prints a clear error naming the port and the `--port` option.
+Packaging: the UI is part of the Python package. A build script (`scripts/build`) runs `npm run build` (output into `backend/src/mlops_agents/web/`) and then `uv build`, producing one platform-independent wheel with the UI inside. Users install that wheel (`uv tool install <wheel>`), so they never need Node. The same script later runs in CI. If the port is in use, `start` prints a clear error naming the port and the `--port` option.
 
 ### Access and security
 
 Single user does not mean no login. The approach follows Jupyter:
 - Local mode binds to `127.0.0.1` only. At start the app generates a random access token and opens the browser at a URL carrying it; the UI exchanges it for an HttpOnly session cookie. Every API request without a valid session is refused.
 - The API checks the `Host` and `Origin` headers on every request (blocks other websites calling localhost and DNS rebinding). State-changing requests also require the cookie's CSRF token.
-- Server mode requires a password set at startup (`MLOPS_AGENTS_PASSWORD`, stored only as a hash); the login page exchanges it for the same session cookie. HTTPS is provided by a reverse proxy in front of the app; the docs say so.
+- Server mode requires a password set at startup (`MLOPS_AGENTS_PASSWORD`). The app hashes it in memory, never writes it anywhere, and compares in constant time. The login page exchanges it for the same session cookie. Login attempts are rate-limited. HTTPS is provided by a reverse proxy in front of the app; settings `allowed_hosts` (the public domain) and `trusted_proxies` (whose forwarded headers are believed) make the Host/Origin checks work behind it.
+- The access URL is also printed in the terminal. A restart issues a new local access token (the browser tab gets a new link). Session cookies are signed with a secret stored in the data folder, so server-mode logins survive restarts.
+- In development the Vite dev origin is added to the allowed origins.
 
 ## 2. Storage and workspace
 
@@ -77,13 +79,15 @@ Single user does not mean no login. The approach follows Jupyter:
 
 `project.db`:
 - `sessions`: id, agent name, created_at, summary (compacted context, nullable), compacted_through (message id up to which `summary` covers).
-- `messages`: id, session_id, turn_id, author_kind (`user` | `agent` | `system`), author_name, from_agent (nullable, used from stage 2), parts (JSON: text, tool calls with inputs, tool results), status (`complete` | `streaming` | `interrupted` | `queued`), created_at.
-- `turns`: id, session_id, status (`queued` | `running` | `done` | `stopped` | `interrupted` | `failed`), started_at, ended_at, error.
+- `messages`: id, session_id, turn_id, author_kind (`user` | `agent` | `system`), author_name, from_agent (nullable, used from stage 2), parts (JSON list, see below), status (`complete` | `streaming` | `interrupted` | `queued`), created_at.
+- `turns`: id, session_id, status (`queued` | `running` | `waiting` | `done` | `stopped` | `interrupted` | `failed`), started_at, ended_at, error. `waiting` is a turn paused for something external (stage 2 approvals); it survives restarts.
+
+Message parts, stored in order: `{"type": "text", "text"}`, `{"type": "tool_call", "id", "name", "input"}`, `{"type": "tool_result", "tool_call_id", "content", "is_error"}`. Tool call IDs from the provider are preserved.
 - `llm_calls`: id, turn_id, agent, model address, prompt_tokens, completion_tokens, latency_ms, created_at.
 - `project_settings`: key/value, including per-agent model overrides.
 - LangGraph checkpoint tables (created by the SQLite checkpointer).
 
-Source of truth: the `messages` table plus `sessions.summary`. At the start of every turn the runtime builds the model's context from the agent's definition, `sessions.summary`, and the messages after `compacted_through`. LangGraph checkpoints hold only the state of a turn in progress (stage 2 needs this to pause a turn for an approval and resume it); a turn's checkpoints are deleted when the turn ends. Because the context is rebuilt from messages, a message added by another agent in stage 2 is a plain insert.
+Source of truth: the `messages` table plus `sessions.summary`. At the start of every turn the runtime builds the model's context from the agent's definition, `sessions.summary`, and the messages after `compacted_through`. LangGraph checkpoints hold only the state of a turn in progress (stage 2 needs this to pause a turn for an approval and resume it); a turn's checkpoints are deleted when the turn ends. Because the context is rebuilt from messages, a message added by another agent in stage 2 is a plain insert. When rebuilding, any tool call without a result (a stopped or interrupted turn) gets a synthetic tool result, "cancelled by the user" or "interrupted", so the history is always valid for OpenAI-compatible APIs.
 
 ### Access and migrations
 
@@ -95,8 +99,8 @@ SQLAlchemy Core in async mode over aiosqlite. Every connection, including the ch
 - Add from GitHub: paste a URL or pick from the user's repositories. The app clones into `projects/<id>/repo/` with the default branch checked out.
 - Duplicate check: the same local path (canonicalized, case-insensitive on Windows) or the same GitHub owner/repo (case-insensitive) cannot be added twice.
 - Empty repo: a repo with no tracked files (for example right after `git init`) is added, but the project shows "commit your files first" and the Orchestrator says the same instead of answering from nothing.
-- Open: updates last_opened_at; for GitHub projects, fetches and fast-forwards the managed clone. The managed clone is never edited by the app.
-- Refresh: same fetch and fast-forward on demand.
+- Open: updates last_opened_at; for GitHub projects, refreshes the managed clone. The managed clone is never edited by the app.
+- Refresh (on open and on demand): `git fetch` then `git reset --hard origin/<default branch>`, re-reading the remote's default branch first. This survives force-pushes and renamed default branches.
 - Missing: a local project whose folder no longer exists, or is no longer a git repo, gets status `missing`; the user relinks it to a new path.
 - Remove: deletes `projects/<id>/` and the row. The user's local repo is never touched.
 - Backup: `mlops-agents backup` writes `VACUUM INTO` copies of `app.db` and every `project.db` into `backups/<timestamp>/`.
@@ -111,11 +115,11 @@ Provider kinds, all over the OpenAI-compatible protocol:
 - `hosted`: a vendor API (Groq, Gemini, OpenRouter, ...). Base URL plus one or more keys.
 - `self_hosted`: a server the user runs (Ollama, vLLM, LM Studio). Base URL; key optional.
 
-Keys: one keystore interface (save, read, delete) with two implementations. Local mode uses the OS keyring. Server mode uses `keys.enc`: one JSON document encrypted with the `cryptography` library's Fernet recipe, its key derived from the `MLOPS_AGENTS_MASTER_KEY` environment variable. Writes go to a temporary file that replaces `keys.enc` atomically. In server mode a missing or wrong master key stops startup with a plain message. Rotating the master key is not supported in stage 1 (changing it means re-entering keys). Keys never enter a database, a URL or a log. "Detect keys" scans environment variables for known provider key names and offers to import them.
+Keys: one keystore interface (save, read, delete) with two implementations. Local mode uses the OS keyring. Server mode uses `keys.enc`: one JSON document encrypted with the `cryptography` library's Fernet recipe, its key derived with scrypt from the `MLOPS_AGENTS_MASTER_KEY` environment variable and a random salt stored in the file header. A wrong key fails decryption (`InvalidToken`) and produces the plain startup error. Writes go to a temporary file that replaces `keys.enc` atomically. In server mode a missing or wrong master key stops startup with a plain message. Rotating the master key is not supported in stage 1 (changing it means re-entering keys). Keys never enter a database, a URL or a log. "Detect keys" scans environment variables for known provider key names and offers to import them.
 
 Models: address `<provider>:<wire-model-id>`; fields: traits, context window (from the provider if it reports one, otherwise entered by the user), availability (`untested` | `verified` | `needs_attention`), detail. Adding a provider lists its models via `/models`, or the user types a model ID.
 
-Verification happens when a key or model is added: a small real request that makes a test tool call while streaming, the way the runtime calls models (provider quirks in streamed tool calls show up here). Traits `tool_calling` and `streaming` are set from what the request proves, never declared. An invalid key or unreachable URL is reported then, with the reason. An agent refuses any model without verified `tool_calling`, and a model cannot be assigned to an agent until its context window is known.
+Verification happens when a key or model is added: a small real request that makes a test tool call while streaming, the way the runtime calls models (provider quirks in streamed tool calls show up here). Traits `tool_calling` and `streaming` are set from what the request proves, never declared. An invalid key or unreachable URL is reported then, with the reason. An agent refuses any model without verified `tool_calling` and `streaming` (the runtime always streams), and a model cannot be assigned to an agent until its context window is known.
 
 Assignment: a default model per agent at app level; an optional per-agent override in a project's settings. An override pointing at a model that no longer exists shows a clear message asking the user to choose another.
 
@@ -145,7 +149,8 @@ The loop is our own small LangGraph graph (model step, tool step, repeat until t
 - Repo file filter, applied inside every stage 1 tool: only git-tracked files; a denylist for secrets (`.env*`, `*.pem`, `*.key`, `id_rsa*`, credential files); paths are resolved and must stay inside the repo (no `..` or symlink escapes). From stage 2 the same filter defines what the sandbox mounts.
 - Tracked files come from `git ls-files`, cached per turn.
 - Arguments: Read (`file_path`, `offset`, `limit`), Glob (`pattern`, `path`), Grep (`pattern`, `path`, `glob`, `type`, `output_mode` content | files_with_matches | count, `-i`, `-n`, context lines `-A`/`-B`/`-C`, `head_limit`). Read handles text only: binary files are reported as binary, and undecodable bytes are replaced rather than failing.
-- Grep runs on a bundled ripgrep binary, with a pure-Python fallback when it is unavailable.
+- Grep runs on `rg` from PATH when present, with a pure-Python fallback otherwise (no bundled binary, so the wheel stays platform-independent).
+- Known limitation: a secret written inside a tracked file whose name the denylist does not match can still reach a hosted LLM. The UI says so where a hosted model is assigned.
 - Output caps: a capped result says it was cut and how to narrow the request. Everything a tool returns, errors included, goes back into the agent's context.
 
 ### Orchestrator definition (stage 1)
@@ -162,9 +167,9 @@ Tools: Read, Glob, Grep. Chat on. Role: the project-level assistant that knows t
 
 Limits: a maximum number of steps per turn (default 25), configurable per agent and per project, including off.
 
-Compaction: context size is measured from the token usage the provider reports for the previous call plus a character-based estimate for newer messages (some providers report no usage while streaming; then the estimate covers everything). When it nears the model's context window, older messages are summarized into `sessions.summary` and `compacted_through` moves forward. The UI keeps the full history.
+Compaction: context size is measured from the token usage the provider reports for the previous call plus a character-based estimate for newer messages (some providers report no usage while streaming; then the estimate covers everything). When it nears the model's context window, older messages are summarized into `sessions.summary` and `compacted_through` moves forward, always to a turn boundary (never between a tool call and its result). The UI keeps the full history.
 
-Recovery: each running turn keeps an in-memory buffer of numbered stream events. A browser that reconnects sends `Last-Event-ID` and receives the events it missed. After a turn ends the client reloads that turn's messages from the API. On startup, any turn left `running` by a stopped process is marked `interrupted`.
+Recovery: each running turn keeps an in-memory buffer of numbered stream events. A browser that reconnects sends `Last-Event-ID` and receives the events it missed. After a turn ends the client reloads that turn's messages from the API. On startup, any turn left `running` by a stopped process is marked `interrupted`; `waiting` turns are left as they are.
 
 ## 6. UI
 
@@ -199,11 +204,12 @@ Test what needs testing, at the cheapest level that proves it. The risky parts:
 - Workspace operations on temporary git repos, including duplicates and missing folders.
 - Runtime with a scripted fake chat model: tool loop, queue, Stop, limits, compaction, restart recovery, and a second throwaway agent definition.
 - Verification against a fake OpenAI-compatible server (tool call works / fails / bad key).
-- One end-to-end check through the UI with the fake model (add project, ask the Orchestrator, see a streamed answer with a tool step). A live test against a real provider runs only on request.
+- Stop in the middle of a tool call, then send the next message: the session keeps working.
+- One end-to-end check through the UI with the fake model, registered as an ordinary self-hosted provider (a fake OpenAI-compatible server), so the app has no test-only code path (add project, ask the Orchestrator, see a streamed answer with a tool step). A live test against a real provider runs only on request.
 
 ## Done when
 
-- `uv tool install` of the package and `mlops-agents start` open a working app on Windows and Linux.
+- `scripts/build` produces a wheel; `uv tool install` of that wheel and `mlops-agents start` open a working app on Windows and Linux.
 - A user can add Groq/Gemini (or Ollama), verify models, add a local or GitHub project, and get correct, streamed answers about the repo from the Orchestrator, with tool steps visible.
 - Untracked and secret files are never readable by the agent.
 - Adding a second agent requires only a new definition file.
