@@ -134,6 +134,7 @@ def git_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
         "GIT_COMMITTER_NAME": "Test",
         "GIT_COMMITTER_EMAIL": "test@example.com",
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -387,12 +388,12 @@ class Settings:
     data_dir: Path
     host: str
     port: int
-    password: str | None
-    master_key: str | None
-    access_token: str | None
-    allowed_hosts: tuple[str, ...]
-    dev_origins: tuple[str, ...]
-    trusted_proxies: tuple[str, ...]
+    password: str | None = field(default=None, repr=False)
+    master_key: str | None = field(default=None, repr=False)
+    access_token: str | None = field(default=None, repr=False)
+    allowed_hosts: tuple[str, ...] = ()
+    dev_origins: tuple[str, ...] = ()
+    trusted_proxies: tuple[str, ...] = ()
 
 
 def _get(env: Mapping[str, str], name: str) -> str | None:
@@ -414,6 +415,8 @@ def default_data_dir() -> Path:
 def load_settings(
     mode: RunMode, port: int = DEFAULT_PORT, env: Mapping[str, str] | None = None
 ) -> Settings:
+    if not (1 <= port <= 65535):
+        raise ConfigError(f"Port must be between 1 and 65535, got {port}.")
     source = os.environ if env is None else env
     home = _get(source, "HOME")
     data_dir = Path(home) if home else default_data_dir()
@@ -428,7 +431,7 @@ def load_settings(
             for name, value in (
                 ("MLOPS_AGENTS_PASSWORD", password),
                 ("MLOPS_AGENTS_MASTER_KEY", master_key),
-                ("MLOPS_AGENTS_ALLOWED_HOSTS", ",".join(allowed_hosts)),
+                ("MLOPS_AGENTS_ALLOWED_HOSTS", allowed_hosts),
             )
             if not value
         ]
@@ -724,6 +727,7 @@ CREATE TABLE project_settings (
 `backend/tests/storage/test_migrate.py`:
 
 ```python
+import re
 import sqlite3
 from pathlib import Path
 
@@ -738,8 +742,11 @@ def _write(folder: Path, name: str, sql: str) -> None:
 
 
 def _tables(db: Path) -> set[str]:
-    with sqlite3.connect(db) as conn:
+    conn = sqlite3.connect(db)
+    try:
         return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        conn.close()
 
 
 def test_fresh_database_gets_every_migration(tmp_path: Path) -> None:
@@ -768,7 +775,7 @@ def test_failed_migration_leaves_database_unchanged(tmp_path: Path) -> None:
     src = tmp_path / "m"
     _write(src, "0001_init.sql", "CREATE TABLE a (x INTEGER); CREATE TABLE a (x INTEGER);")
     db = tmp_path / "x.db"
-    with pytest.raises(MigrationError, match="0001_init.sql"):
+    with pytest.raises(MigrationError, match=re.escape("0001_init.sql")):
         migrate(db, "app", tmp_path / "bk", source=src)
     assert "a" not in _tables(db)
 
@@ -785,8 +792,11 @@ def test_newer_database_is_refused(tmp_path: Path) -> None:
     _write(src, "0001_init.sql", "CREATE TABLE a (x INTEGER);")
     db = tmp_path / "x.db"
     migrate(db, "app", tmp_path / "bk", source=src)
-    with sqlite3.connect(db) as conn:
+    conn = sqlite3.connect(db)
+    try:
         conn.execute("INSERT INTO schema_version VALUES (5, 'later')")
+    finally:
+        conn.close()
     with pytest.raises(MigrationError, match="newer version"):
         migrate(db, "app", tmp_path / "bk", source=src)
 
@@ -1390,6 +1400,7 @@ def test_silently_dropped_write_is_an_error() -> None:
 `backend/tests/credentials/test_file_store.py`:
 
 ```python
+import re
 from pathlib import Path
 
 import pytest
@@ -1412,7 +1423,7 @@ def test_round_trip_across_instances(tmp_path: Path) -> None:
 def test_wrong_master_key_is_a_clear_error(tmp_path: Path) -> None:
     path = tmp_path / "keys.enc"
     EncryptedFileStore(path, "master").set("a", "b")
-    with pytest.raises(KeyStoreError, match="does not unlock keys.enc"):
+    with pytest.raises(KeyStoreError, match=re.escape("does not unlock keys.enc")):
         EncryptedFileStore(path, "other").check()
 
 
@@ -1570,11 +1581,11 @@ SERVICE = APP_NAME
 
 
 class KeyringBackendLike(Protocol):
-    def get_password(self, service: str, username: str) -> str | None: ...
+    def get_password(self, service: str, username: str, /) -> str | None: ...
 
-    def set_password(self, service: str, username: str, password: str) -> None: ...
+    def set_password(self, service: str, username: str, password: str, /) -> None: ...
 
-    def delete_password(self, service: str, username: str) -> None: ...
+    def delete_password(self, service: str, username: str, /) -> None: ...
 
 
 class KeyringStore:
@@ -1764,7 +1775,7 @@ _CREDENTIAL_PARAMS = frozenset(
         "x_amz_credential", "x_amz_security_token",
     }
 )  # fmt: skip
-_ZERO_WIDTH = dict.fromkeys((0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
+_ZERO_WIDTH: dict[int, None] = dict.fromkeys((0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
 _CREDENTIALS_IN_URL = (
     "base_url must not carry credentials (user:secret@host); add the key as a provider key"
 )
@@ -2121,7 +2132,7 @@ class GitRunner:
         cwd: Path | None = None,
         *,
         check: bool = True,
-        timeout: float = 600,
+        timeout: float = 600,  # noqa: ASYNC109 -- passed to subprocess.run in asyncio.to_thread
         authenticated: bool = False,
     ) -> GitResult:
         token = await self._token_provider() if authenticated else None
