@@ -1,9 +1,4 @@
-# Stage 1 — Agent Tools Implementation Plan (DRAFT)
-
-> **DRAFT: not ready to implement.** This plan sits in `drafts/` until both items below are done. Then it moves to `docs/superpowers/plans/` on its own `plan/stage-1-<topic>` branch and gets its issues.
-> 1. **Advisor review.** Round 1 found blockers, and they are fixed. Rounds must continue until one finds no blocking issues.
-> 2. **Check against the merged backend-core code.** backend-core changed while it was implemented (see PR #10, "done differently"). Every name in this plan's Consumes lines and test fixtures must match the code on `main`.
-
+# Stage 1 — Agent Tools Implementation Plan
 
 > **For agentic workers:** Implement this plan task by task, in order. Each task lists its exact files, the interfaces it consumes and produces, its tests (the task's stop condition) and the commands that prove it works. Claude Code users may use superpowers:executing-plans or superpowers:subagent-driven-development; nothing here requires them. Steps use checkbox (`- [ ]`) syntax. Team rules (claiming tasks, commits, PRs) are in `AGENTS.md`.
 
