@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -43,3 +44,34 @@ def test_missing_file_reads_as_empty(tmp_path: Path) -> None:
     store.check()
     assert store.get("anything") is None
     assert not (tmp_path / "keys.enc").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions only")
+def test_file_permissions_are_owner_only(tmp_path: Path) -> None:
+    import stat
+
+    path = tmp_path / "keys.enc"
+    store = EncryptedFileStore(path, "master")
+    store.set("a", "b")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode == 0o600
+
+
+def test_damaged_payload_with_non_string_value(tmp_path: Path) -> None:
+    import base64
+    import json
+    import os
+
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+    from mlops_agents.credentials.file_store import MAGIC
+
+    path = tmp_path / "keys.enc"
+    salt = os.urandom(16)
+    kdf = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1)
+    fernet = Fernet(base64.urlsafe_b64encode(kdf.derive(b"master")))
+    token = fernet.encrypt(json.dumps({"a": 123}).encode("utf-8"))
+    path.write_bytes(MAGIC + salt + token)
+    with pytest.raises(KeyStoreError, match=re.escape("keys.enc is damaged")):
+        EncryptedFileStore(path, "master").check()

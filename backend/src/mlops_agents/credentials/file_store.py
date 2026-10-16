@@ -5,6 +5,7 @@ import json
 import os
 import threading
 from pathlib import Path
+from typing import cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -58,7 +59,13 @@ class EncryptedFileStore:
         loaded: object = json.loads(payload)
         if not isinstance(loaded, dict):
             raise KeyStoreError(f"{self._path.name} is damaged.")
-        self._data = {str(k): str(v) for k, v in loaded.items()}  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
+        data: dict[str, str] = {}
+        for k, v in cast(dict[object, object], loaded).items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise KeyStoreError(f"{self._path.name} is damaged.")
+            data[k] = v
+
+        self._data = data
         self._salt = salt
         self._fernet = fernet
         return fernet
@@ -67,6 +74,7 @@ class EncryptedFileStore:
         token = fernet.encrypt(json.dumps(self._data).encode("utf-8"))
         tmp = self._path.with_name(self._path.name + ".tmp")
         tmp.write_bytes(MAGIC + self._salt + token)
+        tmp.chmod(0o600)
         tmp.replace(self._path)
 
     def check(self) -> None:

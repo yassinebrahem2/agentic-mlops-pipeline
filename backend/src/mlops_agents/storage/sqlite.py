@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from sqlalchemy import event
+from sqlalchemy import URL, event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 PRAGMAS: tuple[str, ...] = (
@@ -17,7 +17,8 @@ PRAGMAS: tuple[str, ...] = (
 
 
 def create_engine_for(path: Path) -> AsyncEngine:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{path.as_posix()}")
+    url = URL.create("sqlite+aiosqlite", database=str(path))
+    engine = create_async_engine(url)
 
     @event.listens_for(engine.sync_engine, "connect")
     def on_connect(dbapi_connection: Any, connection_record: Any) -> None:

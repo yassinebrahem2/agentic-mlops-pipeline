@@ -73,8 +73,9 @@ def migrate(
         pending = [m for m in migrations if m.version > current]
         if not pending:
             return []
+        backup_path: Path | None = None
         if current > 0:
-            backup_db(db_path, backup_dir)
+            backup_path = backup_db(db_path, backup_dir)
         for migration in pending:
             try:
                 # executescript leaves the transaction opened by BEGIN open on success.
@@ -87,7 +88,14 @@ def migrate(
             except sqlite3.Error as exc:
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
-                raise MigrationError(f"Migration {migration.name} failed: {exc}") from exc
+                if backup_path is not None:
+                    advice = (
+                        f"A backup was taken before migrating at {backup_path}; "
+                        "the database can be restored from it."
+                    )
+                else:
+                    advice = "Report the error with the database file kept as is."
+                raise MigrationError(f"Migration {migration.name} failed: {exc}. {advice}") from exc
         return [m.version for m in pending]
     finally:
         conn.close()

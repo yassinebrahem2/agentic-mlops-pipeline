@@ -51,6 +51,33 @@ def test_failed_migration_leaves_database_unchanged(tmp_path: Path) -> None:
     assert "a" not in _tables(db)
 
 
+def test_failed_migration_without_backup_tells_user_to_report(tmp_path: Path) -> None:
+    src = tmp_path / "m"
+    _write(src, "0001_init.sql", "INVALID SQL;")
+    db = tmp_path / "x.db"
+    with pytest.raises(MigrationError) as exc_info:
+        migrate(db, "app", tmp_path / "bk", source=src)
+    msg = str(exc_info.value)
+    assert "0001_init.sql failed" in msg
+    assert "Report the error with the database file kept as is." in msg
+
+
+def test_failed_migration_with_backup_names_backup_path(tmp_path: Path) -> None:
+    src = tmp_path / "m"
+    _write(src, "0001_init.sql", "CREATE TABLE a (x INTEGER);")
+    db = tmp_path / "x.db"
+    migrate(db, "app", tmp_path / "bk", source=src)
+    _write(src, "0002_bad.sql", "INVALID SQL;")
+    with pytest.raises(MigrationError) as exc_info:
+        migrate(db, "app", tmp_path / "bk", source=src)
+    msg = str(exc_info.value)
+    assert "0002_bad.sql failed" in msg
+    assert "restored from it" in msg
+    backups = list((tmp_path / "bk").glob("*.db"))
+    assert len(backups) == 1
+    assert str(backups[0]) in msg
+
+
 def test_gap_in_numbering_is_rejected(tmp_path: Path) -> None:
     src = tmp_path / "m"
     _write(src, "0002_late.sql", "CREATE TABLE a (x INTEGER);")

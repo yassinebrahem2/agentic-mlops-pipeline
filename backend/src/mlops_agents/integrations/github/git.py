@@ -18,6 +18,8 @@ _ASKPASS_POSIX = (
     '#!/bin/sh\ncase "$1" in\n  Username*) echo x-access-token ;;\n'
     '  *) printf "%s\\n" "$MLOPS_AGENTS_GIT_TOKEN" ;;\nesac\n'
 )
+# Passing the token through cmd's `echo` is safe only because GitHub tokens are
+# `[A-Za-z0-9_]`; other token types need a different script.
 _ASKPASS_WINDOWS = (
     '@echo off\r\necho %~1| findstr /b /c:"Username" >nul\r\n'
     "if %errorlevel%==0 (echo x-access-token) else (echo %MLOPS_AGENTS_GIT_TOKEN%)\r\n"

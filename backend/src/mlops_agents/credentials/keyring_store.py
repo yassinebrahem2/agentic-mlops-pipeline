@@ -9,6 +9,10 @@ from mlops_agents.config import APP_NAME
 from mlops_agents.credentials.keystore import KeyStoreError
 
 SERVICE = APP_NAME
+_HELP = (
+    "On Linux start a Secret Service (for example gnome-keyring), or run in server mode"
+    " with MLOPS_AGENTS_MASTER_KEY."
+)
 
 
 class KeyringBackendLike(Protocol):
@@ -32,7 +36,7 @@ class KeyringStore:
             return self._backend.get_password(SERVICE, ref)
         except KeyringError as exc:
             raise KeyStoreError(
-                f"The system keyring could not be read ({type(exc).__name__})."
+                f"The system keyring could not be read ({type(exc).__name__}). {_HELP}"
             ) from None
 
     def set(self, ref: str, value: str) -> None:
@@ -41,11 +45,11 @@ class KeyringStore:
             stored = self._backend.get_password(SERVICE, ref)
         except KeyringError as exc:
             raise KeyStoreError(
-                f"The system keyring refused to store the key ({type(exc).__name__})."
+                f"The system keyring refused to store the key ({type(exc).__name__}). {_HELP}"
             ) from None
         if stored != value:
             raise KeyStoreError(
-                "The system keyring did not keep the key. Check that a keyring service is running."
+                f"The system keyring did not keep the key. Check that a keyring service is running. {_HELP}"
             )
 
     def delete(self, ref: str) -> None:
@@ -55,5 +59,5 @@ class KeyringStore:
             return
         except KeyringError as exc:
             raise KeyStoreError(
-                f"The system keyring could not delete the key ({type(exc).__name__})."
+                f"The system keyring could not delete the key ({type(exc).__name__}). {_HELP}"
             ) from None
