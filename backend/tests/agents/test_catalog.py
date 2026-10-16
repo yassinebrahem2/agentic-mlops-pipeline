@@ -1,0 +1,82 @@
+from pathlib import Path
+
+import pytest
+
+from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
+from mlops_agents.errors import DomainError
+
+TOOLS = frozenset({"Read", "Glob", "Grep"})
+
+VALID = """---
+name: helper
+display_name: Helper
+description: Helps.
+tools: [Read]
+---
+You help.
+"""
+
+
+def test_parse_valid_definition() -> None:
+    d = parse_definition(VALID, "helper.md")
+    assert (d.name, d.display_name, d.tools, d.chat, d.limits.max_steps) == (
+        "helper",
+        "Helper",
+        ("Read",),
+        True,
+        25,
+    )
+    assert d.prompt == "You help."
+
+
+def test_windows_line_endings() -> None:
+    assert parse_definition(VALID.replace("\n", "\r\n"), "x.md").name == "helper"
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("name: x\n", "must start with"),
+        ("---\nname: x\n", "not closed"),
+        ("---\n: [\n---\nbody\n", "invalid YAML"),
+        ("---\nname: Bad Name\ndisplay_name: X\ndescription: d\n---\nbody\n", "name"),
+        ("---\nname: x\ndisplay_name: X\ndescription: d\nmodel: big\n---\nbody\n", "model"),
+        ("---\nname: x\ndisplay_name: X\ndescription: d\n---\n\n", "prompt"),
+    ],
+)
+def test_invalid_definitions(text: str, message: str) -> None:
+    with pytest.raises(DefinitionError, match=message):
+        parse_definition(text, "x.md")
+
+
+def test_catalog_rejects_unknown_tools_agents_and_hooks() -> None:
+    bad_tool = parse_definition(VALID.replace("[Read]", "[Bash]"), "a.md")
+    with pytest.raises(DefinitionError, match="unknown tools"):
+        AgentCatalog([bad_tool], TOOLS)
+    bad_peer = parse_definition(
+        VALID.replace("tools: [Read]", "tools: [Read]\ncan_message: [ghost]"), "b.md"
+    )
+    with pytest.raises(DefinitionError, match="unknown agents"):
+        AgentCatalog([bad_peer], TOOLS)
+    bad_hook = parse_definition(
+        VALID.replace("tools: [Read]", "tools: [Read]\ncontext_hooks: [profile]"), "c.md"
+    )
+    with pytest.raises(DefinitionError, match="unknown context hooks"):
+        AgentCatalog([bad_hook], TOOLS)
+
+
+def test_packaged_orchestrator() -> None:
+    catalog = AgentCatalog.load(TOOLS)
+    orchestrator = catalog.get("orchestrator")
+    assert orchestrator.tools == ("Read", "Glob", "Grep")
+    assert orchestrator.chat
+    assert catalog.all()[0].name == "orchestrator"
+    with pytest.raises(DomainError) as err:
+        catalog.get("nobody")
+    assert err.value.code == "agent_not_found"
+
+
+def test_adding_an_agent_is_adding_a_file(tmp_path: Path) -> None:
+    (tmp_path / "helper.md").write_text(VALID, encoding="utf-8")
+    catalog = AgentCatalog.load(TOOLS, [tmp_path])
+    assert [d.name for d in catalog.all()] == ["orchestrator", "helper"]
