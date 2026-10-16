@@ -36,11 +36,20 @@ if [ -z "$option_id" ]; then
 fi
 
 content_id=$(gh api "repos/$OWNER/$REPO/issues/$number" --jq '.node_id')
-# Adding returns the existing item when the issue is already on the board.
+# The board's auto-add workflow may already have added the issue; adding it again fails.
 item_id=$(gh api graphql -f query='
-  mutation($p: ID!, $c: ID!) {
-    addProjectV2ItemById(input: {projectId: $p, contentId: $c}) { item { id } }
-  }' -f p="$project_id" -f c="$content_id" --jq '.data.addProjectV2ItemById.item.id')
+  query($c: ID!) {
+    node(id: $c) {
+      ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
+      ... on PullRequest { projectItems(first: 20) { nodes { id project { id } } } }
+    }
+  }' -f c="$content_id" --jq ".data.node.projectItems.nodes[] | select(.project.id == \"$project_id\") | .id")
+if [ -z "$item_id" ]; then
+  item_id=$(gh api graphql -f query='
+    mutation($p: ID!, $c: ID!) {
+      addProjectV2ItemById(input: {projectId: $p, contentId: $c}) { item { id } }
+    }' -f p="$project_id" -f c="$content_id" --jq '.data.addProjectV2ItemById.item.id')
+fi
 
 gh api graphql -f query='
   mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
