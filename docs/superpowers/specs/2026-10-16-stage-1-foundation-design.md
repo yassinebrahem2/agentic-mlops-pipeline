@@ -101,7 +101,7 @@ Provider kinds, all over the OpenAI-compatible protocol:
 - `hosted`: a vendor API (Groq, Gemini, OpenRouter, ...). Base URL plus one or more keys.
 - `self_hosted`: a server the user runs (Ollama, vLLM, LM Studio). Base URL; key optional.
 
-Keys: OS keyring in local mode; `keys.enc` (encrypted with a master key from the `MLOPS_AGENTS_MASTER_KEY` environment variable) in server mode. Keys never enter a database, a URL or a log. "Detect keys" scans environment variables for known provider key names and offers to import them.
+Keys: one keystore interface (save, read, delete) with two implementations. Local mode uses the OS keyring. Server mode uses `keys.enc`: one JSON document encrypted with the `cryptography` library's Fernet recipe, its key derived from the `MLOPS_AGENTS_MASTER_KEY` environment variable. Writes go to a temporary file that replaces `keys.enc` atomically. In server mode a missing or wrong master key stops startup with a plain message. Rotating the master key is not supported in stage 1 (changing it means re-entering keys). Keys never enter a database, a URL or a log. "Detect keys" scans environment variables for known provider key names and offers to import them.
 
 Models: address `<provider>:<wire-model-id>`; fields: traits, context window (from the provider if it reports one, otherwise entered by the user), availability (`untested` | `verified` | `needs_attention`), detail. Adding a provider lists its models via `/models`, or the user types a model ID.
 
