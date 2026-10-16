@@ -111,6 +111,11 @@ Anything not listed here is unknown.
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
 - Fine-tuning: not planned; no decision recorded.
 
+### Notes for the stage 1 plan
+- Task 1: spike with the real Groq key: registry entry -> ChatOpenAI -> LangGraph streamed tool call (untested combination).
+- Tool file I/O and the `rg` subprocess run off the event loop (asyncio.to_thread / async subprocess).
+- Linux "done when" check runs in a Linux container or WSL.
+
 ## 4. Ideas (not adopted)
 - Automation agent: reads every agent's top commands and some chats of its choosing, and automates recurring work for the agent stack (scripts, triggers, hooks). Must propose changes through the policy and PR flow, never silently.
 - Resource/Cost Optimization agent and Security/Compliance agent (offered before the presentation).
