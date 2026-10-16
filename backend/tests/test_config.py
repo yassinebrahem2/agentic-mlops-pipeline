@@ -49,10 +49,16 @@ def test_server_settings(tmp_path: Path) -> None:
     assert s.trusted_proxies == ("10.0.0.1",)
 
 
-def test_default_data_dir_is_not_roaming(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_data_dir_is_not_roaming() -> None:
     s = load_settings(RunMode.LOCAL, env={})
     assert "mlops-agents" in str(s.data_dir)
     assert "Roaming" not in str(s.data_dir)
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536, 100000])
+def test_invalid_port_raises_config_error(port: int) -> None:
+    with pytest.raises(ConfigError, match="Port must be between 1 and 65535"):
+        load_settings(RunMode.LOCAL, port=port)
 
 
 def test_repr_hides_secrets(tmp_path: Path) -> None:

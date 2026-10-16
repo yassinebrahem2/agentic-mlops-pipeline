@@ -18,6 +18,7 @@ def git_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
         "GIT_COMMITTER_NAME": "Test",
         "GIT_COMMITTER_EMAIL": "test@example.com",
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)

@@ -55,6 +55,8 @@ def default_data_dir() -> Path:
 def load_settings(
     mode: RunMode, port: int = DEFAULT_PORT, env: Mapping[str, str] | None = None
 ) -> Settings:
+    if not (1 <= port <= 65535):
+        raise ConfigError(f"Port must be between 1 and 65535, got {port}.")
     source = os.environ if env is None else env
     home = _get(source, "HOME")
     data_dir = Path(home) if home else default_data_dir()
@@ -69,7 +71,7 @@ def load_settings(
             for name, value in (
                 ("MLOPS_AGENTS_PASSWORD", password),
                 ("MLOPS_AGENTS_MASTER_KEY", master_key),
-                ("MLOPS_AGENTS_ALLOWED_HOSTS", ",".join(allowed_hosts)),
+                ("MLOPS_AGENTS_ALLOWED_HOSTS", allowed_hosts),
             )
             if not value
         ]
