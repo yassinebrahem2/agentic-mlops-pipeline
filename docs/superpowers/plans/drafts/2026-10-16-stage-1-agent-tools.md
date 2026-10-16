@@ -105,7 +105,9 @@ async def test_invalid_arguments_become_an_error_result() -> None:
 
 
 async def test_tool_failure_becomes_an_error_result() -> None:
-    assert await EchoTool().invoke(CTX, {"text": "fail"}) == ToolOutput("asked to fail", is_error=True)
+    assert await EchoTool().invoke(CTX, {"text": "fail"}) == ToolOutput(
+        "asked to fail", is_error=True
+    )
 
 
 def test_schema_uses_aliases() -> None:
@@ -148,7 +150,13 @@ You help.
 
 def test_parse_valid_definition() -> None:
     d = parse_definition(VALID, "helper.md")
-    assert (d.name, d.display_name, d.tools, d.chat, d.limits.max_steps) == ("helper", "Helper", ("Read",), True, 25)
+    assert (d.name, d.display_name, d.tools, d.chat, d.limits.max_steps) == (
+        "helper",
+        "Helper",
+        ("Read",),
+        True,
+        25,
+    )
     assert d.prompt == "You help."
 
 
@@ -176,10 +184,14 @@ def test_catalog_rejects_unknown_tools_agents_and_hooks() -> None:
     bad_tool = parse_definition(VALID.replace("[Read]", "[Bash]"), "a.md")
     with pytest.raises(DefinitionError, match="unknown tools"):
         AgentCatalog([bad_tool], TOOLS)
-    bad_peer = parse_definition(VALID.replace("tools: [Read]", "tools: [Read]\ncan_message: [ghost]"), "b.md")
+    bad_peer = parse_definition(
+        VALID.replace("tools: [Read]", "tools: [Read]\ncan_message: [ghost]"), "b.md"
+    )
     with pytest.raises(DefinitionError, match="unknown agents"):
         AgentCatalog([bad_peer], TOOLS)
-    bad_hook = parse_definition(VALID.replace("tools: [Read]", "tools: [Read]\ncontext_hooks: [profile]"), "c.md")
+    bad_hook = parse_definition(
+        VALID.replace("tools: [Read]", "tools: [Read]\ncontext_hooks: [profile]"), "c.md"
+    )
     with pytest.raises(DefinitionError, match="unknown context hooks"):
         AgentCatalog([bad_hook], TOOLS)
 
@@ -264,7 +276,8 @@ class ToolContext:
 
 def _summary(exc: ValidationError) -> str:
     return "; ".join(
-        f"{'.'.join(str(p) for p in error['loc']) or 'arguments'}: {error['msg']}" for error in exc.errors()
+        f"{'.'.join(str(p) for p in error['loc']) or 'arguments'}: {error['msg']}"
+        for error in exc.errors()
     )
 
 
@@ -393,9 +406,13 @@ class AgentCatalog:
             if unknown := sorted(set(d.tools) - tool_names):
                 raise DefinitionError(f"agent {d.name} uses unknown tools: {', '.join(unknown)}")
             if unknown := sorted(set(d.can_message) - set(self._by_name)):
-                raise DefinitionError(f"agent {d.name} may message unknown agents: {', '.join(unknown)}")
+                raise DefinitionError(
+                    f"agent {d.name} may message unknown agents: {', '.join(unknown)}"
+                )
             if unknown := sorted(set(d.context_hooks) - KNOWN_HOOKS):
-                raise DefinitionError(f"agent {d.name} uses unknown context hooks: {', '.join(unknown)}")
+                raise DefinitionError(
+                    f"agent {d.name} uses unknown context hooks: {', '.join(unknown)}"
+                )
 
     @classmethod
     def load(cls, tool_names: frozenset[str], extra_dirs: Iterable[Path] = ()) -> AgentCatalog:
@@ -406,7 +423,9 @@ class AgentCatalog:
             if entry.name.endswith(".md")
         ]
         for extra in extra_dirs:
-            definitions.extend(parse_definition(p.read_text("utf-8"), str(p)) for p in sorted(extra.glob("*.md")))
+            definitions.extend(
+                parse_definition(p.read_text("utf-8"), str(p)) for p in sorted(extra.glob("*.md"))
+            )
         return cls(definitions, tool_names)
 
     def get(self, name: str) -> AgentDefinition:
@@ -451,7 +470,7 @@ How to work:
 
 - [ ] **Step 4: Run tests and checks**
 
-Run: `cd backend && uv run ruff format && uv run pytest tests/agents -v && uv run ruff check && uv run pyright`
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -468,22 +487,25 @@ git commit -m "feat(agents): add agent definition files, catalog and tool regist
 **Files:**
 - Create: `backend/src/mlops_agents/agents/tools/files.py`, `read.py`, `glob.py`, `grep.py`
 - Modify: `backend/src/mlops_agents/agents/tools/__init__.py`
-- Test: `backend/tests/agents/tools/__init__.py` (empty), `conftest.py`, `test_files.py`, `test_read.py`, `test_glob.py`, `test_grep.py`
+- Test: `backend/tests/agents/tools/__init__.py` (empty), `conftest.py`, `test_files.py`, `test_read.py`, `test_glob.py`, `test_grep.py`, `test_registry.py`
 
 **Interfaces:**
-- Consumes: `AgentTool`, `ToolContext`, `ToolOutput`, `ToolFailure`, `RiskClass`, `ToolRegistry`, `FileAccess` (Task 1), `GitRunner` (backend-core plan, Task 5).
+- Consumes: `AgentTool`, `ToolContext`, `ToolOutput`, `ToolFailure`, `RiskClass`, `ToolRegistry`, `FileAccess` (Task 1), `GitRunner` (backend-core plan, Task 5); test fixture `git_env` and `make_repo(path, files, env) -> Path` from `tests/conftest.py` (backend-core plan, Task 5). Nothing from the providers or github-workspace plans: callers pass the repository root.
 - Produces:
   - `files.py`: `DENYLIST: tuple[str, ...]`, `is_secret(rel_posix: str) -> bool`, `RepoFiles(root: Path, git: GitRunner)` implementing `FileAccess`. One instance per turn: the tracked-file list is cached on the instance.
   - `read.py`: `ReadArgs`, `ReadTool` (name `Read`), constants `MAX_LINES = 2000`, `MAX_LINE_CHARS = 2000`, `MAX_CHARS = 100_000`.
   - `glob.py`: `glob_to_regex(pattern: str) -> re.Pattern[str]`, `GlobArgs`, `GlobTool` (name `Glob`), `MAX_RESULTS = 200`.
   - `grep.py`: `TYPE_EXTENSIONS`, `GrepArgs`, `GrepTool(rg_path: str | None)` (name `Grep`; `None` means the pure-Python engine).
   - `tools/__init__.py`: `default_registry() -> ToolRegistry` with Read, Glob, Grep.
+  - Path resolution (`resolve`, `is_file`), file reads and `rg` all run in `asyncio.to_thread`.
+  - Both Grep engines give the same results: lines that are not UTF-8 are shown with replacement characters (`rg --json` sends them as base64 `bytes`), and binary files are not searched.
 
 Tool argument names and shapes follow Claude Code's Read (`file_path`, `offset`, `limit`), Glob (`pattern`, `path`) and Grep (`pattern`, `path`, `glob`, `type`, `output_mode`, `-i`, `-n`, `-A`, `-B`, `-C`, `head_limit`, `multiline`).
 
 - [ ] **Step 1: Write the test repository fixture** `backend/tests/agents/tools/conftest.py`:
 
 ```python
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -494,7 +516,15 @@ from mlops_agents.integrations.github.git import GitRunner
 from tests.conftest import make_repo
 
 APP_PY = "\n".join(
-    ["import os", "", "def train(model):", "    return model.fit()", "", "def evaluate(model):", "    return model.score()"]
+    [
+        "import os",
+        "",
+        "def train(model):",
+        "    return model.fit()",
+        "",
+        "def evaluate(model):",
+        "    return model.score()",
+    ]
 )
 
 
@@ -516,10 +546,10 @@ def repo(tmp_path: Path, git_env: dict[str, str]) -> Path:
     )
     (root / "latin1.txt").write_bytes(b"caf\xe9 au lait\n")
     (root / "data.bin").write_bytes(b"\x00\x01binary")
-    import subprocess
-
     subprocess.run(["git", "add", "-A"], cwd=root, env=git_env, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "more"], cwd=root, env=git_env, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "more"], cwd=root, env=git_env, check=True, capture_output=True
+    )
     (root / "untracked.txt").write_text("not committed\n")
     return root
 
@@ -528,8 +558,6 @@ def repo(tmp_path: Path, git_env: dict[str, str]) -> Path:
 def ctx(repo: Path, tmp_path: Path) -> ToolContext:
     return ToolContext(RepoFiles(repo, GitRunner(tmp_path / "bin")))
 ```
-
-Move `import subprocess` to the top of the file.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -545,7 +573,9 @@ from mlops_agents.agents.tools.base import ToolContext, ToolFailure
 from mlops_agents.agents.tools.files import is_secret
 
 
-@pytest.mark.parametrize("name", [".env", ".env.local", "prod.env", "a/b/id_rsa", "cert.PEM", "credentials-prod.json"])
+@pytest.mark.parametrize(
+    "name", [".env", ".env.local", "prod.env", "a/b/id_rsa", "cert.PEM", "credentials-prod.json"]
+)
 def test_secret_names(name: str) -> None:
     assert is_secret(name)
 
@@ -613,7 +643,10 @@ async def test_reads_with_line_numbers(ctx: ToolContext) -> None:
 
 async def test_offset_and_limit(ctx: ToolContext) -> None:
     out = await ReadTool().invoke(ctx, {"file_path": "src/app.py", "offset": 3, "limit": 2})
-    assert out.content.splitlines()[:2] == ["     3\tdef train(model):", "     4\t    return model.fit()"]
+    assert out.content.splitlines()[:2] == [
+        "     3\tdef train(model):",
+        "     4\t    return model.fit()",
+    ]
     assert "continues after line 4" in out.content
 
 
@@ -694,7 +727,11 @@ from mlops_agents.agents.tools.grep import GrepTool
 
 ENGINES = [pytest.param(None, id="python")]
 RG = shutil.which("rg")
-ENGINES.append(pytest.param(RG, id="ripgrep", marks=pytest.mark.skipif(RG is None, reason="rg is not installed")))
+ENGINES.append(
+    pytest.param(
+        RG, id="ripgrep", marks=pytest.mark.skipif(RG is None, reason="rg is not installed")
+    )
+)
 
 
 @pytest.mark.parametrize("rg", ENGINES)
@@ -705,13 +742,20 @@ async def test_files_with_matches_by_default(ctx: ToolContext, rg: str | None) -
 
 @pytest.mark.parametrize("rg", ENGINES)
 async def test_content_with_context(ctx: ToolContext, rg: str | None) -> None:
-    out = await GrepTool(rg).invoke(ctx, {"pattern": "def train", "output_mode": "content", "-A": 1})
-    assert out.content.splitlines() == ["src/app.py:3:def train(model):", "src/app.py-4-    return model.fit()"]
+    out = await GrepTool(rg).invoke(
+        ctx, {"pattern": "def train", "output_mode": "content", "-A": 1}
+    )
+    assert out.content.splitlines() == [
+        "src/app.py:3:def train(model):",
+        "src/app.py-4-    return model.fit()",
+    ]
 
 
 @pytest.mark.parametrize("rg", ENGINES)
 async def test_count_case_and_type(ctx: ToolContext, rg: str | None) -> None:
-    out = await GrepTool(rg).invoke(ctx, {"pattern": "TRAIN", "-i": True, "output_mode": "count", "type": "py"})
+    out = await GrepTool(rg).invoke(
+        ctx, {"pattern": "TRAIN", "-i": True, "output_mode": "count", "type": "py"}
+    )
     assert out.content.splitlines() == ["src/app.py:1"]
 
 
@@ -725,8 +769,12 @@ async def test_glob_filter_and_path(ctx: ToolContext, rg: str | None) -> None:
 
 @pytest.mark.parametrize("rg", ENGINES)
 async def test_secrets_and_untracked_are_never_searched(ctx: ToolContext, rg: str | None) -> None:
-    assert (await GrepTool(rg).invoke(ctx, {"pattern": "supersecret"})).content == "No matches found."
-    assert (await GrepTool(rg).invoke(ctx, {"pattern": "not committed"})).content == "No matches found."
+    assert (
+        await GrepTool(rg).invoke(ctx, {"pattern": "supersecret"})
+    ).content == "No matches found."
+    assert (
+        await GrepTool(rg).invoke(ctx, {"pattern": "not committed"})
+    ).content == "No matches found."
 
 
 @pytest.mark.parametrize("rg", ENGINES)
@@ -737,10 +785,33 @@ async def test_invalid_regex_is_an_error_result(ctx: ToolContext, rg: str | None
 
 
 async def test_head_limit(ctx: ToolContext) -> None:
-    out = await GrepTool(None).invoke(ctx, {"pattern": "line", "output_mode": "content", "head_limit": 5, "path": "big.txt"})
+    out = await GrepTool(None).invoke(
+        ctx, {"pattern": "line", "output_mode": "content", "head_limit": 5, "path": "big.txt"}
+    )
     lines = out.content.splitlines()
     assert len(lines) == 6
     assert lines[-1].startswith("[Showing the first 5")
+
+
+@pytest.mark.parametrize("rg", ENGINES)
+async def test_non_utf8_lines_are_shown_with_replacement(ctx: ToolContext, rg: str | None) -> None:
+    out = await GrepTool(rg).invoke(ctx, {"pattern": "au lait", "output_mode": "content"})
+    assert out.content == "latin1.txt:1:caf\ufffd au lait"
+
+
+@pytest.mark.parametrize("rg", ENGINES)
+async def test_binary_files_are_not_searched(ctx: ToolContext, rg: str | None) -> None:
+    assert (await GrepTool(rg).invoke(ctx, {"pattern": "binary"})).content == "No matches found."
+```
+
+`backend/tests/agents/tools/test_registry.py`:
+
+```python
+from mlops_agents.agents.tools import default_registry
+
+
+def test_default_registry_has_the_stage_1_tools() -> None:
+    assert default_registry().names() == frozenset({"Read", "Glob", "Grep"})
 ```
 
 - [ ] **Step 3: Run them to verify they fail**
@@ -755,6 +826,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'mlops_agents.agents.t
 ```python
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 from pathlib import Path
@@ -786,7 +858,7 @@ class RepoFiles:
 
     def __init__(self, root: Path, git: GitRunner) -> None:
         self._root = root
-        self._resolved_root = root.resolve()
+        self._resolved_root: Path | None = None
         self._git = git
         self._tracked: list[str] | None = None
         self._lookup: dict[str, str] = {}
@@ -810,16 +882,21 @@ class RepoFiles:
         return [f for f in files if _norm(f).startswith(wanted)]
 
     def _relative(self, user_path: str) -> str:
+        """Blocking (resolves symlinks): call it through asyncio.to_thread."""
+        if self._resolved_root is None:
+            self._resolved_root = self._root.resolve()
         candidate = Path(user_path)
         if not candidate.is_absolute():
             candidate = self._root / candidate
         resolved = candidate.resolve(strict=False)
         if not resolved.is_relative_to(self._resolved_root):
-            raise ToolFailure("That path is outside the repository. Only files inside the project can be read.")
+            raise ToolFailure(
+                "That path is outside the repository. Only files inside the project can be read."
+            )
         return resolved.relative_to(self._resolved_root).as_posix()
 
     async def resolve_file(self, user_path: str) -> str:
-        rel = self._relative(user_path)
+        rel = await asyncio.to_thread(self._relative, user_path)
         if is_secret(rel):
             raise ToolFailure(f"{rel} looks like a secret file, so it cannot be read.")
         await self.tracked()
@@ -834,7 +911,7 @@ class RepoFiles:
     async def resolve_dir(self, user_path: str | None) -> str:
         if not user_path or user_path.strip() in (".", "./"):
             return ""
-        rel = self._relative(user_path)
+        rel = await asyncio.to_thread(self._relative, user_path)
         return "" if rel == "." else rel.rstrip("/") + "/"
 ```
 
@@ -849,7 +926,13 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolFailure, ToolOutput
+from mlops_agents.agents.tools.base import (
+    AgentTool,
+    RiskClass,
+    ToolContext,
+    ToolFailure,
+    ToolOutput,
+)
 
 MAX_LINES = 2000
 MAX_LINE_CHARS = 2000
@@ -862,8 +945,17 @@ class ReadArgs(BaseModel):
     file_path: str = Field(
         description="Path of the file, relative to the repository root. Absolute paths inside the repository also work."
     )
-    offset: int | None = Field(default=None, ge=1, description="Line number to start from (1-based). Use it for large files.")
-    limit: int | None = Field(default=None, ge=1, le=MAX_LINES, description=f"Number of lines to read. Defaults to {MAX_LINES}.")
+    offset: int | None = Field(
+        default=None,
+        ge=1,
+        description="Line number to start from (1-based). Use it for large files.",
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_LINES,
+        description=f"Number of lines to read. Defaults to {MAX_LINES}.",
+    )
 
 
 def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, bool]:
@@ -900,13 +992,17 @@ class ReadTool(AgentTool[ReadArgs]):
         rel = await ctx.files.resolve_file(args.file_path)
         offset = args.offset or 1
         try:
-            lines, binary, more = await asyncio.to_thread(_read_lines, ctx.files.root / rel, offset, args.limit or MAX_LINES)
+            lines, binary, more = await asyncio.to_thread(
+                _read_lines, ctx.files.root / rel, offset, args.limit or MAX_LINES
+            )
         except OSError as exc:
             raise ToolFailure(f"{rel} could not be read: {exc.strerror or exc}") from None
         if binary:
             return ToolOutput(f"{rel} is a binary file; its contents are not shown.")
         if not lines:
-            return ToolOutput(f"{rel} has no lines from line {offset}." if offset > 1 else f"{rel} is empty.")
+            return ToolOutput(
+                f"{rel} has no lines from line {offset}." if offset > 1 else f"{rel} is empty."
+            )
         text = "\n".join(lines)
         if more:
             last = offset + len(lines) - 1
@@ -954,7 +1050,9 @@ def _translate(pattern: str) -> str:
             out.append("[" + ("^" + body[1:] if body.startswith("!") else body) + "]")
             i = end
         elif c == "{" and (end := pattern.find("}", i + 1)) != -1:
-            out.append("(?:" + "|".join(_translate(alt) for alt in pattern[i + 1 : end].split(",")) + ")")
+            out.append(
+                "(?:" + "|".join(_translate(alt) for alt in pattern[i + 1 : end].split(",")) + ")"
+            )
             i = end
         else:
             out.append(re.escape(c))
@@ -972,7 +1070,9 @@ class GlobArgs(BaseModel):
     pattern: str = Field(
         description="Glob matched against paths relative to `path`, e.g. **/*.py, src/**/*.ts, or *.md (top level only)."
     )
-    path: str | None = Field(default=None, description="Folder to search in. Defaults to the repository root.")
+    path: str | None = Field(
+        default=None, description="Folder to search in. Defaults to the repository root."
+    )
 
 
 def _mtime(path: Path) -> float:
@@ -1015,16 +1115,22 @@ class GlobTool(AgentTool[GlobArgs]):
 from __future__ import annotations
 
 import asyncio
-import json
+import base64
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolFailure, ToolOutput
+from mlops_agents.agents.tools.base import (
+    AgentTool,
+    RiskClass,
+    ToolContext,
+    ToolFailure,
+    ToolOutput,
+)
 from mlops_agents.agents.tools.glob import glob_to_regex
 
 MAX_FILE_BYTES = 5_000_000
@@ -1050,19 +1156,36 @@ TYPE_EXTENSIONS: dict[str, tuple[str, ...]] = {
 class GrepArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     pattern: str = Field(description="Regular expression to search for.")
-    path: str | None = Field(default=None, description="File or folder to search in. Defaults to the whole repository.")
-    glob: str | None = Field(default=None, description="Only search files matching this glob, e.g. *.py or src/**/*.ts.")
-    type: str | None = Field(default=None, description=f"Only search one file type: {', '.join(sorted(TYPE_EXTENSIONS))}.")
+    path: str | None = Field(
+        default=None, description="File or folder to search in. Defaults to the whole repository."
+    )
+    glob: str | None = Field(
+        default=None, description="Only search files matching this glob, e.g. *.py or src/**/*.ts."
+    )
+    type: str | None = Field(
+        default=None,
+        description=f"Only search one file type: {', '.join(sorted(TYPE_EXTENSIONS))}.",
+    )
     output_mode: Literal["content", "files_with_matches", "count"] = Field(
         default="files_with_matches",
         description="content: matching lines; files_with_matches: file paths; count: matches per file.",
     )
     case_insensitive: bool = Field(default=False, alias="-i", description="Ignore case.")
-    line_numbers: bool = Field(default=True, alias="-n", description="Show line numbers (content mode).")
-    after: int | None = Field(default=None, alias="-A", ge=0, le=20, description="Lines to show after each match.")
-    before: int | None = Field(default=None, alias="-B", ge=0, le=20, description="Lines to show before each match.")
-    context: int | None = Field(default=None, alias="-C", ge=0, le=20, description="Lines to show around each match.")
-    head_limit: int = Field(default=250, ge=1, le=1000, description="Maximum number of output lines.")
+    line_numbers: bool = Field(
+        default=True, alias="-n", description="Show line numbers (content mode)."
+    )
+    after: int | None = Field(
+        default=None, alias="-A", ge=0, le=20, description="Lines to show after each match."
+    )
+    before: int | None = Field(
+        default=None, alias="-B", ge=0, le=20, description="Lines to show before each match."
+    )
+    context: int | None = Field(
+        default=None, alias="-C", ge=0, le=20, description="Lines to show around each match."
+    )
+    head_limit: int = Field(
+        default=250, ge=1, le=1000, description="Maximum number of output lines."
+    )
     multiline: bool = Field(default=False, description="Let the pattern match across lines.")
 
 
@@ -1112,6 +1235,31 @@ def _search_python(
     return result
 
 
+class _RgText(BaseModel):
+    """rg --json gives `text` for UTF-8 and base64 `bytes` for anything else."""
+
+    text: str | None = None
+    bytes: str | None = None
+
+    def decoded(self) -> str:
+        if self.text is not None:
+            return self.text
+        if self.bytes is not None:
+            return base64.b64decode(self.bytes).decode("utf-8", "replace")
+        return ""
+
+
+class _RgLine(BaseModel):
+    path: _RgText
+    lines: _RgText
+    line_number: int | None = None
+
+
+class _RgEvent(BaseModel):
+    type: str
+    data: object = None
+
+
 def _search_rg(
     rg: str, root: Path, prefix: str, allowed: set[str], args: GrepArgs, before: int, after: int
 ) -> SearchResult:
@@ -1135,24 +1283,22 @@ def _search_rg(
         raise ToolFailure(f"The search failed: {message}")
     result = SearchResult()
     for raw in completed.stdout.splitlines():
-        event: dict[str, Any] = json.loads(raw)
-        if event.get("type") not in ("match", "context"):
+        event = _RgEvent.model_validate_json(raw)
+        if event.type not in ("match", "context"):
             continue
-        data: dict[str, Any] = event["data"]
-        path_text = data["path"].get("text")
-        if not isinstance(path_text, str):
+        data = _RgLine.model_validate(event.data)
+        rel = Path(data.path.decoded()).relative_to(root).as_posix()
+        if rel not in allowed or data.line_number is None:
             continue
-        rel = Path(path_text).relative_to(root).as_posix()
-        if rel not in allowed:
-            continue
-        text = str(data["lines"].get("text", ""))
-        for k, part in enumerate(text.rstrip("\r\n").split("\n")):
-            result.hits.setdefault(rel, []).append(Hit(int(data["line_number"]) + k, part.rstrip("\r"), event["type"] == "match"))
+        for k, part in enumerate(data.lines.decoded().rstrip("\r\n").split("\n")):
+            hit = Hit(data.line_number + k, part.rstrip("\r"), event.type == "match")
+            result.hits.setdefault(rel, []).append(hit)
     return result
 
 
 def _format(result: SearchResult, args: GrepArgs) -> str:
     files = sorted(result.hits)
+    lines: list[str]
     if not files:
         lines = ["No matches found."]
     elif args.output_mode == "files_with_matches":
@@ -1168,12 +1314,16 @@ def _format(result: SearchResult, args: GrepArgs) -> str:
                     lines.append("--")
                 sep = ":" if hit.is_match else "-"
                 text = hit.text[:MAX_OUTPUT_LINE]
-                lines.append(f"{f}{sep}{hit.line_no}{sep}{text}" if args.line_numbers else f"{f}{sep}{text}")
+                lines.append(
+                    f"{f}{sep}{hit.line_no}{sep}{text}" if args.line_numbers else f"{f}{sep}{text}"
+                )
                 previous = hit.line_no
     total = len(lines)
     if total > args.head_limit:
         lines = lines[: args.head_limit]
-        lines.append(f"[Showing the first {args.head_limit} of {total} lines. Narrow the search or raise head_limit.]")
+        lines.append(
+            f"[Showing the first {args.head_limit} of {total} lines. Narrow the search or raise head_limit.]"
+        )
     if result.skipped:
         lines.append(f"[Skipped {result.skipped} files larger than 5 MB.]")
     return "\n".join(lines)
@@ -1192,7 +1342,7 @@ class GrepTool(AgentTool[GrepArgs]):
         self._rg = rg_path
 
     async def _candidates(self, ctx: ToolContext, args: GrepArgs) -> tuple[str, list[str]]:
-        if args.path and (ctx.files.root / args.path).is_file():
+        if args.path and await asyncio.to_thread((ctx.files.root / args.path).is_file):
             return "", [await ctx.files.resolve_file(args.path)]
         prefix = await ctx.files.resolve_dir(args.path)
         files = await ctx.files.under(prefix)
@@ -1206,7 +1356,9 @@ class GrepTool(AgentTool[GrepArgs]):
         if args.type:
             extensions = TYPE_EXTENSIONS.get(args.type)
             if extensions is None:
-                raise ToolFailure(f"Unknown type {args.type}. Known types: {', '.join(sorted(TYPE_EXTENSIONS))}.")
+                raise ToolFailure(
+                    f"Unknown type {args.type}. Known types: {', '.join(sorted(TYPE_EXTENSIONS))}."
+                )
             files = [f for f in files if f.lower().endswith(extensions)]
         return prefix, files
 
@@ -1216,7 +1368,9 @@ class GrepTool(AgentTool[GrepArgs]):
         after = args.after if args.after is not None else (args.context or 0)
         if self._rg is not None:
             search_prefix = prefix if not args.path or prefix else ""
-            result = await asyncio.to_thread(_search_rg, self._rg, ctx.files.root, search_prefix, set(files), args, before, after)
+            result = await asyncio.to_thread(
+                _search_rg, self._rg, ctx.files.root, search_prefix, set(files), args, before, after
+            )
         else:
             flags = re.IGNORECASE if args.case_insensitive else 0
             if args.multiline:
@@ -1225,7 +1379,9 @@ class GrepTool(AgentTool[GrepArgs]):
                 regex = re.compile(args.pattern, flags)
             except re.error as exc:
                 raise ToolFailure(f"Invalid regular expression: {exc}") from None
-            result = await asyncio.to_thread(_search_python, ctx.files.root, files, regex, before, after, args.multiline)
+            result = await asyncio.to_thread(
+                _search_python, ctx.files.root, files, regex, before, after, args.multiline
+            )
         return ToolOutput(_format(result, args))
 ```
 
@@ -1246,8 +1402,8 @@ def default_registry() -> ToolRegistry:
 
 - [ ] **Step 5: Run tests and checks**
 
-Run: `cd backend && uv run ruff format && uv run pytest tests/agents -v && uv run ruff check && uv run pyright`
-Expected: all pass. The `ripgrep` cases run where `rg` is installed (CI installs it) and are skipped with a stated reason elsewhere; both engines must give identical results on this fixture.
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright && uv build --wheel && unzip -l dist/*.whl | grep definitions/orchestrator.md`
+Expected: all pass, and the wheel lists `mlops_agents/agents/definitions/orchestrator.md`. The `ripgrep` cases run where `rg` is installed (CI installs it) and are skipped with a stated reason elsewhere; both engines must give identical results on this fixture.
 
 - [ ] **Step 6: Commit**
 
