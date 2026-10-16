@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -865,6 +865,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "keyring" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -894,6 +895,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0.7" },
     { name = "fastapi", specifier = ">=0.143.2" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx2", specifier = ">=2.13.1" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "langchain-core", specifier = ">=1.6.11" },
     { name = "langchain-openai", specifier = ">=1.7.2" },
