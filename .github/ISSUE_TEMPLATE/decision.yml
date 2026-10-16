@@ -2,6 +2,7 @@ name: Decision
 description: A real decision that needs the lead or the team. Not for bugs, chores or ideas.
 title: "[Decision] "
 labels: ["decision"]
+assignees: ["yassinebrahem2"]
 body:
   - type: input
     id: context

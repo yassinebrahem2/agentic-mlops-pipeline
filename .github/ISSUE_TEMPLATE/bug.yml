@@ -1,0 +1,32 @@
+name: Bug
+description: A defect in code already merged into main. Assigned to the lead for triage.
+title: "[Bug] "
+labels: ["bug"]
+assignees: ["yassinebrahem2"]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages and logs.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: The main commit where it happens (git rev-parse --short HEAD)
+    validations:
+      required: true

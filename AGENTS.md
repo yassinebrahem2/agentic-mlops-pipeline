@@ -11,10 +11,10 @@ Design phase: no code yet, so no build, lint or test commands exist. Add them he
 ## Team workflow
 
 Roles:
-- Lead: GitHub `yassinebrahem2`. Writes specs and implementation plans, reviews PRs, merges, closes issues. The only person who merges into `main`.
-- Implementers: the other team members. Carry out implementation plans.
+- Lead: GitHub `yassinebrahem2`. Writes specs and implementation plans, reviews PRs, merges, closes issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
+- Implementers: everyone, the lead included. Anyone can take plan tasks.
 
-Know which role you are serving: check `gh api user --jq .login`. If it is `yassinebrahem2`, follow the lead flow; otherwise follow the implementer flow.
+Know which role you are serving: check `gh api user --jq .login`. Everyone follows the implementer rules when working on plan tasks. Only `yassinebrahem2` follows the lead rules (specs, plans, plan issues, reviews, merges, triage).
 
 Lifecycle of a piece of work:
 1. The lead writes a spec in `docs/superpowers/specs/` and gets it approved.
@@ -42,8 +42,11 @@ Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects
 - Answer Decision issues in the issue itself. If the answer changes the plan, update the plan on its branch, then unblock the task.
 
 ### Issues
-- Plan issues and their task sub-issues are created only by the lead's session, after the plan exists on its branch.
-- Implementers may open an issue only for a real decision that needs the lead (template "Decision", label `decision`), linked to the task it blocks. Not for chores or ideas: those are raised in the plan issue.
+Four types, each with its template and label. Blank issues are disabled.
+- Plan (`plan`) and Task (`task`, sub-issues of a plan): created only by the lead's session, after the plan exists on its branch.
+- Decision (`decision`): anyone, for a real decision that blocks a task, linked to that task. Assigned to the lead.
+- Bug (`bug`): anyone, for a defect in code already merged into `main`, with reproduction steps. Assigned to the lead, who triages it into the current plan or a small fix plan.
+- Nothing else: chores and ideas are raised in the plan issue.
 
 ## Git conventions
 - Conventional Commits: `feat(workspace): add GitHub clone`, `fix(agents): ...`, `test(...)`, `docs(...)`, `refactor(...)`, `chore(...)`. Scope = backend module or `frontend`.
