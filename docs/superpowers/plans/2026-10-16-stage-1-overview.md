@@ -26,6 +26,8 @@ Stage 1 is built through several plans. This overview holds what they all share.
 
 After backend-core is merged, providers, github-workspace and agent-tools run in parallel. frontend-scaffold runs in parallel with all of them.
 
+The five written plans include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The four plans still to write follow that rule: tests as code or as behaviors to verify, and full code only where a mistake is costly.
+
 ## Global Constraints
 
 Every task in every stage 1 plan includes these:
