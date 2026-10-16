@@ -6,7 +6,7 @@ Stage 1 is built through several plans. This overview holds what they all share.
 
 **Architecture:** A modular monolith. One FastAPI process (`backend/`) holds domain modules (`storage`, `credentials`, `providers`, `integrations/github`, `workspace`, `agents`) under one `api` layer, and serves a React SPA (`frontend/`) built into the Python wheel. Storage is SQLite only: `app.db` plus one `project.db` per project. Agents run on one LangGraph runtime driven by markdown agent definition files, and answers stream over server-sent events.
 
-**Tech Stack:** Python 3.12, uv, FastAPI, SQLAlchemy Core (async, aiosqlite), LangGraph + langchain-openai, pydantic, keyring, cryptography, sse-starlette, pytest. React 19, Vite 7, TypeScript 5.9, Tailwind 4, shadcn/ui, React Router 7, TanStack Query 5, openapi-typescript + openapi-fetch, Vitest 3, Playwright. GitHub Actions CI.
+**Tech Stack:** Python 3.12, uv, FastAPI, SQLAlchemy Core (async, aiosqlite), LangGraph + langchain-openai, pydantic, keyring, cryptography, sse-starlette, pytest. React 19, Vite 7, TypeScript 5.9, Tailwind 4, shadcn/ui, React Router 7, TanStack Query 5, openapi-typescript + openapi-fetch, Vitest 5, Playwright. GitHub Actions CI.
 
 **Spec:** `docs/superpowers/specs/2026-10-16-stage-1-foundation-design.md`. Shared contracts: `docs/roadmap.md`.
 
@@ -36,8 +36,9 @@ Every task in every stage 1 plan includes these:
   - Python `>=3.12`; Node 22.
   - Backend dependency floors are the versions verified on 2026-10-16: langgraph 1.2.15, langgraph-checkpoint-sqlite 3.1.2, langchain-openai 1.7.2, langchain-core 1.6.11, fastapi 0.143.2, uvicorn 0.44.0, sqlalchemy 2.1.4, aiosqlite 0.22.1, pydantic 2.13.1, cryptography 46.0.7, python-ulid 4.0.1, platformdirs 4.9.6, sse-starlette 3.3.4, httpx 0.28.1, keyring 25.7.0.
 - **Frontend versions:**
-  - Majors are pinned to the versions this code is written against: react 19, vite 7, react-router 7, typescript ~5.9, tailwindcss 4, vitest 3, eslint 9, @tanstack/react-query 5, openapi-typescript 7, openapi-fetch 0.17.
-  - Newer majors exist (vite 8, react-router 8, typescript 7, vitest 5, eslint 10). Upgrading them is a separate, explicit decision.
+  - Majors are pinned to the versions this code is written against: react 19, vite 7, react-router 7, typescript ~5.9, tailwindcss 4, vitest 5, eslint 9, @tanstack/react-query 5, openapi-typescript 7, openapi-fetch 0.17.
+  - Newer majors exist (vite 8, react-router 8, typescript 7, eslint 10). Upgrading them is a separate, explicit decision. Vitest went from 3 to 5 on 2026-10-16 by such a decision: vitest 3 depended on packages with critical advisories that no 3.x release fixes.
+  - shadcn/ui uses the `radix-vega` style with the neutral base color. shadcn 4 no longer has the `new-york` style.
 - **App name:** it appears only in `backend/src/mlops_agents/config.py` (`APP_NAME`) and `backend/pyproject.toml` (the project name and the script). Everything else imports `APP_NAME`.
 - **IDs and time:** IDs come only from `mlops_agents.ids.new_id(prefix)`, with prefixes registered in `docs/roadmap.md`. Timestamps come only from `mlops_agents.clock.now_iso()` (UTC ISO 8601).
 - **SQLite:** every connection (SQLAlchemy, sqlite3, the LangGraph checkpointer) applies `mlops_agents.storage.sqlite.PRAGMAS`.

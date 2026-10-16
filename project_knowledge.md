@@ -90,7 +90,8 @@ Anything not listed here is unknown.
 - [USER] No Anthropic or OpenAI keys.
 - [USER] Install/launch: one command. A Python package (`uv tool install`), `<app> start` runs FastAPI, which serves the built React UI and opens the browser. Same on a cloud VM. Docker required for the sandbox.
 - [USER] App name undecided: placeholder `mlops-agents`, defined in one place.
-- [USER] UI kit: shadcn/ui + Tailwind.
+- [USER] UI kit: shadcn/ui + Tailwind. [AGREED] shadcn style `radix-vega`, neutral base color (shadcn 4 dropped `new-york`).
+- [AGREED] Frontend tests: Vitest 5.
 - [USER] GitHub access: reuse the GitHub CLI login if present, otherwise a pasted fine-grained token; stored in the keyring.
 - [USER/AGREED] Storage: SQLite. Layout: `<app data>/app.db` (projects, AI providers registry, connections, settings) and `<app data>/projects/<id>/` with `project.db`, the repo clone and worktrees. Nothing is written into the user's repo.
 - [AGREED] Knowledge store: sqlite-vec + FTS5 (hybrid search) inside SQLite, behind a VectorStore interface. Code is read with file/search tools, not RAG.
@@ -122,6 +123,7 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
+- Frontend test runner: was Vitest 3 (pinned major). Now Vitest 5: vitest 3 depended on packages with critical advisories (tinypool, @vitest/mocker) that no 3.x release fixes.
 
 ## 6. Files
 - Multi-Agent-DevOps-MLOps-Pipeline.pdf: the project brief (not in this folder).
