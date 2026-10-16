@@ -223,3 +223,9 @@ Run from `frontend/`:
 git add frontend .github/workflows/frontend.yml AGENTS.md
 git commit -m "chore(frontend): scaffold React app, tooling and CI"
 ```
+
+---
+
+## Changes after review
+
+The lead review of PR #9 found issues that were fixed on this branch after the tasks above (task #12). The PR description lists each change under "Not done, or done differently from the plan"; where it differs from the code shown above, the code on `main` is authoritative.
