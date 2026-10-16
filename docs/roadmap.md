@@ -46,7 +46,7 @@ Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`
 ## Data folder layout
 
 ```
-<data folder>/                 platformdirs user data dir, overridable with MLOPS_AGENTS_HOME
+<data folder>/                 platformdirs user data dir (non-roaming: %LOCALAPPDATA% on Windows), overridable with MLOPS_AGENTS_HOME
   app.db                       projects, AI providers registry, integrations, app settings
   keys.enc                     server mode only
   backups/
