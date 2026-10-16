@@ -35,7 +35,7 @@ npm create vite@7 frontend -- --template react-ts
 cd frontend
 npm install react@19 react-dom@19
 npm install react-router@7 @tanstack/react-query@5 openapi-fetch@0.17 react-markdown@10 remark-gfm@4
-npm install -D typescript@~5.9 vite@7 @vitejs/plugin-react tailwindcss@4 @tailwindcss/vite@4 vitest@3 jsdom @testing-library/react@16 @testing-library/jest-dom @testing-library/user-event prettier@3 eslint@9 typescript-eslint eslint-config-prettier openapi-typescript@7 @types/node@22
+npm install -D typescript@~5.9 vite@7 @vitejs/plugin-react tailwindcss@4 @tailwindcss/vite@4 vitest@^5 jsdom @testing-library/react@16 @testing-library/jest-dom @testing-library/user-event prettier@3 eslint@9 typescript-eslint eslint-config-prettier openapi-typescript@7 @types/node@22
 ```
 
 - [ ] **Step 2: Configure Vite, Tailwind and Vitest** — replace `frontend/vite.config.ts`:
@@ -75,15 +75,15 @@ Replace `frontend/src/index.css` with:
 @import "tailwindcss";
 ```
 
-In `frontend/tsconfig.app.json` add to `compilerOptions`: `"baseUrl": "."`, `"paths": { "@/*": ["./src/*"] }`, `"noUncheckedIndexedAccess": true`, `"types": ["vite/client", "vitest/globals"]`. Keep `"strict": true`.
+In `frontend/tsconfig.app.json` add to `compilerOptions`: `"baseUrl": "."`, `"paths": { "@/*": ["./src/*"] }`, `"noUncheckedIndexedAccess": true`, `"types": ["vite/client", "vitest/globals"]`. Keep `"strict": true`. Also add `"baseUrl": "."` and `"paths": { "@/*": ["./src/*"] }` to the root `frontend/tsconfig.json` so shadcn on Vite can resolve the alias.
 
 - [ ] **Step 3: Initialize shadcn/ui**
 
 ```bash
-npx shadcn@4 init
+npx shadcn@4 init -t vite -b radix -p vega -y
 npx shadcn@4 add button input label card dialog dropdown-menu select table badge tabs sonner scroll-area collapsible separator alert textarea tooltip
 ```
-If `init` asks: style "new-york", base color "neutral", CSS variables "yes". It writes `components.json`, `src/lib/utils.ts` and `src/components/ui/*`.
+Style is `radix-vega` (neutral base, CSS variables). It writes `components.json`, `src/lib/utils.ts` and `src/components/ui/*`. Utilities come from shadcn's `cn` package (`export { cn } from "cn"`).
 
 - [ ] **Step 4: ESLint strict + Prettier** — replace `frontend/eslint.config.js`:
 
@@ -166,7 +166,7 @@ export function App() {
 }
 ```
 
-In `frontend/src/main.tsx` import `{ App }` (named) instead of the default export.
+In `frontend/src/main.tsx` import `{ App }` (named) instead of the default export, and check `document.getElementById("root")` with a null check (avoiding non-null assertion `!` which `strictTypeChecked` rejects).
 
 - [ ] **Step 7: Run all frontend checks**
 
