@@ -43,7 +43,7 @@ def test_server_settings(tmp_path: Path) -> None:
             "MLOPS_AGENTS_TRUSTED_PROXIES": "10.0.0.1",
         },
     )
-    assert s.host == "0.0.0.0"  # noqa: S104 -- asserting the bind address, not binding
+    assert s.host == "0.0.0.0"
     assert s.port == 9000
     assert s.allowed_hosts == ("agents.example.com", "other.example.com")
     assert s.trusted_proxies == ("10.0.0.1",)
@@ -53,3 +53,19 @@ def test_default_data_dir_is_not_roaming(monkeypatch: pytest.MonkeyPatch) -> Non
     s = load_settings(RunMode.LOCAL, env={})
     assert "mlops-agents" in str(s.data_dir)
     assert "Roaming" not in str(s.data_dir)
+
+
+def test_repr_hides_secrets(tmp_path: Path) -> None:
+    s = load_settings(
+        RunMode.SERVER,
+        env={
+            "MLOPS_AGENTS_HOME": str(tmp_path),
+            "MLOPS_AGENTS_PASSWORD": "pw-secret",
+            "MLOPS_AGENTS_MASTER_KEY": "mk-secret",
+            "MLOPS_AGENTS_ACCESS_TOKEN": "tok-secret",
+            "MLOPS_AGENTS_ALLOWED_HOSTS": "agents.example.com",
+        },
+    )
+    text = repr(s)
+    for secret in ("pw-secret", "mk-secret", "tok-secret"):
+        assert secret not in text

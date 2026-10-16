@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -28,9 +28,9 @@ class Settings:
     data_dir: Path
     host: str
     port: int
-    password: str | None
-    master_key: str | None
-    access_token: str | None
+    password: str | None = field(repr=False)
+    master_key: str | None = field(repr=False)
+    access_token: str | None = field(repr=False)
     allowed_hosts: tuple[str, ...]
     dev_origins: tuple[str, ...]
     trusted_proxies: tuple[str, ...]
