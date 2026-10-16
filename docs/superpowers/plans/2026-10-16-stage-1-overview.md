@@ -14,8 +14,8 @@ Stage 1 is built through several plans. This overview holds what they all share.
 
 | Plan | Branch | Covers | Depends on | State |
 |---|---|---|---|---|
-| backend-core | `plan/stage-1-backend-core` | Backend scaffold and CI, config, IDs, storage, credentials, git runner, shared test fixtures | none | In review |
-| frontend-scaffold | `plan/stage-1-frontend-scaffold` | React app scaffold, tooling, frontend CI | none | In review |
+| backend-core | `plan/stage-1-backend-core` | Backend scaffold and CI, config, IDs, storage, credentials, git runner, shared test fixtures | none | Merged |
+| frontend-scaffold | `plan/stage-1-frontend-scaffold` | React app scaffold, tooling, frontend CI | none | Merged |
 | providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
 | github-workspace | `plan/stage-1-github-workspace` | GitHub API and auth, local and GitHub projects | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
 | agent-tools | `plan/stage-1-agent-tools` | Agent definition files, catalog, tool registry, tracked-file filter, Read/Glob/Grep | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
@@ -26,7 +26,7 @@ Stage 1 is built through several plans. This overview holds what they all share.
 
 After backend-core is merged, providers, github-workspace and agent-tools run in parallel. frontend-scaffold runs in parallel with all of them.
 
-The five plans written first (two in review, three in `drafts/`) include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The four plans still to write follow that rule: tests as code or as behaviors to verify, and full code only where a mistake is costly.
+The five plans written first (two merged, three in `drafts/`) include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The four plans still to write follow that rule: tests as code or as behaviors to verify, and full code only where a mistake is costly.
 
 ## Global Constraints
 
