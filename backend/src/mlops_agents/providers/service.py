@@ -16,6 +16,7 @@ from mlops_agents.credentials import KeyStore
 from mlops_agents.credentials.scrub import error_text, mask_key, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
+from mlops_agents.providers.errors import ProviderCallError
 from mlops_agents.providers.models import (
     DetectedKey,
     KeyHint,
@@ -25,6 +26,7 @@ from mlops_agents.providers.models import (
     ProviderCreate,
     RemoteModel,
 )
+from mlops_agents.providers.verification import probe_model
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import models as models_table
 from mlops_agents.storage.tables import provider_keys, providers
@@ -349,6 +351,28 @@ class ProvidersService:
             await conn.execute(
                 update(models_table).where(models_table.c.address == address).values(**values)
             )
+
+    async def verify_model(self, address: str) -> ModelEntry:
+        entry = await self.require_model(address)
+        provider = await self.get_provider_by_id(entry.provider_id)
+        keys = await self.keys_for(provider.id)
+        if provider.kind == "hosted" and not keys:
+            raise DomainError("no_keys", f"Add a key to {provider.name} first.", status=409)
+        try:
+            result = await probe_model(
+                provider.base_url, keys[0] if keys else None, entry.wire_model_id, http=self._http
+            )
+        except ProviderCallError as err:
+            await self.mark_model_problem(address, err.message)
+            raise DomainError(
+                "verification_failed", f"Checking {address} failed: {err.message}", status=502
+            ) from None
+        return await self.record_verification(
+            address,
+            tool_calling=result.tool_calling,
+            streaming=result.streaming,
+            detail=result.detail,
+        )
 
     # Environment keys
 

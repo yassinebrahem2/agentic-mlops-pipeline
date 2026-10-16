@@ -1,7 +1,12 @@
+from types import ModuleType
+
+import httpx
+import httpx2
 import pytest
 
 from mlops_agents.credentials.scrub import (
     base_url_problem,
+    error_text,
     mask_key,
     scrub_url_secrets,
     scrub_values,
@@ -51,3 +56,14 @@ def test_scrub_values_masks_each_secret() -> None:
 def test_mask_key() -> None:
     assert mask_key("gsk_abcdefgh1234") == "••••1234"
     assert mask_key("short") == "••••"
+
+
+@pytest.mark.parametrize("module", [httpx, httpx2])
+def test_error_text_withholds_url_parse_errors(module: ModuleType) -> None:
+    try:
+        module.Request("GET", "http://host:gsk_secret_value/v1")
+    except Exception as exc:
+        assert "gsk_secret_value" not in error_text(exc)
+        assert "withheld" in error_text(exc)
+    else:
+        pytest.fail("the URL should not parse")
