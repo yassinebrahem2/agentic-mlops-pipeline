@@ -18,30 +18,32 @@ Know which role you are serving: check `gh api user --jq .login`. If it is `yass
 
 Lifecycle of a piece of work:
 1. The lead writes a spec in `docs/superpowers/specs/` and gets it approved.
-2. The lead writes the implementation plan in `docs/superpowers/plans/` on a new branch `plan/<topic>` (for example `plan/stage-1-foundation`).
-3. After the plan is on its branch, the lead opens a plan issue (template "Implementation plan", label `plan`): it links the plan and the branch and lists the plan's tasks as checkboxes. It goes on the project board in "Todo".
-4. Implementers work on that branch, following the plan, and move the issue to "In progress".
-5. When the plan is done, an implementer opens a PR from `plan/<topic>` into `main` (the PR template asks for `Closes #<issue>`), requests review from `yassinebrahem2`, and moves the issue to "In review".
-6. The lead reviews. Merging the PR closes the issue and moves it to "Done".
+2. The lead writes the implementation plan in `docs/superpowers/plans/` on a new branch `plan/<topic>` (for example `plan/stage-1-foundation`). Every plan task states which tasks it depends on.
+3. After the plan is on its branch, the lead opens a plan issue (template "Implementation plan", label `plan`, milestone = its stage). The lead's session then creates one sub-issue per plan task (label `task`, same milestone), each stating the task, its plan section and its dependencies. Everything lands on the project board in "Todo".
+4. Implementers pick tasks, work on the plan branch, and move their task through the board.
+5. When every task is done, an implementer opens a PR from `plan/<topic>` into `main` (the PR template asks for `Closes #<plan issue>`), requests review from `yassinebrahem2`, and moves the plan issue to "In review".
+6. The lead reviews. Merging the PR closes the plan issue and moves it to "Done".
 
-Project board: GitHub Projects, Status = Todo / In progress / In review / Done.
+Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects/5), Status = Todo / In progress / Blocked / In review / Done. Milestones: one per roadmap stage ("Stage 1: Foundation and first agent", ...).
 
 ### Implementer rules
 - Work only on the plan's branch. Never push to `main`; never merge anything.
-- Before starting a task, claim it in the issue (comment, or check off as you finish) so two people do not do the same task.
-- Pull with rebase before you start and before you push; commit small and push often, since several people share the branch.
-- Follow the plan as written. If the plan is wrong, unclear, or needs a decision, do not improvise: comment on the issue and ask the lead.
+- Claim a task by assigning yourself to its sub-issue before starting. Only take a task that is unassigned and whose dependencies are closed.
+- Move your task sub-issue: "In progress" when you start; close it when its work is pushed and its checks pass.
+- Pull with rebase before you start and before you push, then re-read the plan (it may have changed). Commit small and push often, since several people share the branch.
+- Follow the plan as written. If the plan is wrong, unclear, or needs a decision, do not improvise: open a Decision issue linked to the blocked task, and move that task to "Blocked" until the lead answers.
 - Do not edit specs, plans, `docs/roadmap.md` or `project_knowledge.md`; those belong to the lead.
 - A task is done only when its tests, lint and type checks pass locally, and CI passes on the branch.
 
 ### Lead rules
 - Specs before plans, plans before code. Each needs the lead's explicit approval.
 - Review specs and plans with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
-- Record decisions in `project_knowledge.md` as they are made.
+- Record project-level decisions in `project_knowledge.md` as they are made.
+- Answer Decision issues in the issue itself. If the answer changes the plan, update the plan on its branch, then unblock the task.
 
 ### Issues
-- The lead opens only plan issues, after the plan exists on its branch.
-- Implementers may open an issue only for a real decision that needs the lead or the team (template "Decision", label `decision`). Not for bugs, chores or ideas: those are handled inside the plan's work or raised in the plan issue.
+- Plan issues and their task sub-issues are created only by the lead's session, after the plan exists on its branch.
+- Implementers may open an issue only for a real decision that needs the lead (template "Decision", label `decision`), linked to the task it blocks. Not for chores or ideas: those are raised in the plan issue.
 
 ## Git conventions
 - Conventional Commits: `feat(workspace): add GitHub clone`, `fix(agents): ...`, `test(...)`, `docs(...)`, `refactor(...)`, `chore(...)`. Scope = backend module or `frontend`.

@@ -6,8 +6,8 @@ body:
   - type: input
     id: context
     attributes:
-      label: Plan issue or document
-      description: Where this came up (plan issue number, spec or plan path)
+      label: Blocked task
+      description: The task sub-issue this blocks (#number), and the plan path
     validations:
       required: true
   - type: textarea

@@ -1,0 +1,33 @@
+name: Plan task
+description: Lead only. Created automatically, one per plan task, as a sub-issue of the plan issue.
+title: "[Task] "
+labels: ["task"]
+body:
+  - type: input
+    id: plan_issue
+    attributes:
+      label: Plan issue
+      description: "#number of the parent plan issue"
+    validations:
+      required: true
+  - type: input
+    id: section
+    attributes:
+      label: Plan section
+      description: Path to the plan and the task heading
+    validations:
+      required: true
+  - type: input
+    id: depends
+    attributes:
+      label: Depends on
+      description: Task sub-issues that must be closed first, or "None"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What this task delivers, copied from the plan
+    validations:
+      required: true

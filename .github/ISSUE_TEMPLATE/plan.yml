@@ -27,9 +27,9 @@ body:
   - type: textarea
     id: tasks
     attributes:
-      label: Tasks
-      description: One checkbox per plan task. Claim a task with a comment before starting it.
+      label: Summary
+      description: Task sub-issues are created from the plan after this issue is opened. Summarize the plan here.
       value: |
-        - [ ] Task 1
+        
     validations:
       required: true
