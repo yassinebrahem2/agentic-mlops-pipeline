@@ -55,7 +55,7 @@ Runtime: one process. `mlops-agents start` runs uvicorn with the FastAPI app, wh
 
 Run modes (see roadmap): `local` (default) and `server` (`--server`). Server mode hides local folders, uses the encrypted key file, and does not open a browser. Mode rules are enforced by the API, not only by the UI: in server mode the folder-browser and add-local endpoints refuse requests.
 
-Packaging: the UI is part of the Python package. A build script (`scripts/build`) runs `npm run build` (output into `backend/src/mlops_agents/web/`) and then `uv build`, producing one platform-independent wheel with the UI inside. Users install that wheel (`uv tool install <wheel>`), so they never need Node. The same script later runs in CI. If the port is in use, `start` prints a clear error naming the port and the `--port` option.
+Packaging: the UI is part of the Python package. A build script (`scripts/build`) runs `npm run build` (output into `backend/src/mlops_agents/web/`) and then `uv build`, producing one platform-independent wheel with the UI inside. Because `web/` is gitignored, the build backend must be told to include it (for hatchling: declare it as artifacts / force-include); the build script checks the wheel lists `mlops_agents/web/index.html`. Users install that wheel (`uv tool install <wheel>`), so they never need Node. The same script later runs in CI. If the port is in use, `start` prints a clear error naming the port and the `--port` option.
 
 ### Access and security
 
@@ -63,7 +63,8 @@ Single user does not mean no login. The approach follows Jupyter:
 - Local mode binds to `127.0.0.1` only. At start the app generates a random access token and opens the browser at a URL carrying it; the UI exchanges it for an HttpOnly session cookie. Every API request without a valid session is refused.
 - The API checks the `Host` and `Origin` headers on every request (blocks other websites calling localhost and DNS rebinding). State-changing requests also require the cookie's CSRF token.
 - Server mode requires a password set at startup (`MLOPS_AGENTS_PASSWORD`). The app hashes it in memory, never writes it anywhere, and compares in constant time. The login page exchanges it for the same session cookie. Login attempts are rate-limited. HTTPS is provided by a reverse proxy in front of the app; settings `allowed_hosts` (the public domain) and `trusted_proxies` (whose forwarded headers are believed) make the Host/Origin checks work behind it.
-- The access URL is also printed in the terminal. A restart issues a new local access token (the browser tab gets a new link). Session cookies are signed with a secret stored in the data folder, so server-mode logins survive restarts.
+- The access URL is also printed in the terminal. Session cookies are signed with a secret stored in the data folder, so a signed-in browser stays signed in across restarts in both modes. Each start issues a new local access token; it is only needed to sign in from a browser that has no session yet.
+- `--server` without `MLOPS_AGENTS_PASSWORD` or without `MLOPS_AGENTS_MASTER_KEY` refuses to start with a plain message. There is no fallback to no password or no encryption.
 - In development the Vite dev origin is added to the allowed origins.
 
 ## 2. Storage and workspace
@@ -87,7 +88,7 @@ Message parts, stored in order: `{"type": "text", "text"}`, `{"type": "tool_call
 - `project_settings`: key/value, including per-agent model overrides.
 - LangGraph checkpoint tables (created by the SQLite checkpointer).
 
-Source of truth: the `messages` table plus `sessions.summary`. At the start of every turn the runtime builds the model's context from the agent's definition, `sessions.summary`, and the messages after `compacted_through`. LangGraph checkpoints hold only the state of a turn in progress (stage 2 needs this to pause a turn for an approval and resume it); a turn's checkpoints are deleted when the turn ends. Because the context is rebuilt from messages, a message added by another agent in stage 2 is a plain insert. When rebuilding, any tool call without a result (a stopped or interrupted turn) gets a synthetic tool result, "cancelled by the user" or "interrupted", so the history is always valid for OpenAI-compatible APIs.
+Source of truth: the `messages` table plus `sessions.summary`. At the start of every turn the runtime builds the model's context from the agent's definition, `sessions.summary`, and the messages after `compacted_through`. LangGraph checkpoints hold only the state of a turn in progress (stage 2 needs this to pause a turn for an approval and resume it); each turn uses its own LangGraph thread (thread ID = turn ID), and that thread is deleted through the checkpointer's own delete-thread call when the turn ends. Because the context is rebuilt from messages, a message added by another agent in stage 2 is a plain insert. When rebuilding, any tool call without a result (a stopped or interrupted turn) gets a synthetic tool result, "cancelled by the user" or "interrupted", so the history is always valid for OpenAI-compatible APIs.
 
 ### Access and migrations
 
@@ -185,6 +186,8 @@ App level (reached from the home screen or the gear icon):
 Project level (project switcher at the top of the sidebar):
 - Agents: the Orchestrator session. Streaming answers, collapsible tool steps, queued messages, Stop, interrupted turns marked.
 - Settings: repo info, refresh, relink (local), per-agent model override, limits.
+
+Routing: FastAPI serves `index.html` for every path that is not under `/api` and not a static file, so reloading a deep link such as `/projects/prj_.../agents` works.
 
 API: REST under `/api`, plus `GET /api/projects/{id}/sessions/{id}/stream` (SSE). Errors share one JSON shape (`code`, `message`, optional `detail`) that the UI turns into plain, actionable text.
 
