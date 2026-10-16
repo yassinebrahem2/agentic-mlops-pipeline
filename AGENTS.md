@@ -18,8 +18,8 @@ Know which role you are serving: check `gh api user --jq .login`. Everyone follo
 
 Lifecycle of a piece of work:
 1. The lead writes a spec in `docs/superpowers/specs/` and gets it approved.
-2. The lead writes the implementation plan in `docs/superpowers/plans/` on a new branch `plan/<topic>` (for example `plan/stage-1-foundation`). Every plan task states which tasks it depends on.
-3. After the plan is on its branch, the lead opens a plan issue (template "Implementation plan", label `plan`, milestone = its stage). The lead's session then creates one sub-issue per plan task (label `task`, same milestone), each stating the task, its plan section and its dependencies. Everything lands on the project board in "Todo".
+2. The lead writes the implementation plans in `docs/superpowers/plans/` (see "How plans are written"). Each plan lives on its own branch `plan/<stage>-<topic>` (for example `plan/stage-1-backend-core`). Every plan task states which tasks it depends on.
+3. After a plan is on its branch, the lead opens a plan issue (template "Implementation plan", label `plan`, milestone = its stage). The lead's session then creates one sub-issue per plan task (label `task`, same milestone), each stating the task, its plan section and its dependencies. Everything lands on the project board in "Todo".
 4. Implementers pick tasks, work on the plan branch, and move their task through the board.
 5. When every task is done, an implementer opens a PR from `plan/<topic>` into `main` (the PR template asks for `Closes #<plan issue>`), requests review from `yassinebrahem2`, and moves the plan issue to "In review".
 6. The lead reviews. Merging the PR closes the plan issue and moves it to "Done".
@@ -40,6 +40,16 @@ Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects
 - Review specs and plans with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
 - Record project-level decisions in `project_knowledge.md` as they are made.
 - Answer Decision issues in the issue itself. If the answer changes the plan, update the plan on its branch, then unblock the task.
+
+### How plans are written
+- One spec per stage. A stage too big for one plan is split into several plans, each small enough to review and assign on its own.
+- A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with their dependencies and branches. Each plan links to it instead of repeating it.
+- A plan whose dependencies are all merged gets its branch and plan issue right away. A plan that depends on an unmerged plan waits: its branch is created from `main` and its issue opened only after that plan is merged. Independent plans run in parallel.
+- Plans are moderately detailed, not a second copy of the code:
+  - every task names its exact files and the interfaces it consumes and produces (exact names and types);
+  - tests are written as code, or as a precise list of behaviors and failure cases to verify;
+  - full implementation code only where a mistake is costly or subtle (security, data loss, platform quirks, tricky concurrency); elsewhere, precise implementation notes.
+- A task's tests are its stop condition: the task is done when they pass, together with lint, type checks and CI.
 
 ### Issues
 Four types, each with its template and label. Blank issues are disabled.
