@@ -2176,3 +2176,9 @@ Expected: all pass on Windows and Linux. `test_askpass_answers_username_and_toke
 git add backend/src/mlops_agents/integrations backend/tests/integrations backend/tests/conftest.py
 git commit -m "feat(git): add prompt-free git runner and shared test fixtures"
 ```
+
+---
+
+## Changes after review
+
+The lead review of PR #10 found issues that were fixed on this branch after the tasks above (task #11). The PR description lists each change under "Not done, or done differently from the plan"; where it differs from the code shown above, the code on `main` is authoritative.
