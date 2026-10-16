@@ -25,6 +25,7 @@ Lifecycle of a piece of work:
 6. The lead reviews. Merging the PR closes the plan issue and moves it to "Done".
 
 Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects/5), Status = Todo / In progress / Blocked / In review / Done. Milestones: one per roadmap stage ("Stage 1: Foundation and first agent", ...).
+Move a card with `scripts/board-status.sh <issue-or-PR number> "<Status>"` (needs `gh` and `jq`; `gh project` itself needs the `read:org` scope, which most tokens lack).
 
 ### Implementer rules
 - Work only on the plan's branch. Never push to `main`; never merge anything.
