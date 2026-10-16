@@ -22,7 +22,7 @@ agent-runtime, api, frontend-app and packaging have no draft. The overview gives
 
 | Plan | Tasks from the original outline |
 |---|---|
-| agent-runtime | Agent settings and model assignment. Message store, context, compaction. Model caller, LangGraph loop, turn executor. Stream hub and session manager (queue, Stop, recovery). |
+| agent-runtime | Agent settings and model assignment (an app-level default or a project override that names a model that no longer exists shows the spec's "choose another model" message: `agent_model_defaults` has no foreign key, and deleting a model or provider leaves its rows). Message store, context, compaction. Model caller, LangGraph loop, turn executor. Stream hub and session manager (queue, Stop, recovery). |
 | api | API foundation, login for both run modes, CLI. Projects and app info. Providers, models, agents. GitHub. Sessions and SSE. Committed OpenAPI contract. |
 | frontend-app | Frontend foundation (API client from the contract, app shell, router). Projects and Add project. AI providers. Integrations and app Settings. Agents chat. Project Settings. |
 | packaging | Build script, wheel contents check, end-to-end test with the fake provider, install check on Windows and Linux. |
