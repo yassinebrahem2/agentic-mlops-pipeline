@@ -39,7 +39,7 @@ Every task in every stage 1 plan includes these:
   - Majors are pinned to the versions this code is written against: react 19, vite 7, react-router 7, typescript ~5.9, tailwindcss 4, vitest 5, eslint 9, @tanstack/react-query 5, openapi-typescript 7, openapi-fetch 0.17.
   - Newer majors exist (vite 8, react-router 8, typescript 7, eslint 10). Upgrading them is a separate, explicit decision. Vitest went from 3 to 5 on 2026-10-16 by such a decision: vitest 3 depended on packages with critical advisories that no 3.x release fixes.
   - shadcn/ui uses the `radix-vega` style with the neutral base color. shadcn 4 no longer has the `new-york` style.
-- **App name:** it appears only in `backend/src/mlops_agents/config.py` (`APP_NAME`) and `backend/pyproject.toml` (the project name and the script). Everything else imports `APP_NAME`.
+- **App name:** it appears only in `backend/src/mlops_agents/config.py` (`APP_NAME`), `backend/pyproject.toml` (the project name and the script) and `frontend/src/config.ts` (`APP_NAME`, the UI's single copy). Everything else imports `APP_NAME`.
 - **IDs and time:** IDs come only from `mlops_agents.ids.new_id(prefix)`, with prefixes registered in `docs/roadmap.md`. Timestamps come only from `mlops_agents.clock.now_iso()` (UTC ISO 8601).
 - **SQLite:** every connection (SQLAlchemy, sqlite3, the LangGraph checkpointer) applies `mlops_agents.storage.sqlite.PRAGMAS`.
 - **Secrets:** no key, token or password ever appears in a database row, URL, log line, error message or test snapshot. Errors that may contain one go through `mlops_agents.credentials.scrub`.
