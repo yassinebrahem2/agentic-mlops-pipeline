@@ -6,7 +6,7 @@ A draft leaves this folder when both of these are true:
 - an advisor review round finds no blocking issues;
 - every plan it depends on is merged, and its Consumes lines have been checked against that merged code.
 
-The lead then moves it to `docs/superpowers/plans/` on its `plan/<stage>-<topic>` branch and opens its issues.
+The lead then moves it with `git mv` on its `plan/<stage>-<topic>` branch, from `drafts/` to `docs/superpowers/plans/`, removes the banner, and opens its issues. Because the move happens on the branch, merging that branch takes the draft off `main`, and only one copy ever exists.
 
 ## Stage 1
 
