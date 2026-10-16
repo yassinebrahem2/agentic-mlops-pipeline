@@ -10,11 +10,13 @@
 
 ## Tasks
 
-- Task 1: Backend scaffold, tooling, CI
-- Task 2: Config, paths, IDs, clock, errors
-- Task 3: Storage
-- Task 4: Credentials
-- Task 5: Git runner and shared test fixtures
+| Task | Title | Depends on |
+|---|---|---|
+| 1 | Backend scaffold, tooling, CI | none |
+| 2 | Config, paths, IDs, clock, errors | 1 |
+| 3 | Storage | 2 |
+| 4 | Credentials | 2 |
+| 5 | Git runner and shared test fixtures | 3, 4 |
 
 ---
 
@@ -83,7 +85,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC", "S", "PTH"]
 # S603/S607: the app deliberately runs git, gh and rg as subprocesses without a shell.
-ignore = ["S603", "S607"]
+# E501: ruff format enforces line length; long strings it cannot split are allowed.
+ignore = ["E501", "S603", "S607"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
@@ -1923,7 +1926,7 @@ git commit -m "feat(credentials): add keyring and encrypted-file key stores and 
 **Interfaces:**
 - Consumes: `scrub_values`, `scrub_url_secrets` (Task 4), `DataPaths` (Task 2), `Databases` (Task 3).
 - Produces:
-  - `git.py`: `TOKEN_ENV`, `TokenProvider = Callable[[], Awaitable[str | None]]`, frozen dataclass `GitResult(code: int, stdout: str, stderr: str)`, `class GitError(Exception)` (`code: int`), `GitRunner(bin_dir: Path, token_provider: TokenProvider = no_token)` with `async run(args: Sequence[str], cwd: Path | None = None, *, check: bool = True, timeout: float = 600, authenticated: bool = False) -> GitResult` and `askpass_path() -> Path`.
+  - `git.py`: `ASKPASS_ENV_VAR`, `TokenProvider = Callable[[], Awaitable[str | None]]`, frozen dataclass `GitResult(code: int, stdout: str, stderr: str)`, `class GitError(Exception)` (`code: int`), `GitRunner(bin_dir: Path, token_provider: TokenProvider = no_token)` with `async run(args: Sequence[str], cwd: Path | None = None, *, check: bool = True, timeout: float = 600, authenticated: bool = False) -> GitResult` and `askpass_path() -> Path`.
   - `tests/conftest.py`: `make_repo(path: Path, files: dict[str, str], env: dict[str, str]) -> Path` (git init on branch main + one commit; use with the `git_env` fixture's env), class `MemoryKeyStore` (an in-memory `KeyStore`), fixtures `paths` (`DataPaths` under `tmp_path`, ensured), `databases` (`Databases`, disposed after the test), `keystore` (`MemoryKeyStore`). Every later backend plan relies on these, so they live here.
 
 The git runner lives in `integrations/github/` because GitHub is its main user, but it is shared infrastructure: the workspace and the agent file tools both run git through it.
@@ -2000,14 +2003,14 @@ from pathlib import Path
 
 import pytest
 
-from mlops_agents.integrations.github.git import TOKEN_ENV, GitError, GitRunner
+from mlops_agents.integrations.github.git import ASKPASS_ENV_VAR, GitError, GitRunner
 from tests.conftest import make_repo
 
 
 def test_askpass_answers_username_and_token(tmp_path: Path) -> None:
     runner = GitRunner(tmp_path / "bin")
     script = str(runner.askpass_path())
-    env = {**os.environ, TOKEN_ENV: "tok_123"}
+    env = {**os.environ, ASKPASS_ENV_VAR: "tok_123"}
     user = subprocess.run([script, "Username for 'https://github.com': "], env=env, capture_output=True, text=True, check=True)
     password = subprocess.run([script, "Password for 'https://x-access-token@github.com': "], env=env, capture_output=True, text=True, check=True)
     assert user.stdout.strip() == "x-access-token"
@@ -2061,7 +2064,7 @@ from pathlib import Path
 
 from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
 
-TOKEN_ENV = "MLOPS_AGENTS_GIT_TOKEN"
+ASKPASS_ENV_VAR = "MLOPS_AGENTS_GIT_TOKEN"
 TokenProvider = Callable[[], Awaitable[str | None]]
 
 # git asks GIT_ASKPASS for a username, then a password. GitHub accepts any username with a
@@ -2130,9 +2133,9 @@ class GitRunner:
                 "GIT_ASKPASS": str(self.askpass_path()),
             }
         )
-        env.pop(TOKEN_ENV, None)
+        env.pop(ASKPASS_ENV_VAR, None)
         if token:
-            env[TOKEN_ENV] = token
+            env[ASKPASS_ENV_VAR] = token
         command = ["git", "-c", "credential.helper=", "-c", "core.quotepath=off", *args]
         try:
             completed = await asyncio.to_thread(
