@@ -1,0 +1,35 @@
+name: Implementation plan
+description: Lead only. Assigns an implementation plan to the team.
+title: "[Plan] "
+labels: ["plan"]
+body:
+  - type: input
+    id: plan
+    attributes:
+      label: Plan
+      description: Path to the plan in docs/superpowers/plans/
+    validations:
+      required: true
+  - type: input
+    id: branch
+    attributes:
+      label: Branch
+      description: The plan branch, plan/<topic>
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Spec
+      description: Path to the spec in docs/superpowers/specs/
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: One checkbox per plan task. Claim a task with a comment before starting it.
+      value: |
+        - [ ] Task 1
+    validations:
+      required: true
