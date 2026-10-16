@@ -10,7 +10,9 @@
 
 ## Tasks
 
-- Task 1: Frontend scaffold, tooling, CI
+| Task | Title | Depends on |
+|---|---|---|
+| 1 | Frontend scaffold, tooling, CI | none |
 
 ---
 
@@ -53,6 +55,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   test: {
+    globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     exclude: ["e2e/**", "node_modules/**"],
