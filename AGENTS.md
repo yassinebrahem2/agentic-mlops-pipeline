@@ -4,9 +4,14 @@ Instructions for every coding agent working in this repository (Claude Code, Cod
 
 These rules apply to every session, whoever runs it and whatever agent they use.
 
-## Status
+## Backend commands
 
-Design phase: no code yet, so no build, lint or test commands exist. Add them here once the backend and frontend are scaffolded.
+Run from `backend/`:
+- Install: `uv sync`
+- Tests: `uv run pytest` (one test: `uv run pytest tests/path/test_file.py::test_name -v`)
+- Live tests against real services: `uv run pytest -m live`
+- Lint and format: `uv run ruff check` and `uv run ruff format`
+- Types: `uv run pyright`
 
 ## Team workflow
 
