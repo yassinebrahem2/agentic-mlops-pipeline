@@ -36,19 +36,28 @@ if [ -z "$option_id" ]; then
 fi
 
 content_id=$(gh api "repos/$OWNER/$REPO/issues/$number" --jq '.node_id')
-# The board's auto-add workflow may already have added the issue; adding it again fails.
-item_id=$(gh api graphql -f query='
-  query($c: ID!) {
-    node(id: $c) {
-      ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
-      ... on PullRequest { projectItems(first: 20) { nodes { id project { id } } } }
-    }
-  }' -f c="$content_id" --jq ".data.node.projectItems.nodes[] | select(.project.id == \"$project_id\") | .id")
+find_item() {
+  gh api graphql -f query='
+    query($c: ID!) {
+      node(id: $c) {
+        ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
+        ... on PullRequest { projectItems(first: 20) { nodes { id project { id } } } }
+      }
+    }' -f c="$content_id" --jq ".data.node.projectItems.nodes[] | select(.project.id == \"$project_id\") | .id"
+}
+# The board's auto-add workflows may add the issue at the same moment (adding a plan issue
+# also adds its sub-issues), so an add that finds it already there looks it up again.
+item_id=$(find_item)
 if [ -z "$item_id" ]; then
   item_id=$(gh api graphql -f query='
     mutation($p: ID!, $c: ID!) {
       addProjectV2ItemById(input: {projectId: $p, contentId: $c}) { item { id } }
-    }' -f p="$project_id" -f c="$content_id" --jq '.data.addProjectV2ItemById.item.id')
+    }' -f p="$project_id" -f c="$content_id" --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) \
+    || item_id=$(find_item)
+fi
+if [ -z "$item_id" ]; then
+  echo "#$number could not be found on or added to the project" >&2
+  exit 1
 fi
 
 gh api graphql -f query='
