@@ -41,6 +41,7 @@ Lifecycle of a piece of work:
 
 Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects/5), Status = Todo / In progress / Blocked / In review / Done. Milestones: one per roadmap stage ("Stage 1: Foundation and first agent", ...).
 Move a card with `scripts/board-status.sh <issue-or-PR number> "<Status>"` (needs `gh` and `jq`; `gh project` itself needs the `read:org` scope, which most tokens lack).
+Most moves are automatic: the board's built-in workflows add items to Todo and set Done on close and merge, and `.github/workflows/board.yml` sets In progress when a task is assigned (Todo when unassigned), Blocked when a Decision issue names it under "Blocked task" (In progress when that Decision closes), and In review when a PR into `main` says `Closes #<n>`. Cloud agent sessions cannot reach the board API; they move a card by running the `board` workflow manually with a number and a status.
 
 ### Implementer rules
 - Work only on the plan's branch. Never push to `main`; never merge anything.
