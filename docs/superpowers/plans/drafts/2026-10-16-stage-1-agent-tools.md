@@ -499,6 +499,7 @@ git commit -m "feat(agents): add agent definition files, catalog and tool regist
   - `tools/__init__.py`: `default_registry() -> ToolRegistry` with Read, Glob, Grep.
   - Path resolution (`resolve`, `is_file`), file reads and `rg` all run in `asyncio.to_thread`.
   - Both Grep engines give the same results: lines that are not UTF-8 are shown with replacement characters (`rg --json` sends them as base64 `bytes`), and binary files are not searched.
+  - A search that runs past `RG_TIMEOUT_SECONDS` (60) returns an error result that says how to narrow it, never an exception.
 
 Tool argument names and shapes follow Claude Code's Read (`file_path`, `offset`, `limit`), Glob (`pattern`, `path`) and Grep (`pattern`, `path`, `glob`, `type`, `output_mode`, `-i`, `-n`, `-A`, `-B`, `-C`, `head_limit`, `multiline`).
 
@@ -718,10 +719,13 @@ async def test_no_match(ctx: ToolContext) -> None:
 `backend/tests/agents/tools/test_grep.py`:
 
 ```python
+import os
 import shutil
+from pathlib import Path
 
 import pytest
 
+from mlops_agents.agents.tools import grep
 from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.grep import GrepTool
 
@@ -802,6 +806,19 @@ async def test_non_utf8_lines_are_shown_with_replacement(ctx: ToolContext, rg: s
 @pytest.mark.parametrize("rg", ENGINES)
 async def test_binary_files_are_not_searched(ctx: ToolContext, rg: str | None) -> None:
     assert (await GrepTool(rg).invoke(ctx, {"pattern": "binary"})).content == "No matches found."
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in rg is a POSIX shell script")
+async def test_slow_search_is_stopped_with_a_note(
+    ctx: ToolContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slow_rg = tmp_path / "slow-rg"
+    slow_rg.write_text("#!/bin/sh\nsleep 5\n")
+    slow_rg.chmod(0o700)
+    monkeypatch.setattr(grep, "RG_TIMEOUT_SECONDS", 0.2)
+    out = await GrepTool(str(slow_rg)).invoke(ctx, {"pattern": "train"})
+    assert out.is_error
+    assert "took longer than 0.2 seconds" in out.content
 ```
 
 `backend/tests/agents/tools/test_registry.py`:
@@ -1134,6 +1151,7 @@ from mlops_agents.agents.tools.base import (
 from mlops_agents.agents.tools.glob import glob_to_regex
 
 MAX_FILE_BYTES = 5_000_000
+RG_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_LINE = 500
 TYPE_EXTENSIONS: dict[str, tuple[str, ...]] = {
     "py": (".py", ".pyi"),
@@ -1275,7 +1293,15 @@ def _search_rg(
     if after:
         command += ["-A", str(after)]
     command += ["--", str(root / prefix) if prefix else str(root)]
-    completed = subprocess.run(command, cwd=root, capture_output=True, timeout=60, check=False)
+    try:
+        completed = subprocess.run(
+            command, cwd=root, capture_output=True, timeout=RG_TIMEOUT_SECONDS, check=False
+        )
+    except subprocess.TimeoutExpired:
+        raise ToolFailure(
+            f"The search took longer than {RG_TIMEOUT_SECONDS:g} seconds and was stopped. "
+            "Narrow it with path, glob or type."
+        ) from None
     if completed.returncode == 2:
         message = completed.stderr.decode("utf-8", "replace").strip()
         if "regex" in message.lower():
