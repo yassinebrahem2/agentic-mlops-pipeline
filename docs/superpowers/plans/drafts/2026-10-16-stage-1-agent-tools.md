@@ -492,13 +492,15 @@ git commit -m "feat(agents): add agent definition files, catalog and tool regist
 **Interfaces:**
 - Consumes: `AgentTool`, `ToolContext`, `ToolOutput`, `ToolFailure`, `RiskClass`, `ToolRegistry`, `FileAccess` (Task 1), `GitRunner` (backend-core plan, Task 5); test fixture `git_env` and `make_repo(path, files, env) -> Path` from `tests/conftest.py` (backend-core plan, Task 5). Nothing from the providers or github-workspace plans: callers pass the repository root.
 - Produces:
-  - `files.py`: `DENYLIST: tuple[str, ...]`, `is_secret(rel_posix: str) -> bool`, `RepoFiles(root: Path, git: GitRunner)` implementing `FileAccess`. One instance per turn: the tracked-file list is cached on the instance.
+  - `files.py`: `DENYLIST: tuple[str, ...]`, `is_secret(rel_posix: str) -> bool`, `RepoFiles(root: Path, git: GitRunner)` implementing `FileAccess`. One instance per turn: the tracked-file list is cached on the instance. It lists only regular files (`git ls-files -s`; symlinks and submodules are left out, so no tool can follow a tracked link to a file outside the repository).
   - `read.py`: `ReadArgs`, `ReadTool` (name `Read`), constants `MAX_LINES = 2000`, `MAX_LINE_CHARS = 2000`, `MAX_CHARS = 100_000`.
   - `glob.py`: `glob_to_regex(pattern: str) -> re.Pattern[str]`, `GlobArgs`, `GlobTool` (name `Glob`), `MAX_RESULTS = 200`.
   - `grep.py`: `TYPE_EXTENSIONS`, `GrepArgs`, `GrepTool(rg_path: str | None)` (name `Grep`; `None` means the pure-Python engine).
   - `tools/__init__.py`: `default_registry() -> ToolRegistry` with Read, Glob, Grep.
   - Path resolution (`resolve`, `is_file`), file reads and `rg` all run in `asyncio.to_thread`.
   - Both Grep engines give the same results: lines that are not UTF-8 are shown with replacement characters (`rg --json` sends them as base64 `bytes`), and binary files are not searched.
+  - Files larger than `MAX_FILE_BYTES` (5,000,000) are not searched by either engine, and the result ends with a note saying how many were skipped.
+  - An invalid glob pattern (Glob, or Grep's `glob`) is an error result, never an exception.
   - A search that runs past `RG_TIMEOUT_SECONDS` (60) returns an error result that says how to narrow it, never an exception.
 
 Tool argument names and shapes follow Claude Code's Read (`file_path`, `offset`, `limit`), Glob (`pattern`, `path`) and Grep (`pattern`, `path`, `glob`, `type`, `output_mode`, `-i`, `-n`, `-A`, `-B`, `-C`, `head_limit`, `multiline`).
@@ -714,6 +716,12 @@ async def test_glob_never_lists_secrets_or_untracked(ctx: ToolContext) -> None:
 
 async def test_no_match(ctx: ToolContext) -> None:
     assert (await GlobTool().invoke(ctx, {"pattern": "**/*.rs"})).content == "No files matched."
+
+
+async def test_invalid_glob_is_an_error_result(ctx: ToolContext) -> None:
+    out = await GlobTool().invoke(ctx, {"pattern": "[z-a].py"})
+    assert out.is_error
+    assert out.content.startswith("Invalid glob pattern")
 ```
 
 `backend/tests/agents/tools/test_grep.py`:
@@ -721,13 +729,17 @@ async def test_no_match(ctx: ToolContext) -> None:
 ```python
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from mlops_agents.agents.tools import grep
 from mlops_agents.agents.tools.base import ToolContext
-from mlops_agents.agents.tools.grep import GrepTool
+from mlops_agents.agents.tools.files import RepoFiles
+from mlops_agents.agents.tools.grep import MAX_FILE_BYTES, GrepTool
+from mlops_agents.integrations.github.git import GitRunner
+from tests.conftest import make_repo
 
 ENGINES = [pytest.param(None, id="python")]
 RG = shutil.which("rg")
@@ -819,6 +831,45 @@ async def test_slow_search_is_stopped_with_a_note(
     out = await GrepTool(str(slow_rg)).invoke(ctx, {"pattern": "train"})
     assert out.is_error
     assert "took longer than 0.2 seconds" in out.content
+
+
+def _commit_all(root: Path, env: dict[str, str]) -> None:
+    subprocess.run(["git", "add", "-A"], cwd=root, env=env, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "more"], cwd=root, env=env, check=True, capture_output=True
+    )
+
+
+@pytest.mark.parametrize("rg", ENGINES)
+async def test_tracked_symlink_to_outside_is_never_searched(
+    tmp_path: Path, git_env: dict[str, str], rg: str | None
+) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private-marker-7731\n")
+    root = make_repo(tmp_path / "repo", {"a.txt": "hello\n"}, git_env)
+    try:
+        (root / "notes.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("this machine does not allow creating symlinks")
+    _commit_all(root, git_env)
+    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    assert await ctx.files.tracked() == ["a.txt"]
+    out = await GrepTool(rg).invoke(ctx, {"pattern": "private-marker-7731"})
+    assert out.content == "No matches found."
+
+
+@pytest.mark.parametrize("rg", ENGINES)
+async def test_files_over_the_size_limit_are_named_in_a_note(
+    tmp_path: Path, git_env: dict[str, str], rg: str | None
+) -> None:
+    root = make_repo(tmp_path / "repo", {"small.csv": "needle\n"}, git_env)
+    (root / "large.csv").write_bytes(b"needle\n" + b"x" * MAX_FILE_BYTES)
+    _commit_all(root, git_env)
+    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    out = await GrepTool(rg).invoke(ctx, {"pattern": "needle"})
+    lines = out.content.splitlines()
+    assert lines[0] == "small.csv"
+    assert lines[-1].startswith("[Skipped 1 files larger than")
 ```
 
 `backend/tests/agents/tools/test_registry.py`:
@@ -865,13 +916,28 @@ def is_secret(rel_posix: str) -> bool:
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in DENYLIST)
 
 
+# git ls-files -s modes that are not regular files: symlinks (whose target may be outside the
+# repository, such as ~/.aws/credentials) and submodules.
+_NOT_REGULAR = frozenset({"120000", "160000"})
+
+
+def _regular_files(ls_files_stage: str) -> list[str]:
+    """Paths from `git ls-files -s -z` output whose mode is a regular file."""
+    paths: list[str] = []
+    for entry in ls_files_stage.split("\0"):
+        meta, sep, path = entry.partition("\t")
+        if sep and meta.split(" ", 1)[0] not in _NOT_REGULAR:
+            paths.append(path)
+    return paths
+
+
 def _norm(rel: str) -> str:
     return rel.casefold() if os.name == "nt" else rel
 
 
 class RepoFiles:
-    """What an agent may see in a repository: files tracked by git, minus secrets, never
-    outside the repository root (no `..`, no symlink escapes). One instance per turn."""
+    """What an agent may see in a repository: regular files tracked by git, minus secrets,
+    never outside the repository root (no `..`, no symlinks). One instance per turn."""
 
     def __init__(self, root: Path, git: GitRunner) -> None:
         self._root = root
@@ -886,8 +952,9 @@ class RepoFiles:
 
     async def tracked(self) -> list[str]:
         if self._tracked is None:
-            result = await self._git.run(["ls-files", "-z"], cwd=self._root)
-            self._tracked = sorted(p for p in result.stdout.split("\0") if p and not is_secret(p))
+            result = await self._git.run(["ls-files", "-s", "-z"], cwd=self._root)
+            files = _regular_files(result.stdout)
+            self._tracked = sorted({p for p in files if not is_secret(p)})
             self._lookup = {_norm(p): p for p in self._tracked}
         return self._tracked
 
@@ -1040,7 +1107,13 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolOutput
+from mlops_agents.agents.tools.base import (
+    AgentTool,
+    RiskClass,
+    ToolContext,
+    ToolFailure,
+    ToolOutput,
+)
 
 MAX_RESULTS = 200
 
@@ -1079,7 +1152,10 @@ def _translate(pattern: str) -> str:
 
 def glob_to_regex(pattern: str) -> re.Pattern[str]:
     """`**` crosses folders, `*` and `?` do not, `[...]`, `[!...]` and `{a,b}` work as in shells."""
-    return re.compile(_translate(pattern), re.IGNORECASE if os.name == "nt" else 0)
+    try:
+        return re.compile(_translate(pattern), re.IGNORECASE if os.name == "nt" else 0)
+    except re.error as exc:
+        raise ToolFailure(f"Invalid glob pattern {pattern!r}: {exc}") from None
 
 
 class GlobArgs(BaseModel):
@@ -1220,6 +1296,13 @@ class SearchResult:
     skipped: int = 0
 
 
+def _too_large(path: Path) -> bool:
+    try:
+        return path.stat().st_size > MAX_FILE_BYTES
+    except OSError:
+        return False
+
+
 def _search_python(
     root: Path, files: list[str], regex: re.Pattern[str], before: int, after: int, multiline: bool
 ) -> SearchResult:
@@ -1283,7 +1366,8 @@ def _search_rg(
 ) -> SearchResult:
     # rg searches the folder and its own ignore rules apply; results are then limited to the
     # files the agent may see. Tracked files that .gitignore also lists are not searched by rg.
-    command = [rg, "--json", "--no-config", "--hidden", "--max-filesize", "5M", "-e", args.pattern]
+    command = [rg, "--json", "--no-config", "--hidden", "--max-filesize", str(MAX_FILE_BYTES)]
+    command += ["-e", args.pattern]
     if args.case_insensitive:
         command.append("-i")
     if args.multiline:
@@ -1302,12 +1386,12 @@ def _search_rg(
             f"The search took longer than {RG_TIMEOUT_SECONDS:g} seconds and was stopped. "
             "Narrow it with path, glob or type."
         ) from None
-    if completed.returncode == 2:
+    if completed.returncode == 2 and not completed.stdout:
         message = completed.stderr.decode("utf-8", "replace").strip()
         if "regex" in message.lower():
             raise ToolFailure(f"Invalid regular expression: {message}")
         raise ToolFailure(f"The search failed: {message}")
-    result = SearchResult()
+    result = SearchResult(skipped=sum(1 for rel in allowed if _too_large(root / rel)))
     for raw in completed.stdout.splitlines():
         event = _RgEvent.model_validate_json(raw)
         if event.type not in ("match", "context"):
@@ -1351,7 +1435,10 @@ def _format(result: SearchResult, args: GrepArgs) -> str:
             f"[Showing the first {args.head_limit} of {total} lines. Narrow the search or raise head_limit.]"
         )
     if result.skipped:
-        lines.append(f"[Skipped {result.skipped} files larger than 5 MB.]")
+        lines.append(
+            f"[Skipped {result.skipped} files larger than {MAX_FILE_BYTES:,} bytes; "
+            "Read them in parts instead.]"
+        )
     return "\n".join(lines)
 
 
