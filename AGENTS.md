@@ -50,6 +50,7 @@ Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects
   - tests are written as code, or as a precise list of behaviors and failure cases to verify;
   - full implementation code only where a mistake is costly or subtle (security, data loss, platform quirks, tricky concurrency); elsewhere, precise implementation notes.
 - A task's tests are its stop condition: the task is done when they pass, together with lint, type checks and CI.
+- Unfinished plans are committed to `docs/superpowers/plans/drafts/` on `main`, each with a banner listing what is still missing (see that folder's README), never kept in local scratch files or unpushed branches. A draft is never implemented.
 
 ### Issues
 Four types, each with its template and label. Blank issues are disabled.
