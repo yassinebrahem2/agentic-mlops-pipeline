@@ -1,9 +1,4 @@
-# Stage 1 — Providers Implementation Plan (DRAFT)
-
-> **DRAFT: not ready to implement.** This plan sits in `drafts/` until both items below are done. Then it moves to `docs/superpowers/plans/` on its own `plan/stage-1-<topic>` branch and gets its issues.
-> 1. **Advisor review.** Round 1 found blockers, and they are fixed. Rounds must continue until one finds no blocking issues.
-> 2. **Check against the merged backend-core code.** backend-core changed while it was implemented (see PR #10, "done differently"). Every name in this plan's Consumes lines and test fixtures must match the code on `main`.
-
+# Stage 1 — Providers Implementation Plan
 
 > **For agentic workers:** Implement this plan task by task, in order. Each task lists its exact files, the interfaces it consumes and produces, its tests (the task's stop condition) and the commands that prove it works. Claude Code users may use superpowers:executing-plans or superpowers:subagent-driven-development; nothing here requires them. Steps use checkbox (`- [ ]`) syntax. Team rules (claiming tasks, commits, PRs) are in `AGENTS.md`.
 
@@ -34,7 +29,7 @@
 - Produces:
   - `models.py`: `ProviderKind`, `ProviderCreate(name, kind, base_url)`, `KeyHint(position, hint)`, `Provider(id, name, kind, base_url, status, status_detail, keys: list[KeyHint])`, `ModelCreate(provider, wire_model_id, context_window: int | None)`, `ModelEntry(address, provider_id, provider_name, wire_model_id, context_window, tool_calling, streaming, availability, availability_detail, verified_at)`, `RemoteModel(id, context_window)`, `DetectedKey(env_var, provider_name, base_url, hint, provider_exists)`.
   - `ProvidersService(databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient)` with async methods: `list_providers() -> list[Provider]`, `get_provider(name) -> Provider`, `get_provider_by_id(provider_id) -> Provider`, `create_provider(data: ProviderCreate) -> Provider`, `delete_provider(name) -> None`, `add_key(name, value) -> Provider`, `remove_key(name, position) -> Provider`, `keys_for(provider_id) -> list[str]`, `list_remote_models(name) -> list[RemoteModel]`, `add_model(data: ModelCreate) -> ModelEntry`, `list_models() -> list[ModelEntry]`, `get_model(address) -> ModelEntry | None`, `require_model(address) -> ModelEntry`, `set_context_window(address, value) -> ModelEntry`, `delete_model(address) -> None`, `record_verification(address, *, tool_calling, streaming, detail) -> ModelEntry`, `mark_model_problem(address, detail) -> None`, `mark_needs_attention(provider_id, detail) -> None`, `detect_env_keys(env=None) -> list[DetectedKey]`, `import_env_key(env_var, env=None) -> Provider`. Task 2 adds `verify_model(address) -> ModelEntry`.
-  - The `http` client: one `httpx2.AsyncClient` per app, created and closed by the app factory (api plan), carries every provider and model call. `httpx2` is the HTTP library the `openai` SDK uses since 3.x; models must get the app's client because langchain-openai's default one is cached for the whole process and bound to the first event loop that used it (the tests, which run one event loop per test, fail with "Event loop is closed" without this).
+  - The `http` client: one `httpx2.AsyncClient` per app, created in the app's lifespan startup and closed at shutdown (api plan; never at import time), carries every provider and model call. `httpx2` is the HTTP library the `openai` SDK uses since 3.x; models must get the app's client because langchain-openai's default one is cached for the whole process and bound to the first event loop that used it (the tests, which run one event loop per test, fail with "Event loop is closed" without this).
   - `delete_model` and `delete_provider` leave `agent_model_defaults` rows that name a deleted model. Model assignment (agent-runtime plan) reports such a default with the spec's "choose another model" message, as it does for a project override.
 
 - [ ] **Step 0: Add the dependency**
@@ -1491,7 +1486,7 @@ async def test_groq_streams_tool_calls() -> None:
 ```
 
 Run: `cd backend && GROQ_API_KEY=... uv run pytest -m live tests/providers/test_live.py -v`
-Expected: PASS (verified on 2026-10-16 with this model).
+Expected: PASS. The probe passed against this model on 2026-10-16, before `http` was added to `probe_model`; run it once with a real key when this task is done and report the result in the PR.
 
 - [ ] **Step 7: Commit**
 

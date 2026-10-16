@@ -12,7 +12,6 @@ The lead then moves it with `git mv` on its `plan/<stage>-<topic>` branch, from 
 
 | Draft | Depends on | Still missing |
 |---|---|---|
-| [providers](2026-10-16-stage-1-providers.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. `agent_model_defaults.model_address` has no foreign key, so an app-level default can point at a deleted model: make sure the plan shows the same clear "choose another model" message the spec requires for a project override. |
 | [github-workspace](2026-10-16-stage-1-github-workspace.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. |
 | [agent-tools](2026-10-16-stage-1-agent-tools.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. |
 
