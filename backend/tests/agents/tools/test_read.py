@@ -84,3 +84,25 @@ async def test_oversized_single_line_file_reads_bounded(
     assert len(lines) == 1
     assert lines[0].endswith(" [line cut]")
     assert len(lines[0]) <= 2025
+
+
+@pytest.mark.parametrize(
+    ("text", "cut"),
+    [
+        ("x" * 2000, False),
+        ("é" * 2000, False),
+        ("€" * 2000, False),
+        ("x" * 2001, True),
+        ("€" * 2001, True),
+    ],
+    ids=["ascii-full", "2-byte-full", "3-byte-full", "ascii-cut", "3-byte-cut"],
+)
+async def test_line_cut_counts_characters_not_bytes(
+    text: str, cut: bool, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    root = make_repo(tmp_path / "repo", {"long.txt": f"{text}\nnext\n"}, git_env)
+    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    out = await ReadTool().invoke(ctx, {"file_path": "long.txt"})
+    lines = out.content.splitlines()
+    assert lines[0] == f"     1\t{text[:2000]}" + (" [line cut]" if cut else "")
+    assert lines[1] == "     2\tnext"

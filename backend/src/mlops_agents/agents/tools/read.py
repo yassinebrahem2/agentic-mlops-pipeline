@@ -18,6 +18,9 @@ MAX_LINES = 2000
 MAX_LINE_CHARS = 2000
 MAX_CHARS = 100_000
 BINARY_SNIFF = 8192
+# UTF-8 spends at most 4 bytes on a character, so this many bytes always hold a full line of
+# MAX_LINE_CHARS characters.
+MAX_LINE_BYTES = 4 * MAX_LINE_CHARS
 CHUNK_SIZE = 65536
 
 
@@ -49,12 +52,11 @@ def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, b
         chars = 0
         number = 0
         while True:
-            raw = handle.readline(MAX_LINE_CHARS + 1)
+            raw = handle.readline(MAX_LINE_BYTES + 1)
             if not raw:
                 break
             number += 1
-            is_cut = len(raw) > MAX_LINE_CHARS
-            if is_cut and not raw.endswith(b"\n"):
+            if len(raw) > MAX_LINE_BYTES and not raw.endswith(b"\n"):
                 while True:
                     chunk = handle.readline(CHUNK_SIZE)
                     if not chunk or chunk.endswith(b"\n"):
@@ -64,7 +66,7 @@ def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, b
             if len(out) >= limit or chars >= MAX_CHARS:
                 return out, False, True
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
-            if is_cut or len(line) > MAX_LINE_CHARS:
+            if len(line) > MAX_LINE_CHARS:
                 line = line[:MAX_LINE_CHARS] + " [line cut]"
             out.append(f"{number:>6}\t{line}")
             chars += len(line)

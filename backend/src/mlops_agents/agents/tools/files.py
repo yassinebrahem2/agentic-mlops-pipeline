@@ -41,9 +41,6 @@ def norm_path(rel: str) -> str:
     return rel.casefold() if os.name == "nt" else rel
 
 
-_norm = norm_path
-
-
 class RepoFiles:
     """What an agent may see in a repository: regular files tracked by git, minus secrets,
     never outside the repository root (no `..`, no symlinks). One instance per turn."""
@@ -64,15 +61,15 @@ class RepoFiles:
             result = await self._git.run(["ls-files", "-s", "-z"], cwd=self._root)
             files = _regular_files(result.stdout)
             self._tracked = sorted({p for p in files if not is_secret(p)})
-            self._lookup = {_norm(p): p for p in self._tracked}
+            self._lookup = {norm_path(p): p for p in self._tracked}
         return self._tracked
 
     async def under(self, prefix: str) -> list[str]:
         files = await self.tracked()
         if not prefix:
             return files
-        wanted = _norm(prefix)
-        return [f for f in files if _norm(f).startswith(wanted)]
+        wanted = norm_path(prefix)
+        return [f for f in files if norm_path(f).startswith(wanted)]
 
     def _relative(self, user_path: str) -> str:
         """Blocking (resolves symlinks): call it through asyncio.to_thread."""
@@ -93,7 +90,7 @@ class RepoFiles:
         if is_secret(rel):
             raise ToolFailure(f"{rel} looks like a secret file, so it cannot be read.")
         await self.tracked()
-        actual = self._lookup.get(_norm(rel))
+        actual = self._lookup.get(norm_path(rel))
         if actual is None:
             raise ToolFailure(
                 f"{rel} is not a file committed to the repository. Only committed files can be "
