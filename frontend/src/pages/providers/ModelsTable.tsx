@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorText, unwrap } from "@/lib/api";
+import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
 
 type ModelEntry = components["schemas"]["ModelEntry"];
 
@@ -149,6 +149,7 @@ function ModelRow({ model }: { model: ModelEntry }) {
 function ContextWindowForm({ address }: { address: string }) {
   const queryClient = useQueryClient();
   const inputId = useId();
+  const errorId = useId();
   const [value, setValue] = useState("");
   const save = useMutation({
     mutationFn: async (tokens: number) =>
@@ -163,13 +164,18 @@ function ContextWindowForm({ address }: { address: string }) {
     save.mutate(Number(value));
   }
 
+  const valueError = fieldErrors(save.error).value;
+
   return (
-    <form onSubmit={submit} className="flex max-w-56 flex-col gap-2 whitespace-normal">
+    // The server is the one judge of the value; its sentence shows under the input.
+    <form noValidate onSubmit={submit} className="flex max-w-56 flex-col gap-2 whitespace-normal">
       <Label htmlFor={inputId}>Context window</Label>
       <div className="flex gap-2">
         <Input
           id={inputId}
           aria-label={`Context window of ${address}`}
+          aria-invalid={valueError !== undefined ? true : undefined}
+          aria-describedby={valueError !== undefined ? errorId : undefined}
           type="number"
           min={1}
           step={1}
@@ -191,7 +197,13 @@ function ContextWindowForm({ address }: { address: string }) {
       <p className="text-muted-foreground">
         This model cannot be assigned to an agent until its context window is set.
       </p>
-      {save.isError && <p className="text-destructive">{errorText(save.error)}</p>}
+      {valueError !== undefined ? (
+        <p id={errorId} className="text-destructive">
+          {valueError}
+        </p>
+      ) : (
+        save.isError && <p className="text-destructive">{errorText(save.error)}</p>
+      )}
     </form>
   );
 }

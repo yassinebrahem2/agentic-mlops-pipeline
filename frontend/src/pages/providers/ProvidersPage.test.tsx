@@ -326,6 +326,54 @@ describe("AI providers page", () => {
     ]);
   });
 
+  it("refreshes the page when an import creates the provider but its key is rejected", async () => {
+    const detected: DetectedKey = {
+      env_var: "GROQ_API_KEY",
+      provider_name: "groq",
+      base_url: groq.base_url,
+      hint: "gsk_...abcd",
+      provider_exists: false,
+    };
+    let created = false;
+    stubApi({
+      "GET /api/providers": () => json(created ? [{ ...groq, keys: [] }] : []),
+      "GET /api/env-keys": () => json([{ ...detected, provider_exists: created }]),
+      "POST /api/env-keys/GROQ_API_KEY/import": () => {
+        created = true;
+        return json(
+          { code: "key_rejected", message: "groq rejected this key.", detail: null },
+          422,
+        );
+      },
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    await user.click(await screen.findByRole("button", { name: "Import GROQ_API_KEY" }));
+
+    const item = (await screen.findByText("groq rejected this key.")).closest("li");
+    expect(item).not.toBeNull();
+    expect(item).toHaveTextContent("GROQ_API_KEY");
+    const card = (await screen.findByRole("heading", { name: "groq" })).closest("section");
+    expect(within(card as HTMLElement).getByRole("button", { name: "Add key" })).toBeVisible();
+    expect(
+      await screen.findByRole("button", { name: "Import key GROQ_API_KEY" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the keys in the environment cannot be listed", async () => {
+    stubApi({
+      "GET /api/env-keys": () =>
+        json(
+          { code: "keystore_unavailable", message: "The key store is locked.", detail: null },
+          503,
+        ),
+    });
+    renderPage("/providers");
+
+    expect(await screen.findByText("The key store is locked.")).toBeInTheDocument();
+  });
+
   it("hides the detected keys section when none are found", async () => {
     stubApi({ "GET /api/providers": () => json([groq]) });
     renderPage("/providers");

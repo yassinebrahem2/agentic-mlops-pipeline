@@ -176,6 +176,37 @@ describe("models table", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the validator's message under the context window input", async () => {
+    const sentence = "Input should be a valid integer, got a number with a fractional part";
+    const sent = stubApi({
+      "GET /api/models": () => json([slashed]),
+      "PUT /api/models/context-window": () =>
+        json(
+          {
+            code: "invalid_request",
+            message: "Some fields are missing or invalid.",
+            detail: { errors: [{ field: "body.value", message: sentence }] },
+          },
+          422,
+        ),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("groq:openai/gpt-oss-120b");
+    const input = within(row).getByLabelText(/^Context window/);
+    await user.type(input, "1.5");
+    await user.click(within(row).getByRole("button", { name: /^Save/ }));
+
+    await waitFor(() => {
+      expect(input).toHaveAccessibleDescription(sentence);
+    });
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(writes(sent).map((s) => s.body)).toEqual([
+      { address: "groq:openai/gpt-oss-120b", value: 1.5 },
+    ]);
+  });
+
   it("asks for an unknown context window and sends the address with the value", async () => {
     const sent = stubApi({
       "GET /api/models": () => json([slashed]),

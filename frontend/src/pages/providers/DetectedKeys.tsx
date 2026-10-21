@@ -11,6 +11,9 @@ export function DetectedKeys() {
     queryFn: async () => unwrap(await api.GET("/api/env-keys")),
   });
 
+  if (detected.isError) {
+    return <p className="text-destructive">{errorText(detected.error)}</p>;
+  }
   if (!detected.data || detected.data.length === 0) return null;
   return (
     <section aria-labelledby="env-keys-heading" className="flex flex-col gap-4">
@@ -41,7 +44,9 @@ function DetectedKeyItem({ detected }: { detected: DetectedKey }) {
           params: { path: { env_var: detected.env_var } },
         }),
       ),
-    onSuccess: async () => {
+    // The server creates a missing provider before it checks the key, so even a failed import
+    // can add a provider: refresh either way.
+    onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["providers"] }),
         queryClient.invalidateQueries({ queryKey: ["env-keys"] }),
