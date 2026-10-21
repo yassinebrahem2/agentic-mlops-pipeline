@@ -78,17 +78,19 @@ class SessionView(BaseModel):
     messages: list[MessageView]              # full history, oldest first
     last_seq: int                            # stream position this view matches
 
-class StreamEvent(BaseModel):
-    seq: int                                 # per session, increasing; sent as the SSE id
-    type: Literal["message.created", "text.delta", "tool.started", "tool.finished",
-                  "message.updated", "turn.ended", "resync"]
-    data: dict[str, Any]
-    # message.created  {"message": MessageView}       every new message, the user's included
-    # text.delta       {"message_id": str, "text": str}
-    # tool.started     {"message_id": str, "tool_call_id": str, "name": str, "input": dict}
-    # tool.finished    {"message_id": str, "tool_call_id": str, "content": str, "is_error": bool}
-    # message.updated  {"message": MessageView}       a message's new final state
-    # turn.ended       {"turn_id": str, "status": TurnEnd, "error": str | None}
+# One class per event, each `seq: int` (per session, increasing; sent as the SSE id), a literal
+# `type` and a typed `data` (#89); the wire shape is `{"seq", "type", "data"}`:
+#   MessageCreated  "message.created"  data: MessageData {message: MessageView}   every new message, the user's included
+#   TextDelta       "text.delta"       data: TextDeltaData {message_id, text}
+#   ToolStarted     "tool.started"     data: ToolStartedData {message_id, tool_call_id, name, input}
+#   ToolFinished    "tool.finished"    data: ToolFinishedData {message_id, tool_call_id, content, is_error}
+#   MessageUpdated  "message.updated"  data: MessageData                           a message's new final state
+#   TurnEnded       "turn.ended"       data: TurnEndedData {turn_id, status: TurnEnd, error: str | None}
+#   Resync          "resync"           data: ResyncData {} (no fields)
+StreamEvent = Annotated[MessageCreated | TextDelta | ToolStarted | ToolFinished | MessageUpdated
+                        | TurnEnded | Resync, Field(discriminator="type")]
+# The stream route's OpenAPI response names StreamEvent, so the frontend generates these types
+# instead of writing them (api-sessions task 1).
 
 class AgentSessions(Protocol):
     async def get(self, project_id: str, agent: str) -> SessionView: ...
@@ -101,7 +103,7 @@ class AgentSessions(Protocol):
 ```
 Errors are `DomainError`s: unknown agent 404, an agent without chat 409, model problems from I2 as they come.
 
-Two tabs and reconnects: a client calls `get`, then `subscribe(after_seq=last_seq)`. `get` returns a message that is still streaming with all the text and tool steps produced so far, so a tab opened mid-turn misses nothing, and the events after `last_seq` carry only what came later. When `after_seq` is older than the hub's in-memory buffer, or newer than the session's current seq (the process restarted, which resets seq), `subscribe` first yields one event of type `resync` with empty `data`, and the client calls `get` again. So `StreamEvent.type` also includes `"resync"`.
+Two tabs and reconnects: a client calls `get`, then `subscribe(after_seq=last_seq)`. `get` returns a message that is still streaming with all the text and tool steps produced so far, so a tab opened mid-turn misses nothing, and the events after `last_seq` carry only what came later. When `after_seq` is older than the hub's in-memory buffer, or newer than the session's current seq (the process restarted, which resets seq), `subscribe` first yields one event of type `resync` with empty `data`, and the client calls `get` again. So `StreamEvent` also includes `Resync`.
 
 The implementation is `mlops_agents.agents.runtime.sessions.SessionManager`, which implements `AgentSessions`. Its constructor is fixed by agent-runtime task 1 in `contract.py`'s docstring, and agent-runtime's task list names the task that delivers it. api-sessions and frontend-chat code against the contract from task 1; their routes and page merge after `SessionManager` is on `main`.
 
@@ -128,7 +130,7 @@ class AgentSettingsService:
     async def set_project_limits(self, project_id: str, agent: str, limits: AgentLimitsUpdate) -> AgentSettingsView: ...
     async def resolve(self, project_id: str, agent: str) -> tuple[ResolvedModel, int | None]: ...
 ```
-`resolve` returns the model and `max_steps` for a turn. It raises `DomainError` (409) with a message saying what to choose when no model is assigned, the model no longer exists, or it lacks verified `tool_calling`, `streaming` or a context window.
+`resolve` returns the model and `max_steps` for a turn. It raises `DomainError` (409) with a message saying what to choose when no model is assigned, the model no longer exists, or the model has a `ModelEntry.problem` (I6, the rule's one source), whose text it uses as the message.
 
 **I3. API skeleton** (api-foundation, task 1):
 - `mlops_agents/api/app.py`: `create_app(settings: Settings, *, keystore: KeyStore | None = None, gh: GhLike | None = None) -> FastAPI` (the CLI passes the key store it opened; tests pass a memory key store and a missing `gh`). Its lifespan builds the services inside one `AsyncExitStack`: a service registers its own startup work and cleanup where it is built.
@@ -154,11 +156,11 @@ class AgentSettingsService:
   };
   ```
 
-- `frontend/src/lib/models.ts` (frontend-foundation task 2): `isUsableModel(model)` (I2's usable-model rule on the client) and `hostedModelWarning(provider)`, used by every page that assigns a model.
+- `frontend/src/lib/models.ts` (frontend-foundation task 2): `hostedModelWarning(provider)`, used by every page that assigns a model. Whether a model is usable is not decided here: a page reads `ModelEntry.problem` (I6), None when usable (#88).
 - Page paths, fixed so pages can link to each other: `/` Projects (frontend-workspace, app nav order 0), `/projects/new` Add project, `/projects/:projectId` (redirects to the first project page by `order`), `/projects/:projectId/agents` Agents (frontend-chat, project nav order 0), `/projects/:projectId/settings` Project settings (frontend-workspace, project nav order 100), `/providers` AI providers (frontend-providers, app nav order 10), `/integrations` Integrations (order 20), `/settings` App settings (order 30). Nav labels are unique, so role and label queries (e2e) are never ambiguous.
 - Tests render pages with `src/test/render.tsx`: `renderPage(path: string, options?: { routes?: PageRoute[] })` renders the real router (memory history at `path`) with a fresh `QueryClient`; requests are answered by `vi.stubGlobal("fetch", ...)`, which works because `createApiClient`'s default fetch calls `globalThis.fetch` at request time.
 
-**I6. Resource API** (api-resources). Bodies are the merged pydantic models (`Project`, `FolderListing`, `Provider`, `ModelEntry`, `RemoteModel`, `DetectedKey`, `GitHubStatus`, `RepoSummary`) and I2's `AgentSettingsView`; the OpenAPI contract is the reference.
+**I6. Resource API** (api-resources). Bodies are the merged pydantic models (`Project`, `FolderListing`, `Provider`, `ModelEntry` (with the computed `problem: str | None`, the one source of the usable-model rule, #88), `RemoteModel`, `DetectedKey`, `GitHubStatus`, `RepoSummary`) and I2's `AgentSettingsView`; the OpenAPI contract is the reference.
 - Projects: `GET/POST /api/projects` (POST body `{"source": "local", "path", "init_git"}` or `{"source": "github", "repo"}`), `GET/DELETE /api/projects/{project_id}`, `POST .../open`, `POST .../refresh`, `POST .../relink` `{"path"}`, `GET /api/folders?path=` (local mode only).
 - GitHub: `GET /api/github`, `POST /api/github/gh`, `POST /api/github/token` `{"token"}`, `DELETE /api/github`, `GET /api/github/repos`.
 - Providers: `GET/POST /api/providers`, `DELETE /api/providers/{name}`, `POST /api/providers/{name}/keys` `{"key"}`, `DELETE /api/providers/{name}/keys/{position}`, `GET /api/providers/{name}/remote-models`, `GET /api/env-keys`, `POST /api/env-keys/{env_var}/import`.
