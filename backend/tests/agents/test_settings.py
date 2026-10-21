@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import NoReturn
 
 import httpx2
 import pytest
@@ -589,7 +590,7 @@ async def test_check_model_handles_provider_not_found(
     await settings_svc.set_default_model("orchestrator", model.address)
 
     # Simulate get_provider_by_id failing with provider_not_found
-    async def fake_get_provider_by_id(provider_id: str):
+    async def fake_get_provider_by_id(provider_id: str) -> NoReturn:
         raise DomainError("provider_not_found", f"No provider {provider_id}.", status=404)
 
     monkeypatch.setattr(providers_svc, "get_provider_by_id", fake_get_provider_by_id)
@@ -629,7 +630,7 @@ async def test_check_model_reraises_other_domain_errors(
     await settings_svc.set_default_model("orchestrator", model.address)
 
     # Simulate get_provider_by_id failing with internal_error (status=500)
-    async def fake_get_provider_by_id(provider_id: str):
+    async def fake_get_provider_by_id(provider_id: str) -> NoReturn:
         raise DomainError("internal_error", "Something went wrong", status=500)
 
     monkeypatch.setattr(providers_svc, "get_provider_by_id", fake_get_provider_by_id)
@@ -684,7 +685,7 @@ async def test_check_model_raises_runtime_error_if_context_window_missing(
 
     real_get_model = providers_svc.get_model
 
-    async def fake_get_model(address: str):
+    async def fake_get_model(address: str) -> ModelEntry | None:
         entry = await real_get_model(address)
         if entry is not None:
             return entry.model_copy(update={"context_window": None})
