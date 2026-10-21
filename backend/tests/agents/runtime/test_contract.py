@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +10,8 @@ from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageView,
     Part,
+    Resync,
+    ResyncData,
     SessionView,
     StreamEvent,
     TextPart,
@@ -16,15 +19,33 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 
-VALID_EVENT_TYPES: list[str] = [
-    "message.created",
-    "text.delta",
-    "tool.started",
-    "tool.finished",
-    "message.updated",
-    "turn.ended",
-    "resync",
-]
+MESSAGE: dict[str, Any] = {
+    "id": "msg_01",
+    "turn_id": None,
+    "author_kind": "user",
+    "author_name": "user",
+    "from_agent": None,
+    "parts": [{"type": "text", "text": "hi"}],
+    "status": "complete",
+    "created_at": "2026-10-21T18:00:00Z",
+}
+
+# One valid wire payload per event type: the shapes I1 fixes.
+EVENT_DATA: dict[str, dict[str, Any]] = {
+    "message.created": {"message": MESSAGE},
+    "text.delta": {"message_id": "msg_01", "text": "Hel"},
+    "tool.started": {"message_id": "msg_01", "tool_call_id": "c1", "name": "Read", "input": {}},
+    "tool.finished": {
+        "message_id": "msg_01",
+        "tool_call_id": "c1",
+        "content": "ok",
+        "is_error": False,
+    },
+    "message.updated": {"message": MESSAGE},
+    "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None},
+    "resync": {},
+}
+STREAM_EVENT: TypeAdapter[StreamEvent] = TypeAdapter(StreamEvent)
 
 
 def test_part_parses_text_from_json() -> None:
@@ -117,9 +138,9 @@ def test_models_reject_missing_required_fields() -> None:
     assert valid_msg.turn_id is None
     assert valid_msg.from_agent is None
 
-    # StreamEvent requires data
+    # Every event requires data
     with pytest.raises(ValidationError):
-        StreamEvent.model_validate({"seq": 1, "type": "resync"})
+        STREAM_EVENT.validate_python({"seq": 1, "type": "resync"})
 
 
 def test_message_view_round_trip() -> None:
@@ -180,17 +201,28 @@ def test_session_view_round_trip() -> None:
     assert restored.messages[0].id == "msg_01"
 
 
-@pytest.mark.parametrize("event_type", VALID_EVENT_TYPES)
-def test_stream_event_accepts_valid_types(event_type: Any) -> None:
-    event = StreamEvent(seq=1, type=event_type, data={"key": "val"})
+@pytest.mark.parametrize("event_type", list(EVENT_DATA))
+def test_each_event_round_trips_its_wire_shape(event_type: str) -> None:
+    wire = {"seq": 7, "type": event_type, "data": EVENT_DATA[event_type]}
+    event = STREAM_EVENT.validate_json(json.dumps(wire))
     assert event.type == event_type
-    assert event.seq == 1
-    assert event.data == {"key": "val"}
+    assert json.loads(STREAM_EVENT.dump_json(event)) == wire
+
+
+@pytest.mark.parametrize("event_type", [t for t in EVENT_DATA if t != "resync"])
+def test_an_event_with_the_wrong_data_is_rejected(event_type: str) -> None:
+    with pytest.raises(ValidationError):
+        STREAM_EVENT.validate_python({"seq": 1, "type": event_type, "data": {"key": "val"}})
+
+
+def test_resync_carries_no_data() -> None:
+    with pytest.raises(ValidationError):
+        STREAM_EVENT.validate_python({"seq": 1, "type": "resync", "data": {"key": "val"}})
 
 
 def test_stream_event_rejects_unknown_type() -> None:
     with pytest.raises(ValidationError):
-        StreamEvent.model_validate({"seq": 1, "type": "invalid.type", "data": {}})
+        STREAM_EVENT.validate_python({"seq": 1, "type": "invalid.type", "data": {}})
 
 
 class DummySessions:
@@ -220,7 +252,7 @@ class DummySessions:
 
     async def _dummy_stream(self) -> AsyncIterator[StreamEvent]:
         if False:
-            yield StreamEvent(seq=1, type="resync", data={})
+            yield Resync(seq=1, type="resync", data=ResyncData())
 
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
@@ -236,3 +268,15 @@ class DummySessions:
 def test_agent_sessions_protocol() -> None:
     sessions: AgentSessions = DummySessions()
     assert sessions is not None
+
+
+def test_the_shared_fold_fixture_matches_the_contract() -> None:
+    # shared/fixtures/session-fold.json is read by the hub's and the frontend's fold tests; it
+    # must only hold events and messages I1 accepts.
+    path = Path(__file__).parents[4] / "shared" / "fixtures" / "session-fold.json"
+    doc = json.loads(path.read_text("utf-8"))
+    for event in doc["events"]:
+        STREAM_EVENT.validate_python(event)
+    for state in [doc["end"], *doc["after_event"].values()]:
+        for message in state["messages"]:
+            MessageView.model_validate(message)
