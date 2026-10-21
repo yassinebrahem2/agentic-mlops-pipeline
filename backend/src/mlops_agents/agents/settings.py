@@ -30,6 +30,18 @@ class AgentSettingsView(BaseModel):
     max_steps: int | None  # effective: project override, else the definition's
 
 
+class ModelProblem(BaseModel):
+    code: str
+    message: str
+
+
+class ResolvedTarget(BaseModel):
+    entry: ModelEntry
+    provider: Provider
+    context_window: int
+    keys: list[str]
+
+
 class AgentSettingsService:
     """Manages app-level default models and project-level model/limit overrides for agents.
 
@@ -60,8 +72,8 @@ class AgentSettingsService:
             max_steps = definition.limits.max_steps
 
         effective_model = project_model if project_model is not None else default_model
-        prob, _ = await self._check_model(definition, effective_model, fetch_keys=False)
-        model_problem = prob[1] if prob is not None else None
+        result = await self._check_model(definition, effective_model, fetch_keys=False)
+        model_problem = result.message if isinstance(result, ModelProblem) else None
 
         return AgentSettingsView(
             agent=definition.name,
@@ -151,24 +163,18 @@ class AgentSettingsService:
         project_model, max_steps = await self._get_project_settings(project_id, agent, definition)
         effective_model = project_model if project_model is not None else default_model
 
-        prob, target = await self._check_model(definition, effective_model, fetch_keys=True)
-        if prob is not None:
-            raise DomainError(prob[0], prob[1], status=409)
-
-        if target is None:
-            raise RuntimeError("Model resolution produced no target")
-        entry, provider, keys = target
-        if entry.context_window is None:
-            raise RuntimeError("Resolved model has no context window")
+        result = await self._check_model(definition, effective_model, fetch_keys=True)
+        if isinstance(result, ModelProblem):
+            raise DomainError(result.code, result.message, status=409)
 
         resolved = ResolvedModel(
-            address=entry.address,
-            provider_id=provider.id,
-            provider_name=provider.name,
-            base_url=provider.base_url,
-            wire_model_id=entry.wire_model_id,
-            context_window=entry.context_window,
-            keys=tuple(keys),
+            address=result.entry.address,
+            provider_id=result.provider.id,
+            provider_name=result.provider.name,
+            base_url=result.provider.base_url,
+            wire_model_id=result.entry.wire_model_id,
+            context_window=result.context_window,
+            keys=tuple(result.keys),
         )
         return resolved, max_steps
 
@@ -178,60 +184,63 @@ class AgentSettingsService:
         address: str | None,
         *,
         fetch_keys: bool,
-    ) -> tuple[tuple[str, str] | None, tuple[ModelEntry, Provider, list[str]] | None]:
+    ) -> ModelProblem | ResolvedTarget:
         if address is None:
-            return (
-                "model_unassigned",
-                f"Choose a model for {definition.display_name} in AI providers, "
-                "or in this project's settings.",
-            ), None
+            return ModelProblem(
+                code="model_unassigned",
+                message=(
+                    f"Choose a model for {definition.display_name} in AI providers, "
+                    "or in this project's settings."
+                ),
+            )
 
         entry = await self._providers.get_model(address)
-        if entry is None:
-            return (
-                "model_missing",
-                f"The model {address} no longer exists. "
-                f"Choose another model for {definition.display_name}.",
-            ), None
+        provider: Provider | None = None
+        if entry is not None:
+            try:
+                provider = await self._providers.get_provider_by_id(entry.provider_id)
+            except DomainError as err:
+                if err.code != "provider_not_found":
+                    raise
+        if entry is None or provider is None:
+            return ModelProblem(
+                code="model_missing",
+                message=(
+                    f"The model {address} no longer exists. "
+                    f"Choose another model for {definition.display_name}."
+                ),
+            )
 
         if entry.problem is not None:
-            return ("model_not_usable", entry.problem), None
-
-        try:
-            provider = await self._providers.get_provider_by_id(entry.provider_id)
-        except DomainError as err:
-            if err.code == "provider_not_found":
-                return (
-                    "model_missing",
-                    f"The model {address} no longer exists. "
-                    f"Choose another model for {definition.display_name}.",
-                ), None
-            raise
+            return ModelProblem(code="model_not_usable", message=entry.problem)
 
         if provider.status == "needs_attention":
-            return (
-                "provider_needs_attention",
-                f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers.",
-            ), None
+            return ModelProblem(
+                code="provider_needs_attention",
+                message=(
+                    f"{provider.name} needs attention: {provider.status_detail}. "
+                    "Fix it in AI providers."
+                ),
+            )
 
         keys: list[str] = []
         if provider.kind == "hosted":
-            if fetch_keys:
-                keys = await self._providers.keys_for(provider.id)
-                if not keys:
-                    return (
-                        "provider_has_no_key",
-                        f"{provider.name} has no key. Add one in AI providers.",
-                    ), None
-            elif not provider.keys:
-                return (
-                    "provider_has_no_key",
-                    f"{provider.name} has no key. Add one in AI providers.",
-                ), None
+            keys = await self._providers.keys_for(provider.id) if fetch_keys else []
+            has_key = bool(keys) if fetch_keys else bool(provider.keys)
+            if not has_key:
+                return ModelProblem(
+                    code="provider_has_no_key",
+                    message=f"{provider.name} has no key. Add one in AI providers.",
+                )
         elif fetch_keys and provider.keys:
             keys = await self._providers.keys_for(provider.id)
 
-        return None, (entry, provider, keys)
+        return ResolvedTarget(
+            entry=entry,
+            provider=provider,
+            context_window=int(entry.context_window or 0),
+            keys=keys,
+        )
 
     async def _get_default_model(self, agent: str) -> str | None:
         app_engine = await self._databases.app()

@@ -3,7 +3,6 @@ from pathlib import Path
 import httpx2
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.settings import (
@@ -15,12 +14,12 @@ from mlops_agents.errors import DomainError
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import providers as providers_tbl
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 SECRET_KEY_1 = "gsk_test_key_alpha_111111"
 SECRET_KEY_2 = "gsk_test_key_beta_222222"
+SECRET_KEY_3 = "gsk_test_key_gamma_333333"
 TOOLS = frozenset({"Read", "Glob", "Grep"})
 
 
@@ -365,19 +364,14 @@ async def test_resolve_and_problem_states(
     assert err.value.message == expected_msg
     assert (await settings_svc.get("orchestrator", "prj_1")).model_problem == expected_msg
 
-    # Clear provider problem by updating provider in DB
-    engine = await databases.app()
-    async with engine.begin() as conn:
-        await conn.execute(
-            update(providers_tbl)
-            .where(providers_tbl.c.id == provider.id)
-            .values(status="ok", status_detail=None)
-        )
+    # Adding a working key proves the key works and automatically resets status to ok
+    await providers_svc.add_key("groq", SECRET_KEY_3)
     assert (await settings_svc.get("orchestrator", "prj_1")).model_problem is None
 
-    # 6. Hosted provider with no keys (remove both keys)
-    await providers_svc.remove_key("groq", 1)
-    await providers_svc.remove_key("groq", 2)
+    # 6. Hosted provider with no keys (remove all keys)
+    prov = await providers_svc.get_provider("groq")
+    for k in prov.keys:
+        await providers_svc.remove_key("groq", k.position)
     with pytest.raises(DomainError) as err:
         await settings_svc.resolve("prj_1", "orchestrator")
     assert err.value.status == 409
@@ -442,8 +436,14 @@ async def test_resolve_and_problem_states(
 
 
 class BrokenKeyStore(MemoryKeyStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.locked = False
+
     def get(self, ref: str) -> str | None:
-        raise KeyStoreError("Keyring is locked")
+        if self.locked:
+            raise KeyStoreError("Keyring is locked")
+        return super().get(ref)
 
 
 async def test_list_settings_works_with_locked_keystore(
@@ -457,10 +457,27 @@ async def test_list_settings_works_with_locked_keystore(
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
     try:
+        # Create a hosted provider with a key and verified model as orchestrator default
+        await providers_svc.create_provider(
+            ProviderCreate(name="groq", kind="hosted", base_url=fake_openai.base_url)
+        )
+        await providers_svc.add_key("groq", SECRET_KEY_1)
+        model = await providers_svc.add_model(
+            ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+        )
+        await providers_svc.verify_model(model.address)
+        await settings_svc.set_default_model("orchestrator", model.address)
+
+        # Now lock the keystore
+        broken_keystore.locked = True
+
         # list_settings must not touch keystore.get, so it succeeds even when keyring is locked
         listing = await settings_svc.list_settings()
         assert len(listing) == 2
         assert [v.agent for v in listing] == ["helper", "orchestrator"]
+        orch = next(v for v in listing if v.agent == "orchestrator")
+        assert orch.effective_model == model.address
+        assert orch.model_problem is None
     finally:
         await client.aclose()
 
@@ -589,4 +606,60 @@ async def test_check_model_handles_provider_not_found(
         await settings_svc.resolve("prj_1", "orchestrator")
     assert err.value.status == 409
     assert err.value.code == "model_missing"
+    assert err.value.message == expected_msg
+
+
+async def test_setters_accept_model_when_provider_needs_attention(
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    databases: Databases,
+    fake_openai: RunningFake,
+) -> None:
+    base_url = fake_openai.base_url
+    await databases.project("prj_1")
+
+    provider = await providers_svc.create_provider(
+        ProviderCreate(name="groq", kind="hosted", base_url=base_url)
+    )
+    await providers_svc.add_key("groq", SECRET_KEY_1)
+    model = await providers_svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+    )
+    await providers_svc.verify_model(model.address)
+
+    # Put provider in needs_attention
+    await providers_svc.mark_needs_attention(provider.id, "Account billing suspended")
+    expected_msg = "groq needs attention: Account billing suspended. Fix it in AI providers."
+
+    # set_default_model succeeds even though provider needs attention
+    view = await settings_svc.set_default_model("orchestrator", model.address)
+    assert view.default_model == model.address
+    assert view.effective_model == model.address
+    assert view.model_problem == expected_msg
+
+    # get also reflects provider_needs_attention
+    get_view = await settings_svc.get("orchestrator", "prj_1")
+    assert get_view.model_problem == expected_msg
+
+    # resolve raises provider_needs_attention
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "provider_needs_attention"
+    assert err.value.message == expected_msg
+
+    # Clear default
+    await settings_svc.set_default_model("orchestrator", None)
+
+    # set_project_model also succeeds when provider needs attention
+    p_view = await settings_svc.set_project_model("prj_1", "orchestrator", model.address)
+    assert p_view.project_model == model.address
+    assert p_view.effective_model == model.address
+    assert p_view.model_problem == expected_msg
+
+    # resolve still raises provider_needs_attention
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "provider_needs_attention"
     assert err.value.message == expected_msg
