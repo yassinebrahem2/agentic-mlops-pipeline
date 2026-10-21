@@ -150,7 +150,7 @@ def test_build_messages_user_and_agent_turn() -> None:
             author_kind="user",
             author_name="user",
             from_agent=None,
-            parts=[TextPart(text="Check the project layout")],
+            parts=[TextPart(type="text", text="Check the project layout")],
             status="complete",
             created_at="2026-10-21T18:01:00Z",
         ),
@@ -161,11 +161,17 @@ def test_build_messages_user_and_agent_turn() -> None:
             author_name="orchestrator",
             from_agent=None,
             parts=[
-                TextPart(text="I will check files."),
-                ToolCallPart(id="call_1", name="Read", input={"path": "README.md"}),
-                ToolCallPart(id="call_2", name="Glob", input={"pattern": "*.py"}),
-                ToolResultPart(tool_call_id="call_1", content="# Title", is_error=False),
-                ToolResultPart(tool_call_id="call_2", content="main.py", is_error=False),
+                TextPart(type="text", text="I will check files."),
+                ToolCallPart(
+                    type="tool_call", id="call_1", name="Read", input={"path": "README.md"}
+                ),
+                ToolCallPart(type="tool_call", id="call_2", name="Glob", input={"pattern": "*.py"}),
+                ToolResultPart(
+                    type="tool_result", tool_call_id="call_1", content="# Title", is_error=False
+                ),
+                ToolResultPart(
+                    type="tool_result", tool_call_id="call_2", content="main.py", is_error=False
+                ),
             ],
             status="complete",
             created_at="2026-10-21T18:02:00Z",
@@ -217,8 +223,10 @@ def test_build_messages_synthetic_tool_message_for_stopped_and_interrupted() -> 
             author_name="orchestrator",
             from_agent=None,
             parts=[
-                TextPart(text="Calling tool then stopped"),
-                ToolCallPart(id="call_stopped", name="Read", input={"path": "large.bin"}),
+                TextPart(type="text", text="Calling tool then stopped"),
+                ToolCallPart(
+                    type="tool_call", id="call_stopped", name="Read", input={"path": "large.bin"}
+                ),
             ],
             status="stopped",
             created_at="2026-10-21T18:03:00Z",
@@ -230,8 +238,13 @@ def test_build_messages_synthetic_tool_message_for_stopped_and_interrupted() -> 
             author_name="orchestrator",
             from_agent=None,
             parts=[
-                TextPart(text="Calling tool then interrupted"),
-                ToolCallPart(id="call_interrupted", name="Read", input={"path": "other.bin"}),
+                TextPart(type="text", text="Calling tool then interrupted"),
+                ToolCallPart(
+                    type="tool_call",
+                    id="call_interrupted",
+                    name="Read",
+                    input={"path": "other.bin"},
+                ),
             ],
             status="interrupted",
             created_at="2026-10-21T18:04:00Z",
@@ -269,7 +282,7 @@ def test_build_messages_omits_queued_and_system_messages() -> None:
             author_kind="user",
             author_name="user",
             from_agent=None,
-            parts=[TextPart(text="Queued message")],
+            parts=[TextPart(type="text", text="Queued message")],
             status="queued",
             created_at="2026-10-21T18:05:00Z",
         ),
@@ -279,7 +292,7 @@ def test_build_messages_omits_queued_and_system_messages() -> None:
             author_kind="system",
             author_name="system",
             from_agent=None,
-            parts=[TextPart(text="Turn failed with an error")],
+            parts=[TextPart(type="text", text="Turn failed with an error")],
             status="complete",
             created_at="2026-10-21T18:06:00Z",
         ),
@@ -289,7 +302,7 @@ def test_build_messages_omits_queued_and_system_messages() -> None:
             author_kind="user",
             author_name="user",
             from_agent=None,
-            parts=[TextPart(text="Valid user message")],
+            parts=[TextPart(type="text", text="Valid user message")],
             status="complete",
             created_at="2026-10-21T18:07:00Z",
         ),
@@ -311,7 +324,7 @@ def test_build_messages_from_agent_prefix() -> None:
             author_kind="user",
             author_name="coder",
             from_agent="coder",
-            parts=[TextPart(text="Please inspect tests")],
+            parts=[TextPart(type="text", text="Please inspect tests")],
             status="complete",
             created_at="2026-10-21T18:08:00Z",
         ),

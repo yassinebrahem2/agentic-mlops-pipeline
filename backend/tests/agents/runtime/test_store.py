@@ -26,10 +26,12 @@ async def test_session_id_is_stable_per_agent(databases: Databases) -> None:
 async def test_messages_round_trip_and_parts_order(databases: Databases) -> None:
     store = SessionStore(databases)
     session_id = await store.session_id("prj_test", "orchestrator")
-    parts = [
-        TextPart(text="Hello 🚀 世界"),
-        ToolCallPart(id="call_1", name="Read", input={"path": "main.py"}),
-        ToolResultPart(tool_call_id="call_1", content="print('hello')", is_error=False),
+    parts: list[Part] = [
+        TextPart(type="text", text="Hello 🚀 世界"),
+        ToolCallPart(type="tool_call", id="call_1", name="Read", input={"path": "main.py"}),
+        ToolResultPart(
+            type="tool_result", tool_call_id="call_1", content="print('hello')", is_error=False
+        ),
     ]
     msg = await store.add_message(
         "prj_test",
@@ -60,11 +62,11 @@ async def test_update_message_changes_parts_and_status(databases: Databases) -> 
         session_id,
         author_kind="agent",
         author_name="orchestrator",
-        parts=[TextPart(text="Initial")],
+        parts=[TextPart(type="text", text="Initial")],
         status="streaming",
     )
 
-    updated_parts: list[Part] = [TextPart(text="Updated content")]
+    updated_parts: list[Part] = [TextPart(type="text", text="Updated content")]
     updated = await store.update_message(
         "prj_test",
         msg.id,
@@ -89,7 +91,7 @@ async def test_messages_after(databases: Databases) -> None:
         session_id,
         author_kind="user",
         author_name="user",
-        parts=[TextPart(text="1")],
+        parts=[TextPart(type="text", text="1")],
         status="complete",
     )
     m2 = await store.add_message(
@@ -97,7 +99,7 @@ async def test_messages_after(databases: Databases) -> None:
         session_id,
         author_kind="agent",
         author_name="orchestrator",
-        parts=[TextPart(text="2")],
+        parts=[TextPart(type="text", text="2")],
         status="complete",
     )
     m3 = await store.add_message(
@@ -105,7 +107,7 @@ async def test_messages_after(databases: Databases) -> None:
         session_id,
         author_kind="user",
         author_name="user",
-        parts=[TextPart(text="3")],
+        parts=[TextPart(type="text", text="3")],
         status="complete",
     )
 
@@ -165,7 +167,7 @@ async def test_recover_turns_running_into_interrupted(databases: Databases) -> N
         session_id,
         author_kind="agent",
         author_name="orchestrator",
-        parts=[TextPart(text="In progress")],
+        parts=[TextPart(type="text", text="In progress")],
         status="streaming",
         turn_id=t_running,
     )
