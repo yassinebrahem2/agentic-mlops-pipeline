@@ -154,6 +154,7 @@ class AgentSettingsService:
   };
   ```
 
+- `frontend/src/lib/models.ts` (frontend-foundation task 2): `isUsableModel(model)` (I2's usable-model rule on the client) and `hostedModelWarning(provider)`, used by every page that assigns a model.
 - Page paths, fixed so pages can link to each other: `/` Projects (frontend-workspace, app nav order 0), `/projects/new` Add project, `/projects/:projectId` (redirects to the first project page by `order`), `/projects/:projectId/agents` Agents (frontend-chat, project nav order 0), `/projects/:projectId/settings` Settings (frontend-workspace, project nav order 100), `/providers` AI providers (frontend-providers, app nav order 10), `/integrations` Integrations (order 20), `/settings` Settings (order 30).
 - Tests render pages with `src/test/render.tsx`: `renderPage(path: string, options?: { routes?: PageRoute[] })` renders the real router (memory history at `path`) with a fresh `QueryClient`; requests are answered by `vi.stubGlobal("fetch", ...)`, which works because `createApiClient`'s default fetch calls `globalThis.fetch` at request time.
 
