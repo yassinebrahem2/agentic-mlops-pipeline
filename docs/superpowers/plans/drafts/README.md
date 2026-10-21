@@ -27,6 +27,10 @@ agent-runtime, api, frontend-app and packaging have no draft. The overview gives
 | frontend-app | Frontend foundation (API client from the contract, app shell, router). Projects and Add project. AI providers. Integrations and app Settings. Agents chat. Project Settings. |
 | packaging | Build script, wheel contents check, end-to-end test with the fake provider, install check on Windows and Linux. |
 
+Decided in review of the stage 1 PRs, for the api plan:
+- One app-wide exception handler maps `KeyStoreError` to a 503 with its message, which is already written for users. Individual services do not wrap key-store calls.
+- The app owns one HTTP client library. Providers use `httpx2`, the openai SDK's client; `integrations/github/api.py` still uses `httpx`. Move it to `httpx2` so the lifespan creates one client type for both.
+
 Files that several api and frontend-app tasks edit:
 - `api/services.py` and `api/app.py`: each router adds its service and router.
 - `frontend/openapi.json`: regenerated after each API change.
