@@ -84,18 +84,18 @@
 
 **Interfaces:**
 - Consumes: I6 `GET /projects/{id}`, `POST .../refresh`, `POST .../relink`, `DELETE /projects/{id}`, `GET /projects/{id}/agents`, `PUT .../agents/{agent}/model`, `PUT .../agents/{agent}/limits`, `GET /models`, `GET /providers` (a model's provider kind); `FolderBrowser`, `ProjectStatus`; the codes `not_local`, `local_projects_disabled`, `model_not_usable`.
-- Produces: `route` at `/projects/:projectId/settings` with `nav: { area: "project", label: "Settings", order: 100 }`.
+- Produces: `route` at `/projects/:projectId/settings` with `nav: { area: "project", label: "Project settings", order: 100 }`.
 
 **Implementation notes:**
 - Repository: name, source, the local path or the GitHub repository, default branch, `ProjectStatus`; "Refresh" (`POST .../refresh`); for local projects in local mode "Relink" opens `FolderBrowser` in a dialog and posts the chosen path (the way to fix `missing`).
 - Agents: one row per agent from `GET /projects/{id}/agents`: display name, "Model" select and "Step limit".
-  - The model select offers "Use the app default (<default_model or none>)" and the usable models from `GET /models` (`isUsableModel` from `src/lib/models.ts`, I5: I2's rule, so the server never answers `model_not_usable` for a listed choice). Choosing sends `PUT .../model` with the address, or `null` for the default.
+  - The model select offers "Use the app default (<default_model or none>)" and the usable models from `GET /models` (`isUsableModel` from `src/lib/models.ts`, I5: I2's rule, so the server never answers `model_not_usable` for a listed choice). Choosing sends `PUT .../model` with the address, or `null` for the default. The current `project_model` is always an option, labelled "<address> (not usable)" when it fails the rule or is missing from `GET /models`, so the select never shows a value that is not the real one.
   - `model_problem`, when set, is shown under the row as a warning.
   - "Step limit": a number input (at least 1) and a "No limit" checkbox; saving sends `PUT .../limits` with the number or `null`.
   - Where an agent's effective model belongs to a `hosted` provider (look the provider up by `provider_name` in `GET /providers`), show under that row `hostedModelWarning(provider)` from `src/lib/models.ts` (I5; spec section 5, known limitation). Not shown for self-hosted models.
 - Remove: "Remove project" opens a dialog saying the app's copy, sessions and settings for this project are deleted and the user's own folder is not touched (for GitHub projects: the downloaded copy is deleted); confirming sends `DELETE` and navigates to `/`.
 
-**Tests (behaviors to verify):** the repository section for a local and a GitHub project; Refresh sends the request and shows the new status; Relink is offered only for local projects and sends the chosen path; the model select lists only usable models plus the default option, and choosing sends the address or `null`; `model_problem` is shown; the step limit sends a number, and "No limit" sends `null`; the hosted-model warning is shown for a hosted effective model and absent for a self-hosted one; Remove asks first, sends `DELETE` and returns to `/`.
+**Tests (behaviors to verify):** the repository section for a local and a GitHub project; Refresh sends the request and shows the new status; Relink is offered only for local projects and sends the chosen path; the model select lists only usable models plus the default option, and a current override that is no longer usable appears as "(not usable)" and stays selected; choosing sends the address or `null`; `model_problem` is shown; the step limit sends a number, and "No limit" sends `null`; the hosted-model warning is shown for a hosted effective model and absent for a self-hosted one; Remove asks first, sends `DELETE` and returns to `/`.
 
 **Checks:** as task 1.
 

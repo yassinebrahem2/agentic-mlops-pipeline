@@ -35,8 +35,8 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 - Produces: `route` at `/providers` with `nav: { area: "app", label: "AI providers", order: 10 }`.
 
 **Implementation notes:**
-- Providers: one card each with name, kind ("Hosted" / "Self-hosted"), base URL, status (`needs_attention` shows its detail as a warning with "Fix the key below"), and its keys as masked hints, each with "Remove". "Add key" opens a password-type input; the key is sent once and never shown again (the response carries the hint only); a rejected key shows the server's message (`key_rejected`). "Remove provider" asks first.
-- "Add provider": name (lowercase letters, digits and dashes, the server's validation message shown on 422), kind, base URL (for self-hosted the hint "for example http://localhost:11434/v1 for Ollama"), and for hosted, a first key.
+- Providers: one card each with name, kind ("Hosted" / "Self-hosted"), base URL, status (`needs_attention` shows its detail as a warning with "Fix the key below"), and its keys as masked hints, each with "Remove". "Add key" opens a password-type input; the key is sent once and never shown again (the response carries the hint only); a rejected key shows the server's message (`key_rejected`). "Remove provider" asks first. After adding or removing a key, the card re-renders from the returned `Provider` (positions shift after a removal; never reuse positions cached earlier).
+- "Add provider": name (lowercase letters, digits and dashes), kind, base URL (for self-hosted the hint "for example http://localhost:11434/v1 for Ollama"), and for hosted, an optional first key. A 422 shows each field's message under that field (`fieldErrors`, I5). With a first key it is two requests in order: `POST /providers`, then `POST /providers/{name}/keys`. When the key is rejected, the provider stays (without a key), the dialog shows `key_rejected`'s message, and closing it leaves the provider's card with "Add key".
 - Detected keys: `GET /env-keys` lists environment variables the server can see, masked, with "Import" each (or "Import key" when the provider already exists). Shown only when the list is not empty.
 - Models: a table with address, tool calling, streaming, context window, availability (with its detail when `needs_attention`), last verified, and actions "Verify" and "Remove".
   - "Verify" makes a real model call that can take seconds: the button shows progress and is disabled until the answer; the row updates from the response; `verification_failed` shows its message on the row.
@@ -44,7 +44,7 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 - "Add model": choose the provider, then a model from its remote list (`GET /providers/{name}/remote-models`, with a filter box) or type a model id; an optional context window. A provider whose listing fails still allows typing (show the error above the input).
 - Address values contain `/` and `:`; they are only ever sent in bodies or query strings (I6).
 
-**Tests (behaviors to verify):** the providers and their masked keys render; adding a self-hosted provider without a key sends `{name, kind: "self_hosted", base_url}`; a 422 shows the server's message; adding a key sends it once and the input clears, and the key text appears nowhere in the page afterwards; a `needs_attention` provider shows its detail; detected keys import; the models table shows traits and availability; "Verify" disables itself while the request is pending and shows the result; `verification_failed` shows on the row; an unknown context window offers the input and sends `{address, value}`; "Add model" lists remote models, filters them, and sends the chosen id; removing a model whose address contains `/` sends it in the query string.
+**Tests (behaviors to verify):** the providers and their masked keys render; adding a self-hosted provider without a key sends `{name, kind: "self_hosted", base_url}`; a 422 on the base URL shows the validator's own sentence under the base URL field; a hosted provider with a first key that the server rejects stays listed without a key and the dialog shows the rejection; adding a key sends it once and the input clears, and the key text appears nowhere in the page afterwards; a `needs_attention` provider shows its detail; detected keys import; the models table shows traits and availability; "Verify" disables itself while the request is pending and shows the result; `verification_failed` shows on the row; an unknown context window offers the input and sends `{address, value}`; "Add model" lists remote models, filters them, and sends the chosen id; removing a model whose address contains `/` sends it in the query string.
 
 **Checks (from `frontend/`):** `npm run lint`, `npm run format:check`, `npm test`, `npm run build`.
 
@@ -61,11 +61,11 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 - Consumes: I6 `GET /agents`, `PUT /agents/{agent}/model`, `GET /models`, `GET /providers`; `isUsableModel` and `hostedModelWarning` from `src/lib/models.ts` (frontend-foundation task 2); the code `model_not_usable`.
 
 **Implementation notes:**
-- A section "Default model per agent": one row per agent (display name, description), a "Model" select with "None" and the usable models (`isUsableModel`), and the agent's `settings.model_problem` as a warning when set (for example "Choose a model for Orchestrator ...").
+- A section "Default model per agent": one row per agent (display name, description), a "Model" select with "None" and the usable models (`isUsableModel`). The current `default_model` is always an option, labelled "<address> (not usable)" when it fails the rule or is missing from `GET /models`, so the select never shows a value that is not the real one; and the agent's `settings.model_problem` as a warning when set (for example "Choose a model for Orchestrator ...").
 - When the chosen model belongs to a `hosted` provider (by `provider_name` in `GET /providers`), show `hostedModelWarning(provider)` under the row (spec section 5).
 - Choosing sends `PUT /agents/{agent}/model` with the address, or `null` for None, and refreshes `["agents"]`.
 
-**Tests (behaviors to verify):** the select offers only usable models plus None; choosing sends the address and the row's problem disappears after the refetch; None sends `null`; the hosted warning is shown for a hosted model and absent for a self-hosted one; `model_problem` is shown when the agent has no model.
+**Tests (behaviors to verify):** the select offers only usable models plus None, and a current default that is no longer usable appears as "<address> (not usable)" and stays selected; choosing sends the address and the row's problem disappears after the refetch; None sends `null`; the hosted warning is shown for a hosted model and absent for a self-hosted one; `model_problem` is shown when the agent has no model.
 
 **Checks:** as task 1.
 
@@ -79,7 +79,7 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 
 **Interfaces:**
 - Consumes: I6 `GET /github`, `POST /github/gh`, `POST /github/token`, `DELETE /github`, `GET /app`, `POST /app/backup`; the codes `gh_not_installed`, `gh_not_logged_in`, `gh_timeout`, `github_token_rejected`, `github_unreachable`, `token_empty`.
-- Produces: `route` at `/integrations` with `nav: { area: "app", label: "Integrations", order: 20 }`; `route` at `/settings` with `nav: { area: "app", label: "Settings", order: 30 }`.
+- Produces: `route` at `/integrations` with `nav: { area: "app", label: "Integrations", order: 20 }`; `route` at `/settings` with `nav: { area: "app", label: "App settings", order: 30 }`.
 
 **Implementation notes:**
 - Integrations, GitHub card:

@@ -72,6 +72,7 @@ The project switcher in the sidebar lists projects, so it comes with the project
   export class ApiError extends Error { code: string; status: number; detail: unknown }
   export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T;  // throws ApiError
   export function errorText(error: unknown): string;
+  export function fieldErrors(error: unknown): Record<string, string>;  // 422 detail.errors by field, without the "body." prefix
   // src/lib/query.ts
   export const queryClient: QueryClient;
   // src/lib/models.ts (shared by the pages that assign models, I5)
@@ -85,12 +86,13 @@ The project switcher in the sidebar lists projects, so it comes with the project
 - Types: `src/api/schema.d.ts` is generated, never committed (`.gitignore`), so it never conflicts. `package.json` gains `"predev"`, `"prebuild"`, `"pretest"` and `"prelint"`, each `npm run gen:api`, so every command and CI regenerate it from the committed `openapi.json`.
 - When this task starts, the generated schema may hold no routes yet (api-foundation's first router, `auth`, arrives in its task 3), so nothing here may depend on a specific route. `createApiClient` builds `createClient<P>({ baseUrl: "", fetch: fetchImpl ?? ((input, init) => globalThis.fetch(input, init)) })` (late-bound, so a test's `vi.stubGlobal("fetch", ...)` reaches the shared `api`) with one middleware: on POST, PUT, PATCH and DELETE it reads the `csrf_token` cookie (`document.cookie`) and sets `X-CSRF-Token`.
 - `unwrap`: returns `data`; otherwise throws `ApiError` from the body when it has the I3 shape, or `ApiError("http_<status>", "The server answered with an error (HTTP <status>).")` when it does not. A network failure (fetch rejects) becomes `ApiError("offline", "The app's server is not reachable. Check that it is still running.")`.
+- `fieldErrors`: for an `ApiError` with code `invalid_request`, `{ base_url: "...", ... }` from `detail.errors` (field `body.base_url` → `base_url`); otherwise `{}`. Forms show each message under its field and `errorText` above the form.
 - `errorText`: `ApiError` → its `message`; anything else → "Something went wrong. Try again." Pages show `errorText(error)` and nothing else from an error.
 - `renderPage(path, { routes })` renders `buildRouter(routes ?? pageRoutes, createMemoryRouter)` at `path` inside a fresh `QueryClient` (no retries, so failures show at once) and the providers the app uses; it skips the sign-in gate (tests of task 3 render the gate themselves).
 - `models.ts`: `isUsableModel` is I2's rule on the client (`availability === "verified"`, both traits, a known context window), so a page never offers a model the server refuses. `hostedModelWarning(provider)` returns "Files the agent reads are sent to <provider>. A secret inside a committed file whose name does not look secret can reach it." (spec section 5). Both take plain values, so they need no generated type.
 - `queryClient`: queries retry once except on `ApiError` with status 4xx; a 401 (`not_signed_in`) from any query or mutation (an `onError` on both `QueryCache` and `MutationCache`) invalidates the `["auth"]` query, which brings back the sign-in screen (task 3).
 
-**Tests (behaviors to verify)** (`createApiClient<TestPaths>(fakeFetch)` with a small hand-written `TestPaths` type in the test file; no real server): a POST carries the CSRF header taken from the cookie and a GET does not; `unwrap` throws `ApiError` with the server's `code` and `message`, the generic text for a non-JSON 502, and `offline` when fetch rejects; `errorText` never returns raw response text; a 401 from a query and from a mutation each invalidate `["auth"]`; `renderPage` with a fake route at `/x` shows that page, and a `vi.stubGlobal("fetch")` stub answers the shared `api`'s requests.
+**Tests (behaviors to verify)** (`createApiClient<TestPaths>(fakeFetch)` with a small hand-written `TestPaths` type in the test file; no real server): a POST carries the CSRF header taken from the cookie and a GET does not; `unwrap` throws `ApiError` with the server's `code` and `message`, the generic text for a non-JSON 502, and `offline` when fetch rejects; `errorText` never returns raw response text; `fieldErrors` maps `body.base_url` to `base_url` and returns `{}` for other errors; a 401 from a query and from a mutation each invalidate `["auth"]`; `renderPage` with a fake route at `/x` shows that page, and a `vi.stubGlobal("fetch")` stub answers the shared `api`'s requests.
 
 **Checks:** as task 1.
 
