@@ -12,7 +12,7 @@ The method: you (the controller) never write the task's code yourself. A fresh i
 
 If your agent cannot run subagents, play each role yourself in turn, with a clean break between them: finish and commit the implementation, then start the review from the brief and the diff only (a new session or a cleared context where your agent allows it), as if someone else wrote the code.
 
-Never run two implementers at once on the same branch, and never let an implementer dispatch another agent. When other agents work on this repository on the same machine (another plan, the lead's session), work in your own git worktree as `AGENTS.md` rule 2 says, never in a folder another agent uses.
+Never run two implementers at once on the same branch, and never let an implementer dispatch another agent.
 
 ## Workspace
 
