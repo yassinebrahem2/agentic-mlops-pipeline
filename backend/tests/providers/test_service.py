@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Callable
 import httpx2
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
@@ -177,6 +178,7 @@ async def test_detect_and_import_env_keys(make_service: MakeService) -> None:
     assert [(d.env_var, d.provider_name, d.provider_exists) for d in found] == [
         ("GROQ_API_KEY", "groq", False),
         ("GROQ_API_KEY_1", "groq", False),
+        ("GROQ_API_KEY_3", "groq", False),
     ]
     assert all(GOOD not in json.dumps(d.model_dump()) for d in found)
     provider = await svc.import_env_key("GROQ_API_KEY", env)
@@ -186,3 +188,68 @@ async def test_detect_and_import_env_keys(make_service: MakeService) -> None:
     with pytest.raises(DomainError) as err:
         await svc.import_env_key("SOMETHING_ELSE", env)
     assert err.value.code == "unknown_env_key"
+
+
+async def test_detect_env_keys_with_gaps(make_service: MakeService) -> None:
+    svc = make_service()
+    found = await svc.detect_env_keys({"GROQ_API_KEY_2": "val2"})
+    assert [d.env_var for d in found] == ["GROQ_API_KEY_2"]
+
+    env = {
+        "GROQ_API_KEY_3": "val3",
+        "GROQ_API_KEY": "val0",
+        "GROQ_API_KEY_1": "val1",
+    }
+    found = await svc.detect_env_keys(env)
+    assert [d.env_var for d in found] == [
+        "GROQ_API_KEY",
+        "GROQ_API_KEY_1",
+        "GROQ_API_KEY_3",
+    ]
+
+
+async def test_add_key_cleans_up_keystore_if_db_fails(
+    make_service: MakeService, keystore: MemoryKeyStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = make_service()
+    await svc.create_provider(HOSTED)
+
+    class DbError(RuntimeError):
+        pass
+
+    def failing_begin(*args: object, **kwargs: object) -> object:
+        raise DbError("database disk image is malformed")
+
+    monkeypatch.setattr(AsyncEngine, "begin", failing_begin)
+
+    with pytest.raises(DbError, match="database disk image is malformed"):
+        await svc.add_key("groq", GOOD)
+
+    assert keystore.data == {}
+
+
+async def test_add_key_chains_keystore_delete_failure(
+    make_service: MakeService, keystore: MemoryKeyStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = make_service()
+    await svc.create_provider(HOSTED)
+
+    class DbError(RuntimeError):
+        pass
+
+    class KeystoreDeleteError(RuntimeError):
+        pass
+
+    def failing_begin(*args: object, **kwargs: object) -> object:
+        raise DbError("database failure")
+
+    def failing_delete(ref: str) -> None:
+        raise KeystoreDeleteError("keystore locked")
+
+    monkeypatch.setattr(AsyncEngine, "begin", failing_begin)
+    monkeypatch.setattr(keystore, "delete", failing_delete)
+
+    with pytest.raises(DbError) as err:
+        await svc.add_key("groq", GOOD)
+
+    assert isinstance(err.value.__cause__, KeystoreDeleteError)

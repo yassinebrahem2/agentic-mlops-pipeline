@@ -5,7 +5,6 @@ import os
 import re
 import secrets
 from collections.abc import Mapping
-from itertools import count
 
 import httpx2
 from pydantic import BaseModel, ValidationError
@@ -174,26 +173,33 @@ class ProvidersService:
         ref = f"provider/{provider.id}/{secrets.token_hex(8)}"
         await asyncio.to_thread(self._keys.set, ref, value)
         engine = await self._dbs.app()
-        async with engine.begin() as conn:
-            last = await conn.scalar(
-                select(func.max(provider_keys.c.position)).where(
-                    provider_keys.c.provider_id == provider.id
+        try:
+            async with engine.begin() as conn:
+                last = await conn.scalar(
+                    select(func.max(provider_keys.c.position)).where(
+                        provider_keys.c.provider_id == provider.id
+                    )
                 )
-            )
-            await conn.execute(
-                insert(provider_keys).values(
-                    provider_id=provider.id,
-                    position=(last or 0) + 1,
-                    keystore_ref=ref,
-                    hint=mask_key(value),
-                    created_at=now_iso(),
+                await conn.execute(
+                    insert(provider_keys).values(
+                        provider_id=provider.id,
+                        position=(last or 0) + 1,
+                        keystore_ref=ref,
+                        hint=mask_key(value),
+                        created_at=now_iso(),
+                    )
                 )
-            )
-            await conn.execute(
-                update(providers)
-                .where(providers.c.id == provider.id)
-                .values(status="ok", status_detail=None)
-            )
+                await conn.execute(
+                    update(providers)
+                    .where(providers.c.id == provider.id)
+                    .values(status="ok", status_detail=None)
+                )
+        except BaseException as db_err:
+            try:
+                await asyncio.to_thread(self._keys.delete, ref)
+            except Exception as del_err:
+                raise db_err from del_err
+            raise
         return await self.get_provider(name)
 
     async def remove_key(self, name: str, position: int) -> Provider:
@@ -381,23 +387,27 @@ class ProvidersService:
         existing = {p.name for p in await self.list_providers()}
         found: list[DetectedKey] = []
         for base, (provider_name, base_url) in KNOWN_ENV_KEYS.items():
-            names = [base]
-            for i in count(1):
-                if not source.get(f"{base}_{i}"):
-                    break
-                names.append(f"{base}_{i}")
-            for var in names:
-                value = source.get(var)
-                if value:
-                    found.append(
-                        DetectedKey(
-                            env_var=var,
-                            provider_name=provider_name,
-                            base_url=base_url,
-                            hint=mask_key(value),
-                            provider_exists=provider_name in existing,
-                        )
+            pattern = re.compile(rf"^{re.escape(base)}(?:_(?P<num>\d+))?$")
+            candidates: list[tuple[tuple[int, int], str, str]] = []
+            for var, value in source.items():
+                if not value:
+                    continue
+                match = pattern.match(var)
+                if match:
+                    num_str = match.group("num")
+                    sort_key = (-1, 0) if num_str is None else (int(num_str), 1)
+                    candidates.append((sort_key, var, value))
+            candidates.sort(key=lambda c: c[0])
+            for _, var, value in candidates:
+                found.append(
+                    DetectedKey(
+                        env_var=var,
+                        provider_name=provider_name,
+                        base_url=base_url,
+                        hint=mask_key(value),
+                        provider_exists=provider_name in existing,
                     )
+                )
         return found
 
     async def import_env_key(self, env_var: str, env: Mapping[str, str] | None = None) -> Provider:
