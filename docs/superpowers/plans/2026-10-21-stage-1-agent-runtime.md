@@ -52,6 +52,8 @@ async def close(self) -> None   # cancels running turns and marks them interrupt
 ```
 api-sessions builds it in the lifespan's `AsyncExitStack` and registers `close`.
 
+The protocol includes `close_project` (I1).
+
 **Tests:** `Part` parses each of the three part shapes from JSON and rejects an unknown `type`; `MessageView` and `SessionView` round-trip through `model_dump_json`/`model_validate_json`; `StreamEvent.type` accepts the seven names and rejects others; a small class implementing the four methods type-checks as `AgentSessions` (pyright strict is the check; the test only instantiates it).
 
 **Checks:** `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`.
@@ -206,6 +208,7 @@ api-sessions builds it in the lifespan's `AsyncExitStack` and registers `close`.
   - `send`: empty text → 422 `message_empty`; stores the user message (`complete` when idle, `queued` when busy), creates its turn, publishes `message.created`, starts the worker for the session when idle, returns the message.
   - One worker task per busy session runs queued turns in order. Each turn runs as its own child task (`TurnExecutor.run`); the worker awaits it, sets the turn's status, publishes `turn.ended`, and moves to the next turn, exiting when the queue is empty.
   - `stop`: sets the session's "stop requested" flag and cancels the current turn's child task (queued turns continue); a no-op when idle. When the child ends cancelled with the flag set, the worker records `stopped`, clears the flag and goes on.
+  - `close_project(project_id)`: like `close`, for one project's workers (their running turns end `interrupted`), then drops that project's hubs (subscribers' streams end), forgets that its recovery ran, and calls `databases.close_project(project_id)` so the folder can be deleted (Windows refuses to delete open SQLite files).
   - `close`: cancels every worker. A worker cancelled without the flag set records its running turn `interrupted` (and its message), starts nothing else, and exits.
 - Tool steps and text are published through the hub as `tool.started`, `tool.finished`, `text.delta`; messages as `message.created` / `message.updated`.
 
@@ -216,6 +219,7 @@ api-sessions builds it in the lifespan's `AsyncExitStack` and registers `close`.
 - Three messages sent at once: the second and third are `queued`, run in order, each gets its own `turn.ended`; `busy` is true until the last ends.
 - Stop during `fake-slow` → `turn.ended` `stopped`, the partial text stays in the stored message, a queued message then runs; Stop during a slow tool, then a new message: the session keeps working (spec section 8).
 - Recovery: a project database with a `running` turn and a `queued` turn written by a previous manager → the first `get` marks the running one `interrupted` and the queued one runs.
+- `close_project` during a turn → the turn is `interrupted`, a subscriber's stream ends, and the project's folder can then be deleted on Windows (`shutil.rmtree` succeeds).
 - `close()` during a turn → the turn and its message are `interrupted`, and a queued turn behind it is still `queued` (not started).
 - The `get`/`send` race (deterministic): patch `SessionStore.messages` to wait on an `asyncio.Event`; start `get` in a task, `send` from another task, release the event; a subscriber started with the returned `last_seq` sees the new user message exactly once, either in the snapshot or as an event.
 - An agent with `chat: false` (test definition) → `send` 409; unknown agent → 404; empty text → 422.

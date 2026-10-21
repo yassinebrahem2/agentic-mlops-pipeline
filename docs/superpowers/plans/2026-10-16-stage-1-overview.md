@@ -25,7 +25,7 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | agent-runtime | `plan/stage-1-agent-runtime` | Message store, context and compaction, model calls with retries and key rotation, the LangGraph loop, turn executor, stream hub, session queue, Stop, recovery | I2 (its task 1 declares I1) | now | Ready: plan issue open |
 | api-foundation | `plan/stage-1-api-foundation` | App factory and lifespan, services container, router discovery, error format, one HTTP client library (`integrations/github` moves from `httpx` to `httpx2`), login for both run modes, Host/Origin/CSRF checks, SPA serving, CLI (`start`, `backup`), committed OpenAPI contract and its CI check | none | now | Ready: plan issue open |
 | api-resources | `plan/stage-1-api-resources` | REST routers for projects and the folder browser, GitHub, providers and models, agents and their settings, app info and backup | I3; I2 for the agents router | after api-foundation task 1 | To write |
-| api-sessions | `plan/stage-1-api-sessions` | Session REST routes and the SSE stream, two tabs and reconnects | I1 (contract, then the `SessionManager` class), I3 | coding: after agent-runtime task 1 and api-foundation task 1; merging the routes: after `SessionManager` is on `main` | To write |
+| api-sessions | `plan/stage-1-api-sessions` | Session REST routes and the SSE stream, two tabs and reconnects; `DELETE /api/projects/{id}` closes the project's sessions first (one line in api-resources' projects router) | I1 (contract, then the `SessionManager` class), I3 | coding: after agent-runtime task 1 and api-foundation task 1; merging the routes: after `SessionManager` is on `main` | To write |
 | frontend-foundation | `plan/stage-1-frontend-foundation` | Page registration and app shell (sidebar, gear menu), typed API client from the contract, query setup, error text, sign-in pages | I3 for the client, I4 for sign-in | now (task 1: registration and shell); the client after api-foundation task 1; sign-in after its login task | Ready: plan issue open |
 | frontend-workspace | `plan/stage-1-frontend-workspace` | Projects, the project switcher in the shell's sidebar, Add project (local folder browser, GitHub URL or repo picker), project Settings (repo info, refresh, relink, model override, limits) | I5, I6 | after frontend-foundation's client task and the I6 routes it uses | To write |
 | frontend-providers | `plan/stage-1-frontend-providers` | AI providers (keys, detect keys, models, verify, default model per agent), Integrations (GitHub), app Settings | I5, I6 | after frontend-foundation's client task and the I6 routes it uses | To write |
@@ -89,6 +89,9 @@ class AgentSessions(Protocol):
     async def send(self, project_id: str, agent: str, text: str) -> MessageView: ...
     async def stop(self, project_id: str, agent: str) -> None: ...
     def subscribe(self, project_id: str, agent: str, after_seq: int | None) -> AsyncIterator[StreamEvent]: ...
+    async def close_project(self, project_id: str) -> None: ...
+        # before a project is removed: ends its running turns (interrupted), drops its hubs and
+        # subscribers, closes its database handles; later calls for that project start fresh
 ```
 Errors are `DomainError`s: unknown agent 404, an agent without chat 409, model problems from I2 as they come.
 
@@ -149,7 +152,7 @@ class AgentSettingsService:
 - GitHub: `GET /api/github`, `POST /api/github/gh`, `POST /api/github/token` `{"token"}`, `DELETE /api/github`, `GET /api/github/repos`.
 - Providers: `GET/POST /api/providers`, `DELETE /api/providers/{name}`, `POST /api/providers/{name}/keys` `{"key"}`, `DELETE /api/providers/{name}/keys/{position}`, `GET /api/providers/{name}/remote-models`, `GET /api/env-keys`, `POST /api/env-keys/{env_var}/import`.
 - Models: wire model IDs contain `/` (`openai/gpt-oss-120b`, `models/gemini-…`), so an address never goes in the path: `GET/POST /api/models`, `DELETE /api/models?address=`, `POST /api/models/verify` `{"address"}`, `PUT /api/models/context-window` `{"address", "value"}`.
-- Agents: `GET /api/agents` (catalog with app-level settings), `PUT /api/agents/{agent}/model` `{"address"}` (`null` clears it); `GET /api/projects/{project_id}/agents`, `PUT /api/projects/{project_id}/agents/{agent}/model` `{"address"}`, `PUT /api/projects/{project_id}/agents/{agent}/limits` `{"max_steps"}`.
+- Agents: `AgentInfo {name, display_name, description, chat, tools, settings: AgentSettingsView}`. `GET /api/agents` (app-level settings), `PUT /api/agents/{agent}/model` `{"address"}` (`null` clears it); `GET /api/projects/{project_id}/agents`, `PUT /api/projects/{project_id}/agents/{agent}/model` `{"address"}`, `PUT /api/projects/{project_id}/agents/{agent}/limits` `{"max_steps"}`.
 - App: `GET /api/app` → `{"name", "version", "mode", "data_dir"}`; `POST /api/app/backup` → `{"path"}`.
 
 **I7. Session API** (api-sessions, task 1): `GET /api/projects/{project_id}/agents/{agent}/session` → `SessionView`; `POST .../session/messages` `{"text"}` → `MessageView`; `POST .../session/stop`; `GET .../session/stream` (SSE: each event's `id` is `StreamEvent.seq`, `event` its `type`, `data` its JSON `data`; `Last-Event-ID` resumes after that seq).
