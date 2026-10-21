@@ -86,7 +86,8 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 ### Lead rules
 - Specs before plans, plans before code. Each needs the lead's explicit approval.
 - Review specs, the stage overview's interface lists and every plan draft with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
-- Review every PR yourself (after the teammate's review when there is one), against its tasks, the spec and the interfaces. Merge only with green CI on the PR's head and the branch up to date with `main`, always with a merge commit (never squash or rebase: the plan branch shares an early PR's commits).
+- Review every PR yourself (after the teammate's review when there is one), against its tasks, the spec and the interfaces. Merge only with green CI on the PR's head and the branch up to date with `main`, always with a merge commit (never squash or rebase: the plan branch shares an early PR's commits). Right before merging, the lead may bring `main` into the PR with GitHub's Update branch; that merge commit is the one exception to "only the owner commits".
+- Review each PR with its own review subagent, all in parallel, so no review waits for another.
 - Record project-level decisions in `project_knowledge.md` as they are made.
 - Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
 
