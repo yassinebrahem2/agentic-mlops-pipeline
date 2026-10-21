@@ -10,9 +10,7 @@ The lead then moves it with `git mv` on its `plan/<stage>-<topic>` branch, from 
 
 ## Stage 1
 
-| Draft | Depends on | Still missing |
-|---|---|---|
-| [github-workspace](2026-10-16-stage-1-github-workspace.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. |
+No stage 1 draft is waiting: providers, github-workspace and agent-tools left this folder and are merged.
 
 ### Not written yet
 

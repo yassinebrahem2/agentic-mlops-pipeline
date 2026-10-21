@@ -1,9 +1,4 @@
-# Stage 1 — GitHub and Workspace Implementation Plan (DRAFT)
-
-> **DRAFT: not ready to implement.** This plan sits in `drafts/` until both items below are done. Then it moves to `docs/superpowers/plans/` on its own `plan/stage-1-<topic>` branch and gets its issues.
-> 1. **Advisor review.** Round 1 found blockers, and they are fixed. Rounds must continue until one finds no blocking issues.
-> 2. **Check against the merged backend-core code.** backend-core changed while it was implemented (see PR #10, "done differently"). Every name in this plan's Consumes lines and test fixtures must match the code on `main`.
-
+# Stage 1 — GitHub and Workspace Implementation Plan
 
 > **For agentic workers:** Implement this plan task by task, in order. Each task lists its exact files, the interfaces it consumes and produces, its tests (the task's stop condition) and the commands that prove it works. Claude Code users may use superpowers:executing-plans or superpowers:subagent-driven-development; nothing here requires them. Steps use checkbox (`- [ ]`) syntax. Team rules (claiming tasks, commits, PRs) are in `AGENTS.md`.
 
@@ -29,11 +24,13 @@
 - Test: `backend/tests/integrations/test_github_api.py`, `test_github_auth.py`, `test_live_clone.py`
 
 **Interfaces:**
-- Consumes: `Databases` (backend-core plan, Task 3), `KeyStore`, `error_text` (backend-core plan, Task 4), `DomainError`, `now_iso` (backend-core plan, Task 2), `GitRunner` (backend-core plan, Task 5).
+- Consumes: `Databases` (backend-core plan, Task 3), `KeyStore`, `error_text` (backend-core plan, Task 4), `DomainError`, `now_iso` (backend-core plan, Task 2), `GitRunner` (backend-core plan, Task 5); test fixtures `databases`, `keystore`, `git_env`, the class `MemoryKeyStore` and `make_repo(path, files, env) -> Path` from `tests/conftest.py` (backend-core plan, Task 5).
 - Produces:
   - `api.py`: `RepoSummary(full_name, private, default_branch, description)`, `async get_login(http, token) -> str`, `async list_repos(http, token, *, limit=300) -> list[RepoSummary]`, `async get_repo(http, token, full_name) -> RepoSummary`.
   - `auth.py`: `GitHubStatus(mode: Literal["none", "gh", "token"], login: str | None, gh_available: bool)`, `class GhLike(Protocol)` (`available` property, `async token() -> str`), `GhCli(path: str | None = None)`, `GitHubAuth(databases, keystore, http, gh: GhLike)` with `async status()`, `async enable_gh()`, `async set_token(value)`, `async disconnect()`, `async token() -> str | None`, `async require_token() -> str`.
-  - `tests/conftest.py`: `make_repo(path: Path, files: dict[str, str], env: dict[str, str]) -> Path` (git init + commit; needs the `git_env` fixture's env).
+  - The `http` client (`httpx.AsyncClient`) for GitHub API calls is app-owned: created in the app's lifespan startup and closed at shutdown (api plan).
+  - `GitHubAuth.token()` raises `DomainError` for every failure, including a key store that cannot be read (`github_token_unreadable`; `KeyStoreError` messages never contain a key).
+  - GitHub answers are parsed with pydantic; an answer the app cannot read is `github_error`, never a crash.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -46,6 +43,7 @@ import pytest
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import get_login, get_repo, list_repos
 
+
 def _client() -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.headers.get("authorization") != "Bearer good":
@@ -55,27 +53,46 @@ def _client() -> httpx.AsyncClient:
         if request.url.path == "/user/repos":
             page = int(request.url.params["page"])
             items = [
-                {"full_name": f"octo/r{page}-{i}", "private": True, "default_branch": "main", "description": None}
+                {
+                    "full_name": f"octo/r{page}-{i}",
+                    "private": True,
+                    "default_branch": "main",
+                    "description": None,
+                }
                 for i in range(100 if page == 1 else 3)
             ]
             return httpx.Response(200, json=items)
         if request.url.path == "/repos/octo/demo":
-            return httpx.Response(200, json={"full_name": "Octo/Demo", "private": False, "default_branch": "trunk", "description": "d"})
+            return httpx.Response(
+                200,
+                json={
+                    "full_name": "Octo/Demo",
+                    "private": False,
+                    "default_branch": "trunk",
+                    "description": "d",
+                },
+            )
+        if request.url.path == "/repos/octo/broken":
+            return httpx.Response(200, json={"name": "no full_name"})
         return httpx.Response(404, json={"message": "Not Found"})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
+
 async def test_login() -> None:
     assert await get_login(_client(), "good") == "octo"
+
 
 async def test_rejected_token() -> None:
     with pytest.raises(DomainError) as err:
         await get_login(_client(), "bad")
     assert err.value.code == "github_token_rejected"
 
+
 async def test_repos_are_paginated() -> None:
     repos = await list_repos(_client(), "good")
     assert len(repos) == 103
+
 
 async def test_get_repo_and_missing_repo() -> None:
     repo = await get_repo(_client(), "good", "octo/demo")
@@ -84,6 +101,12 @@ async def test_get_repo_and_missing_repo() -> None:
     with pytest.raises(DomainError) as err:
         await get_repo(_client(), "good", "octo/nope")
     assert err.value.code == "github_repo_not_found"
+
+
+async def test_unreadable_answer() -> None:
+    with pytest.raises(DomainError) as err:
+        await get_repo(_client(), "good", "octo/broken")
+    assert err.value.code == "github_error"
 ```
 
 `backend/tests/integrations/test_github_auth.py`:
@@ -96,6 +119,7 @@ from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.auth import GITHUB_KEYSTORE_REF, GitHubAuth
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
+
 
 class FakeGh:
     def __init__(self, value: str | None) -> None:
@@ -110,15 +134,23 @@ class FakeGh:
             raise DomainError("gh_not_logged_in", "not logged in", status=409)
         return self.value
 
+
 def _http() -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.headers.get("authorization") in ("Bearer gho_a", "Bearer gho_b", "Bearer ghp_pasted"):
+        if request.headers.get("authorization") in (
+            "Bearer gho_a",
+            "Bearer gho_b",
+            "Bearer ghp_pasted",
+        ):
             return httpx.Response(200, json={"login": "octo"})
         return httpx.Response(401, json={"message": "Bad credentials"})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-async def test_gh_mode_reads_the_token_every_time(databases: Databases, keystore: MemoryKeyStore) -> None:
+
+async def test_gh_mode_reads_the_token_every_time(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
     gh = FakeGh("gho_a")
     auth = GitHubAuth(databases, keystore, _http(), gh)
     status = await auth.enable_gh()
@@ -126,6 +158,7 @@ async def test_gh_mode_reads_the_token_every_time(databases: Databases, keystore
     gh.value = "gho_b"  # the user logged in again with gh
     assert await auth.token() == "gho_b"
     assert keystore.data == {}
+
 
 async def test_token_mode_stores_the_token(databases: Databases, keystore: MemoryKeyStore) -> None:
     auth = GitHubAuth(databases, keystore, _http(), FakeGh(None))
@@ -137,13 +170,17 @@ async def test_token_mode_stores_the_token(databases: Databases, keystore: Memor
     assert (await auth.status()).mode == "none"
     assert keystore.data == {}
 
+
 async def test_rejected_token_is_not_stored(databases: Databases, keystore: MemoryKeyStore) -> None:
     auth = GitHubAuth(databases, keystore, _http(), FakeGh(None))
     with pytest.raises(DomainError):
         await auth.set_token("ghp_wrong")
     assert keystore.data == {}
 
-async def test_require_token_when_not_connected(databases: Databases, keystore: MemoryKeyStore) -> None:
+
+async def test_require_token_when_not_connected(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
     auth = GitHubAuth(databases, keystore, _http(), FakeGh(None))
     with pytest.raises(DomainError) as err:
         await auth.require_token()
@@ -165,7 +202,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
@@ -173,18 +210,24 @@ from mlops_agents.errors import DomainError
 GITHUB_API = "https://api.github.com"
 _HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
+
 class RepoSummary(BaseModel):
     full_name: str
     private: bool
     default_branch: str
     description: str | None
 
-async def _get(http: httpx.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
+
+async def _get(
+    http: httpx.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None
+) -> httpx.Response:
     headers = {**_HEADERS, "Authorization": f"Bearer {token}"}
     try:
         response = await http.get(GITHUB_API + path, headers=headers, params=params, timeout=30)
     except httpx.HTTPError as exc:
-        raise DomainError("github_unreachable", f"Could not reach GitHub: {error_text(exc)}", status=502) from None
+        raise DomainError(
+            "github_unreachable", f"Could not reach GitHub: {error_text(exc)}", status=502
+        ) from None
     if response.status_code == 401:
         raise DomainError(
             "github_token_rejected",
@@ -193,33 +236,53 @@ async def _get(http: httpx.AsyncClient, token: str, path: str, params: dict[str,
         )
     return response
 
-def _repo(item: dict[str, Any]) -> RepoSummary:
-    return RepoSummary(
-        full_name=str(item["full_name"]),
-        private=bool(item.get("private")),
-        default_branch=str(item.get("default_branch") or "main"),
-        description=item.get("description") if isinstance(item.get("description"), str) else None,
+
+class _User(BaseModel):
+    login: str
+
+
+_REPO_LIST = TypeAdapter(list[RepoSummary])
+
+
+def _unreadable() -> DomainError:
+    return DomainError(
+        "github_error", "GitHub answered with data this app cannot read. Try again.", status=502
     )
+
 
 async def get_login(http: httpx.AsyncClient, token: str) -> str:
     response = await _get(http, token, "/user")
     if response.status_code != 200:
-        raise DomainError("github_error", f"GitHub answered with HTTP {response.status_code}.", status=502)
-    return str(response.json()["login"])
+        raise DomainError(
+            "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+        )
+    try:
+        return _User.model_validate(response.json()).login
+    except ValidationError:
+        raise _unreadable() from None
+
 
 async def list_repos(http: httpx.AsyncClient, token: str, *, limit: int = 300) -> list[RepoSummary]:
     repos: list[RepoSummary] = []
     page = 1
     while len(repos) < limit:
-        response = await _get(http, token, "/user/repos", {"per_page": 100, "page": page, "sort": "updated"})
+        response = await _get(
+            http, token, "/user/repos", {"per_page": 100, "page": page, "sort": "updated"}
+        )
         if response.status_code != 200:
-            raise DomainError("github_error", f"GitHub answered with HTTP {response.status_code}.", status=502)
-        items: list[dict[str, Any]] = response.json()
-        repos.extend(_repo(item) for item in items)
-        if len(items) < 100:
+            raise DomainError(
+                "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+            )
+        try:
+            page_repos = _REPO_LIST.validate_python(response.json())
+        except ValidationError:
+            raise _unreadable() from None
+        repos.extend(page_repos)
+        if len(page_repos) < 100:
             break
         page += 1
     return repos[:limit]
+
 
 async def get_repo(http: httpx.AsyncClient, token: str, full_name: str) -> RepoSummary:
     response = await _get(http, token, f"/repos/{full_name}")
@@ -230,8 +293,13 @@ async def get_repo(http: httpx.AsyncClient, token: str, full_name: str) -> RepoS
             status=404,
         )
     if response.status_code != 200:
-        raise DomainError("github_error", f"GitHub answered with HTTP {response.status_code}.", status=502)
-    return _repo(response.json())
+        raise DomainError(
+            "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+        )
+    try:
+        return RepoSummary.model_validate(response.json())
+    except ValidationError:
+        raise _unreadable() from None
 ```
 
 `backend/src/mlops_agents/integrations/github/auth.py`:
@@ -250,7 +318,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.clock import now_iso
-from mlops_agents.credentials import KeyStore
+from mlops_agents.credentials import KeyStore, KeyStoreError
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import get_login
 from mlops_agents.storage.databases import Databases
@@ -259,16 +327,19 @@ from mlops_agents.storage.tables import integrations
 GITHUB = "github"
 GITHUB_KEYSTORE_REF = "github/token"
 
+
 class GitHubStatus(BaseModel):
     mode: Literal["none", "gh", "token"]
     login: str | None
     gh_available: bool
+
 
 class GhLike(Protocol):
     @property
     def available(self) -> bool: ...
 
     async def token(self) -> str: ...
+
 
 class GhCli:
     """The GitHub CLI. Its token is read on every use, never copied, so a new `gh auth login`
@@ -298,7 +369,9 @@ class GhCli:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            raise DomainError("gh_timeout", "The GitHub CLI did not answer within 30 seconds.", status=504) from None
+            raise DomainError(
+                "gh_timeout", "The GitHub CLI did not answer within 30 seconds.", status=504
+            ) from None
         token = completed.stdout.strip()
         if completed.returncode != 0 or not token:
             raise DomainError(
@@ -308,8 +381,11 @@ class GhCli:
             )
         return token
 
+
 class GitHubAuth:
-    def __init__(self, databases: Databases, keystore: KeyStore, http: httpx.AsyncClient, gh: GhLike) -> None:
+    def __init__(
+        self, databases: Databases, keystore: KeyStore, http: httpx.AsyncClient, gh: GhLike
+    ) -> None:
         self._dbs = databases
         self._keys = keystore
         self._http = http
@@ -318,7 +394,11 @@ class GitHubAuth:
     async def _mode(self) -> tuple[str, str | None]:
         engine = await self._dbs.app()
         async with engine.connect() as conn:
-            row = (await conn.execute(select(integrations).where(integrations.c.name == GITHUB))).mappings().first()
+            row = (
+                (await conn.execute(select(integrations).where(integrations.c.name == GITHUB)))
+                .mappings()
+                .first()
+            )
         return (row["mode"], row["login"]) if row else ("none", None)
 
     async def _save(self, mode: str, login: str) -> None:
@@ -327,12 +407,17 @@ class GitHubAuth:
         statement = sqlite_insert(integrations).values(values)
         async with engine.begin() as conn:
             await conn.execute(
-                statement.on_conflict_do_update(index_elements=["name"], set_={k: v for k, v in values.items() if k != "name"})
+                statement.on_conflict_do_update(
+                    index_elements=["name"], set_={k: v for k, v in values.items() if k != "name"}
+                )
             )
 
     async def status(self) -> GitHubStatus:
         mode, login = await self._mode()
-        return GitHubStatus(mode=mode, login=login, gh_available=self._gh.available)  # pyright: ignore[reportArgumentType] -- mode comes from our own table
+        # model_validate checks the stored mode against GitHubStatus's Literal.
+        return GitHubStatus.model_validate(
+            {"mode": mode, "login": login, "gh_available": self._gh.available}
+        )
 
     async def enable_gh(self) -> GitHubStatus:
         login = await get_login(self._http, await self._gh.token())
@@ -360,20 +445,29 @@ class GitHubAuth:
         if mode == "gh":
             return await self._gh.token()
         if mode == "token":
-            return await asyncio.to_thread(self._keys.get, GITHUB_KEYSTORE_REF)
+            try:
+                return await asyncio.to_thread(self._keys.get, GITHUB_KEYSTORE_REF)
+            except KeyStoreError as err:  # its messages never contain a key
+                raise DomainError(
+                    "github_token_unreadable",
+                    f"The saved GitHub token could not be read: {err}",
+                    status=503,
+                ) from None
         return None
 
     async def require_token(self) -> str:
         token = await self.token()
         if token is None:
-            raise DomainError("github_not_connected", "Connect GitHub in Integrations first.", status=409)
+            raise DomainError(
+                "github_not_connected", "Connect GitHub in Integrations first.", status=409
+            )
         return token
 ```
 
 - [ ] **Step 4: Run tests and checks**
 
-Run: `cd backend && uv run ruff format && uv run pytest tests/integrations -v && uv run ruff check && uv run pyright`
-Expected: all pass on Windows and Linux (CI runs Linux; run it locally on Windows). 
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright`
+Expected: all pass. CI runs the same checks on Linux and Windows.
 
 - [ ] **Step 5: Live clone check** (marker `live`) — add `backend/tests/integrations/test_live_clone.py`:
 
@@ -388,13 +482,17 @@ from mlops_agents.integrations.github.git import GitRunner
 
 pytestmark = pytest.mark.live
 
+
 async def test_clone_private_repo_with_gh_token(tmp_path: Path) -> None:
     repo = os.environ.get("MLOPS_AGENTS_LIVE_GITHUB_REPO")
     if not repo:
         pytest.skip("set MLOPS_AGENTS_LIVE_GITHUB_REPO=owner/name (a private repo you can read)")
     gh = GhCli()
     runner = GitRunner(tmp_path / "bin", gh.token)
-    await runner.run(["clone", "--depth", "1", f"https://github.com/{repo}.git", str(tmp_path / "c")], authenticated=True)
+    await runner.run(
+        ["clone", "--depth", "1", f"https://github.com/{repo}.git", str(tmp_path / "c")],
+        authenticated=True,
+    )
     assert (tmp_path / "c" / ".git").is_dir()
     assert "x-access-token" not in (tmp_path / "c" / ".git" / "config").read_text()
 ```
@@ -423,6 +521,10 @@ git commit -m "feat(github): add GitHub API client and auth"
   - `models.py`: `ProjectSource = Literal["local", "github"]`, `ProjectStatus = Literal["ok", "missing", "empty", "clone_failed"]`, `Project(id, name, source, local_path, github_full_name, default_branch, status, status_detail, created_at, last_opened_at)`, `FolderEntry(name, path, is_git_repo)`, `FolderListing(path, parent, entries, roots)`.
   - `refs.py`: `path_key(path: Path) -> str`, `parse_github_ref(text: str) -> str`.
   - `WorkspaceService(settings, paths, databases, git: GitRunner, github: GitHubAuth, http: httpx.AsyncClient, *, remote_url: Callable[[str], str] = github_https_url)` with async `list_projects() -> list[Project]`, `get(project_id) -> Project`, `add_local(path_text, *, init_git=False) -> Project`, `add_github(ref_text) -> Project`, `open(project_id) -> Project`, `refresh(project_id) -> Project`, `relink(project_id, path_text) -> Project`, `remove(project_id) -> None`, `browse(path_text: str | None) -> FolderListing`, and sync `repo_root(project) -> Path`.
+  - The app builds the service's runner as `GitRunner(paths.bin, github.token)` (api plan). With the default `no_token`, cloning a private repository fails with no hint of the cause.
+  - When a fetch or clone fails, the service asks GitHub whether the token still works (`get_login`), because git's own message is localized and names no fix: a rejected token shows "GitHub rejected the token. Log in again with `gh auth login` or paste a new token in Integrations."
+  - A refresh or clone that cannot get a GitHub token (gh logged out, token expired or revoked, GitHub disconnected) never raises: the project keeps its last downloaded copy, and `status_detail` says "Refresh failed: <reason>. The last downloaded copy is still used." (or "Cloning failed: <reason>. Use Refresh to try again.").
+  - All filesystem checks (`is_dir`, `exists`, `resolve`, `expanduser`, `mkdir`, the Windows drive list) run in `asyncio.to_thread`.
   - Messages shown to users: `EMPTY_REPO_DETAIL = "The repository has no committed files yet. Commit your files first."` (the agent-runtime plan reuses it).
 
 - [ ] **Step 1: Write the failing tests**
@@ -470,6 +572,7 @@ def test_path_key_is_case_insensitive_on_windows(tmp_path: Path) -> None:
 `backend/tests/workspace/test_local.py`:
 
 ```python
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -493,17 +596,32 @@ def _settings(paths: DataPaths, mode: RunMode = RunMode.LOCAL) -> Settings:
     return replace(base, mode=mode)
 
 
-def _service(paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, mode: RunMode = RunMode.LOCAL) -> WorkspaceService:
+def _service(
+    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, mode: RunMode = RunMode.LOCAL
+) -> WorkspaceService:
     http = httpx.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    return WorkspaceService(_settings(paths, mode), paths, databases, GitRunner(paths.bin, github.token), github, http)
+    return WorkspaceService(
+        _settings(paths, mode), paths, databases, GitRunner(paths.bin, github.token), github, http
+    )
 
 
-async def test_add_local_repo(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_add_local_repo(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     repo = make_repo(tmp_path / "demo", {"README.md": "# Demo"}, git_env)
     svc = _service(paths, databases, keystore)
     project = await svc.add_local(str(repo))
-    assert (project.name, project.source, project.status, project.default_branch) == ("demo", "local", "ok", "main")
+    assert (project.name, project.source, project.status, project.default_branch) == (
+        "demo",
+        "local",
+        "ok",
+        "main",
+    )
     assert project.id.startswith("prj_")
     assert svc.repo_root(project) == repo.resolve()
     with pytest.raises(DomainError) as err:
@@ -511,7 +629,13 @@ async def test_add_local_repo(tmp_path: Path, paths: DataPaths, databases: Datab
     assert err.value.code == "project_exists"
 
 
-async def test_not_a_repo_offers_git_init(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_not_a_repo_offers_git_init(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     folder = tmp_path / "plain"
     folder.mkdir()
     svc = _service(paths, databases, keystore)
@@ -521,17 +645,28 @@ async def test_not_a_repo_offers_git_init(tmp_path: Path, paths: DataPaths, data
     assert err.value.detail == {"can_init": True}
     project = await svc.add_local(str(folder), init_git=True)
     assert project.status == "empty"
-    assert project.status_detail == "The repository has no committed files yet. Commit your files first."
+    assert (
+        project.status_detail
+        == "The repository has no committed files yet. Commit your files first."
+    )
 
 
-async def test_subfolder_of_a_repo_is_refused(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_subfolder_of_a_repo_is_refused(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     repo = make_repo(tmp_path / "demo", {"src/a.py": "x = 1"}, git_env)
     with pytest.raises(DomainError) as err:
         await _service(paths, databases, keystore).add_local(str(repo / "src"))
     assert err.value.code == "not_repo_root"
 
 
-async def test_server_mode_refuses_local_folders(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore) -> None:
+async def test_server_mode_refuses_local_folders(
+    tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
+) -> None:
     svc = _service(paths, databases, keystore, RunMode.SERVER)
     with pytest.raises(DomainError) as err:
         await svc.add_local(str(tmp_path))
@@ -540,7 +675,13 @@ async def test_server_mode_refuses_local_folders(tmp_path: Path, paths: DataPath
         await svc.browse(None)
 
 
-async def test_missing_folder_and_relink(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_missing_folder_and_relink(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     repo = make_repo(tmp_path / "demo", {"a.py": "x = 1"}, git_env)
     svc = _service(paths, databases, keystore)
     project = await svc.add_local(str(repo))
@@ -553,7 +694,13 @@ async def test_missing_folder_and_relink(tmp_path: Path, paths: DataPaths, datab
     assert relinked.local_path == str(moved.resolve())
 
 
-async def test_remove_keeps_the_users_repo(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_remove_keeps_the_users_repo(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     repo = make_repo(tmp_path / "demo", {"a.py": "x = 1"}, git_env)
     svc = _service(paths, databases, keystore)
     project = await svc.add_local(str(repo))
@@ -564,7 +711,13 @@ async def test_remove_keeps_the_users_repo(tmp_path: Path, paths: DataPaths, dat
     assert await svc.list_projects() == []
 
 
-async def test_browse_lists_folders(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_browse_lists_folders(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
     make_repo(tmp_path / "b-repo", {"a.py": "x"}, git_env)
     (tmp_path / "A-folder").mkdir()
     (tmp_path / "file.txt").write_text("x")
@@ -574,18 +727,40 @@ async def test_browse_lists_folders(tmp_path: Path, paths: DataPaths, databases:
     assert ("b-repo", True) in names
     assert all(e.name != "file.txt" for e in listing.entries)
     assert listing.parent == str(tmp_path.parent)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path spellings; runs on the Windows CI leg")
+async def test_windows_path_spellings_are_the_same_project(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    repo = make_repo(tmp_path / "Demo", {"a.py": "x = 1"}, git_env)
+    svc = _service(paths, databases, keystore)
+    await svc.add_local(str(repo))
+    text = str(repo)
+    drive_flipped = (text[0].swapcase() + text[1:]) if text[1:2] == ":" else text
+    for variant in (text.upper(), text.lower(), text.replace("\\", "/"), drive_flipped):
+        with pytest.raises(DomainError) as err:
+            await svc.add_local(variant)
+        assert err.value.code == "project_exists"
 ```
 
 `backend/tests/workspace/test_github.py`:
 
 ```python
+import asyncio
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 import pytest
 
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.credentials import KeyStoreError
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
@@ -596,32 +771,86 @@ from tests.conftest import MemoryKeyStore, make_repo
 from tests.integrations.test_github_auth import FakeGh
 
 
+class BreakableKeyStore(MemoryKeyStore):
+    """A key store whose reads can be made to fail, like a locked or missing OS keyring."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.broken = False
+
+    def get(self, ref: str) -> str | None:
+        if self.broken:
+            raise KeyStoreError("The OS keyring is locked. Unlock it and try again.")
+        return super().get(ref)
+
+
+@dataclass
+class Harness:
+    svc: WorkspaceService
+    github: GitHubAuth
+    gh: FakeGh
+    keystore: BreakableKeyStore
+    revoked: set[str] = field(default_factory=set[str])
+
+
 def _bare_remote(tmp_path: Path, env: dict[str, str]) -> tuple[Path, Path]:
     work = make_repo(tmp_path / "work", {"README.md": "first"}, env)
     bare = tmp_path / "remote.git"
-    subprocess.run(["git", "clone", "--bare", str(work), str(bare)], env=env, check=True, capture_output=True)
-    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=work, env=env, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "--bare", str(work), str(bare)], env=env, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=work,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
     return work, bare
 
 
-async def _service(paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, bare: Path) -> WorkspaceService:
+def _force_push_rewrite(work: Path, env: dict[str, str]) -> None:
+    (work / "README.md").write_text("rewritten")
+    for args in (["commit", "-am", "rewrite", "--amend"], ["push", "--force", "origin", "main"]):
+        subprocess.run(["git", *args], cwd=work, env=env, check=True, capture_output=True)
+
+
+async def _harness(paths: DataPaths, databases: Databases, bare: Path) -> Harness:
+    revoked: set[str] = set()
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization", "").removeprefix("Bearer ") in revoked:
+            return httpx.Response(401, json={"message": "Bad credentials"})
         if request.url.path == "/user":
             return httpx.Response(200, json={"login": "octo"})
         if request.url.path.lower() == "/repos/octo/demo":
-            return httpx.Response(200, json={"full_name": "Octo/Demo", "private": True, "default_branch": "main", "description": None})
+            repo = {"full_name": "Octo/Demo", "private": True, "default_branch": "main"}
+            return httpx.Response(200, json={**repo, "description": None})
         return httpx.Response(404, json={})
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    github = GitHubAuth(databases, keystore, http, FakeGh("gho_test"))
+    keystore = BreakableKeyStore()
+    gh = FakeGh("gho_test")
+    github = GitHubAuth(databases, keystore, http, gh)
     await github.enable_gh()
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return WorkspaceService(settings, paths, databases, GitRunner(paths.bin, github.token), github, http, remote_url=lambda _: bare.as_uri())
+    service = WorkspaceService(
+        settings,
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        http,
+        remote_url=lambda _: bare.as_uri(),
+    )
+    return Harness(service, github, gh, keystore, revoked)
 
 
-async def test_add_github_clones_into_app_data(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_add_github_clones_into_app_data(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
     _, bare = _bare_remote(tmp_path, git_env)
-    svc = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("https://github.com/octo/demo")
     assert (project.name, project.github_full_name, project.status) == ("Demo", "Octo/Demo", "ok")
     assert (svc.repo_root(project) / "README.md").read_text() == "first"
@@ -630,28 +859,76 @@ async def test_add_github_clones_into_app_data(tmp_path: Path, paths: DataPaths,
     assert err.value.code == "project_exists"
 
 
-async def test_refresh_survives_force_push(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_refresh_survives_force_push(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
     work, bare = _bare_remote(tmp_path, git_env)
-    svc = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("octo/demo")
-    (work / "README.md").write_text("rewritten")
-    subprocess.run(["git", "commit", "-am", "rewrite", "--amend"], cwd=work, env=git_env, check=True, capture_output=True)
-    subprocess.run(["git", "push", "--force", "origin", "main"], cwd=work, env=git_env, check=True, capture_output=True)
+    await asyncio.to_thread(_force_push_rewrite, work, git_env)
     refreshed = await svc.refresh(project.id)
     assert refreshed.status == "ok"
     assert (svc.repo_root(project) / "README.md").read_text() == "rewritten"
 
 
-async def test_failed_refresh_keeps_the_last_copy(tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, git_env: dict[str, str]) -> None:
+async def test_failed_refresh_keeps_the_last_copy(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
     _, bare = _bare_remote(tmp_path, git_env)
-    svc = await _service(paths, databases, keystore, bare)
+    svc = (await _harness(paths, databases, bare)).svc
     project = await svc.add_github("octo/demo")
-    bare.rename(tmp_path / "gone.git")  # the remote is gone, like a revoked token or a deleted repo
+    bare.rename(tmp_path / "gone.git")  # the remote is gone, like a deleted repo
     refreshed = await svc.refresh(project.id)
     assert refreshed.status == "ok"
     assert refreshed.status_detail is not None
     assert refreshed.status_detail.startswith("Refresh failed")
     assert (svc.repo_root(project) / "README.md").read_text() == "first"
+
+
+async def test_revoked_pasted_token_says_what_to_do(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
+    _, bare = _bare_remote(tmp_path, git_env)
+    h = await _harness(paths, databases, bare)
+    await h.github.set_token("ghp_pasted")
+    project = await h.svc.add_github("octo/demo")
+    h.revoked.add("ghp_pasted")  # revoked or expired on github.com
+    bare.rename(tmp_path / "gone.git")  # so git's fetch fails as it would with the revoked token
+    opened = await h.svc.open(project.id)
+    assert opened.status == "ok"
+    assert opened.status_detail is not None
+    assert opened.status_detail.startswith("Refresh failed: GitHub rejected the token.")
+    assert "paste a new token" in opened.status_detail
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
+
+
+async def test_gh_logout_after_add_keeps_the_last_copy(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
+    _, bare = _bare_remote(tmp_path, git_env)
+    h = await _harness(paths, databases, bare)
+    project = await h.svc.add_github("octo/demo")
+    h.gh.value = None  # the user logged out of gh
+    opened = await h.svc.open(project.id)
+    assert opened.status == "ok"
+    assert opened.status_detail is not None
+    assert opened.status_detail.startswith("Refresh failed: not logged in.")
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
+
+
+async def test_unreadable_key_store_keeps_the_last_copy(
+    tmp_path: Path, paths: DataPaths, databases: Databases, git_env: dict[str, str]
+) -> None:
+    _, bare = _bare_remote(tmp_path, git_env)
+    h = await _harness(paths, databases, bare)
+    await h.github.set_token("ghp_pasted")
+    project = await h.svc.add_github("octo/demo")
+    h.keystore.broken = True
+    opened = await h.svc.open(project.id)
+    assert opened.status == "ok"
+    assert opened.status_detail is not None
+    assert opened.status_detail.startswith("Refresh failed: The saved GitHub token could not")
+    assert (h.svc.repo_root(project) / "README.md").read_text() == "first"
 ```
 
 `tests/integrations/__init__.py` exists (backend-core plan, Task 5), so `FakeGh` is importable from `tests.integrations.test_github_auth`.
@@ -756,7 +1033,7 @@ from mlops_agents.clock import now_iso
 from mlops_agents.config import RunMode, Settings
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
-from mlops_agents.integrations.github.api import get_repo
+from mlops_agents.integrations.github.api import get_login, get_repo
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitError, GitRunner
 from mlops_agents.paths import DataPaths
@@ -777,11 +1054,24 @@ def github_https_url(full_name: str) -> str:
 def _rmtree(path: Path) -> None:
     def make_writable_and_retry(func: Callable[..., Any], target: str, exc: BaseException) -> None:
         del exc
-        Path(target).chmod(stat.S_IWRITE)  # git marks pack files read-only; Windows refuses to delete them
+        Path(target).chmod(
+            stat.S_IWRITE
+        )  # git marks pack files read-only; Windows refuses to delete them
         func(target)
 
     if path.exists():
         shutil.rmtree(path, onexc=make_writable_and_retry)
+
+
+def _user_path(text: str) -> Path:
+    return Path(text.strip()).expanduser()
+
+
+def _drive_roots() -> list[str]:
+    if os.name != "nt":
+        return ["/"]
+    # Probing a disconnected network drive can take seconds; this runs in a worker thread.
+    return [f"{d}:\\" for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
 
 
 class WorkspaceService:
@@ -809,7 +1099,9 @@ class WorkspaceService:
     async def list_projects(self) -> list[Project]:
         engine = await self._dbs.app()
         query = select(projects).order_by(
-            projects.c.last_opened_at.is_(None), projects.c.last_opened_at.desc(), projects.c.created_at.desc()
+            projects.c.last_opened_at.is_(None),
+            projects.c.last_opened_at.desc(),
+            projects.c.created_at.desc(),
         )
         async with engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
@@ -818,7 +1110,11 @@ class WorkspaceService:
     async def get(self, project_id: str) -> Project:
         engine = await self._dbs.app()
         async with engine.connect() as conn:
-            row = (await conn.execute(select(projects).where(projects.c.id == project_id))).mappings().first()
+            row = (
+                (await conn.execute(select(projects).where(projects.c.id == project_id)))
+                .mappings()
+                .first()
+            )
         if row is None:
             raise DomainError("project_not_found", "This project does not exist.", status=404)
         return _project(row)
@@ -839,9 +1135,11 @@ class WorkspaceService:
             )
 
     async def _repo_folder(self, path_text: str, *, init_git: bool) -> tuple[Path, str]:
-        folder = Path(path_text.strip()).expanduser()
-        if not folder.is_dir():
-            raise DomainError("folder_not_found", f"{folder} is not a folder on this machine.", status=422)
+        folder = await asyncio.to_thread(_user_path, path_text)
+        if not await asyncio.to_thread(folder.is_dir):
+            raise DomainError(
+                "folder_not_found", f"{folder} is not a folder on this machine.", status=422
+            )
         key = await asyncio.to_thread(path_key, folder)
         top = await self._git.run(["rev-parse", "--show-toplevel"], cwd=folder, check=False)
         if top.code != 0:
@@ -861,7 +1159,7 @@ class WorkspaceService:
                 status=422,
                 detail={"repo_root": root},
             )
-        return folder.resolve(), key
+        return await asyncio.to_thread(folder.resolve), key
 
     async def add_local(self, path_text: str, *, init_git: bool = False) -> Project:
         self._require_local_mode()
@@ -890,7 +1188,9 @@ class WorkspaceService:
         self._require_local_mode()
         project = await self.get(project_id)
         if project.source != "local":
-            raise DomainError("not_local", "Only local projects can be pointed to a new folder.", status=409)
+            raise DomainError(
+                "not_local", "Only local projects can be pointed to a new folder.", status=409
+            )
         folder, key = await self._repo_folder(path_text, init_git=False)
         await self._ensure_unique(local_path_key=key, except_id=project_id)
         status, detail = await self._status(folder)
@@ -906,16 +1206,24 @@ class WorkspaceService:
 
     async def browse(self, path_text: str | None) -> FolderListing:
         self._require_local_mode()
-        folder = Path(path_text).expanduser() if path_text else Path.home()
-        if not folder.is_dir():
-            raise DomainError("folder_not_found", f"{folder} is not a folder on this machine.", status=404)
+        folder = await asyncio.to_thread(_user_path, path_text) if path_text else Path.home()
+        if not await asyncio.to_thread(folder.is_dir):
+            raise DomainError(
+                "folder_not_found", f"{folder} is not a folder on this machine.", status=404
+            )
 
         def scan() -> list[FolderEntry]:
             found: list[FolderEntry] = []
             for child in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
                 try:
                     if child.is_dir():
-                        found.append(FolderEntry(name=child.name, path=str(child), is_git_repo=(child / ".git").exists()))
+                        found.append(
+                            FolderEntry(
+                                name=child.name,
+                                path=str(child),
+                                is_git_repo=(child / ".git").exists(),
+                            )
+                        )
                 except OSError:
                     continue
             return found
@@ -923,11 +1231,10 @@ class WorkspaceService:
         try:
             entries = await asyncio.to_thread(scan)
         except PermissionError:
-            raise DomainError("folder_unreadable", f"The app is not allowed to read {folder}.", status=403) from None
-        if os.name == "nt":
-            roots = [f"{d}:\\" for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
-        else:
-            roots = ["/"]
+            raise DomainError(
+                "folder_unreadable", f"The app is not allowed to read {folder}.", status=403
+            ) from None
+        roots = await asyncio.to_thread(_drive_roots)
         parent = str(folder.parent) if folder.parent != folder else None
         return FolderListing(path=str(folder), parent=parent, entries=entries, roots=roots)
 
@@ -936,14 +1243,18 @@ class WorkspaceService:
     async def _clone(self, project_id: str, full_name: str) -> tuple[ProjectStatus, str | None]:
         target = self._paths.repo_dir(project_id)
         await asyncio.to_thread(_rmtree, target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        result = await self._git.run(
-            ["clone", "--origin", "origin", self._remote_url(full_name), str(target)],
-            check=False,
-            authenticated=True,
-        )
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        try:
+            result = await self._git.run(
+                ["clone", "--origin", "origin", self._remote_url(full_name), str(target)],
+                check=False,
+                authenticated=True,
+            )
+        except DomainError as err:  # no GitHub token: gh logged out, or GitHub disconnected
+            reason = err.message.rstrip(".")
+            return "clone_failed", f"Cloning failed: {reason}. Use Refresh to try again."
         if result.code != 0:
-            reason = result.stderr.strip() or "no output"
+            reason = (await self._failure_reason(result.stderr)).rstrip(".")
             return "clone_failed", f"Cloning failed: {reason}. Use Refresh to try again."
         return await self._status(target)
 
@@ -978,33 +1289,64 @@ class WorkspaceService:
         if project.github_full_name is None:
             return
         target = self._paths.repo_dir(project.id)
-        if not (target / ".git").is_dir():
+        if not await asyncio.to_thread((target / ".git").is_dir):
             status, detail = await self._clone(project.id, project.github_full_name)
             await self._update(project.id, status=status, status_detail=detail)
             return
-        fetch = await self._git.run(["fetch", "--prune", "origin"], cwd=target, check=False, authenticated=True)
-        if fetch.code != 0:
-            status, _ = await self._status(target)
-            reason = fetch.stderr.strip() or "no output"
-            await self._update(
-                project.id,
-                status=status,
-                status_detail=f"Refresh failed: {reason}. The last downloaded copy is still used.",
+        try:
+            fetch = await self._git.run(
+                ["fetch", "--prune", "origin"], cwd=target, check=False, authenticated=True
             )
+        except DomainError as err:  # no GitHub token: gh logged out, or GitHub disconnected
+            await self._refresh_failed(project.id, target, err.message)
+            return
+        if fetch.code != 0:
+            await self._refresh_failed(project.id, target, await self._failure_reason(fetch.stderr))
             return
         try:
-            await self._git.run(["remote", "set-head", "origin", "--auto"], cwd=target, check=False, authenticated=True)
-            head = await self._git.run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=target, check=False)
+            await self._git.run(
+                ["remote", "set-head", "origin", "--auto"],
+                cwd=target,
+                check=False,
+                authenticated=True,
+            )
+            head = await self._git.run(
+                ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=target, check=False
+            )
             branch = head.stdout.strip().removeprefix("origin/") or project.default_branch or "main"
-            await self._git.run(["checkout", "--force", "-B", branch, f"origin/{branch}"], cwd=target)
+            await self._git.run(
+                ["checkout", "--force", "-B", branch, f"origin/{branch}"], cwd=target
+            )
             await self._git.run(["reset", "--hard", f"origin/{branch}"], cwd=target)
             await self._git.run(["clean", "-ffdx"], cwd=target)
-        except GitError as err:
+        except (GitError, DomainError) as err:  # set-head reads the token again
             status, detail = await self._status(target)
-            await self._update(project.id, status=status, status_detail=detail or f"Refresh failed: {err}")
+            await self._update(
+                project.id, status=status, status_detail=detail or f"Refresh failed: {err}"
+            )
             return
         status, detail = await self._status(target)
         await self._update(project.id, default_branch=branch, status=status, status_detail=detail)
+
+    async def _failure_reason(self, stderr: str) -> str:
+        """Why a fetch or clone failed. git's own text is localized and names no fix, so a
+        rejected token is detected by asking GitHub, whose message says what to do."""
+        try:
+            token = await self._github.token()
+            if token is not None:
+                await get_login(self._http, token)
+        except DomainError as err:
+            if err.code in ("github_token_rejected", "gh_not_logged_in", "github_token_unreadable"):
+                return err.message
+        return stderr.strip() or "no output"
+
+    async def _refresh_failed(self, project_id: str, target: Path, reason: str) -> None:
+        status, _ = await self._status(target)
+        await self._update(
+            project_id,
+            status=status,
+            status_detail=f"Refresh failed: {reason.rstrip('.')}. The last downloaded copy is still used.",
+        )
 
     # Both kinds
 
@@ -1015,8 +1357,12 @@ class WorkspaceService:
         else:
             root = self.repo_root(project)
             status, detail = await self._status(root)
-            branch = await self._current_branch(root) if status != "missing" else project.default_branch
-            await self._update(project_id, status=status, status_detail=detail, default_branch=branch)
+            branch = (
+                await self._current_branch(root) if status != "missing" else project.default_branch
+            )
+            await self._update(
+                project_id, status=status, status_detail=detail, default_branch=branch
+            )
         return await self.get(project_id)
 
     async def open(self, project_id: str) -> Project:
@@ -1035,7 +1381,7 @@ class WorkspaceService:
     # Helpers
 
     async def _status(self, root: Path) -> tuple[ProjectStatus, str | None]:
-        if not root.is_dir():
+        if not await asyncio.to_thread(root.is_dir):
             return "missing", MISSING_DETAIL
         top = await self._git.run(["rev-parse", "--show-toplevel"], cwd=root, check=False)
         if top.code != 0:
@@ -1050,7 +1396,11 @@ class WorkspaceService:
         return result.stdout.strip() or None
 
     async def _ensure_unique(
-        self, *, local_path_key: str | None = None, github_key: str | None = None, except_id: str | None = None
+        self,
+        *,
+        local_path_key: str | None = None,
+        github_key: str | None = None,
+        except_id: str | None = None,
     ) -> None:
         condition = (
             projects.c.local_path_key == local_path_key
@@ -1061,7 +1411,11 @@ class WorkspaceService:
             condition = condition & (projects.c.id != except_id)
         engine = await self._dbs.app()
         async with engine.connect() as conn:
-            row = (await conn.execute(select(projects.c.id, projects.c.name).where(condition))).mappings().first()
+            row = (
+                (await conn.execute(select(projects.c.id, projects.c.name).where(condition)))
+                .mappings()
+                .first()
+            )
         if row is not None:
             raise DomainError(
                 "project_exists",
@@ -1093,8 +1447,8 @@ def _project(row: RowMapping) -> Project:
 
 - [ ] **Step 4: Run tests and checks**
 
-Run: `cd backend && uv run ruff format && uv run pytest tests/workspace -v && uv run ruff check && uv run pyright`
-Expected: all pass on Windows and Linux.
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright`
+Expected: all pass. On Linux, `test_windows_path_spellings_are_the_same_project` is skipped; it runs on the Windows CI leg, which must pass before the task is closed.
 
 - [ ] **Step 5: Commit**
 

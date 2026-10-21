@@ -16,9 +16,9 @@ Stage 1 is built through several plans. This overview holds what they all share.
 |---|---|---|---|---|
 | backend-core | `plan/stage-1-backend-core` | Backend scaffold and CI, config, IDs, storage, credentials, git runner, shared test fixtures | none | Merged |
 | frontend-scaffold | `plan/stage-1-frontend-scaffold` | React app scaffold, tooling, frontend CI | none | Merged |
-| providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | backend-core | Ready on its branch |
-| github-workspace | `plan/stage-1-github-workspace` | GitHub API and auth, local and GitHub projects | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
-| agent-tools | `plan/stage-1-agent-tools` | Agent definition files, catalog, tool registry, tracked-file filter, Read/Glob/Grep | backend-core | Ready on its branch |
+| providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | backend-core | Merged |
+| github-workspace | `plan/stage-1-github-workspace` | GitHub API and auth, local and GitHub projects | backend-core | Merged |
+| agent-tools | `plan/stage-1-agent-tools` | Agent definition files, catalog, tool registry, tracked-file filter, Read/Glob/Grep | backend-core | Merged |
 | agent-runtime | `plan/stage-1-agent-runtime` | Per-project agent settings and model assignment, message store, context and compaction, model calls with retries, the LangGraph loop, turn executor, stream hub, session queue, Stop, recovery | providers, github-workspace, agent-tools | To write |
 | api | `plan/stage-1-api` | App factory, login for both run modes, CLI, every router, SSE stream, committed OpenAPI contract | agent-runtime | To write |
 | frontend-app | `plan/stage-1-frontend-app` | API client from the contract, app shell, every stage 1 page | frontend-scaffold, api | To write |
