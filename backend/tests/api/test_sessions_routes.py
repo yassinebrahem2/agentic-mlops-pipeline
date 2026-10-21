@@ -15,10 +15,16 @@ from fastapi import FastAPI
 
 import mlops_agents.api.routers as api_routers
 from mlops_agents.agents.runtime.contract import (
+    MessageCreated,
+    MessageData,
     MessageView,
     SessionView,
     StreamEvent,
+    TextDelta,
+    TextDeltaData,
     TextPart,
+    TurnEnded,
+    TurnEndedData,
 )
 from mlops_agents.api.routers import sessions as sessions_module
 from tests.api.conftest import build_app, signed_in
@@ -194,11 +200,38 @@ async def test_stream_events_arrive_in_order(
     git_env: dict[str, str],
 ) -> None:
     project_id = await _create_project(live_app, tmp_path, git_env)
-    events = [
-        StreamEvent(seq=1, type="message.created", data={"id": "msg_1"}),
-        StreamEvent(seq=2, type="text.delta", data={"delta": "hello "}),
-        StreamEvent(seq=3, type="text.delta", data={"delta": "world"}),
-        StreamEvent(seq=4, type="turn.ended", data={"status": "done"}),
+    events: list[StreamEvent] = [
+        MessageCreated(
+            seq=1,
+            type="message.created",
+            data=MessageData(
+                message=MessageView(
+                    id="msg_1",
+                    turn_id="trn_1",
+                    author_kind="agent",
+                    author_name="Orchestrator",
+                    from_agent=None,
+                    parts=[TextPart(type="text", text="hello")],
+                    status="streaming",
+                    created_at="2026-10-21T20:00:00Z",
+                )
+            ),
+        ),
+        TextDelta(
+            seq=2,
+            type="text.delta",
+            data=TextDeltaData(message_id="msg_1", text="hello "),
+        ),
+        TextDelta(
+            seq=3,
+            type="text.delta",
+            data=TextDeltaData(message_id="msg_1", text="world"),
+        ),
+        TurnEnded(
+            seq=4,
+            type="turn.ended",
+            data=TurnEndedData(turn_id="trn_1", status="done", error=None),
+        ),
     ]
     fake = FakeSessions(scripted_events=events)
     live_app.state.services.sessions = fake
@@ -226,7 +259,7 @@ async def test_stream_events_arrive_in_order(
         "text.delta",
         "turn.ended",
     ]
-    assert [json.loads(m.data or "{}") for m in received] == [e.data for e in events]
+    assert [json.loads(m.data or "{}") for m in received] == [e.data.model_dump() for e in events]
 
 
 async def test_stream_start_positions_and_headers(

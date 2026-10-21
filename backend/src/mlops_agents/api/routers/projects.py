@@ -53,6 +53,8 @@ async def get_project(project: ProjectDep) -> Project:
 
 @router.delete("/projects/{project_id}", status_code=204)
 async def delete_project(project: ProjectDep, services: ServicesDep) -> None:
+    if services.sessions is not None:
+        await services.sessions.close_project(project.id)
     await services.workspace.remove(project.id)
 
 

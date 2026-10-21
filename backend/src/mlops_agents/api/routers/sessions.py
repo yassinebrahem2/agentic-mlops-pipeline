@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -15,6 +14,7 @@ from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageView,
     SessionView,
+    StreamEvent,
 )
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.api.services import Services
@@ -91,13 +91,18 @@ async def stop_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+class _EventSourceResponse(EventSourceResponse):
+    media_type = "text/event-stream"
+
+
 @router.get(
     "/projects/{project_id}/agents/{agent}/session/stream",
-    response_class=EventSourceResponse,
+    response_class=_EventSourceResponse,
     responses={
         200: {
-            "content": {"text/event-stream": {}},
-            "description": "Stream of session events",
+            "model": StreamEvent,
+            "description": "I1 stream events",
+            "content": {"text/event-stream": {"schema": {"type": "object"}}},
         }
     },
 )
@@ -108,7 +113,7 @@ async def stream_session(
     _project: ProjectDep,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     after: Annotated[str | None, Query()] = None,
-) -> EventSourceResponse:
+) -> _EventSourceResponse:
     sessions = _require_sessions(services)
     # Check agent and project before returning EventSourceResponse
     await sessions.get(project_id, agent)
@@ -122,7 +127,7 @@ async def stream_session(
                 yield ServerSentEvent(
                     id=str(event.seq),
                     event=event.type,
-                    data=json.dumps(event.data),
+                    data=event.data.model_dump_json(),
                 )
         finally:
             aclose = getattr(subscription, "aclose", None)
@@ -131,7 +136,7 @@ async def stream_session(
                 if inspect.isawaitable(close_result):
                     await close_result
 
-    return EventSourceResponse(
+    return _EventSourceResponse(
         event_generator(),
         ping=PING_SECONDS,
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
