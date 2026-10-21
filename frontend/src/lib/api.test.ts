@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import type { Client } from "openapi-fetch";
 import { api, ApiError, createApiClient, errorText, fieldErrors, unwrap } from "./api";
 import { queryClient } from "./query";
 import { renderPage } from "../test/render";
@@ -315,7 +316,8 @@ describe("api client and utilities", () => {
       );
       vi.stubGlobal("fetch", fakeFetch);
 
-      await api.GET("/test");
+      const client = api as unknown as Client<TestPaths>;
+      await client.GET("/test");
       expect(fakeFetch).toHaveBeenCalled();
     });
   });
