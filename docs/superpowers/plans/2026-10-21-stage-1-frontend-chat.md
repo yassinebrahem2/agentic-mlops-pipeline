@@ -15,7 +15,7 @@
 | 1 | Session state and the stream | coding: I5 on `main` (I1 and I7's shapes are fixed in the overview); merging: api-sessions task 1 (#55) on `main` |
 | 2 | The Agents page | task 1; api-resources task 4 (#53); frontend-workspace task 1 (#58, `ProjectStatus`) |
 
-Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the event and session shapes are fixed in I1, and its tests use a fake stream. Its PR merges after api-sessions task 1, when the generated types hold the session routes.
+Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the event and session shapes are fixed in I1, and its tests use a fake stream. Its code type-checks against the generated types once api-sessions task 1 is on `main`; the plan PR comes after task 2 anyway.
 
 ---
 
