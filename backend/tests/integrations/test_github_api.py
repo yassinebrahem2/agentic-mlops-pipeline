@@ -68,3 +68,39 @@ async def test_unreadable_answer() -> None:
     with pytest.raises(DomainError) as err:
         await get_repo(_client(), "good", "octo/broken")
     assert err.value.code == "github_error"
+
+
+def _answering(status: int, headers: dict[str, str]) -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, headers=headers, json={"message": "limited"})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_primary_rate_limit_says_when_to_retry() -> None:
+    # 1793023500 is 2026-10-26 14:05:00 UTC.
+    http = _answering(403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1793023500"})
+    with pytest.raises(DomainError) as err:
+        await list_repos(http, "good")
+    assert (err.value.code, err.value.status) == ("github_rate_limited", 429)
+    assert err.value.message == "GitHub's rate limit was reached. Try again after 14:05 UTC."
+
+
+async def test_secondary_rate_limit_uses_retry_after() -> None:
+    with pytest.raises(DomainError) as err:
+        await get_login(_answering(429, {"retry-after": "60"}), "good")
+    assert err.value.code == "github_rate_limited"
+    assert err.value.message == "GitHub's rate limit was reached. Try again after 60 seconds."
+
+
+async def test_rate_limit_without_a_time() -> None:
+    with pytest.raises(DomainError) as err:
+        await get_repo(_answering(429, {}), "good", "octo/demo")
+    assert err.value.message == "GitHub's rate limit was reached. Try again in a few minutes."
+
+
+async def test_plain_forbidden_keeps_its_error() -> None:
+    with pytest.raises(DomainError) as err:
+        await get_login(_answering(403, {"x-ratelimit-remaining": "4999"}), "good")
+    assert err.value.code == "github_error"
+    assert err.value.message == "GitHub answered with HTTP 403."

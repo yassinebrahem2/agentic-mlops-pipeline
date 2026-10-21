@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -35,7 +36,25 @@ async def _get(
             "GitHub rejected the token. Log in again with `gh auth login` or paste a new token in Integrations.",
             status=422,
         )
+    if response.status_code == 429 or (
+        response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0"
+    ):
+        raise DomainError(
+            "github_rate_limited",
+            f"GitHub's rate limit was reached. Try again {_retry_time(response.headers)}.",
+            status=429,
+        )
     return response
+
+
+def _retry_time(headers: httpx.Headers) -> str:
+    retry_after = headers.get("retry-after", "")
+    if retry_after.isdigit():
+        return f"after {retry_after} seconds"
+    reset = headers.get("x-ratelimit-reset", "")
+    if reset.isdigit():
+        return f"after {datetime.fromtimestamp(int(reset), UTC):%H:%M} UTC"
+    return "in a few minutes"
 
 
 class _User(BaseModel):
