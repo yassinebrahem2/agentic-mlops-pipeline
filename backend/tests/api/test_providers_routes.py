@@ -91,6 +91,7 @@ async def test_providers_crud_and_keys(
     # 6. Remote models lists fake's models with their context windows
     res = await client.get("/api/providers/fake/remote-models")
     assert res.status_code == 200
+    assert secret_key not in res.text
     remote_models = res.json()
     model_ids = {m["id"]: m["context_window"] for m in remote_models}
     assert "fake-tools" in model_ids
@@ -101,13 +102,19 @@ async def test_providers_crud_and_keys(
     # 7. Remove key by position
     res = await client.delete("/api/providers/fake/keys/1")
     assert res.status_code == 200
+    assert secret_key not in res.text
     assert res.json()["keys"] == []
 
     # 8. Delete provider -> 204
     res = await client.delete("/api/providers/fake")
     assert res.status_code == 204
+    assert secret_key not in res.text
+
+    # Final GET: provider is gone and secret_key nowhere in response
     res = await client.get("/api/providers")
+    assert res.status_code == 200
     assert res.json() == []
+    assert secret_key not in res.text
 
 
 async def test_env_keys_detection_and_import(
@@ -133,6 +140,8 @@ async def test_env_keys_detection_and_import(
 
     # 2. Mock client so import does not hit real Groq API
     def groq_handler(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url).startswith("https://api.groq.com/openai/v1")
+        assert request.url.path.endswith("/models")
         if request.headers.get("authorization") == f"Bearer {test_key}":
             return httpx2.Response(
                 200,
@@ -141,23 +150,26 @@ async def test_env_keys_detection_and_import(
         return httpx2.Response(401, json={"error": {"message": "Invalid API key"}})
 
     mock_client = httpx2.AsyncClient(transport=httpx2.MockTransport(groq_handler))
-    services = app.state.services
-    app.state.services.providers = ProvidersService(
-        services.databases, services.keystore, mock_client
-    )
+    try:
+        services = app.state.services
+        app.state.services.providers = ProvidersService(
+            services.databases, services.keystore, mock_client
+        )
 
-    # 3. POST /api/env-keys/GROQ_API_KEY/import -> 200 Provider
-    res = await client.post("/api/env-keys/GROQ_API_KEY/import")
-    assert res.status_code == 200, res.text
-    imported = res.json()
-    assert imported["name"] == "groq"
-    assert imported["kind"] == "hosted"
-    assert len(imported["keys"]) == 1
-    assert imported["keys"][0]["hint"] == "••••4321"
-    assert test_key not in res.text
+        # 3. POST /api/env-keys/GROQ_API_KEY/import -> 200 Provider
+        res = await client.post("/api/env-keys/GROQ_API_KEY/import")
+        assert res.status_code == 200, res.text
+        imported = res.json()
+        assert imported["name"] == "groq"
+        assert imported["kind"] == "hosted"
+        assert len(imported["keys"]) == 1
+        assert imported["keys"][0]["hint"] == "••••4321"
+        assert test_key not in res.text
 
-    # Provider now exists in list
-    res = await client.get("/api/providers")
-    assert any(p["name"] == "groq" for p in res.json())
-
-    await mock_client.aclose()
+        # Provider now exists in list
+        res = await client.get("/api/providers")
+        assert res.status_code == 200
+        assert any(p["name"] == "groq" for p in res.json())
+        assert test_key not in res.text
+    finally:
+        await mock_client.aclose()
