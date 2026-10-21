@@ -13,7 +13,6 @@ The lead then moves it with `git mv` on its `plan/<stage>-<topic>` branch, from 
 | Draft | Depends on | Still missing |
 |---|---|---|
 | [github-workspace](2026-10-16-stage-1-github-workspace.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. |
-| [agent-tools](2026-10-16-stage-1-agent-tools.md) | backend-core | Advisor rounds after round 1. Check against merged backend-core. |
 
 ### Not written yet
 
