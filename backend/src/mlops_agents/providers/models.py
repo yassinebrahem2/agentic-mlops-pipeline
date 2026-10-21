@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 from mlops_agents.credentials.scrub import base_url_problem
 
@@ -59,6 +59,25 @@ class ModelEntry(BaseModel):
     availability: Availability
     availability_detail: str | None
     verified_at: str | None
+
+    @computed_field
+    @property
+    def problem(self) -> str | None:
+        """Why an agent cannot use this model, or null when it can."""
+        # The one place the usable-model rule lives (#88): agent settings and the UI read it.
+        if self.availability == "needs_attention":
+            return (
+                f"The model {self.address} failed: {self.availability_detail}. "
+                "Verify it again in AI providers or choose another model."
+            )
+        if self.availability != "verified" or not (self.tool_calling and self.streaming):
+            return (
+                f"The model {self.address} has not passed verification (tool calls and streaming). "
+                "Verify it in AI providers or choose another model."
+            )
+        if self.context_window is None:
+            return f"The context window of {self.address} is unknown. Enter it in AI providers."
+        return None
 
 
 class RemoteModel(BaseModel):

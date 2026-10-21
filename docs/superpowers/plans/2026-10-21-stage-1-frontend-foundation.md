@@ -76,7 +76,6 @@ The project switcher in the sidebar lists projects, so it comes with the project
   // src/lib/query.ts
   export const queryClient: QueryClient;
   // src/lib/models.ts (shared by the pages that assign models, I5)
-  export function isUsableModel(m: { availability: string; tool_calling: boolean; streaming: boolean; context_window: number | null }): boolean;
   export function hostedModelWarning(provider: string): string;
   // src/test/render.tsx (test helper every page plan uses, I5)
   export function renderPage(path: string, options?: { routes?: PageRoute[] }): RenderResult;
@@ -89,7 +88,7 @@ The project switcher in the sidebar lists projects, so it comes with the project
 - `fieldErrors`: for an `ApiError` with code `invalid_request`, `{ base_url: "...", ... }` from `detail.errors` (field `body.base_url` → `base_url`); otherwise `{}`. Forms show each message under its field and `errorText` above the form.
 - `errorText`: `ApiError` → its `message`; anything else → "Something went wrong. Try again." Pages show `errorText(error)` and nothing else from an error.
 - `renderPage(path, { routes })` renders `buildRouter(routes ?? pageRoutes, createMemoryRouter)` at `path` inside a fresh `QueryClient` (no retries, so failures show at once) and the providers the app uses; it skips the sign-in gate (tests of task 3 render the gate themselves).
-- `models.ts`: `isUsableModel` is I2's rule on the client (`availability === "verified"`, both traits, a known context window), so a page never offers a model the server refuses. `hostedModelWarning(provider)` returns "Files the agent reads are sent to <provider>. A secret inside a committed file whose name does not look secret can reach it." (spec section 5). Both take plain values, so they need no generated type.
+- `models.ts`: `hostedModelWarning(provider)` returns "Files the agent reads are sent to <provider>. A secret inside a committed file whose name does not look secret can reach it." (spec section 5). It takes a plain value, so it needs no generated type. (`isUsableModel` was removed by #88: pages read `ModelEntry.problem`.)
 - `queryClient`: queries retry once except on `ApiError` with status 4xx; a 401 (`not_signed_in`) from any query or mutation (an `onError` on both `QueryCache` and `MutationCache`) invalidates the `["auth"]` query, which brings back the sign-in screen (task 3).
 
 **Tests (behaviors to verify)** (`createApiClient<TestPaths>(fakeFetch)` with a small hand-written `TestPaths` type in the test file; no real server): a POST carries the CSRF header taken from the cookie and a GET does not; `unwrap` throws `ApiError` with the server's `code` and `message`, the generic text for a non-JSON 502, and `offline` when fetch rejects; `errorText` never returns raw response text; `fieldErrors` maps `body.base_url` to `base_url` and returns `{}` for other errors; a 401 from a query and from a mutation each invalidate `["auth"]`; `renderPage` with a fake route at `/x` shows that page, and a `vi.stubGlobal("fetch")` stub answers the shared `api`'s requests.
