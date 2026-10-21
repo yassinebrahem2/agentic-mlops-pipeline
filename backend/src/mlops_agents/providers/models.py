@@ -63,8 +63,8 @@ class ModelEntry(BaseModel):
     @computed_field
     @property
     def problem(self) -> str | None:
-        """Why an agent cannot use this model, or None when it can. The one place this rule lives:
-        agent settings and the UI both read it."""
+        """Why an agent cannot use this model, or null when it can."""
+        # The one place the usable-model rule lives (#88): agent settings and the UI read it.
         if self.availability == "needs_attention":
             return (
                 f"The model {self.address} failed: {self.availability_detail}. "

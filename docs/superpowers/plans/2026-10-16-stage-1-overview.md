@@ -128,7 +128,7 @@ class AgentSettingsService:
     async def set_project_limits(self, project_id: str, agent: str, limits: AgentLimitsUpdate) -> AgentSettingsView: ...
     async def resolve(self, project_id: str, agent: str) -> tuple[ResolvedModel, int | None]: ...
 ```
-`resolve` returns the model and `max_steps` for a turn. It raises `DomainError` (409) with a message saying what to choose when no model is assigned, the model no longer exists, or it lacks verified `tool_calling`, `streaming` or a context window.
+`resolve` returns the model and `max_steps` for a turn. It raises `DomainError` (409) with a message saying what to choose when no model is assigned, the model no longer exists, or the model has a `ModelEntry.problem` (I6, the rule's one source), whose text it uses as the message.
 
 **I3. API skeleton** (api-foundation, task 1):
 - `mlops_agents/api/app.py`: `create_app(settings: Settings, *, keystore: KeyStore | None = None, gh: GhLike | None = None) -> FastAPI` (the CLI passes the key store it opened; tests pass a memory key store and a missing `gh`). Its lifespan builds the services inside one `AsyncExitStack`: a service registers its own startup work and cleanup where it is built.

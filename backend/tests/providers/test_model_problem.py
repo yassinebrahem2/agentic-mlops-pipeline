@@ -48,6 +48,21 @@ def test_an_unknown_context_window_is_a_problem() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("change", "starts"),
+    [
+        (
+            {"availability": "needs_attention", "availability_detail": "x", "context_window": None},
+            "The model groq/m1 failed",
+        ),
+        ({"availability": "untested", "context_window": None}, "The model groq/m1 has not passed"),
+    ],
+)
+def test_the_first_failing_rule_gives_the_message(change: dict[str, Any], starts: str) -> None:
+    problem = ModelEntry.model_validate({**USABLE, **change}).problem
+    assert problem is not None and problem.startswith(starts)
+
+
 def test_the_problem_is_serialized_for_the_api() -> None:
     assert (
         ModelEntry.model_validate({**USABLE, "context_window": None}).model_dump()["problem"]

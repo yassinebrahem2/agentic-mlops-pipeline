@@ -56,7 +56,7 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 - Test: `AgentDefaults.test.tsx`
 
 **Interfaces:**
-- Consumes: I6 `GET /agents`, `PUT /agents/{agent}/model`, `GET /models`, `GET /providers`; `ModelEntry.problem` (None when usable, #88) and `hostedModelWarning` from `src/lib/models.ts` (frontend-foundation task 2); the code `model_not_usable`.
+- Consumes: I6 `GET /agents`, `PUT /agents/{agent}/model`, `GET /models`, `GET /providers`; `ModelEntry.problem` from `GET /models` (`null` when usable, #88), `hostedModelWarning` from `src/lib/models.ts` (frontend-foundation task 2); the code `model_not_usable`.
 
 **Implementation notes:**
 - A section "Default model per agent": one row per agent (display name, description), a "Model" select with "None" and the usable models (`problem === null`). The current `default_model` is always an option, labelled "<address> (not usable)" when it fails the rule or is missing from `GET /models`, so the select never shows a value that is not the real one; and the agent's `settings.model_problem` as a warning when set (for example "Choose a model for Orchestrator ...").
