@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 from collections.abc import Callable
@@ -62,10 +63,16 @@ async def test_projects_crud_and_lifecycle(
     assert res.json()["id"] == project_id
 
     # 4. Same path again (different case / trailing slash) -> 409 project_exists
-    dup_path = str(repo / ".")
-    res = await client.post("/api/projects", json={"source": "local", "path": dup_path})
+    trailing_path = str(repo) + os.sep
+    res = await client.post("/api/projects", json={"source": "local", "path": trailing_path})
     assert res.status_code == 409
     assert res.json()["code"] == "project_exists"
+
+    if os.name == "nt":
+        upper_path = str(repo).upper()
+        res = await client.post("/api/projects", json={"source": "local", "path": upper_path})
+        assert res.status_code == 409
+        assert res.json()["code"] == "project_exists"
 
     # 5. Open project -> updates last_opened_at
     res = await client.post(f"/api/projects/{project_id}/open")
@@ -111,12 +118,17 @@ async def test_projects_crud_and_lifecycle(
     assert res.status_code == 409
     assert res.json()["code"] == "not_local"
 
-    # 9. DELETE -> 204, then GET -> 404 project_not_found, repo untouched
+    # 9. DELETE -> 204, then GET -> 404 project_not_found, data folder gone, repo untouched
+    await app.state.services.databases.project(project_id)
     data_dir = app.state.services.paths.project_dir(project_id)
+    assert data_dir.exists()
+
     res = await client.delete(f"/api/projects/{project_id}")
     assert res.status_code == 204
     assert not data_dir.exists()
     assert new_repo.exists()
+    assert (new_repo / "README.md").exists()
+    assert (new_repo / ".git").exists()
 
     res = await client.get(f"/api/projects/{project_id}")
     assert res.status_code == 404
