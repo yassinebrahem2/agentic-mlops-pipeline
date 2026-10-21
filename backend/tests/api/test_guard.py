@@ -177,8 +177,8 @@ async def test_signed_in_client_with_its_token_passes(
         # The routes answer for themselves: here, that the body is missing.
         ("POST", "/api/auth/token", 422),
         ("POST", "/api/auth/login", 422),
-        ("GET", "/", 404),
-        ("GET", "/projects/prj_1/agents", 404),
+        ("GET", "/", 200),
+        ("GET", "/projects/prj_1/agents", 200),
     ],
 )
 async def test_sign_in_routes_and_ui_paths_pass_without_a_session(

@@ -20,9 +20,10 @@ def _split(host: str) -> tuple[str, str | None]:
     return name, port or None
 
 
-def _first(value: str) -> str:
-    """The first hop of a forwarded header: the one the browser's request carried."""
-    return value.split(",")[0].strip()
+def _last(value: str) -> str:
+    """The last hop of a forwarded header: the one the trusted proxy appended."""
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    return parts[-1] if parts else ""
 
 
 class HostRules:
@@ -58,12 +59,17 @@ class HostRules:
         return client is not None and client[0] in self._proxies
 
     def client_address(self, scope: Scope, headers: Headers) -> str:
-        """The browser's address: the first X-Forwarded-For hop when a trusted proxy sent it."""
+        """The browser's address: the right-most X-Forwarded-For hop not in trusted_proxies
+        when a trusted proxy sent it, or the peer address."""
         client = scope.get("client")
         peer = client[0] if client is not None else ""
+        if not self.trusted(scope):
+            return peer
         forwarded = headers.get("x-forwarded-for", "")
-        if self.trusted(scope) and _first(forwarded):
-            return _first(forwarded)
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        for hop in reversed(hops):
+            if hop not in self._proxies:
+                return hop
         return peer
 
 
@@ -82,8 +88,8 @@ class HostCheck:
         headers = Headers(scope=scope)
         host = headers.get("host", "")
         if self.rules.trusted(scope):
-            host = _first(headers.get("x-forwarded-host", "")) or host
-            proto = _first(headers.get("x-forwarded-proto", "")).lower()
+            host = _last(headers.get("x-forwarded-host", "")) or host
+            proto = _last(headers.get("x-forwarded-proto", "")).lower()
             scheme = proto if proto in ("http", "https") else scope["scheme"]
             scope = _with_host(scope, host, scheme)
         if not host or not self.rules.host_allowed(host):
