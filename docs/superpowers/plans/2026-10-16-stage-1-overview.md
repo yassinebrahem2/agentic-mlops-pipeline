@@ -78,17 +78,19 @@ class SessionView(BaseModel):
     messages: list[MessageView]              # full history, oldest first
     last_seq: int                            # stream position this view matches
 
-class StreamEvent(BaseModel):
-    seq: int                                 # per session, increasing; sent as the SSE id
-    type: Literal["message.created", "text.delta", "tool.started", "tool.finished",
-                  "message.updated", "turn.ended", "resync"]
-    data: dict[str, Any]
-    # message.created  {"message": MessageView}       every new message, the user's included
-    # text.delta       {"message_id": str, "text": str}
-    # tool.started     {"message_id": str, "tool_call_id": str, "name": str, "input": dict}
-    # tool.finished    {"message_id": str, "tool_call_id": str, "content": str, "is_error": bool}
-    # message.updated  {"message": MessageView}       a message's new final state
-    # turn.ended       {"turn_id": str, "status": TurnEnd, "error": str | None}
+# One class per event, each `seq: int` (per session, increasing; sent as the SSE id), a literal
+# `type` and a typed `data` (#89); the wire shape is `{"seq", "type", "data"}`:
+#   MessageCreated  "message.created"  data: MessageData {message: MessageView}   every new message, the user's included
+#   TextDelta       "text.delta"       data: TextDeltaData {message_id, text}
+#   ToolStarted     "tool.started"     data: ToolStartedData {message_id, tool_call_id, name, input}
+#   ToolFinished    "tool.finished"    data: ToolFinishedData {message_id, tool_call_id, content, is_error}
+#   MessageUpdated  "message.updated"  data: MessageData                           a message's new final state
+#   TurnEnded       "turn.ended"       data: TurnEndedData {turn_id, status: TurnEnd, error: str | None}
+#   Resync          "resync"           data: ResyncData {} (no fields)
+StreamEvent = Annotated[MessageCreated | TextDelta | ToolStarted | ToolFinished | MessageUpdated
+                        | TurnEnded | Resync, Field(discriminator="type")]
+# The stream route's OpenAPI response names StreamEvent, so the frontend generates these types
+# instead of writing them (api-sessions task 1).
 
 class AgentSessions(Protocol):
     async def get(self, project_id: str, agent: str) -> SessionView: ...
@@ -101,7 +103,7 @@ class AgentSessions(Protocol):
 ```
 Errors are `DomainError`s: unknown agent 404, an agent without chat 409, model problems from I2 as they come.
 
-Two tabs and reconnects: a client calls `get`, then `subscribe(after_seq=last_seq)`. `get` returns a message that is still streaming with all the text and tool steps produced so far, so a tab opened mid-turn misses nothing, and the events after `last_seq` carry only what came later. When `after_seq` is older than the hub's in-memory buffer, or newer than the session's current seq (the process restarted, which resets seq), `subscribe` first yields one event of type `resync` with empty `data`, and the client calls `get` again. So `StreamEvent.type` also includes `"resync"`.
+Two tabs and reconnects: a client calls `get`, then `subscribe(after_seq=last_seq)`. `get` returns a message that is still streaming with all the text and tool steps produced so far, so a tab opened mid-turn misses nothing, and the events after `last_seq` carry only what came later. When `after_seq` is older than the hub's in-memory buffer, or newer than the session's current seq (the process restarted, which resets seq), `subscribe` first yields one event of type `resync` with empty `data`, and the client calls `get` again. So `StreamEvent` also includes `Resync`.
 
 The implementation is `mlops_agents.agents.runtime.sessions.SessionManager`, which implements `AgentSessions`. Its constructor is fixed by agent-runtime task 1 in `contract.py`'s docstring, and agent-runtime's task list names the task that delivers it. api-sessions and frontend-chat code against the contract from task 1; their routes and page merge after `SessionManager` is on `main`.
 
