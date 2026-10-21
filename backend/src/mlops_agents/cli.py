@@ -20,6 +20,14 @@ from mlops_agents.credentials import KeyStoreError, open_keystore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.backup import snapshot_all
 
+IN_USE_ERRNOS = {errno.EADDRINUSE}
+if hasattr(errno, "WSAEADDRINUSE"):
+    IN_USE_ERRNOS.add(errno.WSAEADDRINUSE)
+if hasattr(errno, "WSAEACCES"):
+    IN_USE_ERRNOS.add(errno.WSAEACCES)
+if sys.platform == "win32":
+    IN_USE_ERRNOS.add(errno.EACCES)
+
 
 async def _run_server(
     server: uvicorn.Server, sock: socket.socket, callback: Callable[[], None]
@@ -73,18 +81,16 @@ def _start(args: argparse.Namespace) -> int:
         sock.bind((settings.host, settings.port))
     except OSError as exc:
         sock.close()
-        # On Linux/macOS SO_REUSEADDR raises EADDRINUSE; on Windows it raises WSAEACCES (10013).
-        if exc.errno in (errno.EADDRINUSE, errno.EACCES) or getattr(exc, "winerror", None) in (
-            10048,
-            10013,
-        ):
+        is_in_use = exc.errno == errno.EADDRINUSE or (
+            sys.platform == "win32" and exc.errno in (errno.EACCES, 10048, 10013)
+        )
+        if is_in_use:
             print(
                 f"Port {settings.port} is in use. Start with --port and another number, for example --port {settings.port + 1}.",
                 file=sys.stderr,
             )
-        else:
-            print(str(exc), file=sys.stderr)
-        sys.exit(2)
+            sys.exit(2)
+        raise
 
     try:
         keystore = open_keystore(settings, DataPaths(settings.data_dir))
