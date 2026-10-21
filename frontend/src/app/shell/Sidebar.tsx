@@ -3,6 +3,7 @@ import { APP_NAME } from "@/config";
 import { cn } from "@/lib/utils";
 import type { PageRoute } from "../routes";
 import { GearMenu } from "./GearMenu";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 export function Sidebar({
   routes,
@@ -24,12 +25,13 @@ export function Sidebar({
         className,
       )}
     >
-      <div className="flex h-14 items-center border-b px-4">
-        <h1 className="text-lg font-semibold tracking-tight">
+      <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
+        <h1 className="text-lg font-semibold tracking-tight shrink-0">
           <Link to="/" onClick={onNavigate} className="transition-opacity hover:opacity-80">
             {APP_NAME}
           </Link>
         </h1>
+        <ProjectSwitcher onNavigate={onNavigate} />
       </div>
 
       <nav className="flex-1 space-y-4 overflow-y-auto p-3">
