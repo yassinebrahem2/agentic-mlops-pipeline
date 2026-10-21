@@ -497,3 +497,96 @@ async def test_no_secrets_in_views_or_messages(
     with pytest.raises(DomainError) as err:
         await settings_svc.resolve("prj_1", "orchestrator")
     assert SECRET_KEY_1 not in err.value.message
+
+
+async def test_setters_accept_verified_model_without_provider_keys(
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    databases: Databases,
+    fake_openai: RunningFake,
+) -> None:
+    base_url = fake_openai.base_url
+    await databases.project("prj_1")
+
+    await providers_svc.create_provider(
+        ProviderCreate(name="groq", kind="hosted", base_url=base_url)
+    )
+    await providers_svc.add_key("groq", SECRET_KEY_1)
+    model = await providers_svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+    )
+    await providers_svc.verify_model(model.address)
+
+    # Remove the key so the hosted provider has no keys saved
+    prov = await providers_svc.get_provider("groq")
+    await providers_svc.remove_key("groq", prov.keys[0].position)
+    prov_no_keys = await providers_svc.get_provider("groq")
+    assert not prov_no_keys.keys
+
+    # set_default_model succeeds even though provider has no keys
+    view = await settings_svc.set_default_model("orchestrator", model.address)
+    assert view.default_model == model.address
+    assert view.effective_model == model.address
+    assert view.model_problem == "groq has no key. Add one in AI providers."
+
+    # resolve raises provider_has_no_key
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "provider_has_no_key"
+    assert err.value.message == "groq has no key. Add one in AI providers."
+
+    # Clear default
+    await settings_svc.set_default_model("orchestrator", None)
+
+    # set_project_model also succeeds without keys
+    p_view = await settings_svc.set_project_model("prj_1", "orchestrator", model.address)
+    assert p_view.project_model == model.address
+    assert p_view.effective_model == model.address
+    assert p_view.model_problem == "groq has no key. Add one in AI providers."
+
+    # resolve still raises provider_has_no_key
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "provider_has_no_key"
+
+
+async def test_check_model_handles_provider_not_found(
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    databases: Databases,
+    fake_openai: RunningFake,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = fake_openai.base_url
+    await databases.project("prj_1")
+    await providers_svc.create_provider(
+        ProviderCreate(name="groq", kind="hosted", base_url=base_url)
+    )
+    await providers_svc.add_key("groq", SECRET_KEY_1)
+    model = await providers_svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+    )
+    await providers_svc.verify_model(model.address)
+    await settings_svc.set_default_model("orchestrator", model.address)
+
+    # Simulate get_provider_by_id failing with provider_not_found
+    async def fake_get_provider_by_id(provider_id: str):
+        raise DomainError("provider_not_found", f"No provider {provider_id}.", status=404)
+
+    monkeypatch.setattr(providers_svc, "get_provider_by_id", fake_get_provider_by_id)
+
+    # get reflects model_missing
+    view = await settings_svc.get("orchestrator")
+    expected_msg = (
+        f"The model {model.address} no longer exists. Choose another model for Orchestrator."
+    )
+    assert view.model_problem == expected_msg
+
+    # resolve also raises model_missing
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "model_missing"
+    assert err.value.message == expected_msg

@@ -10,6 +10,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.errors import DomainError
 from mlops_agents.providers.bridge import ResolvedModel
+from mlops_agents.providers.models import ModelEntry, Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import agent_model_defaults, project_settings
@@ -59,7 +60,7 @@ class AgentSettingsService:
             max_steps = definition.limits.max_steps
 
         effective_model = project_model if project_model is not None else default_model
-        prob = await self._model_problem(definition, effective_model)
+        prob, _ = await self._check_model(definition, effective_model, fetch_keys=False)
         model_problem = prob[1] if prob is not None else None
 
         return AgentSettingsView(
@@ -77,13 +78,12 @@ class AgentSettingsService:
         return [await self.get(agent.name, project_id=project_id) for agent in agents]
 
     async def set_default_model(self, agent: str, address: str | None) -> AgentSettingsView:
-        definition = self._catalog.get(agent)
+        self._catalog.get(agent)
         app_engine = await self._databases.app()
         if address is not None:
-            await self._providers.require_model(address)
-            prob = await self._model_problem(definition, address)
-            if prob is not None:
-                raise DomainError(prob[0], prob[1], status=409)
+            entry = await self._providers.require_model(address)
+            if entry.problem is not None:
+                raise DomainError("model_not_usable", entry.problem, status=409)
             stmt = (
                 sqlite_insert(agent_model_defaults)
                 .values(agent=agent, model_address=address)
@@ -104,14 +104,13 @@ class AgentSettingsService:
     async def set_project_model(
         self, project_id: str, agent: str, address: str | None
     ) -> AgentSettingsView:
-        definition = self._catalog.get(agent)
+        self._catalog.get(agent)
         key = f"agent.{agent}.model"
         proj_engine = await self._databases.project(project_id)
         if address is not None:
-            await self._providers.require_model(address)
-            prob = await self._model_problem(definition, address)
-            if prob is not None:
-                raise DomainError(prob[0], prob[1], status=409)
+            entry = await self._providers.require_model(address)
+            if entry.problem is not None:
+                raise DomainError("model_not_usable", entry.problem, status=409)
             stmt = (
                 sqlite_insert(project_settings)
                 .values(key=key, value=address)
@@ -152,33 +151,15 @@ class AgentSettingsService:
         project_model, max_steps = await self._get_project_settings(project_id, agent, definition)
         effective_model = project_model if project_model is not None else default_model
 
-        # Check model rules (unassigned, missing, unverified, missing context, provider status, etc.)
-        prob = await self._model_problem(definition, effective_model)
+        prob, target = await self._check_model(definition, effective_model, fetch_keys=True)
         if prob is not None:
             raise DomainError(prob[0], prob[1], status=409)
 
-        # Usability rules passed: effective_model exists, is verified, has context window, provider exists and is ok
-        if effective_model is None:
-            raise DomainError(
-                "model_unassigned",
-                f"Choose a model for {definition.display_name} in AI providers, "
-                "or in this project's settings.",
-                status=409,
-            )
-        entry = await self._providers.require_model(effective_model)
+        if target is None:
+            raise RuntimeError("Model resolution produced no target")
+        entry, provider, keys = target
         if entry.context_window is None:
-            raise DomainError(
-                "model_not_usable",
-                f"The context window of {effective_model} is unknown. Enter it in AI providers.",
-                status=409,
-            )
-        provider = await self._providers.get_provider_by_id(entry.provider_id)
-        keys = await self._providers.keys_for(provider.id)
-
-        # Check hosted key check with resolved keys from keystore
-        key_prob = await self._model_problem(definition, effective_model, keys=keys)
-        if key_prob is not None:
-            raise DomainError(key_prob[0], key_prob[1], status=409)
+            raise RuntimeError("Resolved model has no context window")
 
         resolved = ResolvedModel(
             address=entry.address,
@@ -191,19 +172,19 @@ class AgentSettingsService:
         )
         return resolved, max_steps
 
-    async def _model_problem(
+    async def _check_model(
         self,
         definition: AgentDefinition,
         address: str | None,
         *,
-        keys: list[str] | None = None,
-    ) -> tuple[str, str] | None:
+        fetch_keys: bool,
+    ) -> tuple[tuple[str, str] | None, tuple[ModelEntry, Provider, list[str]] | None]:
         if address is None:
             return (
                 "model_unassigned",
                 f"Choose a model for {definition.display_name} in AI providers, "
                 "or in this project's settings.",
-            )
+            ), None
 
         entry = await self._providers.get_model(address)
         if entry is None:
@@ -211,27 +192,10 @@ class AgentSettingsService:
                 "model_missing",
                 f"The model {address} no longer exists. "
                 f"Choose another model for {definition.display_name}.",
-            )
+            ), None
 
-        if entry.availability == "needs_attention":
-            return (
-                "model_not_usable",
-                f"The model {address} failed: {entry.availability_detail}. "
-                "Verify it again in AI providers or choose another model.",
-            )
-
-        if not (entry.availability == "verified" and entry.tool_calling and entry.streaming):
-            return (
-                "model_not_usable",
-                f"The model {address} has not passed verification (tool calls and streaming). "
-                "Verify it in AI providers or choose another model.",
-            )
-
-        if entry.context_window is None:
-            return (
-                "model_not_usable",
-                f"The context window of {address} is unknown. Enter it in AI providers.",
-            )
+        if entry.problem is not None:
+            return ("model_not_usable", entry.problem), None
 
         try:
             provider = await self._providers.get_provider_by_id(entry.provider_id)
@@ -241,24 +205,33 @@ class AgentSettingsService:
                     "model_missing",
                     f"The model {address} no longer exists. "
                     f"Choose another model for {definition.display_name}.",
-                )
+                ), None
             raise
 
         if provider.status == "needs_attention":
             return (
                 "provider_needs_attention",
                 f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers.",
-            )
+            ), None
 
+        keys: list[str] = []
         if provider.kind == "hosted":
-            has_no_key = (not keys) if keys is not None else (not provider.keys)
-            if has_no_key:
+            if fetch_keys:
+                keys = await self._providers.keys_for(provider.id)
+                if not keys:
+                    return (
+                        "provider_has_no_key",
+                        f"{provider.name} has no key. Add one in AI providers.",
+                    ), None
+            elif not provider.keys:
                 return (
                     "provider_has_no_key",
                     f"{provider.name} has no key. Add one in AI providers.",
-                )
+                ), None
+        elif fetch_keys and provider.keys:
+            keys = await self._providers.keys_for(provider.id)
 
-        return None
+        return None, (entry, provider, keys)
 
     async def _get_default_model(self, agent: str) -> str | None:
         app_engine = await self._databases.app()
