@@ -13,6 +13,13 @@ from mlops_agents.credentials.file_store import EncryptedFileStore
 
 
 @pytest.fixture
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+@pytest.fixture
 def fake_serve(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mock = MagicMock()
 
@@ -35,18 +42,20 @@ def mock_browser(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 def test_port_in_use_exits_2(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    free_port: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 8765))
+        sock.bind(("127.0.0.1", free_port))
         sock.listen(1)
         with pytest.raises(SystemExit) as exc:
-            main(["start"])
+            main(["start", "--port", str(free_port)])
 
     assert exc.value.code == 2
     captured = capsys.readouterr()
     assert (
-        "Port 8765 is in use. Start with --port and another number, for example --port 8766."
+        f"Port {free_port} is in use. Start with --port and another number, for example --port {free_port + 1}."
         in captured.err
     )
 
@@ -63,11 +72,15 @@ def test_server_without_env_vars_exits_2(
 
     assert exc.value.code == 2
     captured = capsys.readouterr()
-    assert "MLOPS_AGENTS_PASSWORD" in captured.err or "ConfigError" in captured.err
+    assert (
+        "Server mode needs these environment variables: MLOPS_AGENTS_PASSWORD, MLOPS_AGENTS_MASTER_KEY, MLOPS_AGENTS_ALLOWED_HOSTS. Set them and start again."
+        in captured.err
+    )
 
 
 def test_local_start_prints_url_carrying_token_and_opens_browser(
     tmp_path: Path,
+    free_port: int,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     fake_serve: MagicMock,
@@ -75,17 +88,18 @@ def test_local_start_prints_url_carrying_token_and_opens_browser(
 ) -> None:
     monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
 
-    main(["start"])
+    main(["start", "--port", str(free_port)])
 
     captured = capsys.readouterr()
-    assert "Open http://127.0.0.1:8765/#token=" in captured.out
+    assert f"Open http://127.0.0.1:{free_port}/#token=" in captured.out
     mock_browser.assert_called_once()
     opened_url = mock_browser.call_args[0][0]
-    assert opened_url.startswith("http://127.0.0.1:8765/#token=")
+    assert opened_url.startswith(f"http://127.0.0.1:{free_port}/#token=")
 
 
 def test_no_log_record_contains_token(
     tmp_path: Path,
+    free_port: int,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
@@ -95,7 +109,7 @@ def test_no_log_record_contains_token(
     monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
     caplog.set_level(logging.DEBUG)
 
-    main(["start"])
+    main(["start", "--port", str(free_port)])
 
     captured = capsys.readouterr()
     token = captured.out.split("#token=")[1].strip()
@@ -106,6 +120,7 @@ def test_no_log_record_contains_token(
 
 def test_server_start_opens_no_browser_and_prints_no_password(
     tmp_path: Path,
+    free_port: int,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
@@ -118,10 +133,10 @@ def test_server_start_opens_no_browser_and_prints_no_password(
     monkeypatch.setenv("MLOPS_AGENTS_ALLOWED_HOSTS", "app.example.com")
     caplog.set_level(logging.DEBUG)
 
-    main(["start", "--server"])
+    main(["start", "--server", "--port", str(free_port)])
 
     captured = capsys.readouterr()
-    assert "Listening on 0.0.0.0:8765" in captured.out
+    assert f"Listening on 0.0.0.0:{free_port}" in captured.out
     mock_browser.assert_not_called()
     assert "super_secret_pw" not in captured.out
     assert "super_secret_pw" not in captured.err
@@ -131,6 +146,7 @@ def test_server_start_opens_no_browser_and_prints_no_password(
 
 def test_dev_mode_prints_and_opens_5173_url(
     tmp_path: Path,
+    free_port: int,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     fake_serve: MagicMock,
@@ -138,7 +154,7 @@ def test_dev_mode_prints_and_opens_5173_url(
 ) -> None:
     monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
 
-    main(["start", "--dev"])
+    main(["start", "--dev", "--port", str(free_port)])
 
     captured = capsys.readouterr()
     assert "Open http://localhost:5173/#token=" in captured.out
@@ -146,9 +162,16 @@ def test_dev_mode_prints_and_opens_5173_url(
     opened_url = mock_browser.call_args[0][0]
     assert opened_url.startswith("http://localhost:5173/#token=")
 
+    server_instance = fake_serve.call_args[0][0]
+    host_rules = server_instance.config.app.state.host_rules
+    assert host_rules.origin_allowed("http://localhost:5173")
+    assert host_rules.origin_allowed("http://127.0.0.1:5173")
+    assert not host_rules.origin_allowed("http://evil.example.com:5173")
+
 
 def test_no_browser_prints_link_and_never_calls_webbrowser_open(
     tmp_path: Path,
+    free_port: int,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     fake_serve: MagicMock,
@@ -156,11 +179,29 @@ def test_no_browser_prints_link_and_never_calls_webbrowser_open(
 ) -> None:
     monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
 
-    main(["start", "--no-browser"])
+    main(["start", "--no-browser", "--port", str(free_port)])
 
     captured = capsys.readouterr()
-    assert "Open http://127.0.0.1:8765/#token=" in captured.out
+    assert f"Open http://127.0.0.1:{free_port}/#token=" in captured.out
     mock_browser.assert_not_called()
+
+
+def test_start_ctrl_c_exits_quietly(
+    tmp_path: Path,
+    free_port: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
+
+    async def _sigint_serve(self: uvicorn.Server, sockets: list[Any] | None = None) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _sigint_serve)
+    code = main(["start", "--no-browser", "--port", str(free_port)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
 
 
 def test_server_dev_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
@@ -189,7 +230,7 @@ def test_server_with_wrong_master_key_exits_2_no_traceback(
     assert exc.value.code == 2
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
-    assert len(captured.err.strip()) > 0
+    assert "MLOPS_AGENTS_MASTER_KEY does not unlock keys.enc." in captured.err
 
 
 def test_backup_writes_app_db_under_home(

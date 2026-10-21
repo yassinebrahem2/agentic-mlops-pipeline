@@ -20,10 +20,15 @@ def _split(host: str) -> tuple[str, str | None]:
     return name, port or None
 
 
+def _hops(value: str) -> list[str]:
+    """Hops in a comma-separated forwarded header value."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def _last(value: str) -> str:
     """The last hop of a forwarded header: the one the trusted proxy appended."""
-    parts = [part.strip() for part in value.split(",") if part.strip()]
-    return parts[-1] if parts else ""
+    hops = _hops(value)
+    return hops[-1] if hops else ""
 
 
 class HostRules:
@@ -66,8 +71,7 @@ class HostRules:
         if not self.trusted(scope):
             return peer
         forwarded = headers.get("x-forwarded-for", "")
-        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
-        for hop in reversed(hops):
+        for hop in reversed(_hops(forwarded)):
             if hop not in self._proxies:
                 return hop
         return peer

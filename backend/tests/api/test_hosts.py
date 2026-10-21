@@ -32,12 +32,6 @@ def _client(
 
 
 @pytest.fixture
-async def app(tmp_path: Path) -> AsyncIterator[FastAPI]:
-    async with started_app(tmp_path / "data") as application:
-        yield application
-
-
-@pytest.fixture
 async def server_app(tmp_path: Path) -> AsyncIterator[FastAPI]:
     async with started_app(tmp_path / "server", RunMode.SERVER, PROXY_ENV) as application:
         yield application

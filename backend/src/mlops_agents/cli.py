@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import dataclasses
+import errno
 import socket
 import sys
 import webbrowser
@@ -67,14 +68,22 @@ def _start(args: argparse.Namespace) -> int:
         settings = dataclasses.replace(settings, dev_origins=dev_origins)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind((settings.host, settings.port))
-    except OSError:
+    except OSError as exc:
         sock.close()
-        print(
-            f"Port {settings.port} is in use. Start with --port and another number, for example --port {settings.port + 1}.",
-            file=sys.stderr,
-        )
+        # On Linux/macOS SO_REUSEADDR raises EADDRINUSE; on Windows it raises WSAEACCES (10013).
+        if exc.errno in (errno.EADDRINUSE, errno.EACCES) or getattr(exc, "winerror", None) in (
+            10048,
+            10013,
+        ):
+            print(
+                f"Port {settings.port} is in use. Start with --port and another number, for example --port {settings.port + 1}.",
+                file=sys.stderr,
+            )
+        else:
+            print(str(exc), file=sys.stderr)
         sys.exit(2)
 
     try:
@@ -104,6 +113,8 @@ def _start(args: argparse.Namespace) -> int:
     server = uvicorn.Server(config)
     try:
         asyncio.run(_run_server(server, sock, notify_started))
+    except KeyboardInterrupt:
+        pass
     finally:
         sock.close()
     return 0
@@ -153,10 +164,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers.add_parser("backup")
 
     args = parser.parse_args(argv)
-    if args.command == "start":
-        return _start(args)
-    if args.command == "backup":
-        return _backup()
+    try:
+        if args.command == "start":
+            return _start(args)
+        if args.command == "backup":
+            return _backup()
+    except KeyboardInterrupt:
+        return 0
     return 0
 
 
