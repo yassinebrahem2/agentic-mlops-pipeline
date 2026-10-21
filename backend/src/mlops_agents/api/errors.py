@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from collections.abc import Mapping
 from typing import Any
 
@@ -13,7 +14,6 @@ from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mlops_agents.credentials import KeyStoreError
-from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
 
 _log = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
 
 class InternalErrors:
-    """Turns an unexpected exception into the JSON 500 and logs only its scrubbed text.
+    """Turns an unexpected exception into the JSON 500 and logs its type and stack frames.
 
     Not an exception handler: Starlette's ServerErrorMiddleware re-raises after calling one,
     and the server would then log the raw message and traceback."""
@@ -94,12 +94,14 @@ class InternalErrors:
         try:
             await self.app(scope, receive, tracked_send)
         except Exception as exc:
+            # The type and frames only: the exception's text can hold a key that error_text
+            # does not mask, and exc_info would print that text through the formatter.
             _log.error(
-                "Unexpected %s on %s %s: %s",
+                "Unexpected %s on %s %s\n%s",
                 type(exc).__name__,
                 scope["method"],
                 scope["path"],
-                error_text(exc),
+                "".join(traceback.format_tb(exc.__traceback__)),
             )
             if not started:
                 response = error_response(

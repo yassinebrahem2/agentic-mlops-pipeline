@@ -101,13 +101,17 @@ async def test_unknown_api_path_is_404_not_found(client: httpx2.AsyncClient) -> 
     assert response.json()["detail"] is None
 
 
-async def test_unexpected_error_is_a_plain_500_without_its_text_or_traceback(
+async def test_unexpected_error_is_a_plain_500_logged_without_its_text(
     app: FastAPI, client: httpx2.AsyncClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
 
+    # On its own line: the logged frames show the raising line's source, which in real code
+    # names a variable, never a key.
+    message = "secret sk-test-123"
+
     async def fail() -> None:
-        raise RuntimeError("secret sk-test-123")
+        raise RuntimeError(message)
 
     app.add_api_route("/api/test/crash", fail)
 
@@ -120,36 +124,23 @@ async def test_unexpected_error_is_a_plain_500_without_its_text_or_traceback(
         "detail": None,
     }
     assert "sk-test-123" not in response.text
-    assert all(record.exc_info is None for record in caplog.records)
-    logged = [r for r in caplog.records if r.name == "mlops_agents.api.errors"]
-    assert [r.getMessage() for r in logged] == [
-        "Unexpected RuntimeError on GET /api/test/crash: secret sk-test-123"
-    ]
+    assert "sk-test-123" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "/api/test/crash" in caplog.text
+    assert "in fail" in caplog.text
 
 
-async def test_unexpected_error_log_scrubs_secrets_in_urls(
+async def test_error_after_a_stream_started_ends_the_response_without_a_second_start(
     app: FastAPI, client: httpx2.AsyncClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
 
-    async def fail() -> None:
-        raise RuntimeError("call to https://api.example.com/v1?key=sk-test-123 failed")
+    message = "broken mid-stream sk-test-123"
 
-    app.add_api_route("/api/test/crash", fail)
-
-    response = await client.get("/api/test/crash")
-
-    assert response.status_code == 500
-    assert not [r for r in caplog.records if "sk-test-123" in r.getMessage()]
-
-
-async def test_error_after_a_stream_started_ends_the_response_without_a_second_start(
-    app: FastAPI, client: httpx2.AsyncClient
-) -> None:
     async def stream() -> StreamingResponse:
         async def chunks() -> AsyncIterator[bytes]:
             yield b"first\n"
-            raise RuntimeError("broken mid-stream")
+            raise RuntimeError(message)
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
@@ -160,3 +151,7 @@ async def test_error_after_a_stream_started_ends_the_response_without_a_second_s
 
     assert response.status_code == 200
     assert response.content == b"first\n"
+    assert "sk-test-123" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "/api/test/broken-stream" in caplog.text
+    assert "in chunks" in caplog.text
