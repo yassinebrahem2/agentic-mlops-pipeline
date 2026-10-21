@@ -45,11 +45,11 @@ The project switcher in the sidebar lists projects, so it comes with the project
 **Implementation notes:**
 - `collectRoutes` validates: two routes with the same `path` → throw an error naming both files; it sorts nav entries by `area`, then `order`, then `label`.
 - The router: one layout route rendering `AppShell` with every page route as a child, plus `*` → `NotFound` ("This page does not exist." and a link home).
-- `AppShell`: a sidebar and the page area. The sidebar shows `APP_NAME` at the top (a link to `/`), then the `project` area's entries when the URL is under `/projects/:projectId` (each entry's path with `:projectId` filled from the URL), then the `app` area's entries, then the gear menu at the bottom. The gear menu holds the `app` entries again for small screens and, from task 3, "Sign out". The sidebar collapses into a sheet below the `md` breakpoint (a button opens it).
+- `AppShell`: a sidebar and the page area. The sidebar shows `APP_NAME` at the top (a link to `/`), then the `project` area's entries when the matched route has a `projectId` param (`useParams()` inside the layout; never parse the URL text, so `/projects/new` shows no project entries), each entry's path with `:projectId` filled in, then the `app` area's entries, then the gear menu at the bottom. The gear menu holds the `app` entries again for small screens and, from task 3, "Sign out". The sidebar collapses into a sheet below the `md` breakpoint (a button opens it).
 - `buildRouter(routes, createRouter)` adds a `Welcome` child at `/` ("No pages yet.") only when no registered route has `path: "/"`. It is never a registered route itself, so frontend-workspace registering `/` for Projects replaces it without a duplicate path.
 - Only pages that work are registered (spec section 6): no placeholder pages, no menu entries without a page.
 
-**Tests (behaviors to verify):** `collectRoutes` returns every module's route, rejects a duplicate path naming both modules, and orders nav entries; with two fake modules (one `app`, one `project` route) rendered through the real router (`createMemoryRouter` with the same route tree builder): the app entry is in the sidebar at `/`, the project entry appears only under `/projects/prj_1/...` with `prj_1` in its link, an unknown path shows `NotFound`, the button that opens the narrow-screen sidebar shows the entries (jsdom ignores Tailwind breakpoints, so test the button, not a window size); `/` shows "No pages yet." with no module registering `/`, and the fake module's page when one does. Export the route-tree builder (`buildRouter(routes, createRouter)`) so tests use the real tree with a memory router.
+**Tests (behaviors to verify):** `collectRoutes` returns every module's route, rejects a duplicate path naming both modules, and orders nav entries; with two fake modules (one `app`, one `project` route) rendered through the real router (`createMemoryRouter` with the same route tree builder): the app entry is in the sidebar at `/`, the project entry appears only under `/projects/prj_1/...` with `prj_1` in its link and not at `/projects/new` (with a fake route registered there), an unknown path shows `NotFound`, the button that opens the narrow-screen sidebar shows the entries (jsdom ignores Tailwind breakpoints, so test the button, not a window size); `/` shows "No pages yet." with no module registering `/`, and the fake module's page when one does. Export the route-tree builder (`buildRouter(routes, createRouter)`) so tests use the real tree with a memory router.
 
 **Checks (from `frontend/`):** `npm run lint`, `npm run format:check`, `npm test`, `npm run build`.
 
@@ -58,7 +58,7 @@ The project switcher in the sidebar lists projects, so it comes with the project
 ### Task 2: Typed API client, queries and error text
 
 **Files:**
-- Create: `frontend/src/lib/api.ts`, `frontend/src/lib/query.ts`, `frontend/src/lib/api.test.ts`
+- Create: `frontend/src/lib/api.ts`, `frontend/src/lib/query.ts`, `frontend/src/lib/api.test.ts`, `frontend/src/test/render.tsx`, `frontend/src/lib/models.ts` and its test
 - Modify: `frontend/package.json` (scripts below), `frontend/.gitignore` (`src/api/schema.d.ts`), `.github/workflows/frontend.yml` (if the pre-scripts below do not already cover CI), `frontend/src/App.tsx` (the query provider)
 
 **Interfaces:**
@@ -72,18 +72,27 @@ The project switcher in the sidebar lists projects, so it comes with the project
   export class ApiError extends Error { code: string; status: number; detail: unknown }
   export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T;  // throws ApiError
   export function errorText(error: unknown): string;
+  export function fieldErrors(error: unknown): Record<string, string>;  // 422 detail.errors by field, without the "body." prefix
   // src/lib/query.ts
   export const queryClient: QueryClient;
+  // src/lib/models.ts (shared by the pages that assign models, I5)
+  export function isUsableModel(m: { availability: string; tool_calling: boolean; streaming: boolean; context_window: number | null }): boolean;
+  export function hostedModelWarning(provider: string): string;
+  // src/test/render.tsx (test helper every page plan uses, I5)
+  export function renderPage(path: string, options?: { routes?: PageRoute[] }): RenderResult;
   ```
 
 **Implementation notes:**
 - Types: `src/api/schema.d.ts` is generated, never committed (`.gitignore`), so it never conflicts. `package.json` gains `"predev"`, `"prebuild"`, `"pretest"` and `"prelint"`, each `npm run gen:api`, so every command and CI regenerate it from the committed `openapi.json`.
-- When this task starts, the generated schema may hold no routes yet (api-foundation's first router, `auth`, arrives in its task 3), so nothing here may depend on a specific route. `createApiClient` builds `createClient<P>({ baseUrl: "", fetch: fetchImpl })` with one middleware: on POST, PUT, PATCH and DELETE it reads the `csrf_token` cookie (`document.cookie`) and sets `X-CSRF-Token`.
+- When this task starts, the generated schema may hold no routes yet (api-foundation's first router, `auth`, arrives in its task 3), so nothing here may depend on a specific route. `createApiClient` builds `createClient<P>({ baseUrl: "", fetch: fetchImpl ?? ((input, init) => globalThis.fetch(input, init)) })` (late-bound, so a test's `vi.stubGlobal("fetch", ...)` reaches the shared `api`) with one middleware: on POST, PUT, PATCH and DELETE it reads the `csrf_token` cookie (`document.cookie`) and sets `X-CSRF-Token`.
 - `unwrap`: returns `data`; otherwise throws `ApiError` from the body when it has the I3 shape, or `ApiError("http_<status>", "The server answered with an error (HTTP <status>).")` when it does not. A network failure (fetch rejects) becomes `ApiError("offline", "The app's server is not reachable. Check that it is still running.")`.
+- `fieldErrors`: for an `ApiError` with code `invalid_request`, `{ base_url: "...", ... }` from `detail.errors` (field `body.base_url` → `base_url`); otherwise `{}`. Forms show each message under its field and `errorText` above the form.
 - `errorText`: `ApiError` → its `message`; anything else → "Something went wrong. Try again." Pages show `errorText(error)` and nothing else from an error.
+- `renderPage(path, { routes })` renders `buildRouter(routes ?? pageRoutes, createMemoryRouter)` at `path` inside a fresh `QueryClient` (no retries, so failures show at once) and the providers the app uses; it skips the sign-in gate (tests of task 3 render the gate themselves).
+- `models.ts`: `isUsableModel` is I2's rule on the client (`availability === "verified"`, both traits, a known context window), so a page never offers a model the server refuses. `hostedModelWarning(provider)` returns "Files the agent reads are sent to <provider>. A secret inside a committed file whose name does not look secret can reach it." (spec section 5). Both take plain values, so they need no generated type.
 - `queryClient`: queries retry once except on `ApiError` with status 4xx; a 401 (`not_signed_in`) from any query or mutation (an `onError` on both `QueryCache` and `MutationCache`) invalidates the `["auth"]` query, which brings back the sign-in screen (task 3).
 
-**Tests (behaviors to verify)** (`createApiClient<TestPaths>(fakeFetch)` with a small hand-written `TestPaths` type in the test file; no real server): a POST carries the CSRF header taken from the cookie and a GET does not; `unwrap` throws `ApiError` with the server's `code` and `message`, the generic text for a non-JSON 502, and `offline` when fetch rejects; `errorText` never returns raw response text; a 401 from a query and from a mutation each invalidate `["auth"]`.
+**Tests (behaviors to verify)** (`createApiClient<TestPaths>(fakeFetch)` with a small hand-written `TestPaths` type in the test file; no real server): a POST carries the CSRF header taken from the cookie and a GET does not; `unwrap` throws `ApiError` with the server's `code` and `message`, the generic text for a non-JSON 502, and `offline` when fetch rejects; `errorText` never returns raw response text; `fieldErrors` maps `body.base_url` to `base_url` and returns `{}` for other errors; a 401 from a query and from a mutation each invalidate `["auth"]`; `renderPage` with a fake route at `/x` shows that page, and a `vi.stubGlobal("fetch")` stub answers the shared `api`'s requests.
 
 **Checks:** as task 1.
 
