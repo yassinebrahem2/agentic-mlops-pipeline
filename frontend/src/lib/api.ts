@@ -2,26 +2,6 @@ import createClient, { type Client } from "openapi-fetch";
 
 export type paths = import("../api/schema").paths;
 
-// Node/undici in tests throws ERR_INVALID_URL on relative URLs without a base origin.
-// In browser environments, new Request('/') resolves to the current origin.
-try {
-  new Request("/");
-} catch {
-  const OriginalRequest = globalThis.Request;
-  globalThis.Request = class extends OriginalRequest {
-    constructor(input: RequestInfo | URL, init?: RequestInit) {
-      if (typeof input === "string" && input.startsWith("/")) {
-        const origin =
-          typeof window !== "undefined" && window.location.origin
-            ? window.location.origin
-            : "http://localhost";
-        input = `${origin}${input}`;
-      }
-      super(input, init);
-    }
-  };
-}
-
 export class ApiError extends Error {
   code: string;
   status: number;
@@ -78,18 +58,12 @@ export function createApiClient<P extends object>(fetchImpl?: typeof fetch): Cli
 export const api: Client<paths> = createApiClient<paths>();
 
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
-  if (result.data !== undefined) {
-    return result.data;
+  if (result.response.ok) {
+    // openapi-fetch leaves data undefined for a 204 or any empty body; that is the route's success value.
+    return result.data as T;
   }
 
   const status = result.response.status;
-  if (status === 0) {
-    throw new ApiError(
-      "offline",
-      "The app's server is not reachable. Check that it is still running.",
-      0,
-    );
-  }
 
   const err = result.error;
   if (
