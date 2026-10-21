@@ -10,14 +10,13 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.errors import DomainError
 from mlops_agents.providers.bridge import ResolvedModel
-from mlops_agents.providers.models import ModelEntry
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import agent_model_defaults, project_settings
 
 
 class AgentLimitsUpdate(BaseModel):
-    max_steps: int | None = Field(default=None, ge=1)  # None = no limit
+    max_steps: int | None = Field(ge=1)  # None = no limit
 
 
 class AgentSettingsView(BaseModel):
@@ -60,7 +59,8 @@ class AgentSettingsService:
             max_steps = definition.limits.max_steps
 
         effective_model = project_model if project_model is not None else default_model
-        model_problem = await self._compute_model_problem(definition, effective_model)
+        prob = await self._model_problem(definition, effective_model)
+        model_problem = prob[1] if prob is not None else None
 
         return AgentSettingsView(
             agent=definition.name,
@@ -77,10 +77,13 @@ class AgentSettingsService:
         return [await self.get(agent.name, project_id=project_id) for agent in agents]
 
     async def set_default_model(self, agent: str, address: str | None) -> AgentSettingsView:
-        self._catalog.get(agent)
+        definition = self._catalog.get(agent)
         app_engine = await self._databases.app()
         if address is not None:
-            await self._check_model_usable(address)
+            await self._providers.require_model(address)
+            prob = await self._model_problem(definition, address)
+            if prob is not None:
+                raise DomainError(prob[0], prob[1], status=409)
             stmt = (
                 sqlite_insert(agent_model_defaults)
                 .values(agent=agent, model_address=address)
@@ -101,11 +104,14 @@ class AgentSettingsService:
     async def set_project_model(
         self, project_id: str, agent: str, address: str | None
     ) -> AgentSettingsView:
-        self._catalog.get(agent)
+        definition = self._catalog.get(agent)
         key = f"agent.{agent}.model"
         proj_engine = await self._databases.project(project_id)
         if address is not None:
-            await self._check_model_usable(address)
+            await self._providers.require_model(address)
+            prob = await self._model_problem(definition, address)
+            if prob is not None:
+                raise DomainError(prob[0], prob[1], status=409)
             stmt = (
                 sqlite_insert(project_settings)
                 .values(key=key, value=address)
@@ -146,6 +152,12 @@ class AgentSettingsService:
         project_model, max_steps = await self._get_project_settings(project_id, agent, definition)
         effective_model = project_model if project_model is not None else default_model
 
+        # Check model rules (unassigned, missing, unverified, missing context, provider status, etc.)
+        prob = await self._model_problem(definition, effective_model)
+        if prob is not None:
+            raise DomainError(prob[0], prob[1], status=409)
+
+        # Usability rules passed: effective_model exists, is verified, has context window, provider exists and is ok
         if effective_model is None:
             raise DomainError(
                 "model_unassigned",
@@ -153,62 +165,20 @@ class AgentSettingsService:
                 "or in this project's settings.",
                 status=409,
             )
-
-        entry = await self._providers.get_model(effective_model)
-        if entry is None:
-            raise DomainError(
-                "model_missing",
-                f"The model {effective_model} no longer exists. "
-                f"Choose another model for {definition.display_name}.",
-                status=409,
-            )
-
-        if entry.availability == "needs_attention":
-            raise DomainError(
-                "model_not_usable",
-                f"The model {effective_model} failed: {entry.availability_detail}. "
-                "Verify it again in AI providers or choose another model.",
-                status=409,
-            )
-        if not (entry.availability == "verified" and entry.tool_calling and entry.streaming):
-            raise DomainError(
-                "model_not_usable",
-                f"The model {effective_model} has not passed verification (tool calls and streaming). "
-                "Verify it in AI providers or choose another model.",
-                status=409,
-            )
-        context_window = entry.context_window
-        if context_window is None or context_window <= 0:
+        entry = await self._providers.require_model(effective_model)
+        if entry.context_window is None:
             raise DomainError(
                 "model_not_usable",
                 f"The context window of {effective_model} is unknown. Enter it in AI providers.",
                 status=409,
             )
-
-        try:
-            provider = await self._providers.get_provider_by_id(entry.provider_id)
-        except DomainError:
-            raise DomainError(
-                "model_missing",
-                f"The model {effective_model} no longer exists. "
-                f"Choose another model for {definition.display_name}.",
-                status=409,
-            ) from None
-
-        if provider.status == "needs_attention":
-            raise DomainError(
-                "provider_needs_attention",
-                f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers.",
-                status=409,
-            )
-
+        provider = await self._providers.get_provider_by_id(entry.provider_id)
         keys = await self._providers.keys_for(provider.id)
-        if provider.kind == "hosted" and not keys:
-            raise DomainError(
-                "provider_has_no_key",
-                f"{provider.name} has no key. Add one in AI providers.",
-                status=409,
-            )
+
+        # Check hosted key check with resolved keys from keystore
+        key_prob = await self._model_problem(definition, effective_model, keys=keys)
+        if key_prob is not None:
+            raise DomainError(key_prob[0], key_prob[1], status=409)
 
         resolved = ResolvedModel(
             address=entry.address,
@@ -216,35 +186,79 @@ class AgentSettingsService:
             provider_name=provider.name,
             base_url=provider.base_url,
             wire_model_id=entry.wire_model_id,
-            context_window=context_window,
+            context_window=entry.context_window,
             keys=tuple(keys),
         )
         return resolved, max_steps
 
-    async def _check_model_usable(self, address: str) -> ModelEntry:
-        entry = await self._providers.require_model(address)
+    async def _model_problem(
+        self,
+        definition: AgentDefinition,
+        address: str | None,
+        *,
+        keys: list[str] | None = None,
+    ) -> tuple[str, str] | None:
+        if address is None:
+            return (
+                "model_unassigned",
+                f"Choose a model for {definition.display_name} in AI providers, "
+                "or in this project's settings.",
+            )
+
+        entry = await self._providers.get_model(address)
+        if entry is None:
+            return (
+                "model_missing",
+                f"The model {address} no longer exists. "
+                f"Choose another model for {definition.display_name}.",
+            )
+
         if entry.availability == "needs_attention":
-            raise DomainError(
+            return (
                 "model_not_usable",
                 f"The model {address} failed: {entry.availability_detail}. "
                 "Verify it again in AI providers or choose another model.",
-                status=409,
             )
+
         if not (entry.availability == "verified" and entry.tool_calling and entry.streaming):
-            raise DomainError(
+            return (
                 "model_not_usable",
                 f"The model {address} has not passed verification (tool calls and streaming). "
                 "Verify it in AI providers or choose another model.",
-                status=409,
             )
-        context_window = entry.context_window
-        if context_window is None or context_window <= 0:
-            raise DomainError(
+
+        if entry.context_window is None:
+            return (
                 "model_not_usable",
                 f"The context window of {address} is unknown. Enter it in AI providers.",
-                status=409,
             )
-        return entry
+
+        try:
+            provider = await self._providers.get_provider_by_id(entry.provider_id)
+        except DomainError as err:
+            if err.code == "provider_not_found":
+                return (
+                    "model_missing",
+                    f"The model {address} no longer exists. "
+                    f"Choose another model for {definition.display_name}.",
+                )
+            raise
+
+        if provider.status == "needs_attention":
+            return (
+                "provider_needs_attention",
+                f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers.",
+            )
+
+        if provider.kind == "hosted":
+            has_no_key = (not keys) if keys is not None else (not provider.keys)
+            if has_no_key:
+                return (
+                    "provider_has_no_key",
+                    f"{provider.name} has no key. Add one in AI providers.",
+                )
+
+        return None
 
     async def _get_default_model(self, agent: str) -> str | None:
         app_engine = await self._databases.app()
@@ -284,42 +298,3 @@ class AgentSettingsService:
         else:
             max_steps = definition.limits.max_steps
         return project_model, max_steps
-
-    async def _compute_model_problem(
-        self, definition: AgentDefinition, effective_model: str | None
-    ) -> str | None:
-        if effective_model is None:
-            return (
-                f"Choose a model for {definition.display_name} in AI providers, "
-                "or in this project's settings."
-            )
-        entry = await self._providers.get_model(effective_model)
-        if entry is None:
-            return (
-                f"The model {effective_model} no longer exists. "
-                f"Choose another model for {definition.display_name}."
-            )
-        if entry.availability == "needs_attention":
-            return (
-                f"The model {effective_model} failed: {entry.availability_detail}. "
-                "Verify it again in AI providers or choose another model."
-            )
-        if not (entry.availability == "verified" and entry.tool_calling and entry.streaming):
-            return (
-                f"The model {effective_model} has not passed verification (tool calls and streaming). "
-                "Verify it in AI providers or choose another model."
-            )
-        if entry.context_window is None or entry.context_window <= 0:
-            return f"The context window of {effective_model} is unknown. Enter it in AI providers."
-        try:
-            provider = await self._providers.get_provider_by_id(entry.provider_id)
-        except DomainError:
-            return (
-                f"The model {effective_model} no longer exists. "
-                f"Choose another model for {definition.display_name}."
-            )
-        if provider.status == "needs_attention":
-            return f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers."
-        if provider.kind == "hosted" and not provider.keys:
-            return f"{provider.name} has no key. Add one in AI providers."
-        return None

@@ -68,7 +68,9 @@ async def test_unknown_agent_rejected(settings_svc: AgentSettingsService) -> Non
         lambda: settings_svc.get("unknown", "prj_1"),
         lambda: settings_svc.set_default_model("unknown", None),
         lambda: settings_svc.set_project_model("prj_1", "unknown", None),
-        lambda: settings_svc.set_project_limits("prj_1", "unknown", AgentLimitsUpdate()),
+        lambda: settings_svc.set_project_limits(
+            "prj_1", "unknown", AgentLimitsUpdate(max_steps=None)
+        ),
         lambda: settings_svc.resolve("prj_1", "unknown"),
     ]
     for fn in calls:
@@ -236,7 +238,9 @@ async def test_limits_and_validation(
     settings_svc: AgentSettingsService,
     databases: Databases,
 ) -> None:
-    # 1. Validation fails for max_steps=0 or negative
+    # 1. Validation fails when max_steps is missing (no default), 0, or negative
+    with pytest.raises(ValidationError):
+        AgentLimitsUpdate.model_validate({})
     with pytest.raises(ValidationError):
         AgentLimitsUpdate(max_steps=0)
     with pytest.raises(ValidationError):
