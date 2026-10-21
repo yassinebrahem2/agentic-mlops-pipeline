@@ -88,7 +88,7 @@ The four tasks touch different files and can be done in any order. Do them in th
 - `GET /github` with nothing connected → `mode: "none"`; `POST /github/token` with a good token → `mode: "token"` and the login; a rejected token → the service's 401-class error, and nothing is saved; the token appears in no response body.
 - `GET /github/repos` → the fake's repositories; with nothing connected → 409 `github_not_connected`.
 - `POST /github/gh` when `gh` is not available (the fixture's `NoGh`) → 409 `gh_not_installed`.
-- Adding a GitHub project through the route: build the replacement `WorkspaceService` as `tests/workspace/test_github.py` does, with `remote_url` pointing at a local bare repository, and a new `GitRunner` whose `token_provider` is the new `GitHubAuth`'s `token` (swapping only `services.github` would leave the workspace's runner reading tokens from the old one); `POST /projects` with `{source: "github", repo: "octo/demo"}` → 201, `status: "ok"`; then `POST /projects/{id}/refresh` → `ok`; with the token revoked in the fake → the project keeps its last copy and `status_detail` says the refresh failed (review focus 5).
+- Adding a GitHub project through the route: build the replacement `WorkspaceService` as `tests/workspace/test_github.py` does, with `remote_url` pointing at a local bare repository, and a new `GitRunner` whose `token_provider` is the new `GitHubAuth`'s `token` (swapping only `services.github` would leave the workspace's runner reading tokens from the old one); `POST /projects` with `{source: "github", repo: "octo/demo"}` → 201, `status: "ok"`; then `POST /projects/{id}/refresh` → `ok`. Then make the refresh fail the way the merged `tests/workspace/test_github.py` does (the fake answers 401 for the revoked token, and the bare repository is renamed so git's fetch fails as it would with that token; a fetch from a local path never uses the token): `refresh` → 200, the project keeps its last copy (its files are still readable) and `status_detail` says the refresh failed and the last downloaded copy is still used (review focus 5).
 - `DELETE /github` → 204, then status is `none` and the key store no longer holds the token.
 - `anonymous` → 401.
 
@@ -122,7 +122,7 @@ The four tasks touch different files and can be done in any order. Do them in th
 - Add a key → `Provider` with a masked hint only; the key appears in no response body (search every response of the test); remove it by position.
 - Remote models list the fake's models with their context windows.
 - Add `fake-tools`, verify it → `availability: "verified"`, `tool_calling` and `streaming` true; `fake-no-tools` verifies without tool calling; set a context window; `DELETE /models?address=` a model whose wire id contains `/` (add one by typing its id) → 204.
-- `GET /env-keys` with `monkeypatch.setenv("GROQ_API_KEY", ...)` lists it masked; importing it creates the provider.
+- `GET /env-keys` with `monkeypatch.setenv("GROQ_API_KEY", ...)` contains it, masked (assert containment: the machine running the tests may have real keys in its environment). Importing it must not call the real Groq API: `add_key` proves the key with a `/models` call to Groq's base URL, so replace `services.providers` with a `ProvidersService` on an `httpx2.MockTransport` client answering that URL, as the merged `tests/providers/test_service.py` does; then the import creates the `groq` provider with one masked key.
 - `anonymous` → 401.
 
 **Checks:** as task 1.
