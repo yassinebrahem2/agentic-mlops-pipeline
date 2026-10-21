@@ -20,11 +20,8 @@ from mlops_agents.credentials import KeyStoreError, open_keystore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.backup import snapshot_all
 
-IN_USE_ERRNOS = {errno.EADDRINUSE}
-if hasattr(errno, "WSAEADDRINUSE"):
-    IN_USE_ERRNOS.add(errno.WSAEADDRINUSE)
-if hasattr(errno, "WSAEACCES"):
-    IN_USE_ERRNOS.add(errno.WSAEACCES)
+# Linux/macOS raises EADDRINUSE; Windows raises WSAEADDRINUSE (10048) or WSAEACCES (10013 / EACCES).
+IN_USE_ERRNOS: set[int] = {errno.EADDRINUSE, 10048, 10013}
 if sys.platform == "win32":
     IN_USE_ERRNOS.add(errno.EACCES)
 
