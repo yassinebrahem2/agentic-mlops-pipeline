@@ -37,8 +37,14 @@ class PasswordSignIn(BaseModel):
     password: str = Field(repr=False)
 
 
+def _utf8(text: str) -> bytes:
+    """UTF-8 that also encodes lone surrogates, which JSON allows: such input is just wrong,
+    and the environment can hold them too (undecodable bytes become surrogate escapes)."""
+    return text.encode("utf-8", "surrogatepass")
+
+
 def _scrypt(password: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return hashlib.scrypt(_utf8(password), salt=salt, n=2**14, r=8, p=1, dklen=32)
 
 
 class PasswordHash:
@@ -133,7 +139,7 @@ async def sign_in_with_token(
             status=404,
         )
     access_token: str = request.app.state.access_token
-    if not hmac.compare_digest(body.token.encode(), access_token.encode()):
+    if not hmac.compare_digest(_utf8(body.token), _utf8(access_token)):
         raise DomainError(
             "bad_token",
             "This link is out of date. Open the address printed in the terminal where the app runs.",

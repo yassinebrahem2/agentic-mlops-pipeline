@@ -88,6 +88,24 @@ async def test_a_non_ascii_token_is_401_not_500(anonymous: httpx2.AsyncClient) -
     assert response.status_code == 401
 
 
+# A lone surrogate: valid in JSON and in a Python str, but not encodable as UTF-8.
+LONE_SURROGATE_TOKEN = b'{"token": "\\ud800"}'
+LONE_SURROGATE_PASSWORD = b'{"password": "\\ud800"}'
+JSON_HEADERS = {"Content-Type": "application/json"}
+
+
+async def test_a_lone_surrogate_token_is_the_wrong_token_401(
+    anonymous: httpx2.AsyncClient,
+) -> None:
+    response = await anonymous.post(
+        "/api/auth/token", content=LONE_SURROGATE_TOKEN, headers=JSON_HEADERS
+    )
+
+    assert response.status_code == 401
+    assert response.json() == BAD_TOKEN
+    assert "set-cookie" not in response.headers
+
+
 async def test_the_right_token_signs_in_with_both_cookies(
     app: FastAPI, anonymous: httpx2.AsyncClient
 ) -> None:
@@ -225,6 +243,21 @@ async def test_behind_a_trusted_proxy_the_limit_uses_the_forwarded_address(
 
     assert other.status_code == 200
     assert same.status_code == 429
+
+
+async def test_a_lone_surrogate_password_is_a_failed_attempt(
+    visitor: httpx2.AsyncClient,
+) -> None:
+    for _ in range(5):
+        response = await visitor.post(
+            "/api/auth/login", content=LONE_SURROGATE_PASSWORD, headers=JSON_HEADERS
+        )
+        assert response.status_code == 401
+        assert response.json() == BAD_PASSWORD
+
+    response = await visitor.post("/api/auth/login", json={"password": PASSWORD})
+
+    assert response.status_code == 429
 
 
 async def test_an_untrusted_peer_cannot_dodge_the_limit_with_forwarded_for(
