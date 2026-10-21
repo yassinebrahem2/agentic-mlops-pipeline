@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.config import RunMode, Settings, load_settings
@@ -27,7 +27,7 @@ def _settings(paths: DataPaths, mode: RunMode = RunMode.LOCAL) -> Settings:
 def _service(
     paths: DataPaths, databases: Databases, keystore: MemoryKeyStore, mode: RunMode = RunMode.LOCAL
 ) -> WorkspaceService:
-    http = httpx.AsyncClient()
+    http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     return WorkspaceService(
         _settings(paths, mode), paths, databases, GitRunner(paths.bin, github.token), github, http

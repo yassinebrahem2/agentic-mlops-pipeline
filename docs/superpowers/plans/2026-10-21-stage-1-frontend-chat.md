@@ -26,7 +26,7 @@ Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the ev
 - Test: `applyEvent.test.ts`, `useSession.test.tsx`
 
 **Interfaces:**
-- Consumes: I7 (`GET .../session` → `SessionView`, `POST .../session/messages`, `POST .../session/stop`, `GET .../session/stream`), I1's `SessionView`, `MessageView` and `Part` (from the generated schema), `api`, `unwrap`, `ApiError`. The stream's event shapes are not in the OpenAPI contract (FastAPI does not describe SSE events), so `events.ts` writes them by hand from I1.
+- Consumes: I7 (`GET .../session` → `SessionView`, `POST .../session/messages`, `POST .../session/stop`, `GET .../session/stream`), I1's `SessionView`, `MessageView` and `Part` (from the generated schema), `api`, `unwrap`, `ApiError`. The stream's event types come from the generated schema too: api-sessions declares I1's `StreamEvent` on the stream route (#89), so `events.ts` imports them instead of writing them.
 - Produces:
   ```ts
   // events.ts: the seven I1 event data types and a type guard per event name

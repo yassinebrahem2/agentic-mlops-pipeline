@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from typing import Literal, Protocol
 
-import httpx
+import httpx2
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from mlops_agents.clock import now_iso
 from mlops_agents.credentials import KeyStore, KeyStoreError
 from mlops_agents.errors import DomainError
-from mlops_agents.integrations.github.api import get_login
+from mlops_agents.integrations.github.api import RepoSummary, get_login, list_repos
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import integrations
 
@@ -77,7 +77,7 @@ class GhCli:
 
 class GitHubAuth:
     def __init__(
-        self, databases: Databases, keystore: KeyStore, http: httpx.AsyncClient, gh: GhLike
+        self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient, gh: GhLike
     ) -> None:
         self._dbs = databases
         self._keys = keystore
@@ -155,3 +155,7 @@ class GitHubAuth:
                 "github_not_connected", "Connect GitHub in Integrations first.", status=409
             )
         return token
+
+    async def list_repos(self) -> list[RepoSummary]:
+        token = await self.require_token()
+        return await list_repos(self._http, token)

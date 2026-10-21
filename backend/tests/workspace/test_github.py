@@ -3,7 +3,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.config import RunMode, load_settings
@@ -65,17 +65,17 @@ def _force_push_rewrite(work: Path, env: dict[str, str]) -> None:
 async def _harness(paths: DataPaths, databases: Databases, bare: Path) -> Harness:
     revoked: set[str] = set()
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.headers.get("authorization", "").removeprefix("Bearer ") in revoked:
-            return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx2.Response(401, json={"message": "Bad credentials"})
         if request.url.path == "/user":
-            return httpx.Response(200, json={"login": "octo"})
+            return httpx2.Response(200, json={"login": "octo"})
         if request.url.path.lower() == "/repos/octo/demo":
             repo = {"full_name": "Octo/Demo", "private": True, "default_branch": "main"}
-            return httpx.Response(200, json={**repo, "description": None})
-        return httpx.Response(404, json={})
+            return httpx2.Response(200, json={**repo, "description": None})
+        return httpx2.Response(404, json={})
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     keystore = BreakableKeyStore()
     gh = FakeGh("gho_test")
     github = GitHubAuth(databases, keystore, http, gh)

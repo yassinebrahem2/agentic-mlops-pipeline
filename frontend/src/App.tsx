@@ -1,9 +1,15 @@
-import { APP_NAME } from "./config";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "react-router";
+import { buildRouter } from "./app/router";
+import { pageRoutes } from "./app/routes";
+import { queryClient } from "./lib/query";
+
+const router = buildRouter(pageRoutes);
 
 export function App() {
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold">{APP_NAME}</h1>
-    </main>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   );
 }
