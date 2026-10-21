@@ -1,6 +1,6 @@
 # Implementing plan tasks
 
-How every coding agent implements a plan task in this repository, whatever agent it is. It fits the team workflow in `AGENTS.md` (one owner per plan, work on the plan branch, one PR per task, Decision issues for anything the plan does not settle), which applies in full.
+How every coding agent implements a plan task in this repository, whatever agent it is. It fits the team workflow in `AGENTS.md` (one owner per plan, work on the plan branch, one PR per plan plus the early PRs task issues ask for, Decision issues for anything the plan does not settle), which applies in full.
 
 The method: you (the controller) never write the task's code yourself. A fresh implementer does the task, a fresh reviewer checks the result against the plan task and the spec, fixes are made and re-reviewed, and only then does the next task start. Fresh context for each role keeps the reviewer from inheriting the implementer's assumptions.
 
@@ -73,15 +73,16 @@ Minor findings do not hold the task. Fix them in the loop if cheap; otherwise li
 ### 5. Finish
 1. Check the final state yourself: tests, lint and type checks pass on the branch head.
 2. Bring `main` in again (`git merge origin/main`; regenerate `uv.lock`, `package-lock.json` or `openapi.json` instead of merging them by hand), run the checks again if anything came in, push.
-3. Open the task's PR into `main` (template `.github/pull_request_template.md`, `Closes #<task issue>`) and move the card to In review. Wait for the Backend and Frontend CI runs (every job, Backend's Windows job included) on the PR's head; a red run is a finding for the fix loop. Answer the teammate's and the lead's review comments through the same fix loop. The task issue closes when the lead merges the PR (AGENTS.md rule 6), never by hand. Add the ledger line, then start the next task.
+3. Wait for the CI runs on the pushed commit (every workflow and job, Backend's Windows job included); a red run is a finding for the fix loop.
+4. If the task issue has a "PR" section asking for an early PR, open it now into `main` (template `.github/pull_request_template.md`, `Closes #<task issue>`) and move the card to In review. Otherwise move the card to In review: it waits for the plan PR. Answer review comments through the same fix loop. The issue closes when the PR containing it is merged (AGENTS.md rule 6), never by hand. Add the ledger line, then start the next task.
 
 ## Choosing models
 
 Always name the model when you dispatch a subagent. Use the cheapest tier that can do the job: mechanical work (a small, fully specified change) on the cheapest; integration work (several files, existing interfaces) on the standard tier; design-heavy or subtle work (concurrency, security, data loss, platform quirks) and every final review on the most capable.
 
-## Before the last PR
+## The plan PR
 
-Before opening the PR of a plan's last task, run one review of the whole plan on the most capable model: package from the plan's first task's base to HEAD, checked against the plan's Goal and Review Focus and the spec sections the plan covers, looking at how the tasks fit together rather than at each task again. Fix Critical and Important findings through the same loop before opening that PR.
+When the last task is done, run one review of the whole branch on the most capable model: package from `git merge-base origin/main HEAD` to HEAD, checked against the plan's Goal and Review Focus and the spec sections the plan covers, looking at how the tasks fit together rather than at each task again. Fix Critical and Important findings through the same loop, then open the plan PR: `Closes #<plan issue>` and `Closes #<task issue>` for every task not yet closed by an early PR.
 
 ## Rules that hold throughout
 - **No rulings by the agent.** When the plan is wrong, unclear or needs a decision, do not choose for the lead: open a Decision issue linked to the task, naming it under "Blocked task" (the board moves the task to Blocked and back when the Decision closes). Continue only after the lead answers.

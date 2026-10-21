@@ -1,6 +1,6 @@
 # Stage 1 — Agent Settings Implementation Plan
 
-> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. The task is one PR into `main` (`AGENTS.md` rule 5). It lists its files, the interfaces it consumes and produces, its tests (the stop condition) and the checks that prove it works.
+> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. The plan merges through one PR (`AGENTS.md` rule 5). It lists its files, the interfaces it consumes and produces, its tests (the stop condition) and the checks that prove it works.
 
 **Goal:** Which model each agent uses and how many steps it may take: a default model per agent at app level, a per-project override of the model and of the step limit, and one `resolve` call that gives a turn its model or a clear message saying what to choose.
 

@@ -1,6 +1,6 @@
 # Stage 1 — API Resources Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. Each task is one PR into `main` (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
 
 **Goal:** The REST routes the stage 1 pages use: projects and the folder browser, app info and backup, GitHub, AI providers and models, and agents with their settings. Thin routers over the merged services: they validate input, call one service method, and return the service's models.
 

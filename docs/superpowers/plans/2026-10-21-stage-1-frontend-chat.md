@@ -1,6 +1,6 @@
 # Stage 1 — Frontend Chat Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. Each task is one PR into `main` (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
 
 **Goal:** The Agents page: a project's session with the Orchestrator (and any other chat agent), streamed answers, collapsible tool steps, queued messages, Stop, stopped and interrupted turns marked, failure notices, and a view that stays right across two tabs and reconnects.
 
@@ -15,7 +15,7 @@
 | 1 | Session state and the stream | coding: I5 on `main` (I1 and I7's shapes are fixed in the overview); merging: api-sessions task 1 (#55) on `main` |
 | 2 | The Agents page | task 1; api-resources task 4 (#53); frontend-workspace task 1 (#58, `ProjectStatus`) |
 
-Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the event and session shapes are fixed in I1, and its tests use a fake stream. Its PR merges after api-sessions task 1, when the generated types hold the session routes.
+Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the event and session shapes are fixed in I1, and its tests use a fake stream. Its code type-checks against the generated types once api-sessions task 1 is on `main`; the plan PR comes after task 2 anyway.
 
 ---
 

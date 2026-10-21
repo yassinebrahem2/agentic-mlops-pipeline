@@ -1,6 +1,6 @@
 # Stage 1 — Frontend Workspace Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. Each task is one PR into `main` (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
 
 **Goal:** The pages for projects: the Projects home with the project switcher, adding a project (local folder with a folder browser, or GitHub by URL or from the user's repositories), and a project's Settings (repository info, refresh, relink, remove, per-agent model and step limit).
 
