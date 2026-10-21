@@ -25,6 +25,7 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
    | you stop working on it and unassign yourself | Todo |
    | the task is done, pushed and CI is green (no PR of its own) | close the issue: Done |
    | a PR into `main` is opened | every issue it closes: In review (In review holds only work waiting on the lead) |
+   | you push the fixes for a PR with changes requested | the PR and every issue it closes: In review |
    | the issue is closed (rule 6) | Done |
 
    Move a card with `scripts/board-status.sh <number> "<Status>"` (needs `gh`, `jq` and a token with the `project` scope) or, where the Projects API is not reachable (cloud agent sessions), by running the `board` workflow with `workflow_dispatch` inputs `number` and `status` (cloud sessions block `gh workflow run`, which uses GraphQL; use the REST call `gh api -X POST repos/yassinebrahem2/agentic-mlops-pipeline/actions/workflows/board.yml/dispatches -f ref=main -f 'inputs[number]=42' -f 'inputs[status]=Blocked'`, or your agent's GitHub tool for a workflow dispatch, e.g. the GitHub MCP `actions_run_trigger`). Check that the run succeeded. If you cannot move the card, say so in the issue so a person moves it in the GitHub UI. Column names are exactly: Todo, In progress, Blocked, In review, Done.
@@ -87,6 +88,7 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 - Specs before plans, plans before code. Each needs the lead's explicit approval.
 - Review specs, the stage overview's interface lists and every plan draft with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
 - Review every PR yourself (after the teammate's review when there is one), against its tasks, the spec and the interfaces. Merge only with green CI on the PR's head and the branch up to date with `main`, always with a merge commit (never squash or rebase: the plan branch shares an early PR's commits). Right before merging, the lead may bring `main` into the PR with GitHub's Update branch; that merge commit is the one exception to "only the owner commits".
+- When you request changes on a PR, move it and every issue it closes to In progress.
 - Review each PR with its own review subagent, all in parallel, so no review waits for another.
 - Record project-level decisions in `project_knowledge.md` as they are made.
 - Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
