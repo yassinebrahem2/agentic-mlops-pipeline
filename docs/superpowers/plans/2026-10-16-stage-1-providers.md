@@ -1,9 +1,4 @@
-# Stage 1 — Providers Implementation Plan (DRAFT)
-
-> **DRAFT: not ready to implement.** This plan sits in `drafts/` until both items below are done. Then it moves to `docs/superpowers/plans/` on its own `plan/stage-1-<topic>` branch and gets its issues.
-> 1. **Advisor review.** Round 1 found blockers, and they are fixed. Rounds must continue until one finds no blocking issues.
-> 2. **Check against the merged backend-core code.** backend-core changed while it was implemented (see PR #10, "done differently"). Every name in this plan's Consumes lines and test fixtures must match the code on `main`.
-
+# Stage 1 — Providers Implementation Plan
 
 > **For agentic workers:** Implement this plan task by task, in order. Each task lists its exact files, the interfaces it consumes and produces, its tests (the task's stop condition) and the commands that prove it works. Claude Code users may use superpowers:executing-plans or superpowers:subagent-driven-development; nothing here requires them. Steps use checkbox (`- [ ]`) syntax. Team rules (claiming tasks, commits, PRs) are in `AGENTS.md`.
 
@@ -26,22 +21,30 @@
 
 **Files:**
 - Create: `backend/src/mlops_agents/providers/__init__.py` (empty), `models.py`, `service.py`
+- Modify: `backend/pyproject.toml`, `backend/uv.lock` (add `httpx2`)
 - Test: `backend/tests/providers/__init__.py` (empty), `test_service.py`
 
 **Interfaces:**
-- Consumes: `Databases` (backend-core plan, Task 3), `KeyStore`, `scrub_values`, `error_text`, `mask_key`, `base_url_problem` (backend-core plan, Task 4), `DomainError`, `new_id`, `now_iso` (backend-core plan, Task 2).
+- Consumes: `Databases` (backend-core plan, Task 3), `KeyStore`, `scrub_values`, `error_text`, `mask_key`, `base_url_problem` (backend-core plan, Task 4), `DomainError`, `new_id`, `now_iso` (backend-core plan, Task 2); test fixtures `databases`, `keystore`, `paths` and the class `MemoryKeyStore` from `tests/conftest.py` (backend-core plan, Task 5).
 - Produces:
   - `models.py`: `ProviderKind`, `ProviderCreate(name, kind, base_url)`, `KeyHint(position, hint)`, `Provider(id, name, kind, base_url, status, status_detail, keys: list[KeyHint])`, `ModelCreate(provider, wire_model_id, context_window: int | None)`, `ModelEntry(address, provider_id, provider_name, wire_model_id, context_window, tool_calling, streaming, availability, availability_detail, verified_at)`, `RemoteModel(id, context_window)`, `DetectedKey(env_var, provider_name, base_url, hint, provider_exists)`.
-  - `ProvidersService(databases: Databases, keystore: KeyStore, http: httpx.AsyncClient)` with async methods: `list_providers() -> list[Provider]`, `get_provider(name) -> Provider`, `get_provider_by_id(provider_id) -> Provider`, `create_provider(data: ProviderCreate) -> Provider`, `delete_provider(name) -> None`, `add_key(name, value) -> Provider`, `remove_key(name, position) -> Provider`, `keys_for(provider_id) -> list[str]`, `list_remote_models(name) -> list[RemoteModel]`, `add_model(data: ModelCreate) -> ModelEntry`, `list_models() -> list[ModelEntry]`, `get_model(address) -> ModelEntry | None`, `require_model(address) -> ModelEntry`, `set_context_window(address, value) -> ModelEntry`, `delete_model(address) -> None`, `record_verification(address, *, tool_calling, streaming, detail) -> ModelEntry`, `mark_model_problem(address, detail) -> None`, `mark_needs_attention(provider_id, detail) -> None`, `detect_env_keys(env=None) -> list[DetectedKey]`, `import_env_key(env_var, env=None) -> Provider`. Task 2 adds `verify_model(address) -> ModelEntry`.
+  - `ProvidersService(databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient)` with async methods: `list_providers() -> list[Provider]`, `get_provider(name) -> Provider`, `get_provider_by_id(provider_id) -> Provider`, `create_provider(data: ProviderCreate) -> Provider`, `delete_provider(name) -> None`, `add_key(name, value) -> Provider`, `remove_key(name, position) -> Provider`, `keys_for(provider_id) -> list[str]`, `list_remote_models(name) -> list[RemoteModel]`, `add_model(data: ModelCreate) -> ModelEntry`, `list_models() -> list[ModelEntry]`, `get_model(address) -> ModelEntry | None`, `require_model(address) -> ModelEntry`, `set_context_window(address, value) -> ModelEntry`, `delete_model(address) -> None`, `record_verification(address, *, tool_calling, streaming, detail) -> ModelEntry`, `mark_model_problem(address, detail) -> None`, `mark_needs_attention(provider_id, detail) -> None`, `detect_env_keys(env=None) -> list[DetectedKey]`, `import_env_key(env_var, env=None) -> Provider`. Task 2 adds `verify_model(address) -> ModelEntry`.
+  - The `http` client: one `httpx2.AsyncClient` per app, created in the app's lifespan startup and closed at shutdown (api plan; never at import time), carries every provider and model call. `httpx2` is the HTTP library the `openai` SDK uses since 3.x; models must get the app's client because langchain-openai's default one is cached for the whole process and bound to the first event loop that used it (the tests, which run one event loop per test, fail with "Event loop is closed" without this).
+  - `delete_model` and `delete_provider` leave `agent_model_defaults` rows that name a deleted model. Model assignment (agent-runtime plan) reports such a default with the spec's "choose another model" message, as it does for a project override.
+
+- [ ] **Step 0: Add the dependency**
+
+Run: `cd backend && uv add "httpx2>=2.13.1"`
+Expected: `pyproject.toml` lists `httpx2>=2.13.1` and `uv.lock` is updated. It is already installed through `openai`; this declares it because the app imports it.
+
 
 - [ ] **Step 1: Write the failing tests** `backend/tests/providers/test_service.py`:
 
 ```python
 import json
-from collections.abc import Callable
-from pathlib import Path
+from collections.abc import AsyncIterator, Callable
 
-import httpx
+import httpx2
 import pytest
 from pydantic import ValidationError
 
@@ -53,28 +56,44 @@ from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
 
 GOOD = "gsk_good_key_123456"
+Handler = Callable[[httpx2.Request], httpx2.Response]
+MakeService = Callable[..., ProvidersService]
 
 
-def _handler(request: httpx.Request) -> httpx.Response:
+def _handler(request: httpx2.Request) -> httpx2.Response:
     if request.headers.get("authorization") != f"Bearer {GOOD}":
-        return httpx.Response(401, json={"error": {"message": "Invalid API key"}})
-    data = [{"id": "m1", "context_window": 8192}, {"id": "m2", "context_length": 4096}, {"id": "m3"}]
-    return httpx.Response(200, json={"object": "list", "data": data})
+        return httpx2.Response(401, json={"error": {"message": "Invalid API key"}})
+    data = [
+        {"id": "m1", "context_window": 8192},
+        {"id": "m2", "context_length": 4096},
+        {"id": "m3"},
+        {"id": "m4", "context_window": "big"},
+        {"name": "no id"},
+    ]
+    return httpx2.Response(200, json={"object": "list", "data": data})
 
 
-def _service(
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    handler: Callable[[httpx.Request], httpx.Response] = _handler,
-) -> ProvidersService:
-    return ProvidersService(databases, keystore, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+@pytest.fixture
+async def make_service(
+    databases: Databases, keystore: MemoryKeyStore
+) -> AsyncIterator[MakeService]:
+    clients: list[httpx2.AsyncClient] = []
+
+    def make(handler: Handler = _handler) -> ProvidersService:
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        clients.append(client)
+        return ProvidersService(databases, keystore, client)
+
+    yield make
+    for client in clients:
+        await client.aclose()
 
 
 HOSTED = ProviderCreate(name="groq", kind="hosted", base_url="https://api.groq.com/openai/v1/")
 
 
-async def test_create_and_duplicate(databases: Databases, keystore: MemoryKeyStore) -> None:
-    svc = _service(databases, keystore)
+async def test_create_and_duplicate(make_service: MakeService) -> None:
+    svc = make_service()
     provider = await svc.create_provider(HOSTED)
     assert provider.base_url == "https://api.groq.com/openai/v1"
     assert provider.id.startswith("prv_")
@@ -89,22 +108,25 @@ def test_base_url_with_credentials_is_rejected() -> None:
 
 
 async def test_add_key_stores_only_in_keystore(
-    databases: Databases, keystore: MemoryKeyStore, paths: DataPaths
+    make_service: MakeService, keystore: MemoryKeyStore, paths: DataPaths
 ) -> None:
-    svc = _service(databases, keystore)
+    svc = make_service()
     await svc.create_provider(HOSTED)
     provider = await svc.add_key("groq", f"  {GOOD}  ")
     assert [k.hint for k in provider.keys] == ["••••3456"]
     assert list(keystore.data.values()) == [GOOD]
-    stored = b"".join(p.read_bytes() for p in (paths.app_db, paths.app_db.with_name("app.db-wal")) if p.exists())
+    files = (paths.app_db, paths.app_db.with_name("app.db-wal"))
+    stored = b"".join(p.read_bytes() for p in files if p.exists())
     assert GOOD.encode() not in stored
     with pytest.raises(DomainError) as err:
         await svc.add_key("groq", GOOD)
     assert err.value.code == "key_exists"
 
 
-async def test_rejected_key_is_not_stored(databases: Databases, keystore: MemoryKeyStore) -> None:
-    svc = _service(databases, keystore)
+async def test_rejected_key_is_not_stored(
+    make_service: MakeService, keystore: MemoryKeyStore
+) -> None:
+    svc = make_service()
     await svc.create_provider(HOSTED)
     with pytest.raises(DomainError) as err:
         await svc.add_key("groq", "wrong")
@@ -112,13 +134,11 @@ async def test_rejected_key_is_not_stored(databases: Databases, keystore: Memory
     assert keystore.data == {}
 
 
-async def test_unreachable_provider_error_hides_the_key(
-    databases: Databases, keystore: MemoryKeyStore
-) -> None:
-    def boom(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError(f"cannot connect while sending {GOOD}")
+async def test_unreachable_provider_error_hides_the_key(make_service: MakeService) -> None:
+    def boom(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError(f"cannot connect while sending {GOOD}")
 
-    svc = _service(databases, keystore, boom)
+    svc = make_service(boom)
     await svc.create_provider(HOSTED)
     with pytest.raises(DomainError) as err:
         await svc.add_key("groq", GOOD)
@@ -127,9 +147,9 @@ async def test_unreachable_provider_error_hides_the_key(
 
 
 async def test_remove_key_and_delete_provider_clean_keystore(
-    databases: Databases, keystore: MemoryKeyStore
+    make_service: MakeService, keystore: MemoryKeyStore
 ) -> None:
-    svc = _service(databases, keystore)
+    svc = make_service()
     await svc.create_provider(HOSTED)
     await svc.add_key("groq", GOOD)
     provider = await svc.remove_key("groq", 1)
@@ -142,19 +162,24 @@ async def test_remove_key_and_delete_provider_clean_keystore(
     assert await svc.list_models() == []
 
 
-async def test_remote_models_and_context_window(
-    databases: Databases, keystore: MemoryKeyStore
-) -> None:
-    svc = _service(databases, keystore)
+async def test_remote_models_and_context_window(make_service: MakeService) -> None:
+    svc = make_service()
     await svc.create_provider(HOSTED)
     await svc.add_key("groq", GOOD)
     remote = await svc.list_remote_models("groq")
-    assert [(m.id, m.context_window) for m in remote] == [("m1", 8192), ("m2", 4096), ("m3", None)]
+    assert [(m.id, m.context_window) for m in remote] == [
+        ("m1", 8192),
+        ("m2", 4096),
+        ("m3", None),
+        ("m4", None),
+    ]
     entry = await svc.add_model(ModelCreate(provider="groq", wire_model_id="m1"))
     assert entry.address == "groq:m1"
     assert entry.context_window == 8192
     assert entry.availability == "untested"
-    manual = await svc.add_model(ModelCreate(provider="groq", wire_model_id="m3", context_window=2048))
+    manual = await svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="m3", context_window=2048)
+    )
     assert manual.context_window == 2048
     updated = await svc.set_context_window("groq:m3", 16000)
     assert updated.context_window == 16000
@@ -163,19 +188,34 @@ async def test_remote_models_and_context_window(
     assert err.value.code == "model_exists"
 
 
-async def test_hosted_provider_without_key_cannot_list(
-    databases: Databases, keystore: MemoryKeyStore
-) -> None:
-    svc = _service(databases, keystore)
+async def test_answer_that_is_not_a_model_list(make_service: MakeService) -> None:
+    def not_a_list(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=["not", "a", "list"])
+
+    svc = make_service(not_a_list)
+    await svc.create_provider(
+        ProviderCreate(name="local", kind="self_hosted", base_url="http://localhost:11434/v1")
+    )
+    with pytest.raises(DomainError) as err:
+        await svc.list_remote_models("local")
+    assert err.value.code == "provider_error"
+
+
+async def test_hosted_provider_without_key_cannot_list(make_service: MakeService) -> None:
+    svc = make_service()
     await svc.create_provider(HOSTED)
     with pytest.raises(DomainError) as err:
         await svc.list_remote_models("groq")
     assert err.value.code == "no_keys"
 
 
-async def test_detect_and_import_env_keys(databases: Databases, keystore: MemoryKeyStore) -> None:
-    svc = _service(databases, keystore)
-    env = {"GROQ_API_KEY": GOOD, "GROQ_API_KEY_1": "gsk_second_key_0000", "GROQ_API_KEY_3": "gap"}
+async def test_detect_and_import_env_keys(make_service: MakeService) -> None:
+    svc = make_service()
+    env = {
+        "GROQ_API_KEY": GOOD,
+        "GROQ_API_KEY_1": "gsk_second_key_0000",
+        "GROQ_API_KEY_3": "gap",
+    }
     found = await svc.detect_env_keys(env)
     assert [(d.env_var, d.provider_name, d.provider_exists) for d in found] == [
         ("GROQ_API_KEY", "groq", False),
@@ -288,9 +328,9 @@ import re
 import secrets
 from collections.abc import Mapping
 from itertools import count
-from typing import Any
 
-import httpx
+import httpx2
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import RowMapping, delete, func, insert, select, update
 
 from mlops_agents.clock import now_iso
@@ -317,12 +357,34 @@ KNOWN_ENV_KEYS: dict[str, tuple[str, str]] = {
     "GEMINI_API_KEY": ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
     "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
 }
-_CONTEXT_FIELDS = ("context_window", "context_length", "max_context_length")
 _ENV_VAR = re.compile(r"^(?P<base>[A-Z0-9_]+?)(?:_\d+)?$")
 
 
+class _ListedModel(BaseModel):
+    """One entry of a provider's /models answer. Providers name the context window differently."""
+
+    id: str
+    context_window: object = None
+    context_length: object = None
+    max_context_length: object = None
+
+    def context(self) -> int | None:
+        for value in (self.context_window, self.context_length, self.max_context_length):
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+        return None
+
+
+class _ModelList(BaseModel):
+    data: list[object]
+
+
 class ProvidersService:
-    def __init__(self, databases: Databases, keystore: KeyStore, http: httpx.AsyncClient) -> None:
+    """`http` is the app's one client for provider calls, model calls included. Its owner (the
+    app factory) closes it. langchain-openai's default client must never be used: it is cached
+    for the whole process and bound to the first event loop that uses it."""
+
+    def __init__(self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient) -> None:
         self._dbs = databases
         self._keys = keystore
         self._http = http
@@ -332,7 +394,9 @@ class ProvidersService:
     async def list_providers(self) -> list[Provider]:
         engine = await self._dbs.app()
         async with engine.connect() as conn:
-            rows = (await conn.execute(select(providers).order_by(providers.c.name))).mappings().all()
+            rows = (
+                (await conn.execute(select(providers).order_by(providers.c.name))).mappings().all()
+            )
             key_rows = (
                 (await conn.execute(select(provider_keys).order_by(provider_keys.c.position)))
                 .mappings()
@@ -455,7 +519,9 @@ class ProvidersService:
     async def remove_key(self, name: str, position: int) -> Provider:
         provider = await self.get_provider(name)
         engine = await self._dbs.app()
-        where = (provider_keys.c.provider_id == provider.id) & (provider_keys.c.position == position)
+        where = (provider_keys.c.provider_id == provider.id) & (
+            provider_keys.c.position == position
+        )
         async with engine.begin() as conn:
             ref = await conn.scalar(select(provider_keys.c.keystore_ref).where(where))
             if ref is None:
@@ -466,12 +532,12 @@ class ProvidersService:
 
     # Remote calls
 
-    async def _get(self, provider: Provider, path: str, key: str | None) -> Any:
+    async def _get(self, provider: Provider, path: str, key: str | None) -> object:
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         secrets_seen = [key] if key else []
         try:
             response = await self._http.get(provider.base_url + path, headers=headers, timeout=20)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             reason = scrub_values(error_text(exc), secrets_seen)
             raise DomainError(
                 "provider_unreachable", f"Could not reach {provider.name}: {reason}", status=502
@@ -497,16 +563,19 @@ class ProvidersService:
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {name} first.", status=409)
         payload = await self._get(provider, "/models", keys[0] if keys else None)
-        data = payload.get("data") if isinstance(payload, dict) else None
+        try:
+            listing = _ModelList.model_validate(payload)
+        except ValidationError:
+            raise DomainError(
+                "provider_error", f"{provider.name} did not answer with a model list.", status=502
+            ) from None
         found: list[RemoteModel] = []
-        for item in data if isinstance(data, list) else []:  # pyright: ignore[reportUnknownVariableType] -- provider JSON
-            if not isinstance(item, dict) or not isinstance(item.get("id"), str):  # pyright: ignore[reportUnknownMemberType]
-                continue
-            context = next(
-                (item[f] for f in _CONTEXT_FIELDS if isinstance(item.get(f), int)),  # pyright: ignore[reportUnknownMemberType]
-                None,
-            )
-            found.append(RemoteModel(id=item["id"], context_window=context))
+        for item in listing.data:
+            try:
+                listed = _ListedModel.model_validate(item)
+            except ValidationError:
+                continue  # an entry without a string id cannot be added; the others still can
+            found.append(RemoteModel(id=listed.id, context_window=listed.context()))
         return sorted(found, key=lambda m: m.id)
 
     # Models
@@ -563,12 +632,16 @@ class ProvidersService:
 
     async def set_context_window(self, address: str, value: int) -> ModelEntry:
         if value <= 0:
-            raise DomainError("invalid_context_window", "Enter a positive number of tokens.", status=422)
+            raise DomainError(
+                "invalid_context_window", "Enter a positive number of tokens.", status=422
+            )
         await self.require_model(address)
         await self._update_model(address, context_window=value)
         return await self.require_model(address)
 
     async def delete_model(self, address: str) -> None:
+        # agent_model_defaults rows that name this model stay; model assignment (agent-runtime
+        # plan) reports them with a "choose another model" message.
         await self.require_model(address)
         engine = await self._dbs.app()
         async with engine.begin() as conn:
@@ -588,7 +661,9 @@ class ProvidersService:
         return await self.require_model(address)
 
     async def mark_model_problem(self, address: str, detail: str) -> None:
-        await self._update_model(address, availability="needs_attention", availability_detail=detail)
+        await self._update_model(
+            address, availability="needs_attention", availability_detail=detail
+        )
 
     async def _update_model(self, address: str, **values: object) -> None:
         engine = await self._dbs.app()
@@ -669,13 +744,13 @@ def _model(row: RowMapping) -> ModelEntry:
 
 - [ ] **Step 4: Run tests and checks**
 
-Run: `cd backend && uv run pytest tests/providers -v && uv run ruff check && uv run pyright`
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/mlops_agents/providers backend/tests/providers backend/tests/conftest.py
+git add backend/pyproject.toml backend/uv.lock backend/src/mlops_agents/providers backend/tests/providers
 git commit -m "feat(providers): add providers registry with keys, models and env key import"
 ```
 
@@ -685,17 +760,18 @@ git commit -m "feat(providers): add providers registry with keys, models and env
 
 **Files:**
 - Create: `backend/tests/fakes/__init__.py` (empty), `backend/tests/fakes/fake_openai.py`, `backend/src/mlops_agents/providers/errors.py`, `bridge.py`, `verification.py`
-- Modify: `backend/src/mlops_agents/providers/service.py` (add `verify_model`), `backend/tests/conftest.py` (add `fake_openai` fixture)
-- Test: `backend/tests/providers/test_errors.py`, `test_verification.py`, `test_verify_service.py`
+- Modify: `backend/src/mlops_agents/providers/service.py` (add `verify_model`), `backend/tests/conftest.py` (add the `model_http` and `fake_openai` fixtures), `backend/src/mlops_agents/credentials/scrub.py` (`error_text` also withholds `httpx2.InvalidURL`)
+- Test: `backend/tests/providers/test_errors.py`, `test_verification.py`, `test_verify_service.py`; add a test to `backend/tests/credentials/test_scrub.py`
 
 **Interfaces:**
 - Consumes: `ProvidersService` (Task 1), `scrub_values`, `error_text` (backend-core plan, Task 4).
+- Changes: `error_text` treats `httpx2.InvalidURL` like `httpx.InvalidURL`, because model calls now raise `httpx2` errors and their URL-parse messages can quote part of a key.
 - Produces:
   - `tests/fakes/fake_openai.py`: `FakeState` (fields `required_key: str | None`, `rate_limit_remaining: int`, `server_error_remaining: int`, `auth_fail: bool`, `usage_in_stream: bool`, `requests: list[dict[str, Any]]`, method `reset()`), `create_fake_app(state) -> FastAPI`, `RunningFake(base_url: str, state: FakeState)`, `start_fake_server(state, port=0) -> RunningFake`; runnable as `python -m tests.fakes.fake_openai --port N`. Models: `fake-tools` (calls the first offered tool, then answers from the tool result), `fake-no-tools` (ignores tools), `fake-slow` (40 words, 50 ms apart), each with context window 32768 except `fake-no-tools` (8192).
-  - `conftest.py` fixture `fake_openai -> RunningFake` (one server per test session, state reset per test).
+  - `conftest.py` fixtures `fake_openai -> RunningFake` (one server per test session, state reset per test) and `model_http -> httpx2.AsyncClient` (a client closed after the test; stands in for the app's shared client).
   - `errors.py`: `class ProviderErrorKind(StrEnum)` (`AUTH`, `QUOTA`, `RATE_LIMIT`, `TRANSIENT`, `UNREACHABLE`, `BAD_REQUEST`, `UNKNOWN`), `class ProviderCallError(Exception)` (`kind`, `message`, `retry_after: float | None`), `classify(exc: BaseException, secrets: Iterable[str] = ()) -> ProviderCallError`.
-  - `bridge.py`: `KEYLESS: str`, `build_chat_model(base_url, api_key: str | None, wire_model_id, *, timeout=120.0) -> ChatOpenAI`, frozen dataclass `ResolvedModel(address, provider_id, provider_name, base_url, wire_model_id, context_window: int, keys: tuple[str, ...])` with `build(key_index: int = 0) -> ChatOpenAI`.
-  - `verification.py`: `PROBE_TOOL`, `ProbeResult(tool_calling, streaming, detail)`, `async probe_model(base_url, api_key, wire_model_id, *, timeout=60.0) -> ProbeResult` (raises `ProviderCallError`).
+  - `bridge.py`: `KEYLESS: str`, `build_chat_model(base_url, api_key: str | None, wire_model_id, *, http: httpx2.AsyncClient, timeout=120.0) -> ChatOpenAI`, frozen dataclass `ResolvedModel(address, provider_id, provider_name, base_url, wire_model_id, context_window: int, keys: tuple[str, ...])` with `build(http: httpx2.AsyncClient, key_index: int = 0) -> ChatOpenAI`.
+  - `verification.py`: `PROBE_TOOL`, `ProbeResult(tool_calling, streaming, detail)`, `async probe_model(base_url, api_key, wire_model_id, *, http: httpx2.AsyncClient, timeout=60.0) -> ProbeResult` (raises `ProviderCallError`).
   - `ProvidersService.verify_model(address) -> ModelEntry`.
 
 - [ ] **Step 1: Write the fake server** `backend/tests/fakes/fake_openai.py`:
@@ -765,7 +841,9 @@ def _chunk(model: str, delta: dict[str, Any], finish: str | None = None) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _reply(model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[str, str | None]:
+def _reply(
+    model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> tuple[str, str | None]:
     """(text, name of the tool to call or None)."""
     last = messages[-1]
     if model == "fake-slow":
@@ -780,7 +858,11 @@ def _reply(model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any
 
 
 async def _stream(
-    state: FakeState, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]], usage: bool
+    state: FakeState,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    usage: bool,
 ) -> AsyncIterator[str]:
     text, tool = _reply(model, messages, tools)
     yield _chunk(model, {"role": "assistant", "content": ""})
@@ -788,7 +870,12 @@ async def _stream(
         args = json.dumps(TOOL_ARGS.get(tool, {}))
         half = len(args) // 2
         call_id = f"call_{len(state.requests)}"
-        first = {"index": 0, "id": call_id, "type": "function", "function": {"name": tool, "arguments": args[:half]}}
+        first = {
+            "index": 0,
+            "id": call_id,
+            "type": "function",
+            "function": {"name": tool, "arguments": args[:half]},
+        }
         yield _chunk(model, {"tool_calls": [first]})
         yield _chunk(model, {"tool_calls": [{"index": 0, "function": {"arguments": args[half:]}}]})
         finish = "tool_calls"
@@ -800,7 +887,7 @@ async def _stream(
         finish = "stop"
     yield _chunk(model, {}, finish)
     if usage:
-        tail = {
+        tail: dict[str, Any] = {
             "id": "chatcmpl-fake",
             "object": "chat.completion.chunk",
             "created": 0,
@@ -872,7 +959,9 @@ def _free_port() -> int:
 
 def start_fake_server(state: FakeState, port: int = 0) -> RunningFake:
     port = port or _free_port()
-    config = uvicorn.Config(create_fake_app(state), host="127.0.0.1", port=port, log_level="warning")
+    config = uvicorn.Config(
+        create_fake_app(state), host="127.0.0.1", port=port, log_level="warning"
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -895,12 +984,22 @@ if __name__ == "__main__":
     main()
 ```
 
-Add the fixture to `backend/tests/conftest.py`:
+Add to `backend/tests/conftest.py`. At the top, with the other imports:
 
 ```python
-from collections.abc import Iterator
+import httpx2
 
 from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
+```
+
+At the end of the file:
+
+```python
+@pytest.fixture
+async def model_http() -> AsyncIterator[httpx2.AsyncClient]:
+    """The shared client the app passes to model calls, closed after the test."""
+    async with httpx2.AsyncClient() as client:
+        yield client
 
 
 @pytest.fixture(scope="session")
@@ -916,21 +1015,23 @@ def fake_openai(_fake_openai_server: RunningFake) -> RunningFake:
     return _fake_openai_server
 ```
 
+`AsyncIterator` and `Iterator` are already imported there. Run `uv run ruff check --fix` to sort the imports.
+
 - [ ] **Step 2: Write the failing tests**
 
 `backend/tests/providers/test_errors.py`:
 
 ```python
-import httpx
+import httpx2
 import openai
 
 from mlops_agents.providers.errors import ProviderErrorKind, classify
 
-REQUEST = httpx.Request("POST", "https://x.io/v1/chat/completions")
+REQUEST = httpx2.Request("POST", "https://x.io/v1/chat/completions")
 
 
-def _response(status: int, headers: dict[str, str] | None = None) -> httpx.Response:
-    return httpx.Response(status, request=REQUEST, headers=headers)
+def _response(status: int, headers: dict[str, str] | None = None) -> httpx2.Response:
+    return httpx2.Response(status, request=REQUEST, headers=headers)
 
 
 def test_auth() -> None:
@@ -939,7 +1040,9 @@ def test_auth() -> None:
 
 
 def test_rate_limit_with_retry_after() -> None:
-    err = openai.RateLimitError("slow down", response=_response(429, {"retry-after": "3"}), body=None)
+    err = openai.RateLimitError(
+        "slow down", response=_response(429, {"retry-after": "3"}), body=None
+    )
     result = classify(err)
     assert result.kind is ProviderErrorKind.RATE_LIMIT
     assert result.retry_after == 3.0
@@ -947,7 +1050,9 @@ def test_rate_limit_with_retry_after() -> None:
 
 def test_quota() -> None:
     err = openai.RateLimitError(
-        "You exceeded your current quota", response=_response(429), body={"code": "insufficient_quota"}
+        "You exceeded your current quota",
+        response=_response(429),
+        body={"code": "insufficient_quota"},
     )
     assert classify(err).kind is ProviderErrorKind.QUOTA
 
@@ -958,7 +1063,9 @@ def test_overloaded_is_transient() -> None:
 
 
 def test_connection_error_is_unreachable() -> None:
-    assert classify(openai.APIConnectionError(request=REQUEST)).kind is ProviderErrorKind.UNREACHABLE
+    assert (
+        classify(openai.APIConnectionError(request=REQUEST)).kind is ProviderErrorKind.UNREACHABLE
+    )
 
 
 def test_wrapped_error_is_found_through_the_cause_chain() -> None:
@@ -977,11 +1084,17 @@ def test_message_hides_secrets() -> None:
     result = classify(err, ["gsk_abcdef123456"])
     assert result.kind is ProviderErrorKind.UNKNOWN
     assert "gsk_abcdef123456" not in result.message
+
+
+def test_dropped_stream_is_unreachable() -> None:
+    err = httpx2.RemoteProtocolError("peer closed connection without sending complete message body")
+    assert classify(err).kind is ProviderErrorKind.UNREACHABLE
 ```
 
 `backend/tests/providers/test_verification.py`:
 
 ```python
+import httpx2
 import pytest
 
 from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind
@@ -989,8 +1102,10 @@ from mlops_agents.providers.verification import probe_model
 from tests.fakes.fake_openai import RunningFake
 
 
-async def test_tool_calling_model_passes(fake_openai: RunningFake) -> None:
-    result = await probe_model(fake_openai.base_url, None, "fake-tools")
+async def test_tool_calling_model_passes(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    result = await probe_model(fake_openai.base_url, None, "fake-tools", http=model_http)
     assert result.tool_calling
     assert result.streaming
     assert result.detail is None
@@ -999,23 +1114,29 @@ async def test_tool_calling_model_passes(fake_openai: RunningFake) -> None:
     assert sent["tools"][0]["function"]["name"] == "report_capabilities"
 
 
-async def test_model_that_ignores_tools_is_reported(fake_openai: RunningFake) -> None:
-    result = await probe_model(fake_openai.base_url, None, "fake-no-tools")
+async def test_model_that_ignores_tools_is_reported(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    result = await probe_model(fake_openai.base_url, None, "fake-no-tools", http=model_http)
     assert not result.tool_calling
     assert result.detail is not None
     assert "tool" in result.detail
 
 
-async def test_missing_usage_in_stream_still_passes(fake_openai: RunningFake) -> None:
+async def test_missing_usage_in_stream_still_passes(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
     fake_openai.state.usage_in_stream = False
-    result = await probe_model(fake_openai.base_url, None, "fake-tools")
+    result = await probe_model(fake_openai.base_url, None, "fake-tools", http=model_http)
     assert result.tool_calling
 
 
-async def test_bad_key_is_an_auth_error(fake_openai: RunningFake) -> None:
+async def test_bad_key_is_an_auth_error(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
     fake_openai.state.required_key = "right"
     with pytest.raises(ProviderCallError) as err:
-        await probe_model(fake_openai.base_url, "wrong-key-value", "fake-tools")
+        await probe_model(fake_openai.base_url, "wrong-key-value", "fake-tools", http=model_http)
     assert err.value.kind is ProviderErrorKind.AUTH
     assert "wrong-key-value" not in err.value.message
 ```
@@ -1023,7 +1144,7 @@ async def test_bad_key_is_an_auth_error(fake_openai: RunningFake) -> None:
 `backend/tests/providers/test_verify_service.py`:
 
 ```python
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
@@ -1034,16 +1155,26 @@ from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 
-async def _service(databases: Databases, keystore: MemoryKeyStore, fake: RunningFake) -> ProvidersService:
-    svc = ProvidersService(databases, keystore, httpx.AsyncClient())
-    await svc.create_provider(ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url))
+async def _service(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake: RunningFake,
+    http: httpx2.AsyncClient,
+) -> ProvidersService:
+    svc = ProvidersService(databases, keystore, http)
+    await svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
+    )
     return svc
 
 
 async def test_verify_records_traits(
-    databases: Databases, keystore: MemoryKeyStore, fake_openai: RunningFake
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = await _service(databases, keystore, fake_openai)
+    svc = await _service(databases, keystore, fake_openai, model_http)
     entry = await svc.add_model(ModelCreate(provider="fake", wire_model_id="fake-tools"))
     assert entry.context_window == 32768
     verified = await svc.verify_model("fake:fake-tools")
@@ -1054,9 +1185,12 @@ async def test_verify_records_traits(
 
 
 async def test_failed_verification_marks_the_model(
-    databases: Databases, keystore: MemoryKeyStore, fake_openai: RunningFake
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = await _service(databases, keystore, fake_openai)
+    svc = await _service(databases, keystore, fake_openai, model_http)
     await svc.add_model(ModelCreate(provider="fake", wire_model_id="fake-tools"))
     fake_openai.state.auth_fail = True
     with pytest.raises(DomainError) as err:
@@ -1066,12 +1200,35 @@ async def test_failed_verification_marks_the_model(
     assert entry.availability == "needs_attention"
 ```
 
+Add to `backend/tests/credentials/test_scrub.py` (imports `from types import ModuleType`, `import httpx`, `import httpx2`, and `error_text` from `mlops_agents.credentials.scrub`):
+
+```python
+@pytest.mark.parametrize("module", [httpx, httpx2])
+def test_error_text_withholds_url_parse_errors(module: ModuleType) -> None:
+    try:
+        module.Request("GET", "http://host:gsk_secret_value/v1")
+    except Exception as exc:
+        assert "gsk_secret_value" not in error_text(exc)
+        assert "withheld" in error_text(exc)
+    else:
+        pytest.fail("the URL should not parse")
+```
+
 - [ ] **Step 3: Run them to verify they fail**
 
-Run: `cd backend && uv run pytest tests/providers -v`
-Expected: FAIL with `ModuleNotFoundError` for `mlops_agents.providers.errors` and `verification`.
+Run: `cd backend && uv run pytest tests/providers tests/credentials/test_scrub.py -v`
+Expected: FAIL with `ModuleNotFoundError` for `mlops_agents.providers.errors` and `verification`, and `test_error_text_withholds_url_parse_errors[httpx2]` fails.
 
 - [ ] **Step 4: Implement**
+
+In `backend/src/mlops_agents/credentials/scrub.py`, `error_text` withholds both URL-parse error classes:
+
+```python
+    import httpx
+    import httpx2
+
+    if isinstance(exc, httpx.InvalidURL | httpx2.InvalidURL):
+```
 
 `backend/src/mlops_agents/providers/errors.py`:
 
@@ -1081,7 +1238,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from enum import StrEnum
 
-import httpx
+import httpx2
 import openai
 
 from mlops_agents.credentials.scrub import error_text, scrub_values
@@ -1100,7 +1257,9 @@ class ProviderErrorKind(StrEnum):
 class ProviderCallError(Exception):
     """A failed call to a model provider, classified. `message` is safe to show."""
 
-    def __init__(self, kind: ProviderErrorKind, message: str, retry_after: float | None = None) -> None:
+    def __init__(
+        self, kind: ProviderErrorKind, message: str, retry_after: float | None = None
+    ) -> None:
         super().__init__(message)
         self.kind = kind
         self.message = message
@@ -1117,7 +1276,7 @@ def _chain(exc: BaseException) -> Iterator[BaseException]:
         current = current.__cause__ or current.__context__
 
 
-def _retry_after(response: httpx.Response) -> float | None:
+def _retry_after(response: httpx2.Response) -> float | None:
     value = response.headers.get("retry-after")
     try:
         return float(value) if value is not None else None
@@ -1134,7 +1293,7 @@ def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:
             if "quota" in str(e).lower() or "insufficient_quota" in body:
                 return ProviderErrorKind.QUOTA, None
             return ProviderErrorKind.RATE_LIMIT, _retry_after(e.response)
-        if isinstance(e, openai.APIConnectionError | httpx.TransportError):
+        if isinstance(e, openai.APIConnectionError | httpx2.TransportError):
             return ProviderErrorKind.UNREACHABLE, None
         if isinstance(e, openai.APIStatusError):
             if e.status_code >= 500:
@@ -1155,6 +1314,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import httpx2
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
@@ -1163,9 +1323,16 @@ KEYLESS = "not-needed"
 
 
 def build_chat_model(
-    base_url: str, api_key: str | None, wire_model_id: str, *, timeout: float = 120.0
+    base_url: str,
+    api_key: str | None,
+    wire_model_id: str,
+    *,
+    http: httpx2.AsyncClient,
+    timeout: float = 120.0,
 ) -> ChatOpenAI:
-    """The only way the app creates an LLM client. Retries are handled by the caller."""
+    """The only way the app creates an LLM client. Retries are handled by the caller. `http` is
+    the app's shared client (see ProvidersService); without it langchain-openai would use a
+    process-wide cached client tied to the first event loop."""
     return ChatOpenAI(
         base_url=base_url,
         api_key=SecretStr(api_key or KEYLESS),
@@ -1174,6 +1341,7 @@ def build_chat_model(
         stream_usage=True,
         max_retries=0,
         timeout=timeout,
+        http_async_client=http,
     )
 
 
@@ -1187,9 +1355,9 @@ class ResolvedModel:
     context_window: int
     keys: tuple[str, ...] = field(repr=False)
 
-    def build(self, key_index: int = 0) -> ChatOpenAI:
+    def build(self, http: httpx2.AsyncClient, key_index: int = 0) -> ChatOpenAI:
         key = self.keys[key_index] if self.keys else None
-        return build_chat_model(self.base_url, key, self.wire_model_id)
+        return build_chat_model(self.base_url, key, self.wire_model_id, http=http)
 ```
 
 `backend/src/mlops_agents/providers/verification.py`:
@@ -1200,6 +1368,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx2
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from mlops_agents.providers.bridge import build_chat_model
@@ -1228,10 +1397,17 @@ class ProbeResult:
 
 
 async def probe_model(
-    base_url: str, api_key: str | None, wire_model_id: str, *, timeout: float = 60.0
+    base_url: str,
+    api_key: str | None,
+    wire_model_id: str,
+    *,
+    http: httpx2.AsyncClient,
+    timeout: float = 60.0,  # noqa: ASYNC109 -- passed to the OpenAI client, which applies it per request
 ) -> ProbeResult:
     """One real streamed request with a tool, the way agents call models."""
-    llm = build_chat_model(base_url, api_key, wire_model_id, timeout=timeout).bind_tools([PROBE_TOOL])
+    model = build_chat_model(base_url, api_key, wire_model_id, http=http, timeout=timeout)
+    # langchain-openai leaves bind_tools' keyword arguments untyped.
+    llm = model.bind_tools([PROBE_TOOL])  # pyright: ignore[reportUnknownMemberType]
     chunks = 0
     merged: AIMessageChunk | None = None
     try:
@@ -1263,27 +1439,33 @@ Add to `ProvidersService` in `service.py` (with imports `from mlops_agents.provi
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {provider.name} first.", status=409)
         try:
-            result = await probe_model(provider.base_url, keys[0] if keys else None, entry.wire_model_id)
+            result = await probe_model(
+                provider.base_url, keys[0] if keys else None, entry.wire_model_id, http=self._http
+            )
         except ProviderCallError as err:
             await self.mark_model_problem(address, err.message)
             raise DomainError(
                 "verification_failed", f"Checking {address} failed: {err.message}", status=502
             ) from None
         return await self.record_verification(
-            address, tool_calling=result.tool_calling, streaming=result.streaming, detail=result.detail
+            address,
+            tool_calling=result.tool_calling,
+            streaming=result.streaming,
+            detail=result.detail,
         )
 ```
 
 - [ ] **Step 5: Run tests and checks**
 
-Run: `cd backend && uv run pytest tests/providers -v && uv run ruff check && uv run ruff format --check && uv run pyright`
-Expected: all pass. Run `uv run ruff format` first if the format check reports long lines in the fake server.
+Run: `cd backend && uv run pytest -W error && uv run ruff check && uv run ruff format --check && uv run pyright`
+Expected: all pass, with no unclosed-socket warnings.
 
 - [ ] **Step 6: Live check against a real provider** (marker `live`, not run in CI) — add `backend/tests/providers/test_live.py`:
 
 ```python
 import os
 
+import httpx2
 import pytest
 
 from mlops_agents.providers.verification import probe_model
@@ -1295,17 +1477,20 @@ async def test_groq_streams_tool_calls() -> None:
     key = os.environ.get("GROQ_API_KEY")
     if not key:
         pytest.skip("set GROQ_API_KEY to run this live test")
-    result = await probe_model("https://api.groq.com/openai/v1", key, "qwen/qwen3.8-27b")
+    async with httpx2.AsyncClient() as http:
+        result = await probe_model(
+            "https://api.groq.com/openai/v1", key, "qwen/qwen3.8-27b", http=http
+        )
     assert result.tool_calling
     assert result.streaming
 ```
 
 Run: `cd backend && GROQ_API_KEY=... uv run pytest -m live tests/providers/test_live.py -v`
-Expected: PASS (verified on 2026-10-16 with this model).
+Expected: PASS. The probe passed against this model on 2026-10-16, before `http` was added to `probe_model`; run it once with a real key when this task is done and report the result in the PR.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/src/mlops_agents/providers backend/tests/providers backend/tests/fakes backend/tests/conftest.py
+git add backend/src/mlops_agents/providers backend/src/mlops_agents/credentials/scrub.py backend/tests/providers backend/tests/fakes backend/tests/conftest.py backend/tests/credentials/test_scrub.py
 git commit -m "feat(providers): add model verification, error classification and the LangChain bridge"
 ```

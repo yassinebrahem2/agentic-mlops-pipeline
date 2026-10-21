@@ -3,10 +3,12 @@ import subprocess
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
+import httpx2
 import pytest
 
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
 
 
 @pytest.fixture
@@ -74,3 +76,23 @@ async def databases(paths: DataPaths) -> AsyncIterator[Databases]:
 @pytest.fixture
 def keystore() -> MemoryKeyStore:
     return MemoryKeyStore()
+
+
+@pytest.fixture
+async def model_http() -> AsyncIterator[httpx2.AsyncClient]:
+    """The shared client the app passes to model calls, closed after the test."""
+    async with httpx2.AsyncClient() as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def _fake_openai_server() -> Iterator[RunningFake]:
+    running = start_fake_server(FakeState())
+    yield running
+    running.stop()
+
+
+@pytest.fixture
+def fake_openai(_fake_openai_server: RunningFake) -> RunningFake:
+    _fake_openai_server.state.reset()
+    return _fake_openai_server
