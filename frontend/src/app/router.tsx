@@ -1,14 +1,12 @@
-import { createBrowserRouter, type RouteObject } from "react-router";
+import { createBrowserRouter, type DataRouter, type RouteObject } from "react-router";
 import { NotFound } from "./NotFound";
 import type { PageRoute } from "./routes";
 import { AppShell } from "./shell/AppShell";
 
-export function buildRouter<T = ReturnType<typeof createBrowserRouter>>(
+export function buildRouter(
   routes: PageRoute[],
-  createRouter: (routes: RouteObject[]) => T = createBrowserRouter as unknown as (
-    routes: RouteObject[],
-  ) => T,
-): T {
+  createRouter: (routes: RouteObject[]) => DataRouter = createBrowserRouter,
+): DataRouter {
   const hasRootRoute = routes.some((r) => r.path === "/");
 
   const children: RouteObject[] = [

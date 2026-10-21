@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router";
@@ -83,9 +83,7 @@ describe("AppShell and Router", () => {
     await user.click(openButton);
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toBeInTheDocument();
-    const settingsLinks = screen.getAllByRole("link", { name: "Settings" });
-    expect(settingsLinks.length).toBeGreaterThanOrEqual(1);
+    expect(within(dialog).getByRole("link", { name: "Settings" })).toBeInTheDocument();
   });
 
   it("shows registered page at / instead of 'No pages yet.' when a module registers /", () => {
