@@ -37,6 +37,8 @@ The five plans written first include full implementation code. They were written
 
 ## Known stage 1 limitations
 
+- A project's step-limit override cannot be removed: I2 has no call for it, and the view does not say whether the value is an override. After overriding, the user sets the number again to match the definition.
+
 - Refreshing a GitHub project (on open or on demand) while its agent is in a turn resets the managed clone under the agent, so that turn may read a mix of old and new files. Stage 2's per-task worktrees remove this.
 
 ## Stage 1 end-to-end flow

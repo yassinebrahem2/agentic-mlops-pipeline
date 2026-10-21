@@ -31,9 +31,9 @@
 ### Task 1: Projects home, project switcher, project landing
 
 **Files:**
-- Create: `frontend/src/pages/projects/route.tsx`, `ProjectsPage.tsx`, `ProjectStatus.tsx`; `frontend/src/pages/project-home/route.tsx`, `ProjectHome.tsx`; `frontend/src/app/shell/ProjectSwitcher.tsx`
+- Create: `frontend/src/pages/projects/route.tsx`, `ProjectsPage.tsx`; `frontend/src/components/ProjectStatus.tsx` (shared: tasks 2 and 3 and frontend-chat use it); `frontend/src/pages/project-home/route.tsx`, `ProjectHome.tsx`, `firstProjectPath.ts`; `frontend/src/app/shell/ProjectSwitcher.tsx`
 - Modify: `frontend/src/app/shell/Sidebar.tsx` (render `ProjectSwitcher` in the sidebar header; frontend-foundation left that place to this plan)
-- Test: `ProjectsPage.test.tsx`, `ProjectHome.test.tsx`, `ProjectSwitcher.test.tsx` beside them
+- Test: `ProjectsPage.test.tsx`, `firstProjectPath.test.ts`, `ProjectHome.test.tsx`, `ProjectSwitcher.test.tsx` beside them
 
 **Interfaces:**
 - Consumes: I5 (`PageRoute`, `pageRoutes`, `api`, `unwrap`, `errorText`, `renderPage`); I6 `GET /projects`, `POST /projects/{id}/open`; the `Project` schema.
@@ -42,11 +42,11 @@
 **Implementation notes:**
 - Projects: a table or list of projects with name, source ("Local folder" / "GitHub"), status and last opened (local time, spec "Time"), sorted by last opened, most recent first; an "Add project" button to `/projects/new`; an empty state ("No projects yet.") with the same button. Clicking a project opens it.
 - Opening a project: `POST /projects/{id}/open` (it refreshes a GitHub clone, so it can take seconds: show progress on that row), then navigate to `/projects/:projectId`.
-- `ProjectHome` at `/projects/:projectId`: redirects (replace) to the first `project`-area page in `pageRoutes` by `order`, with `:projectId` filled in. With frontend-chat merged that is Agents (`order: 0`); before, it is Settings (`order: 100`).
+- `firstProjectPath(routes: PageRoute[], projectId: string): string | null`, a pure function: the first `project`-area route by `order`, with `:projectId` filled in. `ProjectHome` at `/projects/:projectId` redirects (replace) to `firstProjectPath(pageRoutes, projectId)`. With frontend-chat merged that is Agents (`order: 0`); before, it is Settings (`order: 100`).
 - `ProjectStatus`: `ok` → nothing loud; `missing` → "Folder not found" and the detail; `empty` → "No committed files yet. Commit your files first."; `clone_failed` → "Download failed" and the detail (it already says to use Refresh). A refresh failure that kept the last copy arrives as `ok` with a `status_detail`: show the detail as a warning.
-- `ProjectSwitcher`: a menu button showing the current project's name (under `/projects/:projectId`) or "Projects"; it lists all projects (opening one goes through the same open-then-navigate path) and ends with "All projects" (`/`).
+- `ProjectSwitcher`: a menu button showing the current project's name or "Projects". The current project comes from the matched route's params (`useParams()`), never from the URL text: `/projects/new` is not a project called "new" (it matches no route with `:projectId`). It it lists all projects (opening one goes through the same open-then-navigate path) and ends with "All projects" (`/`).
 
-**Tests (behaviors to verify):** the list shows each project's name, source, status and last opened; the empty state; clicking a project sends `POST .../open` and lands on the first project page (with two fake project routes registered, the lower `order` wins); `ProjectStatus` texts for the four statuses and the "kept the last copy" warning; the switcher shows the current project and lists the others; a failing `GET /projects` shows `errorText`.
+**Tests (behaviors to verify):** the list shows each project's name, source, status and last opened; the empty state; clicking a project sends `POST .../open` and lands on its Settings page (the project page on the branch); `firstProjectPath` picks the lower `order` among fake routes, fills in the id, and returns null when there is none; `ProjectStatus` texts for the four statuses and the "kept the last copy" warning; the switcher shows the current project and lists the others; at `/projects/new` the switcher shows "Projects"; a failing `GET /projects` shows `errorText`.
 
 **Checks (from `frontend/`):** `npm run lint`, `npm run format:check`, `npm test`, `npm run build`.
 
@@ -85,7 +85,7 @@
 - Test: `ProjectSettingsPage.test.tsx`
 
 **Interfaces:**
-- Consumes: I6 `GET /projects/{id}`, `POST .../refresh`, `POST .../relink`, `DELETE /projects/{id}`, `GET /projects/{id}/agents`, `PUT .../agents/{agent}/model`, `PUT .../agents/{agent}/limits`, `GET /models`; `FolderBrowser`, `ProjectStatus`; the codes `not_local`, `local_projects_disabled`, `model_not_usable`.
+- Consumes: I6 `GET /projects/{id}`, `POST .../refresh`, `POST .../relink`, `DELETE /projects/{id}`, `GET /projects/{id}/agents`, `PUT .../agents/{agent}/model`, `PUT .../agents/{agent}/limits`, `GET /models`, `GET /providers` (a model's provider kind); `FolderBrowser`, `ProjectStatus`; the codes `not_local`, `local_projects_disabled`, `model_not_usable`.
 - Produces: `route` at `/projects/:projectId/settings` with `nav: { area: "project", label: "Settings", order: 100 }`.
 
 **Implementation notes:**
@@ -94,10 +94,10 @@
   - The model select offers "Use the app default (<default_model or none>)" and the usable models from `GET /models`: `availability == "verified"`, `tool_calling`, `streaming` and a known `context_window` (the same rule as I2, so the server never answers `model_not_usable` for a listed choice). Choosing sends `PUT .../model` with the address, or `null` for the default.
   - `model_problem`, when set, is shown under the row as a warning.
   - "Step limit": a number input (at least 1) and a "No limit" checkbox; saving sends `PUT .../limits` with the number or `null`.
-  - A hosted model is about to see the repository: show the spec's warning once in this section, "Files the agent reads are sent to the model's provider. A secret inside a committed file whose name does not look secret can reach it." (spec section 5, known limitation).
+  - Where an agent's effective model belongs to a `hosted` provider (look the provider up by `provider_name` in `GET /providers`), show under that row the spec's warning: "Files the agent reads are sent to <provider>. A secret inside a committed file whose name does not look secret can reach it." (spec section 5, known limitation). Not shown for self-hosted models.
 - Remove: "Remove project" opens a dialog saying the app's copy, sessions and settings for this project are deleted and the user's own folder is not touched (for GitHub projects: the downloaded copy is deleted); confirming sends `DELETE` and navigates to `/`.
 
-**Tests (behaviors to verify):** the repository section for a local and a GitHub project; Refresh sends the request and shows the new status; Relink is offered only for local projects and sends the chosen path; the model select lists only usable models plus the default option, and choosing sends the address or `null`; `model_problem` is shown; the step limit sends a number, and "No limit" sends `null`; the hosted-model warning is visible; Remove asks first, sends `DELETE` and returns to `/`.
+**Tests (behaviors to verify):** the repository section for a local and a GitHub project; Refresh sends the request and shows the new status; Relink is offered only for local projects and sends the chosen path; the model select lists only usable models plus the default option, and choosing sends the address or `null`; `model_problem` is shown; the step limit sends a number, and "No limit" sends `null`; the hosted-model warning is shown for a hosted effective model and absent for a self-hosted one; Remove asks first, sends `DELETE` and returns to `/`.
 
 **Checks:** as task 1.
 
