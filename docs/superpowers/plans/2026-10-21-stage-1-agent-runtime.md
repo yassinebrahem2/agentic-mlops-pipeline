@@ -23,7 +23,7 @@ Task 1 is small and merges first: api-sessions and frontend-chat code against it
 ## Decisions this plan makes (inside the runtime)
 
 - **One agent message per turn.** A turn writes one message with `author_kind="agent"`; its `parts` hold, in order, the text, tool calls and tool results the turn produced. The user's message is its own message.
-- **Queue.** A message sent while the session is busy is stored with status `queued` and gets its own `queued` turn; turns run one at a time per session, oldest first. When a queued turn starts, its message becomes `complete`.
+- **Queue.** A message sent while the session is busy is stored with status `queued` and gets its own `queued` turn; turns run one at a time per session, oldest first. When a queued turn starts, its message becomes `complete`, and that change is published as `message.updated` (under the session lock), so every tab sees it.
 - **Stop** ends the running turn only (`stopped`); queued turns then run as usual. **Shutdown** (`close`) ends the running turn `interrupted` and starts nothing else; queued turns stay queued for the next start.
 - **A failed turn leaves a visible message.** When a turn ends `failed`, the runtime stores a message with `author_kind="system"`, `author_name="system"` and the error text, and publishes it as `message.created`, so the reason survives a reload. System messages are never sent to the model.
 - **Restart.** Recovery runs once per project, the first time the manager touches that project after start: `running` turns become `interrupted` (their agent message too); `queued` turns run again in order. A project nobody opens keeps its queued turns until it is opened.
@@ -216,7 +216,7 @@ The protocol includes `close_project` (I1).
 - Ask the Orchestrator (`fake-tools`): `send` returns the user message; a subscriber sees `message.created` (user), `message.created` (agent), `tool.started`, `tool.finished`, `text.delta`s, `message.updated`, `turn.ended` with `done`, with strictly increasing seqs.
 - Two subscribers on the same session receive identical event lists. A subscriber that joins mid-turn after `get` (using `fake-slow`) ends with the same final text as the first: the text from `get`'s live message plus the deltas after `last_seq`, nothing missing or doubled (review focus 4).
 - `subscribe(after_seq=0)` after 6000 events, or with a seq above the current one, yields `resync` first.
-- Three messages sent at once: the second and third are `queued`, run in order, each gets its own `turn.ended`; `busy` is true until the last ends.
+- Three messages sent at once: the second and third are `queued`, run in order, each gets its own `turn.ended`; a subscriber sees `message.updated` turning each queued message `complete` when its turn starts; `busy` is true until the last ends.
 - Stop during `fake-slow` → `turn.ended` `stopped`, the partial text stays in the stored message, a queued message then runs; Stop during a slow tool, then a new message: the session keeps working (spec section 8).
 - Recovery: a project database with a `running` turn and a `queued` turn written by a previous manager → the first `get` marks the running one `interrupted` and the queued one runs.
 - `close_project` during a turn → the turn is `interrupted`, a subscriber's stream ends, and the project's folder can then be deleted on Windows (`shutil.rmtree` succeeds).

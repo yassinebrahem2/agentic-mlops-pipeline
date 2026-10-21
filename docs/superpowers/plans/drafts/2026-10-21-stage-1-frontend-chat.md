@@ -15,7 +15,7 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | Session state and the stream | coding: I5 on `main` (I1 and I7's shapes are fixed in the overview); merging: api-sessions task 1 (#55) on `main` |
-| 2 | The Agents page | task 1; api-resources task 4 (#53) |
+| 2 | The Agents page | task 1; api-resources task 4 (#53); frontend-workspace task 1 (#58, `ProjectStatus`) |
 
 Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the event and session shapes are fixed in I1, and its tests use a fake stream. Its PR merges after api-sessions task 1, when the generated types hold the session routes.
 
@@ -24,13 +24,16 @@ Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the ev
 ### Task 1: Session state and the stream
 
 **Files:**
-- Create: `frontend/src/pages/agents/session/applyEvent.ts`, `useSession.ts`, `stream.ts`
+- Create: `frontend/src/pages/agents/session/events.ts`, `applyEvent.ts`, `useSession.ts`, `stream.ts`
 - Test: `applyEvent.test.ts`, `useSession.test.tsx`
 
 **Interfaces:**
-- Consumes: I7 (`GET .../session` → `SessionView`, `POST .../session/messages`, `POST .../session/stop`, `GET .../session/stream`), I1's `SessionView`, `MessageView`, `Part` and event types (from the generated schema), `api`, `unwrap`, `ApiError`.
+- Consumes: I7 (`GET .../session` → `SessionView`, `POST .../session/messages`, `POST .../session/stop`, `GET .../session/stream`), I1's `SessionView`, `MessageView` and `Part` (from the generated schema), `api`, `unwrap`, `ApiError`. The stream's event shapes are not in the OpenAPI contract (FastAPI does not describe SSE events), so `events.ts` writes them by hand from I1.
 - Produces:
   ```ts
+  // events.ts: the seven I1 event data types and a type guard per event name
+  export type StreamEventData = { type: "message.created"; message: MessageView } | ... ;
+  export function parseEvent(type: string, data: string): StreamEventData | null;  // JSON.parse as unknown, then narrowed
   type SessionState = { messages: MessageView[]; busy: boolean; lastSeq: number };
   export function applyEvent(state: SessionState, event: { seq: number; type: string; data: unknown }): SessionState;
   export function useSession(projectId: string, agent: string, options?: { openStream?: (url: string) => StreamLike }): {
@@ -42,6 +45,7 @@ Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the ev
   ```
 
 **Implementation notes:**
+- `parseEvent` parses `data` as `unknown` and narrows it with a guard for its event name (no casts: ESLint strict forbids `any`). An event that fails its guard is ignored and counted as a stream error; it never crashes the page.
 - `applyEvent` is a pure function that folds events the way the runtime's hub does (I1):
   - `message.created`: append the message unless one with that id exists;
   - `text.delta`: append the text to the last text part of that message, or add a text part when the last part is a tool call or result;
@@ -53,14 +57,18 @@ Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the ev
 - `useSession`:
   1. load `GET .../session` (query key `["session", projectId, agent]`) into `SessionState`;
   2. open the stream at `.../session/stream?after=<last_seq>` with `openStream` (default `new EventSource(url)`, same origin so the session cookie goes along); listen for each event name of I1 and feed `applyEvent`;
-  3. on `resync`: close the stream, reload the session, reopen with the new `last_seq`;
-  4. on an error: `EventSource` reconnects by itself and sends `Last-Event-ID`, so the state continues from there (`connection: "reconnecting"` until the next event). After three errors in a row, reload the session: a 404 (the project or the agent is gone) closes the stream for good (`connection: "closed"`, `error` set) and nothing retries; otherwise reopen;
+  3. on `resync`: close the stream, reload the session, reopen with the new `last_seq`. A reload always replaces the state (messages, `busy`, `lastSeq`) and never merges into it: a hub created again after a restart or `close_project` has no relation to the old seq;
+  4. on an error, branch on `readyState`:
+     - `CONNECTING`: the browser is retrying a dropped connection and will send `Last-Event-ID`; set `connection: "reconnecting"` and wait for the next event;
+     - `CLOSED`: the server refused the stream (EventSource does not retry after an HTTP error such as 404 or 401), so reload the session at once: a 404 (the project or the agent is gone) closes the stream for good (`connection: "closed"`, `error` set) and nothing retries; a 401 goes through the query cache's sign-in handling (I5); anything else reopens after a backoff (1 s, 2 s, 5 s, then every 10 s);
   5. close the stream when the component unmounts or the project or agent changes.
 - `send(text)`: `POST .../messages`; the message itself arrives through `message.created` (no optimistic copy, so two tabs and the sender see the same thing); errors are returned for the page to show. `stop()`: `POST .../stop`.
 
 **Tests (behaviors to verify):**
 - `applyEvent` on a recorded turn (user message, agent message created, tool started and finished, deltas, updated, ended) gives the same messages as the final `message.updated` and the same as `GET .../session` would after the turn; a replayed event (same seq) changes nothing; deltas after a tool result start a new text part; `busy` follows queued messages.
-- `useSession` with a fake `StreamLike` and a stubbed `fetch`: it opens the stream with `?after=<last_seq>` from the loaded session; events update `state`; `resync` closes the stream, reloads, and reopens with the new seq; three errors then a 404 on reload close it for good with the error set; unmounting closes the stream.
+- `parseEvent` accepts each of the seven shapes and returns null for malformed JSON or a wrong shape.
+- After a queued turn's `message.updated` (its user message now `complete`) and its `turn.ended`, `busy` is false.
+- `useSession` with a fake `StreamLike` and a stubbed `fetch`: it opens the stream with `?after=<last_seq>` from the loaded session; events update `state`; `resync` closes the stream, reloads, replaces the state and reopens with the new seq; an error with `readyState` `CONNECTING` shows "reconnecting" and makes no request; an error with `readyState` `CLOSED` reloads at once, and a 404 then closes it for good with the error set; another failure reopens after the backoff (fake timers); unmounting closes the stream.
 
 **Checks (from `frontend/`):** `npm run lint`, `npm run format:check`, `npm test`, `npm run build`.
 
@@ -91,7 +99,7 @@ Task 1 can be written as soon as frontend-foundation task 2 is on `main`: the ev
 
 **Tests (behaviors to verify)** (task 1's hook with a fake stream, `renderPage` at `/projects/prj_1/agents`):
 - A recorded turn renders the user message, a closed tool step for Read with the file path, and the markdown answer; opening the step shows the input and the result.
-- A message with a raw `<script>` or `<img onerror>` in its text renders as text, never as an element.
+- Model output is untrusted (the model reads repository files that may hold injected text): a message with a raw `<script>` or `<img onerror>` renders as text, never as an element, and `[x](javascript:alert(1))` renders no `javascript:` href (react-markdown's default `urlTransform`; the test keeps it that way).
 - Queued, stopped and interrupted marks; a system message renders as a notice.
 - Sending: Enter sends, Shift+Enter does not, empty text cannot be sent; while busy, "Stop" sends the stop request.
 - `model_problem` and a `missing` project status are shown with their links.
