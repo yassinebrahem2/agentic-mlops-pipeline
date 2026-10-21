@@ -14,7 +14,21 @@ body:
     id: branch
     attributes:
       label: Branch
-      description: The plan branch, plan/<topic>
+      description: The plan branch, plan/<stage>-<topic>
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      description: The one teammate who implements this plan's tasks (@login); also the issue's assignee
+    validations:
+      required: true
+  - type: input
+    id: reviewer
+    attributes:
+      label: Reviewer
+      description: The teammate who reviews each task PR before the lead (@login)
     validations:
       required: true
   - type: input
