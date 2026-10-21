@@ -46,6 +46,20 @@
         "title": "AddLocalProject",
         "type": "object"
       },
+      "AddProviderKey": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "AddProviderKey",
+        "type": "object"
+      },
       "AppInfo": {
         "properties": {
           "data_dir": {
@@ -111,6 +125,39 @@
           "path"
         ],
         "title": "BackupResult",
+        "type": "object"
+      },
+      "DetectedKey": {
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "env_var": {
+            "title": "Env Var",
+            "type": "string"
+          },
+          "hint": {
+            "title": "Hint",
+            "type": "string"
+          },
+          "provider_exists": {
+            "title": "Provider Exists",
+            "type": "boolean"
+          },
+          "provider_name": {
+            "title": "Provider Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "env_var",
+          "provider_name",
+          "base_url",
+          "hint",
+          "provider_exists"
+        ],
+        "title": "DetectedKey",
         "type": "object"
       },
       "FolderEntry": {
@@ -223,6 +270,139 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "KeyHint": {
+        "properties": {
+          "hint": {
+            "title": "Hint",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "position",
+          "hint"
+        ],
+        "title": "KeyHint",
+        "type": "object"
+      },
+      "ModelCreate": {
+        "properties": {
+          "context_window": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "wire_model_id": {
+            "minLength": 1,
+            "title": "Wire Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "wire_model_id"
+        ],
+        "title": "ModelCreate",
+        "type": "object"
+      },
+      "ModelEntry": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "untested",
+              "verified",
+              "needs_attention"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "availability_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Detail"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "provider_name": {
+            "title": "Provider Name",
+            "type": "string"
+          },
+          "streaming": {
+            "title": "Streaming",
+            "type": "boolean"
+          },
+          "tool_calling": {
+            "title": "Tool Calling",
+            "type": "boolean"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "wire_model_id": {
+            "title": "Wire Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "provider_id",
+          "provider_name",
+          "wire_model_id",
+          "context_window",
+          "tool_calling",
+          "streaming",
+          "availability",
+          "availability_detail",
+          "verified_at"
+        ],
+        "title": "ModelEntry",
         "type": "object"
       },
       "PasswordSignIn": {
@@ -341,6 +521,96 @@
         "title": "Project",
         "type": "object"
       },
+      "Provider": {
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/KeyHint"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "hosted",
+              "self_hosted"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "needs_attention"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Detail"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "base_url",
+          "status",
+          "status_detail",
+          "keys"
+        ],
+        "title": "Provider",
+        "type": "object"
+      },
+      "ProviderCreate": {
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "hosted",
+              "self_hosted"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase letters, digits and dashes; used in model addresses.",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "base_url"
+        ],
+        "title": "ProviderCreate",
+        "type": "object"
+      },
       "RelinkProject": {
         "additionalProperties": false,
         "properties": {
@@ -353,6 +623,31 @@
           "path"
         ],
         "title": "RelinkProject",
+        "type": "object"
+      },
+      "RemoteModel": {
+        "properties": {
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "context_window"
+        ],
+        "title": "RemoteModel",
         "type": "object"
       },
       "RepoSummary": {
@@ -388,6 +683,26 @@
           "description"
         ],
         "title": "RepoSummary",
+        "type": "object"
+      },
+      "SetContextWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "value": {
+            "exclusiveMinimum": 0.0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address",
+          "value"
+        ],
+        "title": "SetContextWindow",
         "type": "object"
       },
       "SetGitHubToken": {
@@ -455,6 +770,20 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyModel": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "VerifyModel",
         "type": "object"
       }
     }
@@ -632,6 +961,73 @@
         ]
       }
     },
+    "/api/env-keys": {
+      "get": {
+        "operationId": "list_env_keys_api_env_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DetectedKey"
+                  },
+                  "title": "Response List Env Keys Api Env Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Env Keys",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/env-keys/{env_var}/import": {
+      "post": {
+        "operationId": "import_env_key_api_env_keys__env_var__import_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env_var",
+            "required": true,
+            "schema": {
+              "title": "Env Var",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Env Key",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
     "/api/folders": {
       "get": {
         "operationId": "browse_folders_api_folders_get",
@@ -798,6 +1194,185 @@
         "summary": "Set Token",
         "tags": [
           "github"
+        ]
+      }
+    },
+    "/api/models": {
+      "delete": {
+        "operationId": "delete_model_api_models_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address",
+            "required": true,
+            "schema": {
+              "title": "Address",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Model",
+        "tags": [
+          "models"
+        ]
+      },
+      "get": {
+        "operationId": "list_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelEntry"
+                  },
+                  "title": "Response List Models Api Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "post": {
+        "operationId": "add_model_api_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/models/context-window": {
+      "put": {
+        "operationId": "set_context_window_api_models_context_window_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetContextWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Context Window",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/models/verify": {
+      "post": {
+        "operationId": "verify_model_api_models_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Model",
+        "tags": [
+          "models"
         ]
       }
     },
@@ -1088,6 +1663,254 @@
         "summary": "Relink Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "operationId": "list_providers_api_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Provider"
+                  },
+                  "title": "Response List Providers Api Providers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Providers",
+        "tags": [
+          "providers"
+        ]
+      },
+      "post": {
+        "operationId": "create_provider_api_providers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Provider",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}": {
+      "delete": {
+        "operationId": "delete_provider_api_providers__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Provider",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/keys": {
+      "post": {
+        "operationId": "add_provider_key_api_providers__name__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddProviderKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Provider Key",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/keys/{position}": {
+      "delete": {
+        "operationId": "remove_provider_key_api_providers__name__keys__position__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "position",
+            "required": true,
+            "schema": {
+              "title": "Position",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Provider Key",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/remote-models": {
+      "get": {
+        "operationId": "list_remote_models_api_providers__name__remote_models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RemoteModel"
+                  },
+                  "title": "Response List Remote Models Api Providers  Name  Remote Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Remote Models",
+        "tags": [
+          "providers"
         ]
       }
     }
