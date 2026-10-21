@@ -198,7 +198,10 @@ class ProvidersService:
             try:
                 await asyncio.to_thread(self._keys.delete, ref)
             except Exception as del_err:
-                raise db_err from del_err
+                # The database error is still the one to report; the failed clean-up rides along.
+                db_err.add_note(
+                    f"The new key could not be removed from the key store either: {del_err}"
+                )
             raise
         return await self.get_provider(name)
 

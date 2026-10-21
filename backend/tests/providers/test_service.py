@@ -252,4 +252,7 @@ async def test_add_key_chains_keystore_delete_failure(
     with pytest.raises(DbError) as err:
         await svc.add_key("groq", GOOD)
 
-    assert isinstance(err.value.__cause__, KeystoreDeleteError)
+    assert err.value.__cause__ is None
+    assert err.value.__notes__ == [
+        "The new key could not be removed from the key store either: keystore locked"
+    ]
