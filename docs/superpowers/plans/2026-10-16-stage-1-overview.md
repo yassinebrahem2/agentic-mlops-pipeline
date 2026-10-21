@@ -109,7 +109,7 @@ class AgentSettingsService:
 `resolve` returns the model and `max_steps` for a turn. It raises `DomainError` (409) with a message saying what to choose when no model is assigned, the model no longer exists, or it lacks verified `tool_calling`, `streaming` or a context window.
 
 **I3. API skeleton** (api-foundation, task 1):
-- `mlops_agents/api/app.py`: `create_app(settings: Settings) -> FastAPI`; its lifespan builds the services and closes them.
+- `mlops_agents/api/app.py`: `create_app(settings: Settings, *, keystore: KeyStore | None = None, gh: GhLike | None = None) -> FastAPI` (the keyword arguments are for tests). Its lifespan builds the services inside one `AsyncExitStack`: a service registers its own startup work and cleanup where it is built.
 - `mlops_agents/api/services.py`: `@dataclass class Services` with `settings`, `paths`, `databases`, `keystore`, `providers: ProvidersService`, `github: GitHubAuth`, `workspace: WorkspaceService`, `catalog: AgentCatalog`, `tools: ToolRegistry`. api-resources adds `agent_settings: AgentSettingsService` and api-sessions adds `sessions: AgentSessions`, each as one field and one line in the builder.
 - `mlops_agents/api/deps.py`: `ServicesDep = Annotated[Services, Depends(get_services)]`; `ProjectDep`, the `Project` named by the `project_id` path parameter (404 if unknown).
 - Routers are discovered: every module in `mlops_agents/api/routers/` that defines `router: APIRouter` is included under `/api`. Adding a router is adding a file; nobody edits a list.
@@ -118,7 +118,7 @@ class AgentSettingsService:
 - `backend/tests/api/conftest.py` provides `client`: an async HTTP client (`get`, `post`, `put`, `delete` returning responses with `status_code` and `json()`) calling `create_app` in process with a temporary data folder, signed in, sending the CSRF header. Every router's tests use it; nobody adds another signed-in setup.
 - `frontend/openapi.json` is exported by `uv run python -m mlops_agents.api.openapi_export` and checked in CI. After a merge it is regenerated, never merged by hand.
 
-**I4. Sign-in** (api-foundation, the login task): `GET /api/auth/status` → `{"mode": "local" | "server", "signed_in": bool}`; `POST /api/auth/token` `{"token"}` (local mode); `POST /api/auth/login` `{"password"}` (server mode); `POST /api/auth/logout`. A signed-in browser holds an HttpOnly session cookie; state-changing requests send the value of the `csrf_token` cookie in an `X-CSRF-Token` header.
+**I4. Sign-in** (api-foundation, the login task): `GET /api/auth/status` → `{"mode": "local" | "server", "signed_in": bool}`; `POST /api/auth/token` `{"token"}` (local mode); `POST /api/auth/login` `{"password"}` (server mode); `POST /api/auth/logout`. In local mode the app opens `http://127.0.0.1:<port>/#token=<token>` (`http://localhost:5173/#token=<token>` with `start --dev`); the UI posts that token to `/api/auth/token` and removes it from the address bar. A signed-in browser holds an HttpOnly session cookie; state-changing requests send the value of the `csrf_token` cookie in an `X-CSRF-Token` header.
 
 **I5. Frontend foundation** (frontend-foundation, task 1):
 - `frontend/src/lib/api.ts`: `api`, an `openapi-fetch` client typed from `frontend/src/api/schema.d.ts` (generated from `openapi.json` by `npm run gen:api`) that sends the CSRF header; `ApiError` with `code`, `message`, `detail`; `errorText(error: unknown): string`.
