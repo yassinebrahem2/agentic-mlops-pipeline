@@ -130,6 +130,7 @@ Four types, each with its template and label. Blank issues are disabled.
 - Inline lint suppressions only at a third-party boundary, naming the rule and the reason; test-only exceptions go in the linter's per-file config.
 - Test-first for logic: write the failing test, then the code. Test at the cheapest level that proves the behavior.
 - Before saying a task is done, run the tests and checks and report their real output.
+- Never repeat yourself: every rule, type, message and constant has one source, which everything else uses (across backend and frontend too: generate or serve it, never copy it). Separation of concerns: each module, class and function owns one concern; a component that needs another concern calls its owner.
 - Small focused files; a file past about 400 lines is doing too much. Comments explain why, not what. No commented-out or dead code.
 - Match the surrounding code's naming and idioms.
 
