@@ -89,7 +89,7 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 - Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
 
 ### How plans are written
-- One spec per stage. The lead splits the stage into plans of 2 to 5 tasks each; each plan gets one owner, who claims it. Each task is one PR, small enough to review in one sitting.
+- One spec per stage. The lead splits the stage into plans of at most 5 tasks each; each plan gets one owner, who claims it. Each task is one PR, small enough to review in one sitting.
 - A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with branch, Consumes and Produces. Each plan links to it instead of repeating it.
 - Plans depend on interfaces, not on whole plans. A plan's first tasks produce what other plans consume, so those interfaces reach `main` early; a task can start as soon as everything it consumes is on `main`, and its issue says which interfaces those are. Plans whose interfaces are on `main` run in parallel.
 - Files that several plans edit (routers, service registries, the frontend route table) are set up once so that each plan only adds its own lines or its own file, never edits someone else's.

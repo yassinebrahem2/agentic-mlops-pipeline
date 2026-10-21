@@ -32,7 +32,7 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | frontend-chat | `plan/stage-1-frontend-chat` | Agents page: Orchestrator session, streamed answers, collapsible tool steps, queued messages, Stop, interrupted turns, reconnect | I5, I7 | coding: after frontend-foundation's client task (I7's shapes are fixed here); merging: after I7 is on `main` | To write |
 | packaging | `plan/stage-1-packaging` | `scripts/build.py`, wheel contents check, install check on Windows and Linux in CI; last, the end-to-end Playwright test with the fake provider | the end-to-end task: every plan above | now | To write |
 
-The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, 2 to 5 tasks, one PR per task.
+The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, at most 5 tasks, one PR per task.
 
 ## Interfaces between plans
 
