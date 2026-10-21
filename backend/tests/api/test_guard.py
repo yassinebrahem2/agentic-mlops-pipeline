@@ -228,4 +228,8 @@ async def test_project_dep_answers_404_for_unknown_or_invalid_ids(
     response = await client.get(f"/api/test/projects/{project_id}")
 
     assert response.status_code == 404
-    assert response.json()["code"] == "project_not_found"
+    assert response.json() == {
+        "code": "project_not_found",
+        "message": "This project does not exist.",
+        "detail": None,
+    }

@@ -1,8 +1,10 @@
 import logging
+from collections.abc import AsyncIterator
 
 import httpx2
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from mlops_agents.credentials import KeyStoreError
@@ -139,3 +141,22 @@ async def test_unexpected_error_log_scrubs_secrets_in_urls(
 
     assert response.status_code == 500
     assert not [r for r in caplog.records if "sk-test-123" in r.getMessage()]
+
+
+async def test_error_after_a_stream_started_ends_the_response_without_a_second_start(
+    app: FastAPI, client: httpx2.AsyncClient
+) -> None:
+    async def stream() -> StreamingResponse:
+        async def chunks() -> AsyncIterator[bytes]:
+            yield b"first\n"
+            raise RuntimeError("broken mid-stream")
+
+        return StreamingResponse(chunks(), media_type="text/plain")
+
+    app.add_api_route("/api/test/broken-stream", stream)
+
+    # ASGITransport raises on a second response start or a re-raised exception.
+    response = await client.get("/api/test/broken-stream")
+
+    assert response.status_code == 200
+    assert response.content == b"first\n"
