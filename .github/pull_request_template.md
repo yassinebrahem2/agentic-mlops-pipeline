@@ -8,5 +8,4 @@
 ## Not done, or done differently from the plan
 <!-- Everything, explicitly. Write "Nothing" if nothing. -->
 
-Closes #<plan issue>
-Closes #<task issue> (one line per task this PR completes)
+Closes #<issue> (an early PR: its task issue; the plan PR: the plan issue)
