@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import pkgutil
+import secrets
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from types import ModuleType
@@ -13,6 +14,8 @@ from fastapi import APIRouter, FastAPI
 
 from mlops_agents.api import routers
 from mlops_agents.api.errors import InternalErrors, register_error_handlers
+from mlops_agents.api.hosts import HostCheck, HostRules
+from mlops_agents.api.routers.auth import LoginLimiter, PasswordHash
 from mlops_agents.api.security import SessionGuard, SessionSigner, load_secret
 from mlops_agents.api.services import build_services
 from mlops_agents.config import APP_NAME, Settings
@@ -31,17 +34,25 @@ def create_app(
             services = await build_services(stack, settings, keystore=keystore, gh=gh)
             app.state.services = services
             app.state.signer = SessionSigner(await asyncio.to_thread(load_secret, services.paths))
+            if settings.password is not None:
+                app.state.password_hash = await PasswordHash.of(settings.password)
             yield
 
     app = FastAPI(
         title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
     )
+    # Each start has a new token unless the settings give one; the CLI prints it in the URL.
+    app.state.access_token = settings.access_token or secrets.token_urlsafe(32)
+    app.state.host_rules = rules = HostRules(settings)
+    app.state.login_limiter = LoginLimiter()
     register_error_handlers(app)
     include_routers(app, routers)
-    # The last middleware added is the outermost: the guard runs first, and the catch-all
-    # 500 sits innermost around the routers.
-    app.add_middleware(InternalErrors)
+    # The last middleware added is the outermost. The catch-all 500 wraps everything of ours,
+    # so an error in a check is the JSON 500 too; a bad Host or Origin is refused before the
+    # session is looked at.
     app.add_middleware(SessionGuard)
+    app.add_middleware(HostCheck, rules=rules)
+    app.add_middleware(InternalErrors)
     return app
 
 
