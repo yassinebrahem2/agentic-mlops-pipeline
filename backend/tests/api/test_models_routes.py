@@ -82,12 +82,14 @@ async def test_models_crud_verification_and_context_window(
         json={"address": "fake:fake-tools", "value": 0},
     )
     assert res.status_code == 422
+    assert res.json()["code"] == "invalid_context_window"
 
     res = await client.put(
         "/api/models/context-window",
         json={"address": "fake:fake-tools", "value": -100},
     )
     assert res.status_code == 422
+    assert res.json()["code"] == "invalid_context_window"
 
     # 5. Add model with wire id containing '/' (slashes)
     res = await client.post(

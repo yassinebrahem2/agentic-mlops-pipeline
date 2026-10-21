@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from mlops_agents.api.deps import ServicesDep
 from mlops_agents.providers.models import ModelCreate, ModelEntry
@@ -21,7 +21,7 @@ class VerifyModel(BaseModel):
 class SetContextWindow(BaseModel):
     model_config = ConfigDict(extra="forbid")
     address: str
-    value: int = Field(gt=0)
+    value: int
 
 
 @router.get("/models", response_model=list[ModelEntry])

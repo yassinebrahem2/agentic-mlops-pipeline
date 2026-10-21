@@ -693,7 +693,6 @@
             "type": "string"
           },
           "value": {
-            "exclusiveMinimum": 0.0,
             "title": "Value",
             "type": "integer"
           }
