@@ -1,6 +1,6 @@
 # Stage 1 — Frontend Chat Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. Each task is one PR into `main` (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works.
 
 **Goal:** The Agents page: a project's session with the Orchestrator (and any other chat agent), streamed answers, collapsible tool steps, queued messages, Stop, stopped and interrupted turns marked, failure notices, and a view that stays right across two tabs and reconnects.
 

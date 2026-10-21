@@ -33,7 +33,7 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | packaging | `plan/stage-1-packaging` | `scripts/build_wheel.py`, wheel contents check, install check on Windows and Linux in CI | api-foundation task 4 for the install check | now | Ready: plan issue open |
 | e2e | `plan/stage-1-e2e` | The Playwright test of the stage 1 flow below, through the installed app and the fake provider | every plan above | after frontend-workspace, frontend-providers and frontend-chat | Ready: plan issue open |
 
-The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, at most 5 tasks, one PR per task.
+The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, at most 5 tasks, one PR per plan plus early PRs for tasks other plans consume (named in the task issues).
 
 ## Known stage 1 limitations
 
