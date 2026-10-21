@@ -37,8 +37,11 @@ def _regular_files(ls_files_stage: str) -> list[str]:
     return paths
 
 
-def _norm(rel: str) -> str:
+def norm_path(rel: str) -> str:
     return rel.casefold() if os.name == "nt" else rel
+
+
+_norm = norm_path
 
 
 class RepoFiles:

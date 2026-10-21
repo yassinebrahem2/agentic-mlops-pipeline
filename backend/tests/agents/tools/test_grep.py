@@ -141,3 +141,46 @@ async def test_files_over_the_size_limit_are_named_in_a_note(
     lines = out.content.splitlines()
     assert lines[0] == "small.csv"
     assert lines[-1].startswith("[Skipped 1 files larger than")
+
+
+@pytest.mark.skipif(RG is None, reason="rg is not installed")
+async def test_single_file_grep_does_not_pass_repo_root_to_rg(
+    ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await ctx.files.tracked()
+    captured_commands: list[list[str]] = []
+    original_run = subprocess.run
+
+    def spy_run(
+        cmd: list[str],
+        cwd: Path | str | None = None,
+        capture_output: bool = False,
+        timeout: float | None = None,
+        check: bool = False,
+    ) -> subprocess.CompletedProcess[bytes]:
+        captured_commands.append(cmd)
+        return original_run(
+            cmd, cwd=cwd, capture_output=capture_output, timeout=timeout, check=check
+        )
+
+    monkeypatch.setattr(subprocess, "run", spy_run)
+    out = await GrepTool(RG).invoke(ctx, {"pattern": "def train", "path": "src/app.py"})
+    assert not out.is_error
+    assert len(captured_commands) == 1
+    cmd = captured_commands[0]
+    target_arg = cmd[cmd.index("--") + 1]
+    assert target_arg != str(ctx.files.root)
+    assert target_arg.replace("\\", "/").endswith("src/app.py")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows case-insensitivity test")
+@pytest.mark.skipif(RG is None, reason="rg is not installed")
+async def test_ripgrep_reports_canonical_case_when_disk_case_differs(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    root = make_repo(tmp_path / "repo", {"src/App.py": "needle_in_app\n"}, git_env)
+    (root / "src" / "App.py").rename(root / "src" / "app.py")
+    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    assert await ctx.files.tracked() == ["src/App.py"]
+    out = await GrepTool(RG).invoke(ctx, {"pattern": "needle_in_app"})
+    assert out.content.splitlines() == ["src/App.py"]

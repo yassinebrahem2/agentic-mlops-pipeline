@@ -17,6 +17,7 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+from mlops_agents.agents.tools.files import norm_path
 from mlops_agents.agents.tools.glob import glob_to_regex
 
 MAX_FILE_BYTES = 5_000_000
@@ -155,7 +156,7 @@ class _RgEvent(BaseModel):
 
 
 def _search_rg(
-    rg: str, root: Path, prefix: str, allowed: set[str], args: GrepArgs, before: int, after: int
+    rg: str, root: Path, prefix: str, files: list[str], args: GrepArgs, before: int, after: int
 ) -> SearchResult:
     # rg searches the folder and its own ignore rules apply; results are then limited to the
     # files the agent may see. Tracked files that .gitignore also lists are not searched by rg.
@@ -184,18 +185,20 @@ def _search_rg(
         if "regex" in message.lower():
             raise ToolFailure(f"Invalid regular expression: {message}")
         raise ToolFailure(f"The search failed: {message}")
-    result = SearchResult(skipped=sum(1 for rel in allowed if _too_large(root / rel)))
+    lookup = {norm_path(rel): rel for rel in files}
+    result = SearchResult(skipped=sum(1 for rel in files if _too_large(root / rel)))
     for raw in completed.stdout.splitlines():
         event = _RgEvent.model_validate_json(raw)
         if event.type not in ("match", "context"):
             continue
         data = _RgLine.model_validate(event.data)
         rel = Path(data.path.decoded()).relative_to(root).as_posix()
-        if rel not in allowed or data.line_number is None:
+        canonical = lookup.get(norm_path(rel))
+        if canonical is None or data.line_number is None:
             continue
         for k, part in enumerate(data.lines.decoded().rstrip("\r\n").split("\n")):
             hit = Hit(data.line_number + k, part.rstrip("\r"), event.type == "match")
-            result.hits.setdefault(rel, []).append(hit)
+            result.hits.setdefault(canonical, []).append(hit)
     return result
 
 
@@ -249,7 +252,8 @@ class GrepTool(AgentTool[GrepArgs]):
 
     async def _candidates(self, ctx: ToolContext, args: GrepArgs) -> tuple[str, list[str]]:
         if args.path and await asyncio.to_thread((ctx.files.root / args.path).is_file):
-            return "", [await ctx.files.resolve_file(args.path)]
+            single = await ctx.files.resolve_file(args.path)
+            return single, [single]
         prefix = await ctx.files.resolve_dir(args.path)
         files = await ctx.files.under(prefix)
         if args.glob:
@@ -270,13 +274,15 @@ class GrepTool(AgentTool[GrepArgs]):
 
     async def run(self, ctx: ToolContext, args: GrepArgs) -> ToolOutput:
         prefix, files = await self._candidates(ctx, args)
+        if not files:
+            return ToolOutput(_format(SearchResult(), args))
         before = args.before if args.before is not None else (args.context or 0)
         after = args.after if args.after is not None else (args.context or 0)
         if self._rg is not None:
-            search_prefix = prefix if not args.path or prefix else ""
             result = await asyncio.to_thread(
-                _search_rg, self._rg, ctx.files.root, search_prefix, set(files), args, before, after
+                _search_rg, self._rg, ctx.files.root, prefix, files, args, before, after
             )
+
         else:
             flags = re.IGNORECASE if args.case_insensitive else 0
             if args.multiline:
