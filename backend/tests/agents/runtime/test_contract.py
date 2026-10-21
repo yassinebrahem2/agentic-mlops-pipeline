@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -267,3 +268,15 @@ class DummySessions:
 def test_agent_sessions_protocol() -> None:
     sessions: AgentSessions = DummySessions()
     assert sessions is not None
+
+
+def test_the_shared_fold_fixture_matches_the_contract() -> None:
+    # shared/fixtures/session-fold.json is read by the hub's and the frontend's fold tests; it
+    # must only hold events and messages I1 accepts.
+    path = Path(__file__).parents[4] / "shared" / "fixtures" / "session-fold.json"
+    doc = json.loads(path.read_text("utf-8"))
+    for event in doc["events"]:
+        STREAM_EVENT.validate_python(event)
+    for state in [doc["end"], *doc["after_event"].values()]:
+        for message in state["messages"]:
+            MessageView.model_validate(message)
