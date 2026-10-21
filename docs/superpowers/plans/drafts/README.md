@@ -14,20 +14,8 @@ No stage 1 draft is waiting: providers, github-workspace and agent-tools left th
 
 ### Not written yet
 
-agent-runtime, api, frontend-app and packaging have no draft. The overview gives what each one covers. When the original single stage 1 plan was split, it held this task outline for them. It is a starting point, not a decision:
+The remaining stage 1 plans and the interfaces between them are listed in the stage overview (`2026-10-16-stage-1-overview.md`, Plans and Interfaces between plans).
 
-| Plan | Tasks from the original outline |
-|---|---|
-| agent-runtime | Agent settings and model assignment (an app-level default or a project override that names a model that no longer exists shows the spec's "choose another model" message: `agent_model_defaults` has no foreign key, and deleting a model or provider leaves its rows). Message store, context, compaction. Model caller, LangGraph loop, turn executor. Stream hub and session manager (queue, Stop, recovery). |
-| api | API foundation, login for both run modes, CLI. Projects and app info. Providers, models, agents. GitHub. Sessions and SSE. Committed OpenAPI contract. |
-| frontend-app | Frontend foundation (API client from the contract, app shell, router). Projects and Add project. AI providers. Integrations and app Settings. Agents chat. Project Settings. |
-| packaging | Build script, wheel contents check, end-to-end test with the fake provider, install check on Windows and Linux. |
-
-Decided in review of the stage 1 PRs, for the api plan:
+Decided in review of the stage 1 PRs, for the api-foundation plan:
 - One app-wide exception handler maps `KeyStoreError` to a 503 with its message, which is already written for users. Individual services do not wrap key-store calls.
 - The app owns one HTTP client library. Providers use `httpx2`, the openai SDK's client; `integrations/github/api.py` still uses `httpx`. Move it to `httpx2` so the lifespan creates one client type for both.
-
-Files that several api and frontend-app tasks edit:
-- `api/services.py` and `api/app.py`: each router adds its service and router.
-- `frontend/openapi.json`: regenerated after each API change.
-- `frontend/src/app/router.tsx`: each page adds its route.
