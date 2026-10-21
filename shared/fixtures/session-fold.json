@@ -2,7 +2,7 @@
   "_about": "One turn's stream events and the session state they fold to. The single source for the runtime hub's fold test and the frontend's applyEvent test (#89).",
   "start": {
     "messages": [],
-    "busy": true,
+    "busy": false,
     "last_seq": 100
   },
   "events": [
@@ -12,7 +12,7 @@
       "data": {
         "message": {
           "id": "msg_u1",
-          "turn_id": "trn_1",
+          "turn_id": null,
           "author_kind": "user",
           "author_name": "user",
           "from_agent": null,
@@ -131,7 +131,7 @@
       "messages": [
         {
           "id": "msg_u1",
-          "turn_id": "trn_1",
+          "turn_id": null,
           "author_kind": "user",
           "author_name": "user",
           "from_agent": null,
@@ -182,7 +182,7 @@
     "messages": [
       {
         "id": "msg_u1",
-        "turn_id": "trn_1",
+        "turn_id": null,
         "author_kind": "user",
         "author_name": "user",
         "from_agent": null,
