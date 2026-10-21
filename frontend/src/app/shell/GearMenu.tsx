@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,10 +9,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useAuth } from "../auth/useAuth";
 import type { PageRoute } from "../routes";
 
 export function GearMenu({ appRoutes }: { appRoutes: PageRoute[] }) {
   const navRoutes = appRoutes.filter((r) => r.nav !== undefined);
+  const auth = useAuth();
 
   return (
     <DropdownMenu>
@@ -36,6 +38,16 @@ export function GearMenu({ appRoutes }: { appRoutes: PageRoute[] }) {
             </DropdownMenuItem>
           );
         })}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => {
+            void auth.signOut();
+          }}
+          className="flex items-center gap-2 cursor-pointer"
+        >
+          <LogOut className="size-4 shrink-0" />
+          <span>Sign out</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

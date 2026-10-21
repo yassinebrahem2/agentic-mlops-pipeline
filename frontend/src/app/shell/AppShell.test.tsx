@@ -25,7 +25,9 @@ const fakeProjectsNewRoute: PageRoute = {
 const testRoutes: PageRoute[] = [fakeAppRoute, fakeProjectRoute, fakeProjectsNewRoute];
 
 function renderWithRouter(routes: PageRoute[], initialEntries: string[]) {
-  const router = buildRouter(routes, (tree) => createMemoryRouter(tree, { initialEntries }));
+  const router = buildRouter(routes, (tree) => createMemoryRouter(tree, { initialEntries }), {
+    skipAuthGate: true,
+  });
   return render(<RouterProvider router={router} />);
 }
 
