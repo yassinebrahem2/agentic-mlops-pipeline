@@ -177,6 +177,41 @@
         "title": "FolderListing",
         "type": "object"
       },
+      "GitHubStatus": {
+        "properties": {
+          "gh_available": {
+            "title": "Gh Available",
+            "type": "boolean"
+          },
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login"
+          },
+          "mode": {
+            "enum": [
+              "none",
+              "gh",
+              "token"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "login",
+          "gh_available"
+        ],
+        "title": "GitHubStatus",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -318,6 +353,55 @@
           "path"
         ],
         "title": "RelinkProject",
+        "type": "object"
+      },
+      "RepoSummary": {
+        "properties": {
+          "default_branch": {
+            "title": "Default Branch",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "private": {
+            "title": "Private",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full_name",
+          "private",
+          "default_branch",
+          "description"
+        ],
+        "title": "RepoSummary",
+        "type": "object"
+      },
+      "SetGitHubToken": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "SetGitHubToken",
         "type": "object"
       },
       "TokenSignIn": {
@@ -594,6 +678,126 @@
         "summary": "Browse Folders",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/github": {
+      "delete": {
+        "operationId": "disconnect_github_api_github_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Disconnect Github",
+        "tags": [
+          "github"
+        ]
+      },
+      "get": {
+        "operationId": "get_github_api_github_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Github",
+        "tags": [
+          "github"
+        ]
+      }
+    },
+    "/api/github/gh": {
+      "post": {
+        "operationId": "enable_gh_api_github_gh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Enable Gh",
+        "tags": [
+          "github"
+        ]
+      }
+    },
+    "/api/github/repos": {
+      "get": {
+        "operationId": "list_repos_api_github_repos_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RepoSummary"
+                  },
+                  "title": "Response List Repos Api Github Repos Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Repos",
+        "tags": [
+          "github"
+        ]
+      }
+    },
+    "/api/github/token": {
+      "post": {
+        "operationId": "set_token_api_github_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGitHubToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Token",
+        "tags": [
+          "github"
         ]
       }
     },
