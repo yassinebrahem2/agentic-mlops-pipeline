@@ -36,6 +36,101 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "MessageView": {
+        "properties": {
+          "author_kind": {
+            "enum": [
+              "user",
+              "agent",
+              "system"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Agent"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "text": "#/components/schemas/TextPart",
+                  "tool_call": "#/components/schemas/ToolCallPart",
+                  "tool_result": "#/components/schemas/ToolResultPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ToolCallPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ToolResultPart"
+                }
+              ]
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "streaming",
+              "queued",
+              "stopped",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "id",
+          "turn_id",
+          "author_kind",
+          "author_name",
+          "from_agent",
+          "parts",
+          "status",
+          "created_at"
+        ],
+        "title": "MessageView",
+        "type": "object"
+      },
       "PasswordSignIn": {
         "properties": {
           "password": {
@@ -49,6 +144,76 @@
         "title": "PasswordSignIn",
         "type": "object"
       },
+      "SendMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SendMessage",
+        "type": "object"
+      },
+      "SessionView": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageView"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "busy",
+          "messages",
+          "last_seq"
+        ],
+        "title": "SessionView",
+        "type": "object"
+      },
+      "TextPart": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "TextPart",
+        "type": "object"
+      },
       "TokenSignIn": {
         "properties": {
           "token": {
@@ -60,6 +225,65 @@
           "token"
         ],
         "title": "TokenSignIn",
+        "type": "object"
+      },
+      "ToolCallPart": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_call",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "name",
+          "input"
+        ],
+        "title": "ToolCallPart",
+        "type": "object"
+      },
+      "ToolResultPart": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_result",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "tool_call_id",
+          "content",
+          "is_error"
+        ],
+        "title": "ToolResultPart",
         "type": "object"
       },
       "ValidationError": {
@@ -232,6 +456,241 @@
         "summary": "Sign In With Token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session": {
+      "get": {
+        "operationId": "get_session_api_projects__project_id__agents__agent__session_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/messages": {
+      "post": {
+        "operationId": "send_message_api_projects__project_id__agents__agent__session_messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Message",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/stop": {
+      "post": {
+        "operationId": "stop_session_api_projects__project_id__agents__agent__session_stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/stream": {
+      "get": {
+        "operationId": "stream_session_api_projects__project_id__agents__agent__session_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Stream of session events"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Session",
+        "tags": [
+          "sessions"
         ]
       }
     }
