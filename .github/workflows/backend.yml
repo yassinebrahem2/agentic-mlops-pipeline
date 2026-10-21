@@ -37,4 +37,4 @@ jobs:
       - run: uv run ruff format --check ../scripts
       - run: uv run pyright
       - run: uv run pytest
-
+      - run: uv run python -m mlops_agents.api.openapi_export --check
