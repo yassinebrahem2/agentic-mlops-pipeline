@@ -30,9 +30,21 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | frontend-workspace | `plan/stage-1-frontend-workspace` | Projects, the project switcher in the shell's sidebar, Add project (local folder browser, GitHub URL or repo picker), project Settings (repo info, refresh, relink, model override, limits) | I5, I6 | after frontend-foundation's client task and the I6 routes it uses | To write |
 | frontend-providers | `plan/stage-1-frontend-providers` | AI providers (keys, detect keys, models, verify, default model per agent), Integrations (GitHub), app Settings | I5, I6 | after frontend-foundation's client task and the I6 routes it uses | To write |
 | frontend-chat | `plan/stage-1-frontend-chat` | Agents page: Orchestrator session, streamed answers, collapsible tool steps, queued messages, Stop, interrupted turns, reconnect | I5, I7 | coding: after frontend-foundation's client task (I7's shapes are fixed here); merging: after I7 is on `main` | To write |
-| packaging | `plan/stage-1-packaging` | `scripts/build.py`, wheel contents check, install check on Windows and Linux in CI; last, the end-to-end Playwright test with the fake provider | the end-to-end task: every plan above | now | To write |
+| packaging | `plan/stage-1-packaging` | `scripts/build_wheel.py`, wheel contents check, install check on Windows and Linux in CI | api-foundation task 4 for the install check | now | To write |
+| e2e | `plan/stage-1-e2e` | The Playwright test of the stage 1 flow below, through the installed app and the fake provider | every plan above | after frontend-workspace, frontend-providers and frontend-chat | To write |
 
 The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, at most 5 tasks, one PR per task.
+
+## Stage 1 end-to-end flow
+
+The page plans must make this flow possible through the UI alone; the e2e plan tests it with Playwright, using visible labels (no test ids):
+1. open `/#token=<token>`: the shell appears and the address bar has no token;
+2. AI providers: add a self-hosted provider with the fake server's base URL; add the model `fake-tools`; verify it (verified, tool calling and streaming); make it the Orchestrator's default model;
+3. Add project: a local folder holding a small committed git repository; the project opens;
+4. Agents: ask "What does the README say?"; a Read tool step on `README.md` appears and expands; the answer streams in and contains the README's first line;
+5. reload: the conversation is still there, tool step included.
+
+Notes for the e2e plan: the fake server gets a `__main__` entry (`cd backend && uv run python -m tests.fakes.fake_openai --port N`); `frontend/e2e/*.ts` and `playwright.config.ts` must be in a tsconfig, or ESLint's type-aware lint fails; CI installs browsers with `npx playwright install --with-deps chromium`.
 
 ## Interfaces between plans
 
