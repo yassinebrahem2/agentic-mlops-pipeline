@@ -1,6 +1,3 @@
-from types import ModuleType
-
-import httpx
 import httpx2
 import pytest
 
@@ -58,10 +55,9 @@ def test_mask_key() -> None:
     assert mask_key("short") == "••••"
 
 
-@pytest.mark.parametrize("module", [httpx, httpx2])
-def test_error_text_withholds_url_parse_errors(module: ModuleType) -> None:
+def test_error_text_withholds_url_parse_errors() -> None:
     try:
-        module.Request("GET", "http://host:gsk_secret_value/v1")
+        httpx2.Request("GET", "http://host:gsk_secret_value/v1")
     except Exception as exc:
         assert "gsk_secret_value" not in error_text(exc)
         assert "withheld" in error_text(exc)

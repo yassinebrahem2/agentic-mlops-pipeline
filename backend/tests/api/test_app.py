@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import httpx
 import httpx2
 import pytest
 from fastapi import FastAPI
@@ -18,19 +17,13 @@ from tests.conftest import MemoryKeyStore
 async def test_lifespan_starts_and_stops_on_a_temporary_data_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    opened: list[httpx.AsyncClient | httpx2.AsyncClient] = []
-
-    class RecordedHttpx(httpx.AsyncClient):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            opened.append(self)
+    opened: list[httpx2.AsyncClient] = []
 
     class RecordedHttpx2(httpx2.AsyncClient):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             opened.append(self)
 
-    monkeypatch.setattr(httpx, "AsyncClient", RecordedHttpx)
     monkeypatch.setattr(httpx2, "AsyncClient", RecordedHttpx2)
     data = tmp_path / "data"
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(data)})
@@ -41,7 +34,14 @@ async def test_lifespan_starts_and_stops_on_a_temporary_data_folder(
         assert (data / "app.db").exists()
         assert services.paths.root == data
         assert services.catalog.all()
-        assert len(opened) == 2
+        assert len(opened) == 1
+        # The services keep the client privately; vars() reads it without a private-access
+        # suppression, and identity is what proves they share one client.
+        shared = [
+            vars(service)["_http"]
+            for service in (services.providers, services.github, services.workspace)
+        ]
+        assert all(client is opened[0] for client in shared)
         assert not any(client.is_closed for client in opened)
 
     assert all(client.is_closed for client in opened)

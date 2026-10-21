@@ -1,16 +1,16 @@
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import get_login, get_repo, list_repos
 
 
-def _client() -> httpx.AsyncClient:
-    def handler(request: httpx.Request) -> httpx.Response:
+def _client() -> httpx2.AsyncClient:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.headers.get("authorization") != "Bearer good":
-            return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx2.Response(401, json={"message": "Bad credentials"})
         if request.url.path == "/user":
-            return httpx.Response(200, json={"login": "octo"})
+            return httpx2.Response(200, json={"login": "octo"})
         if request.url.path == "/user/repos":
             page = int(request.url.params["page"])
             items = [
@@ -22,9 +22,9 @@ def _client() -> httpx.AsyncClient:
                 }
                 for i in range(100 if page == 1 else 3)
             ]
-            return httpx.Response(200, json=items)
+            return httpx2.Response(200, json=items)
         if request.url.path == "/repos/octo/demo":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "full_name": "Octo/Demo",
@@ -34,10 +34,10 @@ def _client() -> httpx.AsyncClient:
                 },
             )
         if request.url.path == "/repos/octo/broken":
-            return httpx.Response(200, json={"name": "no full_name"})
-        return httpx.Response(404, json={"message": "Not Found"})
+            return httpx2.Response(200, json={"name": "no full_name"})
+        return httpx2.Response(404, json={"message": "Not Found"})
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 async def test_login() -> None:
@@ -70,11 +70,11 @@ async def test_unreadable_answer() -> None:
     assert err.value.code == "github_error"
 
 
-def _answering(status: int, headers: dict[str, str]) -> httpx.AsyncClient:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, headers=headers, json={"message": "limited"})
+def _answering(status: int, headers: dict[str, str]) -> httpx2.AsyncClient:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(status, headers=headers, json={"message": "limited"})
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 async def test_primary_rate_limit_says_when_to_retry() -> None:
