@@ -118,6 +118,12 @@ async def test_messages_after(databases: Databases) -> None:
     after_m3 = await store.messages("prj_test", session_id, after=m3.id)
     assert after_m3 == []
 
+    after_non_existent = await store.messages("prj_test", session_id, after="non_existent")
+    assert after_non_existent == []
+
+    other_session = await store.session_id("prj_test", "coder")
+    assert await store.messages("prj_test", other_session, after=m1.id) == []
+
 
 async def test_queued_turns_come_back_oldest_first(databases: Databases) -> None:
     store = SessionStore(databases)

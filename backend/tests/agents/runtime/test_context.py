@@ -130,6 +130,16 @@ def test_build_messages_system_message_without_summary() -> None:
     assert "Summary of the earlier conversation:" not in str(messages[0].content)
 
 
+def test_build_messages_system_message_without_default_branch() -> None:
+    definition = _make_definition()
+    project = _make_project()
+    project_no_branch = project.model_copy(update={"default_branch": None})
+
+    messages = build_messages(definition, project_no_branch, "README.md", None, [])
+    assert len(messages) == 1
+    assert "Default branch:" not in str(messages[0].content)
+
+
 def test_build_messages_user_and_agent_turn() -> None:
     definition = _make_definition()
     project = _make_project()

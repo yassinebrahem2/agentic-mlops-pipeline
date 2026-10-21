@@ -54,8 +54,9 @@ def build_messages(
         "Project:",
         f"Name: {project.name}",
         f"Source: {project.source}",
-        f"Default branch: {project.default_branch or ''}".strip(),
     ]
+    if project.default_branch:
+        project_lines.append(f"Default branch: {project.default_branch}")
     if layout:
         project_lines.extend(["Top-level layout:", layout])
     sections.append("\n".join(project_lines))

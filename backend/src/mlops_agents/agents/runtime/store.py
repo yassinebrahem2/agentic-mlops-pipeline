@@ -150,8 +150,9 @@ class SessionStore:
                         messages.c.id == after, messages.c.session_id == session_id
                     )
                 )
-                if after_seq is not None:
-                    query = query.where(messages.c.seq > after_seq)
+                if after_seq is None:
+                    return []
+                query = query.where(messages.c.seq > after_seq)
 
             rows = (await conn.execute(query)).mappings().all()
 
