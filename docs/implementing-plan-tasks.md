@@ -74,7 +74,7 @@ Minor findings do not hold the task. Fix them in the loop if cheap; otherwise li
 1. Check the final state yourself: tests, lint and type checks pass on the branch head.
 2. Bring `main` in again (`git merge origin/main`; regenerate `uv.lock`, `package-lock.json` or `openapi.json` instead of merging them by hand), run the checks again if anything came in, push.
 3. Wait for the CI runs on the pushed commit (every workflow and job, Backend's Windows job included); a red run is a finding for the fix loop.
-4. If the task issue has a "PR" section asking for an early PR, open it now into `main` (template `.github/pull_request_template.md`, `Closes #<task issue>`) and move the card to In review. Otherwise move the card to In review: it waits for the plan PR. Answer review comments through the same fix loop. The issue closes when the PR containing it is merged (AGENTS.md rule 6), never by hand. Add the ledger line, then start the next task.
+4. If the task issue has a "PR" section asking for an early PR, open it now into `main` from a new branch `plan/<stage>-<topic>-task<n>` at the task's last commit (review fixes go on that branch, then merge it into the plan branch) (template `.github/pull_request_template.md`, `Closes #<task issue>`) and move the card to In review. Otherwise move the card to In review: it waits for the plan PR. Answer review comments through the same fix loop. The issue closes when the PR containing it is merged (AGENTS.md rule 6), never by hand. Add the ledger line, then start the next task.
 
 ## Choosing models
 
