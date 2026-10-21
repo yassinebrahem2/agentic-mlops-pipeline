@@ -1,32 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { components } from "@/api/schema";
 import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
 import { route as projectsRoute } from "./route";
-import { setProjectHomeRoutesForTesting } from "../project-home/firstProjectPath";
 import { route as projectHomeRoute } from "../project-home/route";
 
-interface ProjectStub {
-  id: string;
-  name: string;
-  source: "local" | "github";
-  status: "ok" | "missing" | "empty" | "clone_failed";
-  status_detail: string | null;
-  created_at: string;
-  last_opened_at: string | null;
-  local_path: string | null;
-  github_full_name: string | null;
-  default_branch: string | null;
-}
+type Project = components["schemas"]["Project"];
 
-const fakeSettingsRoute: PageRoute = {
-  path: "/projects/:projectId/settings",
-  element: <div>Project Settings Page Content</div>,
-  nav: { area: "project", label: "Project settings", order: 100 },
-};
-
-const testRoutes: PageRoute[] = [projectsRoute, projectHomeRoute, fakeSettingsRoute];
+const testRoutes: PageRoute[] = [projectsRoute, projectHomeRoute];
 
 function getUrlAndMethod(
   input: RequestInfo | URL,
@@ -39,13 +22,11 @@ function getUrlAndMethod(
 
 describe("ProjectsPage", () => {
   beforeEach(() => {
-    setProjectHomeRoutesForTesting(testRoutes);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
-    setProjectHomeRoutesForTesting(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -74,7 +55,7 @@ describe("ProjectsPage", () => {
   });
 
   it("shows each project's name, source, status, and last opened, sorted by last opened most recent first", async () => {
-    const projects: ProjectStub[] = [
+    const projects: Project[] = [
       {
         id: "prj_older",
         name: "Older Project",
@@ -174,9 +155,8 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("git clone returned exit code 128")).toBeInTheDocument();
     expect(screen.getByText("Using cached clone after network failure")).toBeInTheDocument();
 
-    // Verify sorting order: Recent Project should appear before Older Project, which is before Missing, Failed, and Never Opened
+    // Verify sorting order
     const rows = screen.getAllByRole("row");
-    // Row 0 is header, rows 1..5 are projects
     expect(rows.length).toBe(6);
     const row1 = rows[1];
     const row2 = rows[2];
@@ -197,9 +177,58 @@ describe("ProjectsPage", () => {
     }
   });
 
+  it("displays formatted last opened time for projects with last_opened_at and 'Never' for null", async () => {
+    const projects: Project[] = [
+      {
+        id: "prj_opened",
+        name: "Opened Project",
+        source: "local",
+        status: "ok",
+        status_detail: null,
+        created_at: "2026-10-01T10:00:00Z",
+        last_opened_at: "2026-10-20T10:00:00Z",
+        local_path: "/workspace/opened",
+        github_full_name: null,
+        default_branch: "main",
+      },
+      {
+        id: "prj_unopened",
+        name: "Unopened Project",
+        source: "local",
+        status: "ok",
+        status_detail: null,
+        created_at: "2026-10-01T10:00:00Z",
+        last_opened_at: null,
+        local_path: "/workspace/unopened",
+        github_full_name: null,
+        default_branch: "main",
+      },
+    ];
+
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const { url } = getUrlAndMethod(input, init);
+      if (url.includes("/api/projects")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(projects), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderPage("/", { routes: testRoutes });
+
+    expect(await screen.findByText("Opened Project")).toBeInTheDocument();
+    expect(screen.getByText(new Date("2026-10-20T10:00:00Z").toLocaleString())).toBeInTheDocument();
+    expect(screen.getByText("Never")).toBeInTheDocument();
+  });
+
   it("clicking a project sends POST /api/projects/{id}/open and navigates to the project", async () => {
     const user = userEvent.setup();
-    const projects: ProjectStub[] = [
+    const projects: Project[] = [
       {
         id: "prj_demo",
         name: "Demo Project",
@@ -252,8 +281,56 @@ describe("ProjectsPage", () => {
     expect(openCalled).toBe(true);
     expect(openedId).toBe("prj_demo");
 
-    // Navigates to /projects/prj_demo which ProjectHome redirects to fakeSettingsRoute
-    expect(await screen.findByText("Project Settings Page Content")).toBeInTheDocument();
+    // Navigates to /projects/prj_demo which ProjectHome renders
+    expect(await screen.findByText("No project pages yet.")).toBeInTheDocument();
+  });
+
+  it("shows error on the row whose open failed", async () => {
+    const user = userEvent.setup();
+    const projects: Project[] = [
+      {
+        id: "prj_broken",
+        name: "Broken Project",
+        source: "local",
+        status: "ok",
+        status_detail: null,
+        created_at: "2026-10-01T10:00:00Z",
+        last_opened_at: "2026-10-20T10:00:00Z",
+        local_path: "/workspace/broken",
+        github_full_name: null,
+        default_branch: "main",
+      },
+    ];
+
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const { url, method } = getUrlAndMethod(input, init);
+      if (url.includes("/api/projects/prj_broken/open") && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: "folder_not_found", message: "Folder does not exist" }),
+            { status: 404, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/projects") && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify(projects), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderPage("/", { routes: testRoutes });
+
+    const projectButton = await screen.findByRole("button", { name: "Broken Project" });
+    await user.click(projectButton);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Folder does not exist");
   });
 
   it("shows errorText when GET /api/projects fails", async () => {

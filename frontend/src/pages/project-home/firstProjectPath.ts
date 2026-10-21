@@ -1,15 +1,5 @@
 import type { PageRoute } from "@/app/routes";
 
-let testRoutesRegistry: PageRoute[] | null = null;
-
-export function setProjectHomeRoutesForTesting(routes: PageRoute[] | null) {
-  testRoutesRegistry = routes;
-}
-
-export function getProjectHomeRoutes(defaultRoutes: PageRoute[]): PageRoute[] {
-  return testRoutesRegistry ?? defaultRoutes;
-}
-
 export function firstProjectPath(routes: PageRoute[], projectId: string): string | null {
   const projectRoutes = routes
     .filter((r) => r.nav?.area === "project")

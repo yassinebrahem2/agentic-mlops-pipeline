@@ -1,26 +1,21 @@
+import type { components } from "@/api/schema";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
+export type ProjectStatusType = components["schemas"]["Project"]["status"];
+
 export interface ProjectStatusProps {
-  status: "ok" | "missing" | "empty" | "clone_failed";
-  statusDetail?: string | null;
+  status: ProjectStatusType;
   status_detail?: string | null;
   className?: string;
 }
 
-export function ProjectStatus({
-  status,
-  statusDetail,
-  status_detail,
-  className,
-}: ProjectStatusProps) {
-  const detail = statusDetail ?? status_detail;
-
+export function ProjectStatus({ status, status_detail, className }: ProjectStatusProps) {
   if (status === "missing") {
     return (
       <div className={cn("inline-flex items-center gap-2 flex-wrap", className)}>
         <Badge variant="destructive">Folder not found</Badge>
-        {detail && <span className="text-sm text-muted-foreground">{detail}</span>}
+        {status_detail && <span className="text-sm text-muted-foreground">{status_detail}</span>}
       </div>
     );
   }
@@ -40,27 +35,26 @@ export function ProjectStatus({
     return (
       <div className={cn("inline-flex items-center gap-2 flex-wrap", className)}>
         <Badge variant="destructive">Download failed</Badge>
-        {detail && <span className="text-sm text-muted-foreground">{detail}</span>}
+        {status_detail && <span className="text-sm text-muted-foreground">{status_detail}</span>}
       </div>
     );
   }
 
-  // status === "ok"
   return (
     <div className={cn("inline-flex items-center gap-2 flex-wrap", className)}>
       <Badge
         variant="outline"
         className={
-          detail
+          status_detail
             ? "border-amber-500 text-amber-600 dark:text-amber-400"
             : "font-normal text-muted-foreground"
         }
       >
         OK
       </Badge>
-      {detail && (
+      {status_detail && (
         <span className="text-sm text-amber-600 dark:text-amber-400" role="status">
-          {detail}
+          {status_detail}
         </span>
       )}
     </div>
