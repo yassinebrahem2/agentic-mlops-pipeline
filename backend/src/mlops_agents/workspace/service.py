@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 from sqlalchemy import RowMapping, delete, insert, select, update
 
 from mlops_agents.clock import now_iso
@@ -65,7 +65,7 @@ class WorkspaceService:
         databases: Databases,
         git: GitRunner,
         github: GitHubAuth,
-        http: httpx.AsyncClient,
+        http: httpx2.AsyncClient,
         *,
         remote_url: Callable[[str], str] = github_https_url,
     ) -> None:

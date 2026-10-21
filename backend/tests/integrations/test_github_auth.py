@@ -1,4 +1,4 @@
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
@@ -21,17 +21,17 @@ class FakeGh:
         return self.value
 
 
-def _http() -> httpx.AsyncClient:
-    def handler(request: httpx.Request) -> httpx.Response:
+def _http() -> httpx2.AsyncClient:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.headers.get("authorization") in (
             "Bearer gho_a",
             "Bearer gho_b",
             "Bearer ghp_pasted",
         ):
-            return httpx.Response(200, json={"login": "octo"})
-        return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx2.Response(200, json={"login": "octo"})
+        return httpx2.Response(401, json={"message": "Bad credentials"})
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 async def test_gh_mode_reads_the_token_every_time(

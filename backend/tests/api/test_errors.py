@@ -125,9 +125,42 @@ async def test_unexpected_error_is_a_plain_500_logged_without_its_text(
     }
     assert "sk-test-123" not in response.text
     assert "sk-test-123" not in caplog.text
-    assert "RuntimeError" in caplog.text
-    assert "/api/test/crash" in caplog.text
+    assert "Unexpected RuntimeError on GET /api/test/crash" in caplog.text
     assert "in fail" in caplog.text
+
+
+async def test_an_error_inside_the_middleware_is_the_json_500(
+    app: FastAPI, client: httpx2.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    # Without its signer the session guard itself raises, before any route runs.
+    del app.state.signer
+
+    response = await client.get("/api/test/anything")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+    assert "Unexpected AttributeError on GET /api/test/anything" in caplog.text
+
+
+async def test_an_error_inside_the_host_check_is_the_json_500(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    def broken(host: str) -> bool:
+        raise RuntimeError(host)
+
+    monkeypatch.setattr(app.state.host_rules, "host_allowed", broken)
+
+    response = await client.get("/api/auth/status")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+    assert "Unexpected RuntimeError on GET /api/auth/status" in caplog.text
 
 
 async def test_error_after_a_stream_started_ends_the_response_without_a_second_start(
@@ -152,6 +185,5 @@ async def test_error_after_a_stream_started_ends_the_response_without_a_second_s
     assert response.status_code == 200
     assert response.content == b"first\n"
     assert "sk-test-123" not in caplog.text
-    assert "RuntimeError" in caplog.text
-    assert "/api/test/broken-stream" in caplog.text
+    assert "Unexpected RuntimeError on GET /api/test/broken-stream" in caplog.text
     assert "in chunks" in caplog.text
