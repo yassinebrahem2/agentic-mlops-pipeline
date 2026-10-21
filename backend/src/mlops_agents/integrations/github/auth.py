@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from typing import Literal, Protocol
 
-import httpx
+import httpx2
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -77,7 +77,7 @@ class GhCli:
 
 class GitHubAuth:
     def __init__(
-        self, databases: Databases, keystore: KeyStore, http: httpx.AsyncClient, gh: GhLike
+        self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient, gh: GhLike
     ) -> None:
         self._dbs = databases
         self._keys = keystore

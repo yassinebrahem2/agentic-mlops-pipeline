@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 
 [[package]]
@@ -864,7 +864,6 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "cryptography" },
     { name = "fastapi" },
-    { name = "httpx" },
     { name = "httpx2" },
     { name = "keyring" },
     { name = "langchain-core" },
@@ -894,7 +893,6 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "cryptography", specifier = ">=46.0.7" },
     { name = "fastapi", specifier = ">=0.143.2" },
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.13.1" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "langchain-core", specifier = ">=1.6.11" },

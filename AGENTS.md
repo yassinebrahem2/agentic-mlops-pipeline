@@ -25,6 +25,7 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
    | you stop working on it and unassign yourself | Todo |
    | the task is done, pushed and CI is green (no PR of its own) | close the issue: Done |
    | a PR into `main` is opened | every issue it closes: In review (In review holds only work waiting on the lead) |
+   | the lead requests changes on your PR | the PR and every issue it closes: In progress (until you push the fixes) |
    | you push the fixes for a PR with changes requested | the PR and every issue it closes: In review |
    | the issue is closed (rule 6) | Done |
 
@@ -58,7 +59,7 @@ Roles:
 - Plan owners: everyone, the lead included. Teammates pick plans themselves: whoever first assigns themselves to an unassigned plan issue whose Consumes are on `main` owns it. One open plan per person at a time; the lead does not hand out plans. Exception: when your plan's next task waits on another plan's task that is not on `main` yet, you may claim a second plan meanwhile. The owner implements that plan's task issues on the plan's branch and opens the plan's PR (and the early PRs its issues ask for). Owners do not write or change plans, tasks or issues (Decision and Bug issues aside). Nobody else commits to that branch. An owner who must hand a plan over says so in the plan issue; the lead names the new owner.
 - Reviewers: the lead reviews every PR. A teammate review before the lead's is welcome but optional; teammates pick reviews themselves: anyone other than the PR's author claims the review by commenting "Reviewing" on the PR (first comment wins), then submits it with `gh pr review <n> --comment` / `--request-changes` / `--approve`; the owner of a plan that consumes what the PR produces goes first when they can. The reviewer checks the PR against its task and the interfaces they depend on, and comments on the PR; the reviewer never pushes to the branch.
 
-Know which role you are serving: check `gh api user --jq .login`. Everyone follows the owner rules on their own plan. Only `yassinebrahem2` follows the lead rules.
+Know which role you are serving: check `gh api user --jq .login`. Everyone follows the owner rules on their own plan. The lead rules belong to the lead's Claude Code session only, whose `CLAUDE.md` says so; the login is not enough, because the lead's other agents (Antigravity, Codex, ...) use the same account. Any other agent on `yassinebrahem2` is an owner on the lead's plan and never does a lead action: no merging, closing, approving or requesting changes on a PR; no push to `main`; no change to specs, plans, the overview, `AGENTS.md` or `project_knowledge.md`; no plan or task issues; no answering or closing Decision issues; no closing plan issues. (GitHub cannot tell these agents apart; this rule is the only guard.)
 
 Lifecycle of a piece of work:
 1. The lead writes a spec in `docs/superpowers/specs/` and gets it approved.
@@ -70,7 +71,7 @@ Lifecycle of a piece of work:
 
 Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects/5), Status = Todo / In progress / Blocked / In review / Done. Milestones: one per roadmap stage ("Stage 1: Foundation and first agent", ...).
 Move a card with `scripts/board-status.sh <issue-or-PR number> "<Status>"` (needs `gh` and `jq`, and a token with the `project` scope; `gh project` itself also needs `read:org`, which is why the script uses the GraphQL API).
-Rule 7 above makes every agent and person keep their own cards right; the automation is a backup, not a replacement. Most moves are also automated: `.github/workflows/board.yml` adds every new issue to Todo, the board's built-in workflows set Done on close and merge, and `board.yml` sets In progress when a `task` issue is assigned (Todo when its last assignee is removed), Blocked when a `decision` issue names the task under "Blocked task" (In progress again when that Decision closes), and In review when a PR into `main` says `Closes #<n>`. Cloud agent sessions cannot reach the board API; they move a card by running the `board` workflow manually (`workflow_dispatch` with `number` and `status`, see rule 7).
+Rule 7 above makes every agent and person keep their own cards right; the automation is a backup, not a replacement. Most moves are also automated: `.github/workflows/board.yml` adds every new issue to Todo, the board's built-in workflows set Done on close and merge, and `board.yml` moves a PR and the issues it closes to In progress when changes are requested and back to In review on the owner's next push, sets In progress when a `task` issue is assigned (Todo when its last assignee is removed), Blocked when a `decision` issue names the task under "Blocked task" (In progress again when that Decision closes), and In review when a PR into `main` says `Closes #<n>`. Cloud agent sessions cannot reach the board API; they move a card by running the `board` workflow manually (`workflow_dispatch` with `number` and `status`, see rule 7).
 
 ### Owner rules
 - Work only on your plan's branch. Never push to `main` or to another plan's branch; never merge anything.
@@ -88,7 +89,6 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 - Specs before plans, plans before code. Each needs the lead's explicit approval.
 - Review specs, the stage overview's interface lists and every plan draft with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
 - Review every PR yourself (after the teammate's review when there is one), against its tasks, the spec and the interfaces. Merge only with green CI on the PR's head and the branch up to date with `main`, always with a merge commit (never squash or rebase: the plan branch shares an early PR's commits). Right before merging, the lead may bring `main` into the PR with GitHub's Update branch; that merge commit is the one exception to "only the owner commits".
-- When you request changes on a PR, move it and every issue it closes to In progress.
 - Review each PR with its own review subagent, all in parallel, so no review waits for another.
 - Record project-level decisions in `project_knowledge.md` as they are made.
 - Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
