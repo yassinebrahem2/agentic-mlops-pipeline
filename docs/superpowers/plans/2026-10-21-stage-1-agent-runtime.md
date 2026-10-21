@@ -40,7 +40,7 @@ Task 1 is small and merges first: api-sessions and frontend-chat code against it
 - Create: `backend/src/mlops_agents/agents/runtime/__init__.py` (empty), `contract.py`
 - Test: `backend/tests/agents/runtime/__init__.py` (empty), `test_contract.py`
 
-**Produces:** I1 exactly as the overview states, `"resync"` included in `StreamEvent.type`. The module docstring fixes `SessionManager`'s constructor and lifecycle, which task 5 implements:
+**Produces:** I1 exactly as the overview states, `Resync` included in `StreamEvent` (typed per event since #89, done on main). The module docstring fixes `SessionManager`'s constructor and lifecycle, which task 5 implements:
 
 ```python
 SessionManager(
