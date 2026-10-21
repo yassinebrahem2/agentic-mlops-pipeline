@@ -1,5 +1,7 @@
+import errno
 import os
 import shutil
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -153,6 +155,44 @@ async def test_browse_lists_folders(
     assert ("b-repo", True) in names
     assert all(e.name != "file.txt" for e in listing.entries)
     assert listing.parent == str(tmp_path.parent)
+
+
+async def test_browse_unreadable_folder_names_the_os_reason(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def not_ready(self: Path) -> Iterator[Path]:
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(Path, "iterdir", not_ready)
+    with pytest.raises(DomainError) as err:
+        await _service(paths, databases, keystore).browse(str(tmp_path))
+    assert (err.value.code, err.value.status) == ("folder_unreadable", 409)
+    assert err.value.message == (
+        f"{tmp_path} could not be read (Input/output error). "
+        "Check the drive or network path and try again."
+    )
+
+
+@pytest.mark.parametrize("text", [None, "", "   "])
+async def test_browse_without_a_path_lists_the_home_folder(
+    text: str | None,
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    (home / "projects").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    listing = await _service(paths, databases, keystore).browse(text)
+    assert listing.path == str(home)
+    assert [e.name for e in listing.entries] == ["projects"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path spellings; runs on the Windows CI leg")

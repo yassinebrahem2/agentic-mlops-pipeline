@@ -189,7 +189,8 @@ class WorkspaceService:
 
     async def browse(self, path_text: str | None) -> FolderListing:
         self._require_local_mode()
-        folder = await asyncio.to_thread(_user_path, path_text) if path_text else Path.home()
+        text = (path_text or "").strip()
+        folder = await asyncio.to_thread(_user_path, text) if text else Path.home()
         if not await asyncio.to_thread(folder.is_dir):
             raise DomainError(
                 "folder_not_found", f"{folder} is not a folder on this machine.", status=404
@@ -216,6 +217,13 @@ class WorkspaceService:
         except PermissionError:
             raise DomainError(
                 "folder_unreadable", f"The app is not allowed to read {folder}.", status=403
+            ) from None
+        except OSError as exc:  # a disconnected network path or a drive that is not ready
+            reason = exc.strerror or type(exc).__name__
+            raise DomainError(
+                "folder_unreadable",
+                f"{folder} could not be read ({reason}). Check the drive or network path and try again.",
+                status=409,
             ) from None
         roots = await asyncio.to_thread(_drive_roots)
         parent = str(folder.parent) if folder.parent != folder else None
