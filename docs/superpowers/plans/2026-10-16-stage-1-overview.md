@@ -91,6 +91,7 @@ class AgentLimitsUpdate(BaseModel): max_steps: int | None = Field(ge=1)   # None
 
 class AgentSettingsView(BaseModel):
     agent: str
+    display_name: str                        # from the definition, for labels in the UI
     default_model: str | None                # app level
     project_model: str | None                # project override (None outside a project)
     effective_model: str | None
