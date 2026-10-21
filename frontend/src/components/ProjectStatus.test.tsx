@@ -10,14 +10,14 @@ describe("ProjectStatus", () => {
 
   it("renders warning detail text for ok status with status_detail (kept the last copy)", () => {
     render(
-      <ProjectStatus status="ok" statusDetail="Refresh failed; kept the last downloaded copy." />,
+      <ProjectStatus status="ok" status_detail="Refresh failed; kept the last downloaded copy." />,
     );
     expect(screen.getByText("OK")).toBeInTheDocument();
     expect(screen.getByText("Refresh failed; kept the last downloaded copy.")).toBeInTheDocument();
   });
 
   it("renders 'Folder not found' and the detail for missing status", () => {
-    render(<ProjectStatus status="missing" statusDetail="/home/user/missing-repo" />);
+    render(<ProjectStatus status="missing" status_detail="/home/user/missing-repo" />);
     expect(screen.getByText("Folder not found")).toBeInTheDocument();
     expect(screen.getByText("/home/user/missing-repo")).toBeInTheDocument();
   });
@@ -33,7 +33,7 @@ describe("ProjectStatus", () => {
     render(
       <ProjectStatus
         status="clone_failed"
-        statusDetail="git clone failed: remote repository not found"
+        status_detail="git clone failed: remote repository not found"
       />,
     );
     expect(screen.getByText("Download failed")).toBeInTheDocument();

@@ -1,23 +1,15 @@
+import { useParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { components } from "@/api/schema";
 import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
+import { route as projectHomeRoute } from "../../pages/project-home/route";
 
-interface ProjectStub {
-  id: string;
-  name: string;
-  source: "local" | "github";
-  status: "ok" | "missing" | "empty" | "clone_failed";
-  status_detail: string | null;
-  created_at: string;
-  last_opened_at: string | null;
-  local_path: string | null;
-  github_full_name: string | null;
-  default_branch: string | null;
-}
+type Project = components["schemas"]["Project"];
 
-const fakeProjects: ProjectStub[] = [
+const fakeProjects: Project[] = [
   {
     id: "prj_alpha",
     name: "Alpha Project",
@@ -44,9 +36,14 @@ const fakeProjects: ProjectStub[] = [
   },
 ];
 
+function ProjectSettingsDisplay() {
+  const { projectId } = useParams<{ projectId: string }>();
+  return <div>Project Settings Page for {projectId}</div>;
+}
+
 const fakeProjectSettingsRoute: PageRoute = {
   path: "/projects/:projectId/settings",
-  element: <div>Project Settings Page for Project</div>,
+  element: <ProjectSettingsDisplay />,
   nav: { area: "project", label: "Settings", order: 100 },
 };
 
@@ -61,7 +58,12 @@ const fakeRootRoute: PageRoute = {
   nav: { area: "app", label: "Projects", order: 0 },
 };
 
-const testRoutes: PageRoute[] = [fakeRootRoute, fakeProjectsNewRoute, fakeProjectSettingsRoute];
+const testRoutes: PageRoute[] = [
+  fakeRootRoute,
+  fakeProjectsNewRoute,
+  projectHomeRoute,
+  fakeProjectSettingsRoute,
+];
 
 function getUrlAndMethod(
   input: RequestInfo | URL,
@@ -165,5 +167,42 @@ describe("ProjectSwitcher", () => {
     await user.click(betaItem);
 
     expect(openedId).toBe("prj_beta");
+    expect(await screen.findByRole("button", { name: "Beta Project" })).toBeInTheDocument();
+    expect(await screen.findByText("No project pages yet.")).toBeInTheDocument();
+  });
+
+  it("shows open error alert in the dropdown when opening a project fails", async () => {
+    const user = userEvent.setup();
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const { url, method } = getUrlAndMethod(input, init);
+      if (url.includes("/api/projects/prj_beta/open") && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: "folder_not_found", message: "Folder does not exist" }),
+            { status: 404, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/projects") && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify(fakeProjects), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderPage("/projects/prj_alpha/settings", { routes: testRoutes });
+
+    const switcherButton = await screen.findByRole("button", { name: "Alpha Project" });
+    await user.click(switcherButton);
+
+    const betaItem = screen.getByRole("menuitem", { name: "Beta Project" });
+    await user.click(betaItem);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Folder does not exist");
   });
 });

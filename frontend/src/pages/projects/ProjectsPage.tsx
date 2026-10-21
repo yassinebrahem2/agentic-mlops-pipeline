@@ -1,7 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useMemo } from "react";
+import { Link } from "react-router";
+import type { components } from "@/api/schema";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, errorText, unwrap } from "@/lib/api";
+import { useOpenProject } from "@/lib/useOpenProject";
+
+export type Project = components["schemas"]["Project"];
 
 function formatLastOpened(lastOpenedAt: string | null): string {
   if (!lastOpenedAt) return "Never";
@@ -20,10 +24,7 @@ function formatLastOpened(lastOpenedAt: string | null): string {
 }
 
 export function ProjectsPage() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [openingId, setOpeningId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const { openProject, openingId, error: openError, errorProjectId } = useOpenProject();
 
   const {
     data: projects,
@@ -38,23 +39,6 @@ export function ProjectsPage() {
     },
   });
 
-  const openMutation = useMutation({
-    mutationFn: async (projectId: string) => {
-      const res = await api.POST("/api/projects/{project_id}/open", {
-        params: { path: { project_id: projectId } },
-      });
-      return unwrap(res);
-    },
-    onSuccess: (_data, projectId) => {
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
-      void navigate(`/projects/${projectId}`);
-    },
-    onError: (err) => {
-      setActionError(errorText(err));
-      setOpeningId(null);
-    },
-  });
-
   const sortedProjects = useMemo(() => {
     if (!projects) return [];
     return [...projects].sort((a, b) => {
@@ -66,12 +50,6 @@ export function ProjectsPage() {
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
   }, [projects]);
-
-  const handleOpenProject = (id: string) => {
-    setActionError(null);
-    setOpeningId(id);
-    openMutation.mutate(id);
-  };
 
   return (
     <div className="container mx-auto max-w-5xl space-y-6 p-6">
@@ -89,12 +67,6 @@ export function ProjectsPage() {
           </Link>
         </Button>
       </div>
-
-      {actionError && (
-        <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
-          {actionError}
-        </div>
-      )}
 
       {isPending && (
         <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
@@ -135,24 +107,32 @@ export function ProjectsPage() {
             <TableBody>
               {sortedProjects.map((project) => {
                 const isOpening = openingId === project.id;
+                const hasRowError = errorProjectId === project.id && Boolean(openError);
                 return (
                   <TableRow key={project.id}>
                     <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleOpenProject(project.id);
-                          }}
-                          disabled={openingId !== null}
-                          className="cursor-pointer text-left font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {project.name}
-                        </button>
-                        {isOpening && (
-                          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <Loader2 className="size-3 animate-spin" />
-                            Opening...
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              openProject(project.id);
+                            }}
+                            disabled={openingId !== null}
+                            className="cursor-pointer text-left font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {project.name}
+                          </button>
+                          {isOpening && (
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <Loader2 className="size-3 animate-spin" />
+                              Opening...
+                            </span>
+                          )}
+                        </div>
+                        {hasRowError && (
+                          <span role="alert" className="text-xs text-destructive">
+                            {openError}
                           </span>
                         )}
                       </div>
