@@ -25,7 +25,7 @@ The four tasks touch different files and can be done in any order. Do them in th
 
 - One file per router in `backend/src/mlops_agents/api/routers/`, defining `router = APIRouter(tags=[...])` (I3 discovers it). Paths are written without the `/api` prefix, which discovery adds.
 - Every handler takes `ServicesDep` (and `ProjectDep` for `/projects/{project_id}/...`), calls one service method, and returns its result. No business rules in routers: a rule missing from a service is added to the service, with a test there.
-- Request bodies are small pydantic models defined in the router file, with `model_config = ConfigDict(extra="forbid")`. Responses use `response_model` with the merged models, so the OpenAPI contract names them.
+- Request bodies are small pydantic models defined in the router file, with `model_config = ConfigDict(extra="forbid")` and unique, resource-prefixed names (I3): `AddLocalProject`, `AddGitHubProject`, `RelinkProject`, `SetGitHubToken`, `AddProviderKey`, `ModelAddress`, `VerifyModel`, `SetContextWindow`, `SetAgentModel`. Responses use `response_model` with the merged models, so the OpenAPI contract names them.
 - A route that returns nothing answers 204.
 - Errors are the services' `DomainError`s, unchanged. Mode rules stay in the services (`WorkspaceService` already refuses local projects in server mode with 403 `local_projects_disabled`).
 - Re-export `frontend/openapi.json` in every task (`uv run python -m mlops_agents.api.openapi_export`).
@@ -60,7 +60,7 @@ The four tasks touch different files and can be done in any order. Do them in th
 - `open` updates `last_opened_at`; `refresh` after deleting the folder → `status: "missing"`; `relink` to a new path → `ok`; `relink` on a GitHub project → 409 `not_local`.
 - `DELETE` → 204, then `GET` → 404 `project_not_found`, and the project's data folder is gone while the user's repository is untouched.
 - `GET /folders` with no path lists the home folder; with a repository's parent marks it `is_git_repo`.
-- Server mode (an app built with server settings, as task 3 of api-foundation tests do): `POST /projects` with `source: "local"`, `/folders` and `relink` → 403 `local_projects_disabled`.
+- Server mode (I3's `server_client`): `POST /projects` with `source: "local"`, `/folders` and `relink` → 403 `local_projects_disabled`.
 - A body with an unknown field or a missing `source` → 422 `invalid_request`.
 - `GET /app` returns the name, the installed version, `local`, and the temporary data folder; `POST /app/backup` creates the snapshot folder it returns.
 - `anonymous` `GET /projects` → 401.
@@ -87,7 +87,8 @@ The four tasks touch different files and can be done in any order. Do them in th
 **Tests (behaviors to verify)**: the app's GitHub client must not reach github.com. After the `client` fixture's lifespan starts, replace `services.github` and `services.workspace` (through `app.state.services`, a dataclass) with instances built on an `httpx2.AsyncClient(transport=httpx2.MockTransport(handler))` whose handler answers `/user` and `/user/repos` like `tests/integrations/test_github_api.py` does. Then:
 - `GET /github` with nothing connected → `mode: "none"`; `POST /github/token` with a good token → `mode: "token"` and the login; a rejected token → the service's 401-class error, and nothing is saved; the token appears in no response body.
 - `GET /github/repos` → the fake's repositories; with nothing connected → 409 `github_not_connected`.
-- `POST /github/gh` when `gh` is not available (the fixture's `NoGh`) → the service's error.
+- `POST /github/gh` when `gh` is not available (the fixture's `NoGh`) → 409 `gh_not_installed`.
+- Adding a GitHub project through the route: build the replacement `WorkspaceService` as `tests/workspace/test_github.py` does, with `remote_url` pointing at a local bare repository, and a new `GitRunner` whose `token_provider` is the new `GitHubAuth`'s `token` (swapping only `services.github` would leave the workspace's runner reading tokens from the old one); `POST /projects` with `{source: "github", repo: "octo/demo"}` → 201, `status: "ok"`; then `POST /projects/{id}/refresh` → `ok`; with the token revoked in the fake → the project keeps its last copy and `status_detail` says the refresh failed (review focus 5).
 - `DELETE /github` → 204, then status is `none` and the key store no longer holds the token.
 - `anonymous` → 401.
 
