@@ -30,12 +30,12 @@ class AgentSettingsView(BaseModel):
     max_steps: int | None  # effective: project override, else the definition's
 
 
-class ModelProblem(BaseModel):
+class _ModelProblem(BaseModel):
     code: str
     message: str
 
 
-class ResolvedTarget(BaseModel):
+class _ResolvedTarget(BaseModel):
     entry: ModelEntry
     provider: Provider
     context_window: int
@@ -73,7 +73,7 @@ class AgentSettingsService:
 
         effective_model = project_model if project_model is not None else default_model
         result = await self._check_model(definition, effective_model, fetch_keys=False)
-        model_problem = result.message if isinstance(result, ModelProblem) else None
+        model_problem = result.message if isinstance(result, _ModelProblem) else None
 
         return AgentSettingsView(
             agent=definition.name,
@@ -164,7 +164,7 @@ class AgentSettingsService:
         effective_model = project_model if project_model is not None else default_model
 
         result = await self._check_model(definition, effective_model, fetch_keys=True)
-        if isinstance(result, ModelProblem):
+        if isinstance(result, _ModelProblem):
             raise DomainError(result.code, result.message, status=409)
 
         resolved = ResolvedModel(
@@ -184,9 +184,9 @@ class AgentSettingsService:
         address: str | None,
         *,
         fetch_keys: bool,
-    ) -> ModelProblem | ResolvedTarget:
+    ) -> _ModelProblem | _ResolvedTarget:
         if address is None:
-            return ModelProblem(
+            return _ModelProblem(
                 code="model_unassigned",
                 message=(
                     f"Choose a model for {definition.display_name} in AI providers, "
@@ -203,7 +203,7 @@ class AgentSettingsService:
                 if err.code != "provider_not_found":
                     raise
         if entry is None or provider is None:
-            return ModelProblem(
+            return _ModelProblem(
                 code="model_missing",
                 message=(
                     f"The model {address} no longer exists. "
@@ -212,10 +212,10 @@ class AgentSettingsService:
             )
 
         if entry.problem is not None:
-            return ModelProblem(code="model_not_usable", message=entry.problem)
+            return _ModelProblem(code="model_not_usable", message=entry.problem)
 
         if provider.status == "needs_attention":
-            return ModelProblem(
+            return _ModelProblem(
                 code="provider_needs_attention",
                 message=(
                     f"{provider.name} needs attention: {provider.status_detail}. "
@@ -228,17 +228,22 @@ class AgentSettingsService:
             keys = await self._providers.keys_for(provider.id) if fetch_keys else []
             has_key = bool(keys) if fetch_keys else bool(provider.keys)
             if not has_key:
-                return ModelProblem(
+                return _ModelProblem(
                     code="provider_has_no_key",
                     message=f"{provider.name} has no key. Add one in AI providers.",
                 )
         elif fetch_keys and provider.keys:
             keys = await self._providers.keys_for(provider.id)
 
-        return ResolvedTarget(
+        if entry.context_window is None:
+            raise RuntimeError(
+                f"Model {entry.address} passed usability check but context_window is None"
+            )
+
+        return _ResolvedTarget(
             entry=entry,
             provider=provider,
-            context_window=int(entry.context_window or 0),
+            context_window=entry.context_window,
             keys=keys,
         )
 

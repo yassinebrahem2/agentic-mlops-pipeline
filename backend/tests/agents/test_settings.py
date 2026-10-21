@@ -609,6 +609,93 @@ async def test_check_model_handles_provider_not_found(
     assert err.value.message == expected_msg
 
 
+async def test_check_model_reraises_other_domain_errors(
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    databases: Databases,
+    fake_openai: RunningFake,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = fake_openai.base_url
+    await databases.project("prj_1")
+    await providers_svc.create_provider(
+        ProviderCreate(name="groq", kind="hosted", base_url=base_url)
+    )
+    await providers_svc.add_key("groq", SECRET_KEY_1)
+    model = await providers_svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+    )
+    await providers_svc.verify_model(model.address)
+    await settings_svc.set_default_model("orchestrator", model.address)
+
+    # Simulate get_provider_by_id failing with internal_error (status=500)
+    async def fake_get_provider_by_id(provider_id: str):
+        raise DomainError("internal_error", "Something went wrong", status=500)
+
+    monkeypatch.setattr(providers_svc, "get_provider_by_id", fake_get_provider_by_id)
+
+    # get() re-raises DomainError directly
+    with pytest.raises(DomainError) as err_get:
+        await settings_svc.get("orchestrator")
+    assert err_get.value.status == 500
+    assert err_get.value.code == "internal_error"
+    assert err_get.value.message == "Something went wrong"
+
+    # resolve() also re-raises DomainError directly
+    with pytest.raises(DomainError) as err_res:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err_res.value.status == 500
+    assert err_res.value.code == "internal_error"
+    assert err_res.value.message == "Something went wrong"
+
+
+def test_internal_models_are_private() -> None:
+    import mlops_agents.agents.settings as settings_mod
+
+    assert not hasattr(settings_mod, "ModelProblem")
+    assert not hasattr(settings_mod, "ResolvedTarget")
+    assert hasattr(settings_mod, "_ModelProblem")
+    assert hasattr(settings_mod, "_ResolvedTarget")
+
+
+async def test_check_model_raises_runtime_error_if_context_window_missing(
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    databases: Databases,
+    fake_openai: RunningFake,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = fake_openai.base_url
+    await databases.project("prj_1")
+    await providers_svc.create_provider(
+        ProviderCreate(name="groq", kind="hosted", base_url=base_url)
+    )
+    await providers_svc.add_key("groq", SECRET_KEY_1)
+    model = await providers_svc.add_model(
+        ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
+    )
+    await providers_svc.verify_model(model.address)
+    await settings_svc.set_default_model("orchestrator", model.address)
+
+    # Corrupt model entry so context_window is None, and bypass problem computation
+    from mlops_agents.providers.models import ModelEntry
+
+    monkeypatch.setattr(ModelEntry, "problem", property(lambda self: None))
+
+    real_get_model = providers_svc.get_model
+
+    async def fake_get_model(address: str):
+        entry = await real_get_model(address)
+        if entry is not None:
+            return entry.model_copy(update={"context_window": None})
+        return None
+
+    monkeypatch.setattr(providers_svc, "get_model", fake_get_model)
+
+    with pytest.raises(RuntimeError, match="passed usability check but context_window is None"):
+        await settings_svc.resolve("prj_1", "orchestrator")
+
+
 async def test_setters_accept_model_when_provider_needs_attention(
     settings_svc: AgentSettingsService,
     providers_svc: ProvidersService,
