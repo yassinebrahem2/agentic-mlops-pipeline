@@ -207,7 +207,7 @@ These are the inputs most likely to hurt a real user without any single task cat
 ```
 .github/workflows/      backend.yml, frontend.yml; later plans add contract, e2e and package checks
 AGENTS.md               gains Backend commands and Frontend commands sections
-scripts/build.py        builds the UI into the backend, then the wheel (packaging plan)
+scripts/build_wheel.py  builds the UI into the backend, then the wheel (packaging plan)
 backend/
   pyproject.toml, uv.lock
   src/mlops_agents/

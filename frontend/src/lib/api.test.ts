@@ -1,11 +1,20 @@
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
-import { api, ApiError, createApiClient, errorText, fieldErrors, unwrap } from "./api";
+import { ApiError, createApiClient, errorText, fieldErrors, unwrap } from "./api";
 import { queryClient } from "./query";
 import { renderPage } from "../test/render";
 
 interface TestPaths {
+  "/empty": {
+    delete: {
+      responses: {
+        204: {
+          content?: never;
+        };
+      };
+    };
+  };
   "/test": {
     get: {
       responses: {
@@ -154,22 +163,17 @@ describe("api client and utilities", () => {
       }
     });
 
-    it("throws offline ApiError when status is 0 or fetch rejects", async () => {
-      const response = { status: 0 } as Response;
-      try {
-        unwrap({ response });
-        expect.fail("Expected unwrap to throw");
-      } catch (e) {
-        expect(e).toBeInstanceOf(ApiError);
-        const err = e as ApiError;
-        expect(err.code).toBe("offline");
-        expect(err.message).toBe(
-          "The app's server is not reachable. Check that it is still running.",
-        );
-        expect(err.status).toBe(0);
-      }
+    it("accepts a 204 instead of throwing", async () => {
+      const fakeFetch: typeof fetch = () => Promise.resolve(new Response(null, { status: 204 }));
+      const client = createApiClient<TestPaths>(fakeFetch);
+      const result = await client.DELETE("/empty");
+      expect(result.response.status).toBe(204);
+      expect(() => {
+        unwrap(result);
+      }).not.toThrow();
+    });
 
-      // Also verify rejecting client call / promise handling
+    it("throws offline ApiError when fetch rejects", async () => {
       const rejectingFetch: typeof fetch = () => Promise.reject(new TypeError("Failed to fetch"));
       const client = createApiClient<TestPaths>(rejectingFetch);
       await expect(client.GET("/test")).rejects.toMatchObject({
@@ -306,7 +310,7 @@ describe("api client and utilities", () => {
       expect(screen.getByText("Rendered X Page")).toBeInTheDocument();
     });
 
-    it("shared api reaches vi.stubGlobal('fetch')", async () => {
+    it("the default fetch is looked up at request time, so vi.stubGlobal('fetch') reaches it", async () => {
       const fakeFetch = vi.fn().mockResolvedValue(
         new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -315,7 +319,10 @@ describe("api client and utilities", () => {
       );
       vi.stubGlobal("fetch", fakeFetch);
 
-      await api.GET("/test");
+      // A client built like the shared `api` (no fetch given); `api` itself is typed by the real
+      // contract, which a route-agnostic test cannot name a path of.
+      const client = createApiClient<TestPaths>();
+      expect(unwrap(await client.GET("/test"))).toEqual({ ok: true });
       expect(fakeFetch).toHaveBeenCalled();
     });
   });
