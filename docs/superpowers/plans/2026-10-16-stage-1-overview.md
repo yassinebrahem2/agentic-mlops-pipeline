@@ -16,7 +16,7 @@ Stage 1 is built through several plans. This overview holds what they all share.
 |---|---|---|---|---|
 | backend-core | `plan/stage-1-backend-core` | Backend scaffold and CI, config, IDs, storage, credentials, git runner, shared test fixtures | none | Merged |
 | frontend-scaffold | `plan/stage-1-frontend-scaffold` | React app scaffold, tooling, frontend CI | none | Merged |
-| providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
+| providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | backend-core | Ready on its branch |
 | github-workspace | `plan/stage-1-github-workspace` | GitHub API and auth, local and GitHub projects | backend-core | Draft in `drafts/`; branch opens when backend-core is merged and the draft converges |
 | agent-tools | `plan/stage-1-agent-tools` | Agent definition files, catalog, tool registry, tracked-file filter, Read/Glob/Grep | backend-core | Ready on its branch |
 | agent-runtime | `plan/stage-1-agent-runtime` | Per-project agent settings and model assignment, message store, context and compaction, model calls with retries, the LangGraph loop, turn executor, stream hub, session queue, Stop, recovery | providers, github-workspace, agent-tools | To write |
@@ -34,7 +34,8 @@ Every task in every stage 1 plan includes these:
 
 - **Runtimes and backend versions:**
   - Python `>=3.12`; Node 22.
-  - Backend dependency floors are the versions verified on 2026-10-16: langgraph 1.2.15, langgraph-checkpoint-sqlite 3.1.2, langchain-openai 1.7.2, langchain-core 1.6.11, fastapi 0.143.2, uvicorn 0.44.0, sqlalchemy 2.1.4, aiosqlite 0.22.1, pydantic 2.13.1, cryptography 46.0.7, python-ulid 4.0.1, platformdirs 4.9.6, sse-starlette 3.3.4, httpx 0.28.1, keyring 25.7.0.
+  - Backend dependency floors are the versions verified on 2026-10-16: langgraph 1.2.15, langgraph-checkpoint-sqlite 3.1.2, langchain-openai 1.7.2, langchain-core 1.6.11, fastapi 0.143.2, uvicorn 0.44.0, sqlalchemy 2.1.4, aiosqlite 0.22.1, pydantic 2.13.1, cryptography 46.0.7, python-ulid 4.0.1, platformdirs 4.9.6, sse-starlette 3.3.4, httpx 0.28.1, httpx2 2.13.1, keyring 25.7.0.
+  - The `openai` SDK (through langchain-openai) runs on `httpx2`, not `httpx`. Model calls go through one app-owned `httpx2.AsyncClient` (providers plan); never langchain-openai's default client, which is cached for the whole process and bound to the first event loop.
 - **Frontend versions:**
   - Majors are pinned to the versions this code is written against: react 19, vite 7, react-router 7, typescript ~5.9, tailwindcss 4, vitest 5, eslint 9, @tanstack/react-query 5, openapi-typescript 7, openapi-fetch 0.17.
   - Newer majors exist (vite 8, react-router 8, typescript 7, eslint 10). Upgrading them is a separate, explicit decision. Vitest went from 3 to 5 on 2026-10-16 by such a decision: vitest 3 depended on packages with critical advisories that no 3.x release fixes.

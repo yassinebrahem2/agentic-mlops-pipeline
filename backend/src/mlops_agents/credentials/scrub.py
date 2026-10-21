@@ -108,8 +108,9 @@ def error_text(exc: BaseException) -> str:
     """`str(exc)` made safe to show. URL-parse errors are reduced to their kind, because their
     text can quote part of a key."""
     import httpx
+    import httpx2
 
-    if isinstance(exc, httpx.InvalidURL):
+    if isinstance(exc, httpx.InvalidURL | httpx2.InvalidURL):
         return "the URL could not be parsed (its text is withheld: it can quote part of a key)"
     return scrub_url_secrets(str(exc))
 
