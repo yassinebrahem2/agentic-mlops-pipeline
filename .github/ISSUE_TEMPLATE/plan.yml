@@ -18,20 +18,6 @@ body:
     validations:
       required: true
   - type: input
-    id: owner
-    attributes:
-      label: Owner
-      description: The one teammate who implements this plan's tasks (@login); also the issue's assignee
-    validations:
-      required: true
-  - type: input
-    id: reviewer
-    attributes:
-      label: Reviewer
-      description: The teammate who reviews each task PR before the lead (@login)
-    validations:
-      required: true
-  - type: input
     id: spec
     attributes:
       label: Spec
