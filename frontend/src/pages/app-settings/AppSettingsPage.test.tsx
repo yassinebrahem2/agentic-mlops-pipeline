@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
@@ -75,7 +75,7 @@ describe("App settings page", () => {
     await user.click(await screen.findByRole("button", { name: "Copy data folder" }));
 
     expect(writeText).toHaveBeenCalledWith("/home/someone/.example-app");
-    expect(await screen.findByText("Copied.")).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "Copy result" })).toHaveTextContent("Copied.");
   });
 
   it("says so when the data folder cannot be copied", async () => {
@@ -86,9 +86,11 @@ describe("App settings page", () => {
 
     await user.click(await screen.findByRole("button", { name: "Copy data folder" }));
 
-    expect(
-      await screen.findByText("Could not copy. Select the folder path and copy it by hand."),
-    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("status", { name: "Copy result" })).toHaveTextContent(
+        "Could not copy. Select the folder path and copy it by hand.",
+      );
+    });
   });
 
   it("backs up now and shows the folder the backup was written to", async () => {
@@ -102,7 +104,9 @@ describe("App settings page", () => {
 
     await user.click(await screen.findByRole("button", { name: "Back up now" }));
 
-    expect(await screen.findByText(backup)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("status", { name: "Backup result" })).toHaveTextContent(backup);
+    });
     expect(
       sent.filter((s) => s.method !== "GET").map((s) => [s.method, s.url.pathname, s.body]),
     ).toEqual([["POST", "/api/app/backup", undefined]]);

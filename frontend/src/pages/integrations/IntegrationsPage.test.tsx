@@ -98,16 +98,24 @@ describe("Integrations page", () => {
     expect(screen.queryByLabelText("GitHub token")).not.toBeInTheDocument();
   });
 
-  it("connects through the GitHub CLI login", async () => {
+  it("shows progress while the GitHub CLI login is checked, then connects", async () => {
+    let answer: (response: Response) => void = () => undefined;
     const sent = stubApi({
       "GET /api/github": () => json(notConnectedWithGh),
-      "POST /api/github/gh": () => json(throughGh),
+      "POST /api/github/gh": () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
     });
     const user = userEvent.setup();
     renderPage("/integrations");
 
     await user.click(await screen.findByRole("button", { name: "Use my GitHub CLI login" }));
 
+    expect(
+      await screen.findByRole("button", { name: "Checking GitHub CLI login…" }),
+    ).toBeDisabled();
+    answer(json(throughGh));
     expect(await screen.findByText("Connected as octocat")).toBeInTheDocument();
     expect(screen.getByText("through the GitHub CLI")).toBeInTheDocument();
     expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([

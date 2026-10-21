@@ -106,7 +106,7 @@ function GhLogin() {
             enable.mutate();
           }}
         >
-          Use my GitHub CLI login
+          {enable.isPending ? "Checking GitHub CLI login…" : "Use my GitHub CLI login"}
         </Button>
       </div>
       {enable.isError && <p className="text-destructive">{errorText(enable.error)}</p>}

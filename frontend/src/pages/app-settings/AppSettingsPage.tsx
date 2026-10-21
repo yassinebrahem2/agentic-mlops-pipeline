@@ -82,12 +82,15 @@ function CopyButton({ text }: { text: string }) {
       >
         Copy
       </Button>
-      {result === "copied" && <span className="text-muted-foreground text-sm">Copied.</span>}
-      {result === "failed" && (
-        <span className="text-destructive text-sm">
-          Could not copy. Select the folder path and copy it by hand.
-        </span>
-      )}
+      {/* The live region stays mounted so screen readers announce each new result. */}
+      <span role="status" aria-label="Copy result" className="text-sm">
+        {result === "copied" && <span className="text-muted-foreground">Copied.</span>}
+        {result === "failed" && (
+          <span className="text-destructive">
+            Could not copy. Select the folder path and copy it by hand.
+          </span>
+        )}
+      </span>
     </>
   );
 }
@@ -117,11 +120,13 @@ function Backup() {
           {backup.isPending ? "Backing up…" : "Back up now"}
         </Button>
       </div>
-      {backup.isSuccess && (
-        <p>
-          Backup written to <code className="text-sm break-all">{backup.data.path}</code>
-        </p>
-      )}
+      <div role="status" aria-label="Backup result">
+        {backup.isSuccess && (
+          <p>
+            Backup written to <code className="text-sm break-all">{backup.data.path}</code>
+          </p>
+        )}
+      </div>
       {backup.isError && <p className="text-destructive">{errorText(backup.error)}</p>}
     </section>
   );
