@@ -154,11 +154,11 @@ class AgentSettingsService:
   };
   ```
 
-- `frontend/src/lib/models.ts` (frontend-foundation task 2): `isUsableModel(model)` (I2's usable-model rule on the client) and `hostedModelWarning(provider)`, used by every page that assigns a model.
+- `frontend/src/lib/models.ts` (frontend-foundation task 2): `hostedModelWarning(provider)`, used by every page that assigns a model. Whether a model is usable is not decided here: a page reads `ModelEntry.problem` (I6), None when usable (#88).
 - Page paths, fixed so pages can link to each other: `/` Projects (frontend-workspace, app nav order 0), `/projects/new` Add project, `/projects/:projectId` (redirects to the first project page by `order`), `/projects/:projectId/agents` Agents (frontend-chat, project nav order 0), `/projects/:projectId/settings` Project settings (frontend-workspace, project nav order 100), `/providers` AI providers (frontend-providers, app nav order 10), `/integrations` Integrations (order 20), `/settings` App settings (order 30). Nav labels are unique, so role and label queries (e2e) are never ambiguous.
 - Tests render pages with `src/test/render.tsx`: `renderPage(path: string, options?: { routes?: PageRoute[] })` renders the real router (memory history at `path`) with a fresh `QueryClient`; requests are answered by `vi.stubGlobal("fetch", ...)`, which works because `createApiClient`'s default fetch calls `globalThis.fetch` at request time.
 
-**I6. Resource API** (api-resources). Bodies are the merged pydantic models (`Project`, `FolderListing`, `Provider`, `ModelEntry`, `RemoteModel`, `DetectedKey`, `GitHubStatus`, `RepoSummary`) and I2's `AgentSettingsView`; the OpenAPI contract is the reference.
+**I6. Resource API** (api-resources). Bodies are the merged pydantic models (`Project`, `FolderListing`, `Provider`, `ModelEntry` (with the computed `problem: str | None`, the one source of the usable-model rule, #88), `RemoteModel`, `DetectedKey`, `GitHubStatus`, `RepoSummary`) and I2's `AgentSettingsView`; the OpenAPI contract is the reference.
 - Projects: `GET/POST /api/projects` (POST body `{"source": "local", "path", "init_git"}` or `{"source": "github", "repo"}`), `GET/DELETE /api/projects/{project_id}`, `POST .../open`, `POST .../refresh`, `POST .../relink` `{"path"}`, `GET /api/folders?path=` (local mode only).
 - GitHub: `GET /api/github`, `POST /api/github/gh`, `POST /api/github/token` `{"token"}`, `DELETE /api/github`, `GET /api/github/repos`.
 - Providers: `GET/POST /api/providers`, `DELETE /api/providers/{name}`, `POST /api/providers/{name}/keys` `{"key"}`, `DELETE /api/providers/{name}/keys/{position}`, `GET /api/providers/{name}/remote-models`, `GET /api/env-keys`, `POST /api/env-keys/{env_var}/import`.

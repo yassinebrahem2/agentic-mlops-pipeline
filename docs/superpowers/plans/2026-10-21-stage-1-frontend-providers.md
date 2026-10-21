@@ -56,10 +56,10 @@ The rules for every page in the frontend-workspace plan ("Rules for every page")
 - Test: `AgentDefaults.test.tsx`
 
 **Interfaces:**
-- Consumes: I6 `GET /agents`, `PUT /agents/{agent}/model`, `GET /models`, `GET /providers`; `isUsableModel` and `hostedModelWarning` from `src/lib/models.ts` (frontend-foundation task 2); the code `model_not_usable`.
+- Consumes: I6 `GET /agents`, `PUT /agents/{agent}/model`, `GET /models`, `GET /providers`; `ModelEntry.problem` (None when usable, #88) and `hostedModelWarning` from `src/lib/models.ts` (frontend-foundation task 2); the code `model_not_usable`.
 
 **Implementation notes:**
-- A section "Default model per agent": one row per agent (display name, description), a "Model" select with "None" and the usable models (`isUsableModel`). The current `default_model` is always an option, labelled "<address> (not usable)" when it fails the rule or is missing from `GET /models`, so the select never shows a value that is not the real one; and the agent's `settings.model_problem` as a warning when set (for example "Choose a model for Orchestrator ...").
+- A section "Default model per agent": one row per agent (display name, description), a "Model" select with "None" and the usable models (`problem === null`). The current `default_model` is always an option, labelled "<address> (not usable)" when it fails the rule or is missing from `GET /models`, so the select never shows a value that is not the real one; and the agent's `settings.model_problem` as a warning when set (for example "Choose a model for Orchestrator ...").
 - When the chosen model belongs to a `hosted` provider (by `provider_name` in `GET /providers`), show `hostedModelWarning(provider)` under the row (spec section 5).
 - Choosing sends `PUT /agents/{agent}/model` with the address, or `null` for None, and refreshes `["agents"]`.
 
