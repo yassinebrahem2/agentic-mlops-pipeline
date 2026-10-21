@@ -166,6 +166,7 @@ The decision recorded in `drafts/README.md`: providers use `httpx2`, the openai 
 - `hosts.py`, a middleware on every request (`/` and the UI included):
   - Allowed hosts: local mode `127.0.0.1:<port>` and `localhost:<port>`; server mode each entry of `allowed_hosts` (with or without a port). Compare the host case-insensitively. When the peer address is in `trusted_proxies`, the host and scheme come from `X-Forwarded-Host` and `X-Forwarded-Proto`. Any other host → 400 `bad_host`, "This address is not allowed. Open the app at the address it printed."
   - When an `Origin` header is present it must be one of the allowed hosts with the expected scheme (local `http`, server `https`), or one of `dev_origins`; otherwise 403 `bad_origin`.
+  - Left from task 1's review: the session guard sits outside the catch-all 500 middleware (`app.py`), so an exception inside the guard skips it. Order the middleware so the catch-all wraps the guard and the Host/Origin middleware, and test that an exception raised there still gives the JSON 500. In `test_errors.py`, assert the full log line (`Unexpected RuntimeError on GET <path>`) instead of `RuntimeError` alone, which the logged source line also matches.
 
 **Tests (behaviors to verify):**
 - Local: status says `local`, not signed in; a wrong token → 401 `bad_token` and no cookie; the right token → 200, both cookies with the flags above, and a following guarded GET passes; `login` → 404 `not_available`; a fresh app generates a token when `settings.access_token` is None and two apps generate different ones.
