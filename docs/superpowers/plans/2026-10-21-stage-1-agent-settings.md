@@ -1,5 +1,3 @@
-> **DRAFT. Do not implement.** Still missing: an advisor review round with no blocking issues. The lead removes this banner when the plan leaves `drafts/`.
-
 # Stage 1 — Agent Settings Implementation Plan
 
 > **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. The task is one PR into `main` (`AGENTS.md` rule 5). It lists its files, the interfaces it consumes and produces, its tests (the stop condition) and the checks that prove it works.

@@ -21,7 +21,7 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | providers | `plan/stage-1-providers` | AI providers registry, fake OpenAI-compatible server, model verification, LangChain bridge | | | Merged |
 | github-workspace | `plan/stage-1-github-workspace` | GitHub API and auth, local and GitHub projects | | | Merged |
 | agent-tools | `plan/stage-1-agent-tools` | Agent definition files, catalog, tool registry, tracked-file filter, Read/Glob/Grep | | | Merged |
-| agent-settings | `plan/stage-1-agent-settings` | Default model per agent, per-project model override and limits, resolving the model a turn uses | none | now | To write |
+| agent-settings | `plan/stage-1-agent-settings` | Default model per agent, per-project model override and limits, resolving the model a turn uses | none | now | Ready: plan issue open |
 | agent-runtime | `plan/stage-1-agent-runtime` | Message store, context and compaction, model calls with retries and key rotation, the LangGraph loop, turn executor, stream hub, session queue, Stop, recovery | I2 (its task 1 declares I1) | now | To write |
 | api-foundation | `plan/stage-1-api-foundation` | App factory and lifespan, services container, router discovery, error format, one HTTP client library (`integrations/github` moves from `httpx` to `httpx2`), login for both run modes, Host/Origin/CSRF checks, SPA serving, CLI (`start`, `backup`), committed OpenAPI contract and its CI check | none | now | Ready: plan issue open |
 | api-resources | `plan/stage-1-api-resources` | REST routers for projects and the folder browser, GitHub, providers and models, agents and their settings, app info and backup | I3; I2 for the agents router | after api-foundation task 1 | To write |
