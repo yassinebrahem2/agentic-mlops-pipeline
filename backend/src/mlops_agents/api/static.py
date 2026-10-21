@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, HTMLResponse, Response
 from starlette.types import Receive, Scope, Send
+from starlette.websockets import WebSocketClose
 
 NOT_BUILT_HTML = """<!doctype html>
 <html lang="en">
@@ -31,6 +32,10 @@ def mount_ui(app: FastAPI, web_dir: Path) -> None:
     resolved_web_dir = web_dir.resolve()
 
     async def ui_app(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "websocket":
+            await WebSocketClose()(scope, receive, send)
+            return
+
         if scope["type"] != "http":
             return
 

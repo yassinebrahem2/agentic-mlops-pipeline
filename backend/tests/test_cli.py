@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import logging
 import socket
 from pathlib import Path
@@ -58,6 +59,42 @@ def test_port_in_use_exits_2(
         f"Port {free_port} is in use. Start with --port and another number, for example --port {free_port + 1}."
         in captured.err
     )
+
+
+def test_port_in_use_with_reuseaddr_occupying_socket_exits_2(
+    free_port: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", free_port))
+        sock.listen(1)
+        with pytest.raises(SystemExit) as exc:
+            main(["start", "--port", str(free_port)])
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert (
+        f"Port {free_port} is in use. Start with --port and another number, for example --port {free_port + 1}."
+        in captured.err
+    )
+
+
+def test_other_oserror_on_bind_exits_2_plain_message(
+    free_port: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _fake_bind(self: socket.socket, address: Any) -> None:
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr(socket.socket, "bind", _fake_bind)
+    with pytest.raises(SystemExit) as exc:
+        main(["start", "--no-browser", "--port", str(free_port)])
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "Invalid argument" in captured.err
 
 
 def test_server_without_env_vars_exits_2(
@@ -214,7 +251,10 @@ def test_server_dev_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_server_with_wrong_master_key_exits_2_no_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    free_port: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     keys_file = tmp_path / "keys.enc"
     EncryptedFileStore(keys_file, "original-key").set("key1", "val1")
@@ -225,12 +265,27 @@ def test_server_with_wrong_master_key_exits_2_no_traceback(
     monkeypatch.setenv("MLOPS_AGENTS_ALLOWED_HOSTS", "app.example.com")
 
     with pytest.raises(SystemExit) as exc:
-        main(["start", "--server"])
+        main(["start", "--server", "--port", str(free_port)])
 
     assert exc.value.code == 2
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
     assert "MLOPS_AGENTS_MASTER_KEY does not unlock keys.enc." in captured.err
+
+
+def test_backup_ctrl_c_exits_quietly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("MLOPS_AGENTS_HOME", str(tmp_path))
+
+    def _sigint(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("mlops_agents.cli.snapshot_all", _sigint)
+    code = main(["backup"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
 
 
 def test_backup_writes_app_db_under_home(

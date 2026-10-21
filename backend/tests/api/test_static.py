@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from starlette.types import Message, Scope
 
 from mlops_agents.api.app import create_app
+from mlops_agents.api.static import mount_ui
 from mlops_agents.config import RunMode, load_settings
 from tests.api.conftest import LOCAL_URL, NoGh, signed_in
 from tests.conftest import MemoryKeyStore
@@ -151,3 +152,27 @@ async def test_ui_paths_need_no_session(anonymous: httpx2.AsyncClient) -> None:
         response = await anonymous.get(path)
         assert response.status_code == 200
         assert response.status_code != 401
+
+
+async def test_websocket_request_is_rejected_at_fallback(tmp_path: Path) -> None:
+    app = FastAPI()
+    mount_ui(app, tmp_path)
+
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    scope: Scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0"},
+        "path": "/ws",
+        "headers": [],
+    }
+
+    await app(scope, receive, send)
+    assert len(sent) >= 1
+    assert sent[0]["type"] == "websocket.close"

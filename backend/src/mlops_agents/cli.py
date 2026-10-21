@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import dataclasses
 import errno
+import os
 import socket
 import sys
 import webbrowser
@@ -73,21 +74,20 @@ def _start(args: argparse.Namespace) -> int:
         settings = dataclasses.replace(settings, dev_origins=dev_origins)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if os.name == "posix":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind((settings.host, settings.port))
     except OSError as exc:
         sock.close()
-        is_in_use = exc.errno == errno.EADDRINUSE or (
-            sys.platform == "win32" and exc.errno in (errno.EACCES, 10048, 10013)
-        )
-        if is_in_use:
+        if exc.errno in IN_USE_ERRNOS:
             print(
                 f"Port {settings.port} is in use. Start with --port and another number, for example --port {settings.port + 1}.",
                 file=sys.stderr,
             )
             sys.exit(2)
-        raise
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
 
     try:
         keystore = open_keystore(settings, DataPaths(settings.data_dir))
@@ -116,8 +116,6 @@ def _start(args: argparse.Namespace) -> int:
     server = uvicorn.Server(config)
     try:
         asyncio.run(_run_server(server, sock, notify_started))
-    except KeyboardInterrupt:
-        pass
     finally:
         sock.close()
     return 0
