@@ -1,12 +1,12 @@
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
-    EventType,
     MessageView,
     Part,
     SessionView,
@@ -16,7 +16,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 
-VALID_EVENT_TYPES: list[EventType] = [
+VALID_EVENT_TYPES: list[str] = [
     "message.created",
     "text.delta",
     "tool.started",
@@ -79,6 +79,49 @@ def test_part_rejects_unknown_type() -> None:
         adapter.validate_json(raw)
 
 
+def test_models_reject_missing_required_fields() -> None:
+    # TextPart requires type
+    with pytest.raises(ValidationError):
+        TextPart.model_validate({"text": "hello"})
+
+    # ToolCallPart requires type
+    with pytest.raises(ValidationError):
+        ToolCallPart.model_validate({"id": "c1", "name": "Read", "input": {}})
+
+    # ToolResultPart requires type and is_error
+    with pytest.raises(ValidationError):
+        ToolResultPart.model_validate({"tool_call_id": "c1", "content": "res", "is_error": False})
+    with pytest.raises(ValidationError):
+        ToolResultPart.model_validate(
+            {"type": "tool_result", "tool_call_id": "c1", "content": "res"}
+        )
+
+    # MessageView requires turn_id and from_agent (even if None)
+    base_msg: dict[str, Any] = {
+        "id": "msg_01",
+        "author_kind": "user",
+        "author_name": "user",
+        "parts": [{"type": "text", "text": "hi"}],
+        "status": "complete",
+        "created_at": "2026-10-21T18:00:00Z",
+    }
+    with pytest.raises(ValidationError):
+        MessageView.model_validate(base_msg)  # missing turn_id and from_agent
+    with pytest.raises(ValidationError):
+        MessageView.model_validate({**base_msg, "turn_id": None})  # missing from_agent
+    with pytest.raises(ValidationError):
+        MessageView.model_validate({**base_msg, "from_agent": None})  # missing turn_id
+
+    # Valid with explicit None
+    valid_msg = MessageView.model_validate({**base_msg, "turn_id": None, "from_agent": None})
+    assert valid_msg.turn_id is None
+    assert valid_msg.from_agent is None
+
+    # StreamEvent requires data
+    with pytest.raises(ValidationError):
+        StreamEvent.model_validate({"seq": 1, "type": "resync"})
+
+
 def test_message_view_round_trip() -> None:
     message = MessageView(
         id="msg_01",
@@ -138,7 +181,7 @@ def test_session_view_round_trip() -> None:
 
 
 @pytest.mark.parametrize("event_type", VALID_EVENT_TYPES)
-def test_stream_event_accepts_valid_types(event_type: EventType) -> None:
+def test_stream_event_accepts_valid_types(event_type: Any) -> None:
     event = StreamEvent(seq=1, type=event_type, data={"key": "val"})
     assert event.type == event_type
     assert event.seq == 1
@@ -185,6 +228,8 @@ class DummySessions:
         return self._dummy_stream()
 
     async def close_project(self, project_id: str) -> None:
+        """Before a project is removed: ends its running turns (interrupted), drops its hubs and
+        subscribers, closes its database handles; later calls for that project start fresh."""
         pass
 
 

@@ -29,22 +29,22 @@ TurnEnd = Literal["done", "stopped", "interrupted", "failed"]
 
 
 class TextPart(BaseModel):
-    type: Literal["text"] = "text"
+    type: Literal["text"]
     text: str
 
 
 class ToolCallPart(BaseModel):
-    type: Literal["tool_call"] = "tool_call"
+    type: Literal["tool_call"]
     id: str
     name: str
     input: dict[str, Any]
 
 
 class ToolResultPart(BaseModel):
-    type: Literal["tool_result"] = "tool_result"
+    type: Literal["tool_result"]
     tool_call_id: str
     content: str
-    is_error: bool = False
+    is_error: bool
 
 
 Part = Annotated[TextPart | ToolCallPart | ToolResultPart, Field(discriminator="type")]
@@ -52,10 +52,10 @@ Part = Annotated[TextPart | ToolCallPart | ToolResultPart, Field(discriminator="
 
 class MessageView(BaseModel):
     id: str
-    turn_id: str | None = None
+    turn_id: str | None
     author_kind: AuthorKind
     author_name: str
-    from_agent: str | None = None
+    from_agent: str | None
     parts: list[Part]
     status: MessageStatus
     created_at: str
@@ -69,21 +69,18 @@ class SessionView(BaseModel):
     last_seq: int  # stream position this view matches
 
 
-EventType = Literal[
-    "message.created",
-    "text.delta",
-    "tool.started",
-    "tool.finished",
-    "message.updated",
-    "turn.ended",
-    "resync",
-]
-
-
 class StreamEvent(BaseModel):
     seq: int  # per session, increasing; sent as the SSE id
-    type: EventType
-    data: dict[str, Any] = Field(default_factory=dict)
+    type: Literal[
+        "message.created",
+        "text.delta",
+        "tool.started",
+        "tool.finished",
+        "message.updated",
+        "turn.ended",
+        "resync",
+    ]
+    data: dict[str, Any]
 
 
 class AgentSessions(Protocol):
@@ -97,13 +94,15 @@ class AgentSessions(Protocol):
         self, project_id: str, agent: str, after_seq: int | None
     ) -> AsyncIterator[StreamEvent]: ...
 
-    async def close_project(self, project_id: str) -> None: ...
+    async def close_project(self, project_id: str) -> None:
+        """Before a project is removed: ends its running turns (interrupted), drops its hubs and
+        subscribers, closes its database handles; later calls for that project start fresh."""
+        ...
 
 
 __all__ = [
     "AgentSessions",
     "AuthorKind",
-    "EventType",
     "MessageStatus",
     "MessageView",
     "Part",
