@@ -102,13 +102,15 @@ Anything not listed here is unknown.
 ### Process
 - [USER] Discuss first, then write specs with the brainstorming skill, then plans. Commits carry no AI attribution lines.
 - [AGREED] Build split into sub-specs, in order: (1) foundation + first working agent (workspace, storage, AI providers, app shell, minimal add-project + GitHub integration, Orchestrator chatting with read-only repo tools); (2) agent runtime (all agents, sessions, agent messages, permissions, sandbox, worktrees, PRs/issues, Inbox approvals; audit log + event stream stored from here); (3) full onboarding + data access (diagnosis, data connections, DuckDB hooks, tracking adapters, Models/Data/Runs pages); (4) monitoring loop (checks, scheduler, Data Quality, Model Performance, incidents, Alert Prioritization, Discord/email, Dashboard, shadow baseline recording + verdict buttons from the first check); (5) action agents (Retraining, Deployment & Rollback, hooks, Deployments page); (6) Stats, Activity, Knowledge, Usage pages; (7) developer benchmark harness.
+- [USER] The lead (yassinebrahem2) decides what is built and writes every spec, plan, task and issue; teammates implement task issues only.
+- [AGREED] 2026-10-21: one owner per plan, plans depend on interfaces rather than whole plans, one PR per task into main, a teammate review then the lead's review and merge (details in AGENTS.md).
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open
 - Session concurrency: what happens when a message from another agent or a trigger arrives while an agent is mid-turn.
 - Where scheduled and triggered work appears (inside the agent's session vs separate run records linked from it).
 - What runs where: building a sandbox that matches the user's environment; whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
-- Deliverable format. (Team of 4; deadline 1 week from 2026-10-16, i.e. ~2026-10-23. The user sets the pace of the work.)
+- Deliverable format and the exact final date. (Team of 5. Deadline about 2026-10-29, not final as of 2026-10-21; it was ~2026-10-23 before. The user sets the pace of the work.)
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
 - Fine-tuning: not planned; no decision recorded.
 

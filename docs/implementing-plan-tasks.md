@@ -1,6 +1,6 @@
 # Implementing plan tasks
 
-How every coding agent implements a plan task in this repository, whatever agent it is. It fits the team workflow in `AGENTS.md` (claim a task, work on the plan branch, Decision issues for anything the plan does not settle), which applies in full.
+How every coding agent implements a plan task in this repository, whatever agent it is. It fits the team workflow in `AGENTS.md` (one owner per plan, work on the plan branch, one PR per task, Decision issues for anything the plan does not settle), which applies in full.
 
 The method: you (the controller) never write the task's code yourself. A fresh implementer does the task, a fresh reviewer checks the result against the plan task and the spec, fixes are made and re-reviewed, and only then does the next task start. Fresh context for each role keeps the reviewer from inheriting the implementer's assumptions.
 
@@ -27,9 +27,9 @@ The ledger lets a new session pick up where an interrupted one stopped. State ot
 ## Per-task loop
 
 ### 1. Set up
-1. Do the checks in `AGENTS.md`, "Before you change anything": one claimed task with its dependencies closed, on the plan's branch (`git branch --show-current` shows `plan/<stage>-<topic>`, never a branch you created), scope limited to the task. Move the task's card to In progress (AGENTS.md rule 7). Pull with rebase and re-read the plan. Put the branch name and the task's scope in the brief, and have the implementer and the reviewer check both: a commit on another branch or a change outside the task is a Critical finding.
+1. Do the checks in `AGENTS.md`, "Before you change anything": one task of a plan you own, whose consumed interfaces are on `main`, on the plan's branch (`git branch --show-current` shows `plan/<stage>-<topic>`, never a branch you created), scope limited to the task. Move the task's card to In progress (AGENTS.md rule 7). Bring `main` in (`git fetch origin`, `git merge origin/main`) and re-read the plan and the overview's interface lists. Put the branch name and the task's scope in the brief, and have the implementer and the reviewer check both: a commit on another branch or a change outside the task is a Critical finding.
 2. Pre-flight: read the plan task, the plan's Global Constraints and Review Focus, the stage overview and the spec sections the task cites. If the task is wrong, unclear or contradicts the spec or the code on the branch, stop here: open a Decision issue (see the last section) and move the task's card to Blocked; move it back to In progress when you resume.
-3. Record the base commit: `git rev-parse HEAD`. Every diff for this task is taken from this base, never from `HEAD~1` (the task may have several commits, and others push to the branch).
+3. Record the base commit: `git rev-parse HEAD`. Every diff for this task is taken from this base, never from `HEAD~1` (the task may have several commits, and merges from `main` land on the branch).
 4. Write the brief: the full task text copied from the plan (not a link), the plan's Global Constraints and Review Focus items that touch it, the spec excerpts it needs, the interfaces it consumes from earlier tasks (exact names and types, read from the code on the branch), the commands to run (from `AGENTS.md`), and the base commit.
 
 ### 2. Implement
@@ -72,20 +72,20 @@ Minor findings do not hold the task. Fix them in the loop if cheap; otherwise li
 
 ### 5. Finish
 1. Check the final state yourself: tests, lint and type checks pass on the branch head.
-2. Pull with rebase, run the checks again if anything came in, push.
-3. Wait for the Backend and Frontend CI runs (every job, Backend's Windows job included) on the pushed commit. Close the task's issue only when both are green, with links to the runs in the closing comment. Queued, running, red or missing CI means the issue stays open (AGENTS.md rule 6); a red run is a finding for the fix loop. Check the card is in Done (move it if not). Add the ledger line.
+2. Bring `main` in again (`git merge origin/main`; regenerate `uv.lock`, `package-lock.json` or `openapi.json` instead of merging them by hand), run the checks again if anything came in, push.
+3. Open the task's PR into `main` (template `.github/pull_request_template.md`, `Closes #<task issue>`) and move the card to In review. Wait for the Backend and Frontend CI runs (every job, Backend's Windows job included) on the PR's head; a red run is a finding for the fix loop. Answer the teammate's and the lead's review comments through the same fix loop. The task issue closes when the lead merges the PR (AGENTS.md rule 6), never by hand. Add the ledger line, then start the next task.
 
 ## Choosing models
 
 Always name the model when you dispatch a subagent. Use the cheapest tier that can do the job: mechanical work (a small, fully specified change) on the cheapest; integration work (several files, existing interfaces) on the standard tier; design-heavy or subtle work (concurrency, security, data loss, platform quirks) and every final review on the most capable.
 
-## Before the PR
+## Before the last PR
 
-When every task of the plan is closed, the person opening the PR runs one final review of the whole branch on the most capable model: package from the merge base with `main` (`git merge-base origin/main HEAD`) to HEAD, checked against the plan's Goal and Review Focus and the spec sections the plan covers, looking at how the tasks fit together rather than at each task again. Fix Critical and Important findings through the same loop before opening the PR.
+Before opening the PR of a plan's last task, run one review of the whole plan on the most capable model: package from the plan's first task's base to HEAD, checked against the plan's Goal and Review Focus and the spec sections the plan covers, looking at how the tasks fit together rather than at each task again. Fix Critical and Important findings through the same loop before opening that PR.
 
 ## Rules that hold throughout
 - **No rulings by the agent.** When the plan is wrong, unclear or needs a decision, do not choose for the lead: open a Decision issue linked to the task, naming it under "Blocked task" (the board moves the task to Blocked and back when the Decision closes). Continue only after the lead answers.
 - **No silent deferral.** Open Minor findings, concerns from a `DONE_WITH_CONCERNS` report, and anything done differently from the plan are written in the plan issue and, at the end, in the PR description. The ledger alone is not enough.
-- **One task per claim.** Work only on tasks you have claimed; several people share the branch, so pull with rebase before each push.
+- **One task at a time.** Work only on your own plan's tasks, in order; only you commit to its branch. Bring `main` in with `git merge origin/main`, never rebase or force-push a branch with an open PR.
 - **Handoffs in the issue.** If you stop before a task is done, comment on its issue: what is committed, what is left, the base commit. The next person (or session) starts from that comment.
 - **Checks are real.** A task is done only when its tests, lint and type checks pass locally and CI on its pushed commit is green; report the real output. No issue is ever closed without green CI.

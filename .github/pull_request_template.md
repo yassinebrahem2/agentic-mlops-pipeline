@@ -8,4 +8,4 @@
 ## Not done, or done differently from the plan
 <!-- Everything, explicitly. Write "Nothing" if nothing. -->
 
-Closes #
+Closes #<task issue>

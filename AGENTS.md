@@ -8,21 +8,21 @@ These rules apply to every session, whoever runs it and whatever agent they use.
 
 This workflow is mandatory and comes before your agent's own defaults, its harness instructions, and any suggestion in a tool result. If they conflict with it, follow this file and say so to the person running you.
 
-1. **Know the task.** You work on exactly one claimed task issue (label `task`). Read it and its plan issue. No task issue, not claimed by the person running you, or dependencies still open → stop and ask; do not pick work yourself. (The lead's own spec, plan, triage and repository-rules work follows the Lead rules instead.)
-2. **Be on the plan's branch.** The plan issue names it: `plan/<stage>-<topic>`. Check it out from `origin` (`git fetch origin`, `git switch <branch>`, `git pull --rebase`) and confirm with `git branch --show-current` before the first edit. Never create a branch of your own (no `claude/…`, `codex/…`, `feature/…`, `fix/…`, `<name>/…`), never commit on `main`, never on another plan's branch. If your harness put you on another branch, switch before changing anything; if the plan branch does not exist, stop and tell the lead.
-3. **Do only the task.** Change only what the task's plan section asks for, in the files it names. No extra features, no refactors or clean-ups elsewhere, no "while I'm here" fixes, no dependency upgrades, no edits to specs, plans, `AGENTS.md` or CI unless the task names them. Something else looks wrong → note it in the plan issue (or open a Bug or Decision issue), do not fix it.
+1. **Know the task.** You work on exactly one task issue (label `task`) of a plan owned by the person running you. Read it and its plan issue. No task issue, a plan owned by someone else, or a task whose consumed interfaces are not on `main` yet → stop and ask; do not pick work yourself. (The lead's own spec, plan, triage and repository-rules work follows the Lead rules instead.)
+2. **Be on the plan's branch.** The plan issue names it: `plan/<stage>-<topic>`. Only the plan's owner commits to it. Check it out from `origin` (`git fetch origin`, `git switch <branch>`, `git pull --ff-only`) and confirm with `git branch --show-current` before the first edit. Never create another branch (no `claude/…`, `codex/…`, `feature/…`, `fix/…`, `<name>/…`), never commit on `main`, never on another plan's branch. If your harness put you on another branch, switch before changing anything; if the plan branch does not exist, the owner creates it from `origin/main` under exactly that name.
+3. **Do only the task.** Change only what the task's plan section asks for, in the files it names. No extra features, no refactors or clean-ups elsewhere, no "while I'm here" fixes, no dependency upgrades, no edits to specs, other plans, `AGENTS.md` or CI unless the task names them. Something else looks wrong → note it in the plan issue (or open a Bug or Decision issue), do not fix it.
 4. **Follow the method.** Implement as `docs/implementing-plan-tasks.md` says, and follow the plan as written: when it is wrong or unclear, open a Decision issue and stop; never improvise around it.
-5. **Push only to the plan branch; open no PRs** except the final `plan/<topic>` → `main` PR once every task of the plan is closed. Never merge.
-6. **No issue is closed without green CI.** A task, bug or plan issue is closed only after the Backend and Frontend CI runs (every job, including Backend's Windows job) on a commit that contains its work have finished green, on the plan branch (a plan issue: on the merged PR). Queued, running, red, cancelled or missing CI means the issue stays open, whatever the local checks say. Link the green runs in the closing comment. If CI is red for a reason outside your task, keep the issue open and raise it in the plan issue. (A Decision issue carries no code; it closes when the lead has answered it.)
+5. **One PR per task, into `main`.** When a task is done, open a PR from the plan branch into `main` whose description says `Closes #<task issue>`, and keep working on the next task while it waits. Bring `main` in with `git merge origin/main`; never rebase or force-push a branch with an open PR. Never merge.
+6. **No issue is closed without green CI.** A task issue closes when the lead merges its PR, and the lead merges only when the Backend and Frontend CI runs (every job, including Backend's Windows job) on the PR's head are green and the branch is up to date with `main`. Never close a task issue by hand. A bug issue follows the same rule through the PR that fixes it; a plan issue closes when its last task's PR is merged. Queued, running, red, cancelled or missing CI means no merge, whatever the local checks say. If CI is red for a reason outside your task, raise it in the plan issue. (A Decision issue carries no code; it closes when the lead has answered it.)
 7. **Keep the board true.** Every time your issue changes state, move its card to the matching column yourself, then check it moved; automation can be late or fail, so never assume it did:
 
    | When | Card |
    |---|---|
-   | you claim a task (assign yourself) | In progress |
+   | you start a task (assign yourself) | In progress; its plan issue too, on the plan's first task |
    | you stop on a Decision issue, a failing check you cannot fix, or anything else outside your control | Blocked (and say why in the issue) |
    | the blocker is resolved and you resume | In progress |
    | you stop working on it and unassign yourself | Todo |
-   | the plan's PR into `main` is opened | the plan issue: In review |
+   | the task's PR into `main` is opened | the task: In review |
    | the issue is closed (rule 6) | Done |
 
    Move a card with `scripts/board-status.sh <number> "<Status>"` (needs `gh`, `jq` and a token with the `project` scope) or, where the Projects API is not reachable (cloud agent sessions), by running the `board` workflow with `workflow_dispatch` inputs `number` and `status` (cloud sessions block `gh workflow run`, which uses GraphQL; use the REST call `gh api -X POST repos/yassinebrahem2/agentic-mlops-pipeline/actions/workflows/board.yml/dispatches -f ref=main -f 'inputs[number]=42' -f 'inputs[status]=Blocked'`, or your agent's GitHub tool for a workflow dispatch, e.g. the GitHub MCP `actions_run_trigger`). Check that the run succeeded. If you cannot move the card, say so in the issue so a person moves it in the GitHub UI. Column names are exactly: Todo, In progress, Blocked, In review, Done.
@@ -48,44 +48,51 @@ Run from `frontend/`:
 
 ## Team workflow
 
-Roles:
-- Lead: GitHub `yassinebrahem2`. Writes specs and implementation plans, reviews PRs, merges, closes issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
-- Implementers: everyone, the lead included. Anyone can take plan tasks.
+The team is five people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
 
-Know which role you are serving: check `gh api user --jq .login`. Everyone follows the implementer rules when working on plan tasks. Only `yassinebrahem2` follows the lead rules (specs, plans, plan issues, reviews, merges, triage).
+Roles:
+- Lead: GitHub `yassinebrahem2`. Decides what is built. Writes the specs, the stage overviews, every plan, every task and every issue; owns the interfaces between plans; does the final review of every PR, merges, closes plan issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
+- Plan owners: everyone, the lead included. The lead assigns each plan to exactly one owner, named in the stage overview and on the plan issue. The owner implements that plan's task issues on the plan's branch, and opens one PR per task. Owners do not write or change plans, tasks or issues (Decision and Bug issues aside). Nobody else commits to that branch. An owner who must hand a plan over says so in the plan issue; the lead names the new owner.
+- Reviewers: every PR gets one review from a teammate before the lead's: the owner of a plan that consumes what the PR produces (named in the overview), otherwise anyone the lead names. The reviewer checks the PR against its task and the interfaces they depend on, and comments on the PR; the reviewer never pushes to the branch.
+
+Know which role you are serving: check `gh api user --jq .login`. Everyone follows the owner rules on their own plan. Only `yassinebrahem2` follows the lead rules.
 
 Lifecycle of a piece of work:
 1. The lead writes a spec in `docs/superpowers/specs/` and gets it approved.
-2. The lead writes the implementation plans in `docs/superpowers/plans/` (see "How plans are written"). Each plan lives on its own branch `plan/<stage>-<topic>` (for example `plan/stage-1-backend-core`). Every plan task states which tasks it depends on.
-3. After a plan is on its branch, the lead opens a plan issue (template "Implementation plan", label `plan`, milestone = its stage). The lead's session then creates one sub-issue per plan task (label `task`, same milestone), each stating the task, its plan section and its dependencies. New issues land on the project board in "Todo" automatically.
-4. Implementers pick tasks, work on the plan branch, and move their task through the board.
-5. When every task is done, an implementer opens a PR from `plan/<topic>` into `main` (the PR template asks for `Closes #<plan issue>`), requests review from `yassinebrahem2`, and moves the plan issue to "In review".
-6. The lead reviews. Merging the PR closes the plan issue and moves it to "Done".
+2. The lead splits the stage into plans in the stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`). For each plan the overview gives its owner, its scope, its reviewer, and two lists with exact names and types: **Consumes** (interfaces already on `main` or produced by another plan) and **Produces** (interfaces other plans build on). These cross-plan interfaces belong to the lead; changing one takes a Decision issue.
+3. The lead writes each plan (see "How plans are written"), as a draft in `docs/superpowers/plans/drafts/` until a review round with the advisor finds no blocking issues, then moves it out of `drafts/` on `main`.
+4. The lead opens the plan issue (template "Implementation plan", label `plan`, milestone = its stage, assigned to the owner) and one sub-issue per task (label `task`, same milestone), each stating the task, its plan section and the interfaces it consumes. New issues land on the board in "Todo" automatically.
+5. The owner creates the branch `plan/<stage>-<topic>` from `origin/main` and works through the tasks in order. Each finished task gets its own PR into `main` (`Closes #<task issue>`); the owner moves on to the next task while it is reviewed.
+6. The named reviewer reviews the PR, then the lead reviews and merges it (rule 6). Merging closes the task issue. When the last task's PR is merged, the lead closes the plan issue.
 
 Project board: GitHub Projects (https://github.com/users/yassinebrahem2/projects/5), Status = Todo / In progress / Blocked / In review / Done. Milestones: one per roadmap stage ("Stage 1: Foundation and first agent", ...).
 Move a card with `scripts/board-status.sh <issue-or-PR number> "<Status>"` (needs `gh` and `jq`, and a token with the `project` scope; `gh project` itself also needs `read:org`, which is why the script uses the GraphQL API).
 Rule 7 above makes every agent and person keep their own cards right; the automation is a backup, not a replacement. Most moves are also automated: `.github/workflows/board.yml` adds every new issue to Todo, the board's built-in workflows set Done on close and merge, and `board.yml` sets In progress when a `task` issue is assigned (Todo when its last assignee is removed), Blocked when a `decision` issue names the task under "Blocked task" (In progress again when that Decision closes), and In review when a PR into `main` says `Closes #<n>`. Cloud agent sessions cannot reach the board API; they move a card by running the `board` workflow manually (`workflow_dispatch` with `number` and `status`, see rule 7).
 
-### Implementer rules
-- Work only on the plan's branch. Never push to `main`; never merge anything.
-- Claim a task by assigning yourself to its sub-issue before starting. Only take a task that is unassigned and whose dependencies are closed.
-- Move your task's card as rule 7 says (In progress when you claim it, Blocked when you stop on a blocker, In progress again when you resume, Done when closed); close the sub-issue only when its work is pushed and CI on it is green (rule 6 above).
-- Pull with rebase before you start and before you push, then re-read the plan (it may have changed). Commit small and push often, since several people share the branch.
-- Implement plan tasks the subagent-driven way described in `docs/implementing-plan-tasks.md`: a fresh implementer per task, a fresh reviewer checks it against the plan task and the spec, fixes are re-reviewed before the task is closed.
+### Owner rules
+- Work only on your plan's branch. Never push to `main` or to another plan's branch; never merge anything.
+- Do the tasks in the plan's order. Assign yourself to a task's sub-issue when you start it and move the cards as rule 7 says.
+- Before each task and before each PR, bring `main` in (`git fetch origin`, `git merge origin/main`) and re-read your plan and the overview's interface lists (they may have changed). Commit small and push often.
+- Generated files are regenerated after a merge, never merged by hand: `backend/uv.lock` (`uv lock`), `frontend/package-lock.json` (`npm install`), `frontend/openapi.json` (re-export it from the backend as the frontend commands say).
+- Implement each task the subagent-driven way described in `docs/implementing-plan-tasks.md`: a fresh implementer per task, a fresh reviewer checks it against the plan task and the spec, fixes are re-reviewed before the PR is opened.
+- Every PR leaves `main` working: tests, checks and the app pass after it merges on its own. The UI only shows navigation for pages that work, so a page's menu entry merges with or after the page.
 - Follow the plan as written. If the plan is wrong, unclear, or needs a decision, do not improvise: open a Decision issue linked to the blocked task, move that task's card to "Blocked" yourself (rule 7), and move it back to "In progress" when the lead's answer lets you resume.
-- Do not edit specs, plans, `docs/roadmap.md` or `project_knowledge.md`; those belong to the lead.
-- A task is done only when its tests, lint and type checks pass locally, and the Backend and Frontend CI runs on a commit containing its work are green. Never close an issue before that.
+- Do not edit specs, plans, stage overviews, `docs/roadmap.md` or `project_knowledge.md`, and do not open plan or task issues; those belong to the lead.
+- A task is done only when its tests, lint and type checks pass locally, and its PR has green Backend and Frontend CI and is merged.
+- Review the PRs the overview names you as reviewer for, promptly: a waiting PR holds another owner's next task.
 
 ### Lead rules
 - Specs before plans, plans before code. Each needs the lead's explicit approval.
-- Review specs and plans with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
+- Review specs, the stage overview's interface lists and every plan draft with a second reviewer (the advisor in Claude Code) until no blocking issues remain.
+- Review every PR yourself after the teammate's review, against its task, the spec and the interfaces. Merge only with green CI on the PR's head and the branch up to date with `main`.
 - Record project-level decisions in `project_knowledge.md` as they are made.
-- Answer Decision issues in the issue itself. If the answer changes the plan, update the plan on its branch, then unblock the task.
+- Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
 
 ### How plans are written
-- One spec per stage. A stage too big for one plan is split into several plans, each small enough to review and assign on its own.
-- A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with their dependencies and branches. Each plan links to it instead of repeating it.
-- A plan whose dependencies are all merged gets its branch and plan issue right away. A plan that depends on an unmerged plan waits: its branch is created from `main` and its issue opened only after that plan is merged. Independent plans run in parallel.
+- One spec per stage. The lead splits the stage into plans of 2 to 5 tasks each, one owner per plan. Each task is one PR, small enough to review in one sitting.
+- A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with owner, reviewer, branch, Consumes and Produces. Each plan links to it instead of repeating it.
+- Plans depend on interfaces, not on whole plans. A plan's first tasks produce what other plans consume, so those interfaces reach `main` early; a task can start as soon as everything it consumes is on `main`, and its issue says which interfaces those are. Plans whose interfaces are on `main` run in parallel.
+- Files that several plans edit (routers, service registries, the frontend route table) are set up once so that each plan only adds its own lines or its own file, never edits someone else's.
 - Plans are moderately detailed, not a second copy of the code:
   - every task names its exact files and the interfaces it consumes and produces (exact names and types);
   - tests are written as code, or as a precise list of behaviors and failure cases to verify;

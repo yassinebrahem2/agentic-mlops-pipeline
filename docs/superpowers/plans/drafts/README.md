@@ -4,9 +4,9 @@ Plans that are written but not ready to implement live here, so any session on a
 
 A draft leaves this folder when both of these are true:
 - an advisor review round finds no blocking issues;
-- every plan it depends on is merged, and its Consumes lines have been checked against that merged code.
+- every interface it consumes is on `main` or listed under another plan's Produces in the stage overview, and the ones on `main` have been checked against the code.
 
-The lead then moves it with `git mv` on its `plan/<stage>-<topic>` branch, from `drafts/` to `docs/superpowers/plans/`, removes the banner, and opens its issues. Because the move happens on the branch, merging that branch takes the draft off `main`, and only one copy ever exists.
+The lead then moves it with `git mv` on `main`, from `drafts/` to `docs/superpowers/plans/`, removes the banner, and opens its issues.
 
 ## Stage 1
 

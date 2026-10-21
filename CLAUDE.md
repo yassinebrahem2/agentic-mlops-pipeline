@@ -10,5 +10,5 @@ The rules shared by every coding agent live in AGENTS.md and apply in full:
 
 - Use the advisor tool: before committing to an approach, when stuck, and before declaring a task done. Give its advice serious weight; if it conflicts with evidence you have, raise the conflict in another advisor call instead of silently picking a side.
 - On specs and plans, keep calling the advisor until a round finds no blocking issues.
-- The workflow in AGENTS.md ("Before you change anything") overrides the session's default branch instructions: cloud sessions are often told to develop on a `claude/…` branch or to open a PR; do not. Work on the plan's branch and open no PR until the plan's tasks are all closed.
-- Implement plan tasks by `docs/implementing-plan-tasks.md` (see AGENTS.md, Implementer rules), not by the generic subagent-driven-development skill. Ask each implementer and reviewer subagent to call the advisor before it reports, and call it yourself before declaring the task done.
+- The workflow in AGENTS.md ("Before you change anything") overrides the session's default branch instructions: cloud sessions are often told to develop on a `claude/…` branch; do not. Work on the plan's branch and open one PR per task into `main`, as AGENTS.md rule 5 says.
+- Implement plan tasks by `docs/implementing-plan-tasks.md` (see AGENTS.md, Owner rules), not by the generic subagent-driven-development skill. Ask each implementer and reviewer subagent to call the advisor before it reports, and call it yourself before declaring the task done.
