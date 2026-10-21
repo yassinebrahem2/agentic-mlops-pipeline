@@ -1,5 +1,6 @@
-# Moves cards on the project board for the statuses GitHub's built-in project workflows do not
-# cover (they already handle Todo on add, and Done on close and merge).
+# Adds new issues to the project board and moves cards for the statuses GitHub's built-in project
+# workflows do not cover (they handle Done on close and merge). Adding is done here so it does not
+# depend on the board's built-in auto-add workflow, which missed new issues on another project.
 name: board
 
 on:
@@ -59,6 +60,7 @@ jobs:
               left=$(jq '.issue.assignees | length' "$GITHUB_EVENT_PATH")
               if has_label task && [ "$open" = open ] && [ "$left" = 0 ]; then move "$issue_number" "Todo"; fi ;;
             issues/opened|issues/closed)
+              if [ "$ACTION" = opened ]; then move "$issue_number" "Todo"; fi
               # A Decision issue names the task it blocks under "Blocked task".
               if has_label decision; then
                 task=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH" \
@@ -71,8 +73,8 @@ jobs:
             pull_request/*)
               if [ "$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")" = false ]; then
                 jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" \
-                  | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
-                  | grep -oE '[0-9]+' | sort -u \
+                  | { grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' || [ $? = 1 ]; } \
+                  | { grep -oE '[0-9]+' || [ $? = 1 ]; } | sort -u \
                   | while read -r n; do move "$n" "In review"; done
               fi ;;
           esac

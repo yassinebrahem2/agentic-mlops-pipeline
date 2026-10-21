@@ -26,8 +26,16 @@ keys.enc
 *.db-wal
 *.db-shm
 
+# Agent working files (docs/implementing-plan-tasks.md)
+.agent-work/
+
+# Test coverage
+.coverage
+htmlcov/
+
 # OS / editors
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+*.swp
