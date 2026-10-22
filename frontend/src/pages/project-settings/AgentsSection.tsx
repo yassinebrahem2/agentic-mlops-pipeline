@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorText, unwrap } from "@/lib/api";
 import { hostedModelWarning } from "@/lib/models";
+import { useModels } from "@/lib/useModels";
+import { useProviders } from "@/lib/useProviders";
 
 type Agent = components["schemas"]["AgentInfo"];
 type Model = components["schemas"]["ModelEntry"];
@@ -21,14 +23,8 @@ export function AgentsSection({ projectId }: { projectId: string }) {
         }),
       ),
   });
-  const models = useQuery({
-    queryKey: ["models"],
-    queryFn: async () => unwrap(await api.GET("/api/models")),
-  });
-  const providers = useQuery({
-    queryKey: ["providers"],
-    queryFn: async () => unwrap(await api.GET("/api/providers")),
-  });
+  const models = useModels();
+  const providers = useProviders();
   return (
     <section className="space-y-4" aria-labelledby="agents-title">
       <h2 id="agents-title" className="text-lg font-semibold">

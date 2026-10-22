@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { useProviders } from "@/lib/useProviders";
 import { AddModelDialog } from "./AddModelDialog";
 import { AddProviderDialog } from "./AddProviderDialog";
 import { AgentDefaults } from "./AgentDefaults";
@@ -8,10 +8,7 @@ import { ModelsTable } from "./ModelsTable";
 import { ProviderCard } from "./ProviderCard";
 
 export function ProvidersPage() {
-  const providers = useQuery({
-    queryKey: ["providers"],
-    queryFn: async () => unwrap(await api.GET("/api/providers")),
-  });
+  const providers = useProviders();
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-8 p-6">

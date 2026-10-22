@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { LogOut, Settings } from "lucide-react";
 import { Link } from "react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,9 +24,7 @@ export function GearMenu({ appRoutes }: { appRoutes: PageRoute[] }) {
     try {
       await auth.signOut();
     } catch (err) {
-      const msg = errorText(err);
-      setError(msg);
-      toast.error(msg);
+      setError(errorText(err));
     }
   };
 

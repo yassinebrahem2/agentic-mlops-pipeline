@@ -141,7 +141,6 @@ export function GitHubTab() {
         </div>
       )}
 
-      {/* Repo Input */}
       <div className="space-y-2 rounded-lg border p-4">
         <Label htmlFor="github-repo-input" className="text-sm font-medium">
           Repository
@@ -177,7 +176,6 @@ export function GitHubTab() {
         )}
       </div>
 
-      {/* User's Repositories */}
       <div className="space-y-3 rounded-lg border p-4">
         <div className="flex items-center justify-between">
           <Label htmlFor="github-repo-filter" className="text-sm font-medium">
