@@ -46,7 +46,7 @@ Run from `backend/`:
 
 Run from `frontend/`:
 - Install: `npm ci`
-- Dev server with hot reload (proxies `/api` to the backend on port 8765): `npm run dev`
+- Dev server with hot reload (start the backend first with `cd backend && uv run mlops-agents start --dev`; proxies `/api` to the backend on port 8765): `npm run dev`
 - Tests: `npm test` (one file: `npx vitest run src/path/File.test.tsx`)
 - Lint and format: `npm run lint`, `npm run format:check`
 - Build into the backend package: `npm run build`

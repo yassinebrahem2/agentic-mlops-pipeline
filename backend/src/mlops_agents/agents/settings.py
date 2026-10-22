@@ -93,9 +93,7 @@ class AgentSettingsService:
         self._catalog.get(agent)
         app_engine = await self._databases.app()
         if address is not None:
-            entry = await self._providers.require_model(address)
-            if entry.problem is not None:
-                raise DomainError("model_not_usable", entry.problem, status=409)
+            await self._require_usable_model(address)
             stmt = (
                 sqlite_insert(agent_model_defaults)
                 .values(agent=agent, model_address=address)
@@ -120,9 +118,7 @@ class AgentSettingsService:
         key = f"agent.{agent}.model"
         proj_engine = await self._databases.project(project_id)
         if address is not None:
-            entry = await self._providers.require_model(address)
-            if entry.problem is not None:
-                raise DomainError("model_not_usable", entry.problem, status=409)
+            await self._require_usable_model(address)
             stmt = (
                 sqlite_insert(project_settings)
                 .values(key=key, value=address)
@@ -285,3 +281,8 @@ class AgentSettingsService:
         else:
             max_steps = definition.limits.max_steps
         return project_model, max_steps
+
+    async def _require_usable_model(self, address: str) -> None:
+        entry = await self._providers.require_model(address)
+        if entry.problem is not None:
+            raise DomainError("model_not_usable", entry.problem, status=409)
