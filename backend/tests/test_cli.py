@@ -283,7 +283,7 @@ def test_backup_ctrl_c_exits_quietly(
 
     monkeypatch.setattr("mlops_agents.cli.snapshot_all", _sigint)
     code = main(["backup"])
-    assert code == 0
+    assert code == 130
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
 

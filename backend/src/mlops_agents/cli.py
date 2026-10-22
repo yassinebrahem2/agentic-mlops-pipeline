@@ -21,10 +21,9 @@ from mlops_agents.credentials import KeyStoreError, open_keystore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.backup import snapshot_all
 
-# Linux/macOS raises EADDRINUSE; Windows raises WSAEADDRINUSE (10048) or WSAEACCES (10013 / EACCES).
-IN_USE_ERRNOS: set[int] = {errno.EADDRINUSE, 10048, 10013}
-if sys.platform == "win32":
-    IN_USE_ERRNOS.add(errno.EACCES)
+IN_USE_ERRNOS: frozenset[int] = frozenset(
+    code for code in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", None)) if code is not None
+)
 
 
 async def _run_server(
@@ -116,6 +115,8 @@ def _start(args: argparse.Namespace) -> int:
     server = uvicorn.Server(config)
     try:
         asyncio.run(_run_server(server, sock, notify_started))
+    except KeyboardInterrupt:
+        return 0
     finally:
         sock.close()
     return 0
@@ -124,15 +125,16 @@ def _start(args: argparse.Namespace) -> int:
 def _backup() -> int:
     try:
         settings = load_settings(RunMode.LOCAL)
+        paths = DataPaths(settings.data_dir)
+        paths.ensure()
+        dest = snapshot_all(paths)
+        print(str(dest))
+        return 0
     except ConfigError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(2)
-
-    paths = DataPaths(settings.data_dir)
-    paths.ensure()
-    dest = snapshot_all(paths)
-    print(str(dest))
-    return 0
+    except KeyboardInterrupt:
+        return 130
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -165,13 +167,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers.add_parser("backup")
 
     args = parser.parse_args(argv)
-    try:
-        if args.command == "start":
-            return _start(args)
-        if args.command == "backup":
-            return _backup()
-    except KeyboardInterrupt:
-        return 0
+    if args.command == "start":
+        return _start(args)
+    if args.command == "backup":
+        return _backup()
     return 0
 
 
