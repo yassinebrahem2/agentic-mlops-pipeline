@@ -10,10 +10,9 @@ import { useAuth } from "./useAuth";
 export interface SignInProps {
   mode: "local" | "server";
   tokenError?: string | null;
-  onSuccess?: () => void;
 }
 
-export function SignIn({ mode, tokenError, onSuccess }: SignInProps) {
+export function SignIn({ mode, tokenError }: SignInProps) {
   const auth = useAuth();
 
   const [password, setPassword] = useState("");
@@ -26,7 +25,6 @@ export function SignIn({ mode, tokenError, onSuccess }: SignInProps) {
     setSubmitting(true);
     try {
       await auth.signIn(password);
-      onSuccess?.();
     } catch (err) {
       setError(errorText(err));
     } finally {

@@ -19,6 +19,7 @@ describe("SignIn component", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function wrapper({ children }: { children: ReactNode }) {
@@ -93,7 +94,6 @@ describe("SignIn component", () => {
 
   it("handles correct password submission in server mode", async () => {
     const user = userEvent.setup();
-    const onSuccess = vi.fn();
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const req = new Request(input, init);
       if (req.url.includes("/api/auth/login") && req.method === "POST") {
@@ -114,13 +114,12 @@ describe("SignIn component", () => {
     });
     vi.stubGlobal("fetch", fakeFetch);
 
-    render(<SignIn mode="server" onSuccess={onSuccess} />, { wrapper });
+    render(<SignIn mode="server" />, { wrapper });
 
     await user.type(screen.getByLabelText("Password"), "correctpass");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(onSuccess).toHaveBeenCalled();
       expect(queryClient.getQueryData(["auth"])).toEqual({
         mode: "server",
         signed_in: true,

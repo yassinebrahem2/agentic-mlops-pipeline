@@ -44,8 +44,7 @@ export function collectRoutes(modules: Record<string, { route: PageRoute }>): Pa
   });
 }
 
-export const pageRoutes: PageRoute[] = collectRoutes(
-  import.meta.glob<{ route: PageRoute }>("../pages/**/route.tsx", {
-    eager: true,
-  }),
-);
+const globbedRoutes = import.meta.glob<{ route: PageRoute }>("../pages/**/route.tsx", {
+  eager: true,
+});
+export const pageRoutes: PageRoute[] = collectRoutes(globbedRoutes);

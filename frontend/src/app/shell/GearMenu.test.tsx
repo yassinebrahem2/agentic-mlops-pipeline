@@ -28,6 +28,7 @@ describe("GearMenu", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function renderMenu(appRoutes: PageRoute[] = []) {
