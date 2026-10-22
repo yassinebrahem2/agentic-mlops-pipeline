@@ -589,4 +589,94 @@ describe("AddProjectPage", () => {
     const openLink = screen.getByRole("link", { name: "Open it" });
     expect(openLink).toHaveAttribute("href", "/projects/prj_existing_99");
   });
+
+  it("adding a local folder shows progress text, disables submit, and prevents double submission", async () => {
+    let resolveAdd!: (res: Response) => void;
+    const addPromise = new Promise<Response>((resolve) => {
+      resolveAdd = resolve;
+    });
+
+    const requests: { url: string; method: string; body: unknown }[] = [];
+
+    const fakeFetch = vi
+      .fn()
+      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const parsed = await getUrlAndMethod(input, init);
+        requests.push(parsed);
+        const { url, method } = parsed;
+
+        if (url.includes("/api/app")) {
+          return new Response(
+            JSON.stringify({
+              mode: "local",
+              name: "mlops_agents",
+              version: "0.1.0",
+              data_dir: "/data",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/api/folders")) {
+          return new Response(
+            JSON.stringify({
+              path: "/workspace/local-project",
+              parent: "/workspace",
+              roots: ["/"],
+              entries: [],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/api/projects") && method === "POST") {
+          return addPromise;
+        }
+        return new Response(null, { status: 404 });
+      });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    const user = userEvent.setup();
+    renderPage("/projects/new", { routes: testRoutes });
+
+    const chooseBtn = await screen.findByRole("button", { name: "Use this folder" });
+    await user.click(chooseBtn);
+
+    // Progress text shown on button and in tab
+    expect(screen.getAllByText("Adding project...").length).toBeGreaterThanOrEqual(1);
+    expect(chooseBtn).toBeDisabled();
+
+    // Check request count
+    const postRequests = requests.filter(
+      (r) => r.url.endsWith("/api/projects") && r.method === "POST",
+    );
+    expect(postRequests.length).toBe(1);
+
+    // Try clicking again while pending
+    await user.click(chooseBtn);
+    const postRequestsAfter = requests.filter(
+      (r) => r.url.endsWith("/api/projects") && r.method === "POST",
+    );
+    expect(postRequestsAfter.length).toBe(1);
+
+    // Resolve mutation
+    resolveAdd(
+      new Response(
+        JSON.stringify({
+          id: "prj_local_123",
+          name: "local-project",
+          source: "local",
+          status: "ok",
+          status_detail: null,
+          created_at: "2026-10-21T12:00:00Z",
+          last_opened_at: null,
+          local_path: "/workspace/local-project",
+          github_full_name: null,
+          default_branch: "main",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    // Navigates to project page
+    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
+  });
 });

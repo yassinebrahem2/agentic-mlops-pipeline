@@ -4,7 +4,11 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FolderBrowser } from "./FolderBrowser";
 
-function renderFolderBrowser(props: { initialPath?: string; onChoose?: (path: string) => void }) {
+function renderFolderBrowser(props: {
+  initialPath?: string;
+  onChoose?: (path: string) => void;
+  isSubmitting?: boolean;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -14,7 +18,11 @@ function renderFolderBrowser(props: { initialPath?: string; onChoose?: (path: st
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <FolderBrowser initialPath={props.initialPath} onChoose={props.onChoose ?? vi.fn()} />
+      <FolderBrowser
+        initialPath={props.initialPath}
+        onChoose={props.onChoose ?? vi.fn()}
+        isSubmitting={props.isSubmitting}
+      />
     </QueryClientProvider>,
   );
 }
@@ -309,5 +317,28 @@ describe("FolderBrowser", () => {
     await user.click(chooseBtn);
 
     expect(onChoose).toHaveBeenCalledWith("/chosen/folder");
+  });
+
+  it("disables 'Use this folder' button and shows progress text when isSubmitting is true", async () => {
+    const fakeFetch = vi.fn().mockImplementation(() => {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            path: "/chosen/folder",
+            parent: "/chosen",
+            roots: ["/"],
+            entries: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderFolderBrowser({ isSubmitting: true });
+
+    const submitBtn = await screen.findByRole("button", { name: /Adding project/i });
+    expect(submitBtn).toBeDisabled();
+    expect(submitBtn).toHaveTextContent("Adding project...");
   });
 });

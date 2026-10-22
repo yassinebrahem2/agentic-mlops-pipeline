@@ -22,15 +22,20 @@ function stubApi(handlers: Record<string, Handler>): Sent[] {
     "GET /api/providers": () => json([]),
     "GET /api/env-keys": () => json([]),
     "GET /api/models": () => json([]),
+    "GET /api/agents": () => json([]),
   };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: Request) => {
-      const text = await input.text();
+      let body: unknown = undefined;
+      if (input.method !== "GET" && input.method !== "HEAD") {
+        const text = await input.text();
+        body = text ? (JSON.parse(text) as unknown) : undefined;
+      }
       const request: Sent = {
         method: input.method,
         url: new URL(input.url),
-        body: text ? (JSON.parse(text) as unknown) : undefined,
+        body,
       };
       sent.push(request);
       const handler =

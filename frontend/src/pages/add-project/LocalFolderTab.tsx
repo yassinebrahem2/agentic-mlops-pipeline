@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { FolderBrowser } from "@/components/FolderBrowser";
@@ -83,6 +84,7 @@ export function LocalFolderTab() {
   });
 
   const handleChoose = (path: string, initGit = false) => {
+    if (addProjectMutation.isPending) return;
     setLocalError(null);
     addProjectMutation.mutate({ path, initGit });
   };
@@ -126,10 +128,18 @@ export function LocalFolderTab() {
         </div>
       )}
 
+      {addProjectMutation.isPending && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin text-primary" />
+          <span>Adding project...</span>
+        </div>
+      )}
+
       <FolderBrowser
         onChoose={(path) => {
           handleChoose(path, false);
         }}
+        isSubmitting={addProjectMutation.isPending}
       />
 
       <Dialog open={initDialogOpen} onOpenChange={setInitDialogOpen}>

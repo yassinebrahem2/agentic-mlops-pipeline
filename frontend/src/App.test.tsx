@@ -1,11 +1,10 @@
-import { render, screen } from "@testing-library/react";
-import { App } from "./App";
+import { screen } from "@testing-library/react";
+import { expect, test } from "vitest";
 import { APP_NAME } from "./config";
-import { queryClient } from "./lib/query";
+import { renderPage } from "./test/render";
 
 test("renders the app with APP_NAME and the Projects page at root", async () => {
-  queryClient.setQueryData(["auth"], { mode: "local", signed_in: true });
-  render(<App />);
+  renderPage("/");
   expect(screen.getByRole("heading", { name: APP_NAME })).toBeInTheDocument();
   expect(await screen.findByRole("heading", { name: "Projects" })).toBeInTheDocument();
 });

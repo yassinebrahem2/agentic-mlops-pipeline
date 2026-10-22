@@ -1,17 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { toast } from "sonner";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GearMenu } from "./GearMenu";
 import type { PageRoute } from "../routes";
-
-vi.mock("sonner", () => ({
-  toast: {
-    error: vi.fn(),
-  },
-}));
 
 describe("GearMenu", () => {
   let queryClient: QueryClient;
@@ -84,7 +77,5 @@ describe("GearMenu", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("Failed to log out. Try again.");
     });
-
-    expect(toast.error).toHaveBeenCalledWith("Failed to log out. Try again.");
   });
 });

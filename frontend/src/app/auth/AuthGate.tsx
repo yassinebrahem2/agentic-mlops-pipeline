@@ -5,17 +5,13 @@ import { SignIn } from "./SignIn";
 import { exchangeTokenOnce, useAuth } from "./useAuth";
 import { errorText } from "@/lib/api";
 
-const BAD_LINK_MESSAGE = "The access link is invalid or has expired.";
-
-type ExtractedToken = { token: string } | { bad: true } | null;
-
-function extractTokenFromHash(hash: string): ExtractedToken {
+function extractTokenFromHash(hash: string): string | null {
   const match = hash.match(/(?:^|[#&])token=([^&]+)/);
   if (!match || !match[1]) return null;
   try {
-    return { token: decodeURIComponent(match[1]) };
+    return decodeURIComponent(match[1]);
   } catch {
-    return { bad: true };
+    return match[1];
   }
 }
 
@@ -26,12 +22,8 @@ export function AuthGate({ children }: { children?: ReactNode }) {
     return extractTokenFromHash(window.location.hash);
   }, []);
 
-  const [isExchanging, setIsExchanging] = useState(
-    initialToken !== null && "token" in initialToken,
-  );
-  const [tokenError, setTokenError] = useState<string | null>(
-    initialToken !== null && "bad" in initialToken ? BAD_LINK_MESSAGE : null,
-  );
+  const [isExchanging, setIsExchanging] = useState(initialToken !== null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const { status, error } = useAuth();
 
@@ -44,13 +36,9 @@ export function AuthGate({ children }: { children?: ReactNode }) {
       window.location.pathname + window.location.search,
     );
 
-    if ("bad" in initialToken) {
-      return;
-    }
-
     const state = { canceled: false };
     void (async () => {
-      const result = await exchangeTokenOnce(initialToken.token);
+      const result = await exchangeTokenOnce(initialToken);
       if (state.canceled) return;
 
       if ("status" in result) {

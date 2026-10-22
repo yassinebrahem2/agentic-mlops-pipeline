@@ -10,9 +10,10 @@ import { api, errorText, unwrap } from "@/lib/api";
 export interface FolderBrowserProps {
   initialPath?: string;
   onChoose: (path: string) => void;
+  isSubmitting?: boolean;
 }
 
-export function FolderBrowser({ initialPath, onChoose }: FolderBrowserProps) {
+export function FolderBrowser({ initialPath, onChoose, isSubmitting }: FolderBrowserProps) {
   const [currentPath, setCurrentPath] = useState<string | undefined>(initialPath);
   const [folderPathInput, setFolderPathInput] = useState<string>(initialPath ?? "");
 
@@ -48,7 +49,6 @@ export function FolderBrowser({ initialPath, onChoose }: FolderBrowserProps) {
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
-      {/* Path Input & Go */}
       <div className="flex items-center gap-2">
         <Label htmlFor="folder-path-input" className="shrink-0 text-sm font-medium">
           Folder path
@@ -74,14 +74,12 @@ export function FolderBrowser({ initialPath, onChoose }: FolderBrowserProps) {
         </Button>
       </div>
 
-      {/* Error state */}
       {isError && (
         <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
           {errorText(error)}
         </div>
       )}
 
-      {/* Browser Controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
         <div className="flex items-center gap-2">
           <Button
@@ -99,7 +97,6 @@ export function FolderBrowser({ initialPath, onChoose }: FolderBrowserProps) {
             Up
           </Button>
 
-          {/* Windows Drive Roots */}
           {listing?.roots && listing.roots.length > 1 && (
             <div className="flex items-center gap-1 pl-2">
               <HardDrive className="size-3.5 text-muted-foreground" />
@@ -123,25 +120,30 @@ export function FolderBrowser({ initialPath, onChoose }: FolderBrowserProps) {
 
         <Button
           type="button"
-          disabled={!listing?.path || isPending}
+          disabled={!listing?.path || isPending || isSubmitting}
           onClick={() => {
             if (listing?.path) {
               onChoose(listing.path);
             }
           }}
         >
-          Use this folder
+          {isSubmitting ? (
+            <>
+              <Loader2 className="mr-1.5 size-4 animate-spin" />
+              Adding project...
+            </>
+          ) : (
+            "Use this folder"
+          )}
         </Button>
       </div>
 
-      {/* Current Path Indicator */}
       {listing?.path && (
         <div className="text-sm text-muted-foreground">
           Current folder: <span className="font-semibold text-foreground">{listing.path}</span>
         </div>
       )}
 
-      {/* Folder listing */}
       <div className="min-h-48 rounded-md border bg-muted/20">
         {isPending && (
           <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">

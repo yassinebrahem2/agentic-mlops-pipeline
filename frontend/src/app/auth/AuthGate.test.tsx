@@ -98,7 +98,8 @@ describe("AuthGate token handling", () => {
           new Response(
             JSON.stringify({
               code: "bad_token",
-              message: "The access link is invalid or has expired.",
+              message:
+                "This link is out of date. Open the address printed in the terminal where the app runs.",
             }),
             {
               status: 401,
@@ -132,7 +133,11 @@ describe("AuthGate token handling", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("The access link is invalid or has expired.")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "This link is out of date. Open the address printed in the terminal where the app runs.",
+        ),
+      ).toBeInTheDocument();
     });
 
     expect(
@@ -254,28 +259,37 @@ describe("AuthGate token handling", () => {
     window.history.replaceState(initialHistoryState, "", "/account#token=%invalid%");
     replaceStateSpy.mockClear();
 
-    let tokenPostCalled = false;
-    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const req = new Request(input, init);
-      if (req.url.includes("/api/auth/token")) {
-        tokenPostCalled = true;
-        return Promise.resolve(
-          new Response(JSON.stringify({ mode: "local", signed_in: true }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      if (req.url.includes("/api/auth/status")) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ mode: "local", signed_in: false }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      return Promise.reject(new Error(`Unexpected request to ${req.url}`));
-    });
+    let postedToken: string | undefined = undefined;
+    const fakeFetch = vi
+      .fn()
+      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, init);
+        if (req.url.includes("/api/auth/token") && req.method === "POST") {
+          const bodyText = await req.clone().text();
+          const parsed = JSON.parse(bodyText || "{}") as Record<string, unknown>;
+          postedToken = typeof parsed.token === "string" ? parsed.token : undefined;
+          return new Response(
+            JSON.stringify({
+              code: "bad_token",
+              message:
+                "This link is out of date. Open the address printed in the terminal where the app runs.",
+            }),
+            {
+              status: 401,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        if (req.url.includes("/api/auth/status")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: "local", signed_in: false }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        return Promise.reject(new Error(`Unexpected request to ${req.url}`));
+      });
     vi.stubGlobal("fetch", fakeFetch);
 
     renderWithClient(
@@ -285,12 +299,16 @@ describe("AuthGate token handling", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("The access link is invalid or has expired.")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "This link is out of date. Open the address printed in the terminal where the app runs.",
+        ),
+      ).toBeInTheDocument();
     });
     expect(
       screen.getByText("Open the app with the link printed in the terminal where it runs."),
     ).toBeInTheDocument();
-    expect(tokenPostCalled).toBe(false);
+    expect(postedToken).toBe("%invalid%");
     expect(replaceStateSpy).toHaveBeenCalledWith(initialHistoryState, "", "/account");
     expect(window.history.state).toEqual(initialHistoryState);
     expect(window.location.hash).toBe("");
