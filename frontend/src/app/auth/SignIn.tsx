@@ -1,11 +1,11 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useState, type SyntheticEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { APP_NAME } from "@/config";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { useAuth } from "./useAuth";
 
 export interface SignInProps {
   mode: "local" | "server";
@@ -14,7 +14,7 @@ export interface SignInProps {
 }
 
 export function SignIn({ mode, tokenError, onSuccess }: SignInProps) {
-  const qc = useQueryClient();
+  const auth = useAuth();
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,13 +25,7 @@ export function SignIn({ mode, tokenError, onSuccess }: SignInProps) {
     setError(null);
     setSubmitting(true);
     try {
-      const status = unwrap(
-        await api.POST("/api/auth/login", {
-          body: { password },
-        }),
-      );
-      qc.setQueryData(["auth"], status);
-      await qc.invalidateQueries({ queryKey: ["auth"] });
+      await auth.signIn(password);
       onSuccess?.();
     } catch (err) {
       setError(errorText(err));

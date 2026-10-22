@@ -38,7 +38,11 @@ export function AuthGate({ children }: { children?: ReactNode }) {
   useEffect(() => {
     if (!initialToken) return;
 
-    history.replaceState(null, "", window.location.pathname + window.location.search);
+    history.replaceState(
+      window.history.state,
+      "",
+      window.location.pathname + window.location.search,
+    );
 
     if ("bad" in initialToken) {
       return;

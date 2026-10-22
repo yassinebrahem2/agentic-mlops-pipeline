@@ -27,6 +27,9 @@ export function exchangeTokenOnce(token: string): Promise<ExchangeResult> {
         return { status: res };
       } catch (error) {
         return { error };
+      } finally {
+        activeExchangeToken = null;
+        activeExchangePromise = null;
       }
     })();
   }
@@ -36,6 +39,7 @@ export function exchangeTokenOnce(token: string): Promise<ExchangeResult> {
 export function useAuth(): {
   status: AuthStatus | undefined;
   error: unknown;
+  signIn(password: string): Promise<AuthStatus>;
   signOut(): Promise<void>;
 } {
   const qc = useQueryClient();
@@ -44,6 +48,20 @@ export function useAuth(): {
     queryKey: ["auth"],
     queryFn: async () => unwrap(await api.GET("/api/auth/status")),
   });
+
+  const signIn = useCallback(
+    async (password: string) => {
+      const status = unwrap(
+        await api.POST("/api/auth/login", {
+          body: { password },
+        }),
+      );
+      qc.setQueryData(["auth"], status);
+      await qc.invalidateQueries({ queryKey: ["auth"] });
+      return status;
+    },
+    [qc],
+  );
 
   const signOut = useCallback(async () => {
     const updated = unwrap(await api.POST("/api/auth/logout"));
@@ -54,6 +72,7 @@ export function useAuth(): {
   return {
     status: query.data,
     error: query.error,
+    signIn,
     signOut,
   };
 }

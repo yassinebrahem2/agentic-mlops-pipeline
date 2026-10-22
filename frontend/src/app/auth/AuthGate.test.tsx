@@ -528,11 +528,7 @@ describe("AuthGate", () => {
     });
 
     // Trigger a refetch that fails
-    try {
-      await queryClient.refetchQueries({ queryKey: ["auth"] });
-    } catch {
-      // Expected: refetch rejects on 500 error
-    }
+    await queryClient.refetchQueries({ queryKey: ["auth"] });
 
     // Shell content should still be rendered; error screen should NOT be shown
     await waitFor(() => {
