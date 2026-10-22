@@ -318,4 +318,32 @@ describe("AgentDefaults", () => {
       await screen.findByText("Model groq:llama-3.3-70b-versatile is not usable."),
     ).toBeInTheDocument();
   });
+
+  it("shows an error when models query fails and does not render rows", async () => {
+    stubApi({
+      "GET /api/agents": () => json([orchestrator]),
+      "GET /api/models": () =>
+        json({ code: "server_error", message: "Failed to load models.", detail: null }, 500),
+    });
+
+    renderPage("/providers", { routes: [route] });
+
+    const section = await screen.findByRole("region", { name: "Default model per agent" });
+    expect(await within(section).findByText("Failed to load models.")).toBeInTheDocument();
+    expect(within(section).queryByLabelText("Model for Orchestrator")).not.toBeInTheDocument();
+  });
+
+  it("shows an error when providers query fails and does not render rows", async () => {
+    stubApi({
+      "GET /api/agents": () => json([orchestrator]),
+      "GET /api/providers": () =>
+        json({ code: "server_error", message: "Failed to load providers.", detail: null }, 500),
+    });
+
+    renderPage("/providers", { routes: [route] });
+
+    const section = await screen.findByRole("region", { name: "Default model per agent" });
+    expect(await within(section).findByText("Failed to load providers.")).toBeInTheDocument();
+    expect(within(section).queryByLabelText("Model for Orchestrator")).not.toBeInTheDocument();
+  });
 });

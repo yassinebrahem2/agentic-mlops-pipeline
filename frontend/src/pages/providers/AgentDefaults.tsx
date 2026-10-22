@@ -113,26 +113,31 @@ export function AgentDefaults() {
     queryFn: async () => unwrap(await api.GET("/api/providers")),
   });
 
+  const isPending = agents.isPending || models.isPending || providers.isPending;
+  const hasError = agents.isError || models.isError || providers.isError;
+  const isReady = agents.isSuccess && models.isSuccess && providers.isSuccess;
+
   return (
     <section aria-labelledby="agent-defaults-heading" className="flex flex-col gap-4">
       <h2 id="agent-defaults-heading" className="text-lg font-medium">
         Default model per agent
       </h2>
-      {(agents.isPending || models.isPending || providers.isPending) && (
-        <p className="text-muted-foreground">Loading default models…</p>
-      )}
+      {isPending && !hasError && <p className="text-muted-foreground">Loading default models…</p>}
       {agents.isError && <p className="text-destructive">{errorText(agents.error)}</p>}
-      {!agents.isPending && !agents.isError && agents.data.length === 0 && (
+      {models.isError && <p className="text-destructive">{errorText(models.error)}</p>}
+      {providers.isError && <p className="text-destructive">{errorText(providers.error)}</p>}
+      {isReady && agents.data.length === 0 && (
         <p className="text-muted-foreground">No agents found.</p>
       )}
-      {agents.data?.map((agent) => (
-        <AgentRow
-          key={agent.name}
-          agent={agent}
-          models={models.data ?? []}
-          providers={providers.data ?? []}
-        />
-      ))}
+      {isReady &&
+        agents.data.map((agent) => (
+          <AgentRow
+            key={agent.name}
+            agent={agent}
+            models={models.data}
+            providers={providers.data}
+          />
+        ))}
     </section>
   );
 }

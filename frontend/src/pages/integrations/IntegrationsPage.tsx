@@ -24,10 +24,8 @@ const CONNECTED_HOW: Record<Exclude<GitHubStatus["mode"], "none">, string> = {
   token: "with a pasted token",
 };
 
-// The repositories depend on the account, so a new connection also refreshes them.
-async function storeStatus(queryClient: QueryClient, status: GitHubStatus): Promise<void> {
+function storeStatus(queryClient: QueryClient, status: GitHubStatus): void {
   queryClient.setQueryData<GitHubStatus>(["github"], status);
-  await queryClient.invalidateQueries({ queryKey: ["github", "repos"] });
 }
 
 export function IntegrationsPage() {
@@ -92,8 +90,8 @@ function GhLogin() {
   const queryClient = useQueryClient();
   const enable = useMutation({
     mutationFn: async () => unwrap(await api.POST("/api/github/gh")),
-    onSuccess: async (status) => {
-      await storeStatus(queryClient, status);
+    onSuccess: (status) => {
+      storeStatus(queryClient, status);
     },
   });
 
@@ -122,8 +120,8 @@ function TokenForm() {
   const connect = useMutation({
     mutationFn: async (value: string) =>
       unwrap(await api.POST("/api/github/token", { body: { token: value } })),
-    onSuccess: async (status) => {
-      await storeStatus(queryClient, status);
+    onSuccess: (status) => {
+      storeStatus(queryClient, status);
     },
   });
 

@@ -76,12 +76,16 @@ function ModelRow({ model }: { model: ModelEntry }) {
   const verify = useMutation({
     mutationFn: async () =>
       unwrap(await api.POST("/api/models/verify", { body: { address: model.address } })),
-    onSuccess: (updated) => {
+    onSuccess: async (updated) => {
       storeModel(queryClient, updated);
+      await queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
     onError: async () => {
       // A failed check marks the model on the server, so reload it.
-      await queryClient.invalidateQueries({ queryKey: ["models"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["models"] }),
+        queryClient.invalidateQueries({ queryKey: ["agents"] }),
+      ]);
     },
   });
   const remove = useMutation({
@@ -89,7 +93,10 @@ function ModelRow({ model }: { model: ModelEntry }) {
       unwrap(await api.DELETE("/api/models", { params: { query: { address: model.address } } }));
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["models"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["models"] }),
+        queryClient.invalidateQueries({ queryKey: ["agents"] }),
+      ]);
     },
   });
 
@@ -154,8 +161,9 @@ function ContextWindowForm({ address }: { address: string }) {
   const save = useMutation({
     mutationFn: async (tokens: number) =>
       unwrap(await api.PUT("/api/models/context-window", { body: { address, value: tokens } })),
-    onSuccess: (updated) => {
+    onSuccess: async (updated) => {
       storeModel(queryClient, updated);
+      await queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });
 
@@ -173,7 +181,6 @@ function ContextWindowForm({ address }: { address: string }) {
       <div className="flex gap-2">
         <Input
           id={inputId}
-          aria-label={`Context window of ${address}`}
           aria-invalid={valueError !== undefined ? true : undefined}
           aria-describedby={valueError !== undefined ? errorId : undefined}
           type="number"

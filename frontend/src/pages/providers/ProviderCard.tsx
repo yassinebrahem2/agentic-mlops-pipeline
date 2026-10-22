@@ -198,6 +198,7 @@ function RemoveProviderDialog({ name }: { name: string }) {
         queryClient.invalidateQueries({ queryKey: ["providers"] }),
         queryClient.invalidateQueries({ queryKey: ["models"] }),
         queryClient.invalidateQueries({ queryKey: ["env-keys"] }),
+        queryClient.invalidateQueries({ queryKey: ["agents"] }),
       ]);
     },
   });
