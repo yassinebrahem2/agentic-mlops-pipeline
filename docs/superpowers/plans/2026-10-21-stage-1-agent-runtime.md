@@ -15,7 +15,7 @@
 | 1 | Session contract (I1) | merged code |
 | 2 | Message store and context | task 1 |
 | 3 | Model caller: streaming, retries, key rotation, usage | task 1 |
-| 4 | The turn: LangGraph loop, executor, compaction | tasks 2 and 3, I2 on `main` |
+| 4 | The turn: agent builder, LangGraph loop, executor, compaction | tasks 2 and 3, I2 on `main` |
 | 5 | Stream hub and `SessionManager`: queue, Stop, recovery | task 4 |
 
 Task 1 is small and merges first: api-sessions and frontend-chat code against it while tasks 2 to 5 are built.
@@ -40,7 +40,7 @@ Task 1 is small and merges first: api-sessions and frontend-chat code against it
 - Create: `backend/src/mlops_agents/agents/runtime/__init__.py` (empty), `contract.py`
 - Test: `backend/tests/agents/runtime/__init__.py` (empty), `test_contract.py`
 
-**Produces:** I1 exactly as the overview states, `"resync"` included in `StreamEvent.type`. The module docstring fixes `SessionManager`'s constructor and lifecycle, which task 5 implements:
+**Produces:** I1 exactly as the overview states, `Resync` included in `StreamEvent` (typed per event since #89, done on main). The module docstring fixes `SessionManager`'s constructor and lifecycle, which task 5 implements:
 
 ```python
 SessionManager(
@@ -141,8 +141,8 @@ The protocol includes `close_project` (I1).
 ### Task 4: The turn
 
 **Files:**
-- Create in `backend/src/mlops_agents/agents/runtime/`: `graph.py`, `executor.py`, `compaction.py`
-- Test: `backend/tests/agents/runtime/test_graph.py`, `test_executor.py`, `test_compaction.py`
+- Create in `backend/src/mlops_agents/agents/runtime/`: `agent.py`, `graph.py`, `executor.py`, `compaction.py`
+- Test: `backend/tests/agents/runtime/test_agent.py`, `test_graph.py`, `test_executor.py`, `test_compaction.py`
 
 **Interfaces:**
 - Consumes: tasks 2 and 3; `AgentSettingsService.resolve` (I2); `AgentCatalog`, `ToolRegistry` (`schemas`, `get`), `ToolContext`, `RepoFiles`, `GitRunner`; `WorkspaceService.get`, `repo_root`; `connect_checkpointer` (`storage/sqlite.py`) and `AsyncSqliteSaver`.
@@ -154,23 +154,42 @@ The protocol includes `close_project` (I1).
       async def tool_finished(self, message_id: str, result: ToolResultPart) -> None: ...
       async def message(self, message: MessageView, *, created: bool) -> None: ...   # also system messages
 
+  # agent.py: the agent primitive. The only place a definition becomes something that runs;
+  # every trigger (chat now; agent messages, schedules and events later) goes through it.
+  @dataclass(frozen=True)
+  class Agent:
+      definition: AgentDefinition
+      project: Project
+      layout: str                        # top_level_layout of the repository
+      model: ResolvedModel
+      max_steps: int | None
+      tools: tuple[AgentTool[Any], ...]  # exactly the definition's tools, in its order
+      tool_context: ToolContext          # one RepoFiles per turn (it caches git ls-files)
+
+  class TurnRefused(Exception):         # the turn ends before any model call
+      end: Literal["done", "failed"]; text: str
+
+  class AgentBuilder:
+      def __init__(self, *, catalog: AgentCatalog, tools: ToolRegistry, settings: AgentSettingsService,
+                   workspace: WorkspaceService, git: GitRunner) -> None: ...
+      async def build(self, project_id: str, agent: str) -> Agent: ...   # raises TurnRefused
+
   class TurnExecutor:
-      def __init__(self, *, store: SessionStore, caller: ModelCaller, settings: AgentSettingsService,
-                   catalog: AgentCatalog, tools: ToolRegistry, workspace: WorkspaceService,
-                   git: GitRunner) -> None: ...
+      def __init__(self, *, store: SessionStore, caller: ModelCaller, builder: AgentBuilder) -> None: ...
       async def run(self, project_id: str, session_id: str, agent: str, turn_id: str,
                     sink: TurnSink) -> tuple[TurnEnd, str | None]: ...   # end status and error text
   ```
+  One concern each: `AgentBuilder` assembles, `graph.py` loops, `TurnExecutor` owns the turn's messages, compaction and end, task 5's `SessionManager` owns concurrency.
 
 **Implementation notes:**
 - `run`:
-  1. Project checks: status `missing` or `clone_failed` → end `failed` with the project's `status_detail`; status `empty` → write the agent message "This repository has no committed files yet. Commit your files, then ask again." with no model call and end `done`.
-  2. `settings.resolve(project_id, agent)`; a `DomainError` ends the turn `failed` with its message (the user reads "choose a model ..." in the session).
+  1. `builder.build(project_id, agent)`. `TurnRefused` with `end="done"` → write its text as the agent message and end `done`; with `end="failed"` → end `failed` with its text (the system message below). No model call either way.
+  2. (`build` does the checks, in this order: project status `missing` or `clone_failed` → `TurnRefused("failed", status_detail)`; `empty` → `TurnRefused("done", "This repository has no committed files yet. Commit your files, then ask again.")`; `settings.resolve(project_id, agent)` → a `DomainError`, or a `KeyStoreError` from reading the keys (a locked keyring), becomes `TurnRefused("failed", its message)`, so the user reads "choose a model ..." in the session. Then the tools from the registry by the definition's names, the `ToolContext` and the layout.)
   3. Create the agent message (status `streaming`, no parts) and announce it with `sink.message(..., created=True)`.
   4. Compaction (below), then the graph.
   5. On the end: write the final parts and status (`complete`; for `failed` also `complete`, keeping what streamed, plus the system message with the error, decision above), `sink.message(..., created=False)`, and return.
 - The graph (`graph.py`): our own `StateGraph`, not the prebuilt agent. Nodes `model` and `tools`; `model` → `tools` when the reply has tool calls, else end; `tools` → `model`. State: the langchain messages of this turn and a step count. Before each model step: when `max_steps` is reached, end with the text "Stopped after <n> steps (this agent's step limit). Send a message to continue." added as a text part. Compiled with an `AsyncSqliteSaver` on the project database (connection from `connect_checkpointer`, so it gets the SQLite PRAGMAs), thread id = turn id; the thread is deleted with the checkpointer's own delete call when the turn ends, whatever the outcome, and the checkpointer's connection is closed in a `finally` (an open connection keeps the project's SQLite files locked on Windows).
-- Tool step: for each tool call, `sink.tool_started`, then `tool.invoke(ToolContext(files=RepoFiles(root, git)), args)` (one `RepoFiles` per turn: it caches `git ls-files`), `sink.tool_finished`, a `ToolResultPart`. An unknown tool name gives an error result ("There is no tool named X."). Every result, errors included, goes back to the model (spec section 5).
+- The model is offered the schemas of `agent.tools`, and the tool step looks a call up in `agent.tools` only, never in the registry, so the offered list and the runnable list are one list: a tool registered but not in the definition cannot run. Tool step: for each tool call, `sink.tool_started`, then `tool.invoke(agent.tool_context, args)`, `sink.tool_finished`, a `ToolResultPart`. A name not in `agent.tools` gives an error result ("There is no tool named X."). Every result, errors included, goes back to the model (spec section 5).
 - After each model step and each tool step, store the message's parts so far (`update_message`), so a crash loses at most one step; `llm_calls` gets one row per completed model call with its latency.
 - Cancellation arrives as `asyncio.CancelledError` in `run` (Stop and shutdown both cancel the task running it, task 5). `run` stores the parts so far with status `stopped` in `except CancelledError:` and re-raises; it never swallows the cancel. The caller (task 5's worker) decides the turn's end status and fixes the message status for shutdown. A tool call cut off gets no result part (context adds "cancelled by the user").
 - `compaction.py` (called once, at step 4 of `run`): `async def compact_if_needed(store, caller, model, project_id, session_id, history, system_text) -> None`. Size = the prompt tokens reported for the session's last model call (if any) plus `len(text) / 4` for every message after it; when there is no reported usage the estimate covers everything. Above 75% of `context_window`: summarize the oldest whole turns, keeping the last two turns and never splitting a tool call from its result, with one model call (no tools) asking for a summary of decisions, facts learned about the repository and open questions; `set_summary` with the new summary (the old summary is part of the input) and `compacted_through` = the last summarized message's id.
@@ -185,6 +204,7 @@ The protocol includes `close_project` (I1).
 - The checkpointer thread for the turn is gone after `done`, `stopped` and `failed`.
 - Compaction: with the model's context window set small (`set_context_window`), the third turn triggers a summary; `summary()` returns it with `compacted_through` on a turn boundary; the next context starts with the summary and the last two turns; without reported usage (`usage_in_stream = False`) the estimate alone triggers it.
 - A second agent defined only by a definition file in `tmp_path` runs a turn with no code change (spec "Done when").
+- `AgentBuilder` (`test_agent.py`, no model call): the refusals above in their order, a `KeyStoreError` included; `tools` equals the definition's list in order; a model reply calling a tool that is registered but not in the definition gets "There is no tool named X." (through the executor).
 
 **Checks:** as task 1.
 
@@ -206,7 +226,7 @@ The protocol includes `close_project` (I1).
   - One `asyncio.Lock` per session orders reads against writes: `send` holds it around storing the user message and publishing `message.created`; the executor's message writes go through the same lock with their publish (the sink methods take it); `get` holds it around reading the stored messages and then the hub's live message and seq. So nothing written before the snapshot is missing from it, and nothing after it is below `last_seq`.
   - `get`: recovery for the project if not done yet; checks the agent exists (404) and has `chat` (409); returns the stored messages with the running turn's message replaced by the hub's live message, `busy`, and the hub's current seq as `last_seq`.
   - `send`: empty text → 422 `message_empty`; stores the user message (`complete` when idle, `queued` when busy), creates its turn, publishes `message.created`, starts the worker for the session when idle, returns the message.
-  - One worker task per busy session runs queued turns in order. Each turn runs as its own child task (`TurnExecutor.run`); the worker awaits it, sets the turn's status, publishes `turn.ended`, and moves to the next turn, exiting when the queue is empty.
+  - One worker task per busy session runs queued turns in order. Each turn runs as its own child task (`TurnExecutor.run`, which builds the agent through `AgentBuilder`; the manager builds both from its I1 constructor arguments and knows nothing of assembly); the worker awaits it, sets the turn's status, publishes `turn.ended`, and moves to the next turn, exiting when the queue is empty.
   - `stop`: sets the session's "stop requested" flag and cancels the current turn's child task (queued turns continue); a no-op when idle. When the child ends cancelled with the flag set, the worker records `stopped`, clears the flag and goes on.
   - `close_project(project_id)`: like `close`, for one project's workers (their running turns end `interrupted`), then drops that project's hubs (subscribers' streams end), forgets that its recovery ran, and calls `databases.close_project(project_id)` so the folder can be deleted (Windows refuses to delete open SQLite files).
   - `close`: cancels every worker. A worker cancelled without the flag set records its running turn `interrupted` (and its message), starts nothing else, and exits.

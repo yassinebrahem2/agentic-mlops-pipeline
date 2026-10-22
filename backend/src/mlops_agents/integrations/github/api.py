@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
+import httpx2
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from mlops_agents.credentials.scrub import error_text
@@ -21,12 +21,12 @@ class RepoSummary(BaseModel):
 
 
 async def _get(
-    http: httpx.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None
-) -> httpx.Response:
+    http: httpx2.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None
+) -> httpx2.Response:
     headers = {**_HEADERS, "Authorization": f"Bearer {token}"}
     try:
         response = await http.get(GITHUB_API + path, headers=headers, params=params, timeout=30)
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         raise DomainError(
             "github_unreachable", f"Could not reach GitHub: {error_text(exc)}", status=502
         ) from None
@@ -47,7 +47,7 @@ async def _get(
     return response
 
 
-def _retry_time(headers: httpx.Headers) -> str:
+def _retry_time(headers: httpx2.Headers) -> str:
     retry_after = headers.get("retry-after", "")
     if retry_after.isdigit():
         return f"after {retry_after} seconds"
@@ -70,7 +70,7 @@ def _unreadable() -> DomainError:
     )
 
 
-async def get_login(http: httpx.AsyncClient, token: str) -> str:
+async def get_login(http: httpx2.AsyncClient, token: str) -> str:
     response = await _get(http, token, "/user")
     if response.status_code != 200:
         raise DomainError(
@@ -82,7 +82,9 @@ async def get_login(http: httpx.AsyncClient, token: str) -> str:
         raise _unreadable() from None
 
 
-async def list_repos(http: httpx.AsyncClient, token: str, *, limit: int = 300) -> list[RepoSummary]:
+async def list_repos(
+    http: httpx2.AsyncClient, token: str, *, limit: int = 300
+) -> list[RepoSummary]:
     repos: list[RepoSummary] = []
     page = 1
     while len(repos) < limit:
@@ -104,7 +106,7 @@ async def list_repos(http: httpx.AsyncClient, token: str, *, limit: int = 300) -
     return repos[:limit]
 
 
-async def get_repo(http: httpx.AsyncClient, token: str, full_name: str) -> RepoSummary:
+async def get_repo(http: httpx2.AsyncClient, token: str, full_name: str) -> RepoSummary:
     response = await _get(http, token, f"/repos/{full_name}")
     if response.status_code == 404:
         raise DomainError(

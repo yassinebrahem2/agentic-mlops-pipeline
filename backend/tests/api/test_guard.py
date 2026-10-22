@@ -171,22 +171,23 @@ async def test_signed_in_client_with_its_token_passes(
 
 
 @pytest.mark.parametrize(
-    ("method", "path"),
+    ("method", "path", "status"),
     [
-        ("GET", "/api/auth/status"),
-        ("POST", "/api/auth/token"),
-        ("POST", "/api/auth/login"),
-        ("GET", "/"),
-        ("GET", "/projects/prj_1/agents"),
+        ("GET", "/api/auth/status", 200),
+        # The routes answer for themselves: here, that the body is missing.
+        ("POST", "/api/auth/token", 422),
+        ("POST", "/api/auth/login", 422),
+        ("GET", "/", 200),
+        ("GET", "/projects/prj_1/agents", 200),
     ],
 )
 async def test_sign_in_routes_and_ui_paths_pass_without_a_session(
-    anonymous: httpx2.AsyncClient, method: str, path: str
+    anonymous: httpx2.AsyncClient, method: str, path: str, status: int
 ) -> None:
     response = await anonymous.request(method, path)
 
-    assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.status_code == status
+    assert "not_signed_in" not in response.text
 
 
 async def test_logout_needs_a_session_and_the_csrf_header(

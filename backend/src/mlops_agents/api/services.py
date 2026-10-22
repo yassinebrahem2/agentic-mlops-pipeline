@@ -6,10 +6,10 @@ import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
-import httpx
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
@@ -33,6 +33,7 @@ class Services:
     workspace: WorkspaceService
     catalog: AgentCatalog
     tools: ToolRegistry
+    agent_settings: AgentSettingsService
 
 
 async def build_services(
@@ -51,17 +52,16 @@ async def build_services(
     if keystore is None:
         keystore = await asyncio.to_thread(open_keystore, settings, paths)
 
-    provider_http = httpx2.AsyncClient()
-    stack.push_async_callback(provider_http.aclose)
-    github_http = httpx.AsyncClient()
-    stack.push_async_callback(github_http.aclose)
+    http = httpx2.AsyncClient()
+    stack.push_async_callback(http.aclose)
 
-    github = GitHubAuth(databases, keystore, github_http, gh if gh is not None else GhCli())
+    github = GitHubAuth(databases, keystore, http, gh if gh is not None else GhCli())
     git = GitRunner(paths.bin, token_provider=github.token)
-    workspace = WorkspaceService(settings, paths, databases, git, github, github_http)
-    providers = ProvidersService(databases, keystore, provider_http)
+    workspace = WorkspaceService(settings, paths, databases, git, github, http)
+    providers = ProvidersService(databases, keystore, http)
     tools = default_registry()
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    agent_settings = AgentSettingsService(databases, providers, catalog)
 
     return Services(
         settings=settings,
@@ -73,4 +73,5 @@ async def build_services(
         workspace=workspace,
         catalog=catalog,
         tools=tools,
+        agent_settings=agent_settings,
     )

@@ -1,4 +1,4 @@
-import httpx
+import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
@@ -21,17 +21,17 @@ class FakeGh:
         return self.value
 
 
-def _http() -> httpx.AsyncClient:
-    def handler(request: httpx.Request) -> httpx.Response:
+def _http() -> httpx2.AsyncClient:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.headers.get("authorization") in (
             "Bearer gho_a",
             "Bearer gho_b",
             "Bearer ghp_pasted",
         ):
-            return httpx.Response(200, json={"login": "octo"})
-        return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx2.Response(200, json={"login": "octo"})
+        return httpx2.Response(401, json={"message": "Bad credentials"})
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 async def test_gh_mode_reads_the_token_every_time(
@@ -71,3 +71,42 @@ async def test_require_token_when_not_connected(
     with pytest.raises(DomainError) as err:
         await auth.require_token()
     assert err.value.code == "github_not_connected"
+
+
+async def test_list_repos_when_not_connected(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    auth = GitHubAuth(databases, keystore, _http(), FakeGh(None))
+    with pytest.raises(DomainError) as err:
+        await auth.list_repos()
+    assert err.value.code == "github_not_connected"
+
+
+async def test_list_repos_when_connected(databases: Databases, keystore: MemoryKeyStore) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.headers.get("authorization") == "Bearer gho_a":
+            if request.url.path == "/user":
+                return httpx2.Response(200, json={"login": "octo"})
+            if request.url.path == "/user/repos":
+                return httpx2.Response(
+                    200,
+                    json=[
+                        {
+                            "full_name": "octo/demo",
+                            "private": False,
+                            "default_branch": "main",
+                            "description": "Demo repo",
+                        }
+                    ],
+                )
+        return httpx2.Response(401, json={"message": "Bad credentials"})
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    auth = GitHubAuth(databases, keystore, http, FakeGh("gho_a"))
+    await auth.enable_gh()
+    repos = await auth.list_repos()
+    assert len(repos) == 1
+    assert repos[0].full_name == "octo/demo"
+    assert repos[0].private is False
+    assert repos[0].default_branch == "main"
+    assert repos[0].description == "Demo repo"
