@@ -479,4 +479,65 @@ describe("AuthGate", () => {
     expect(screen.queryByText("The App Shell Content")).not.toBeInTheDocument();
     expect(screen.queryByText("Sign in")).not.toBeInTheDocument();
   });
+
+  it("preserves shell content and does not show error screen on background refetch failure when signed in", async () => {
+    let callCount = 0;
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (req.url.includes("/api/auth/status")) {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: "local",
+                signed_in: true,
+              }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: "internal_error",
+              message: "Network glitch on background refresh",
+            }),
+            {
+              status: 500,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request to ${req.url}`));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderWithClient(
+      <AuthGate>
+        <div>The App Shell Content</div>
+      </AuthGate>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("The App Shell Content")).toBeInTheDocument();
+    });
+
+    // Trigger a refetch that fails
+    try {
+      await queryClient.refetchQueries({ queryKey: ["auth"] });
+    } catch {
+      // Expected: refetch rejects on 500 error
+    }
+
+    // Shell content should still be rendered; error screen should NOT be shown
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("The App Shell Content")).toBeInTheDocument();
+  });
 });

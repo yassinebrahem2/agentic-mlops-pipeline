@@ -40,18 +40,15 @@ export function useAuth(): {
 } {
   const qc = useQueryClient();
 
-  const query = useQuery<AuthStatus>(
-    {
-      queryKey: ["auth"],
-      queryFn: async () => unwrap(await api.GET("/api/auth/status")),
-    },
-    qc,
-  );
+  const query = useQuery<AuthStatus>({
+    queryKey: ["auth"],
+    queryFn: async () => unwrap(await api.GET("/api/auth/status")),
+  });
 
   const signOut = useCallback(async () => {
     const updated = unwrap(await api.POST("/api/auth/logout"));
-    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
     qc.setQueryData(["auth"], updated);
+    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
   }, [qc]);
 
   return {

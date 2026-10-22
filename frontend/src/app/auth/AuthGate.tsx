@@ -23,7 +23,6 @@ export function AuthGate({ children }: { children?: ReactNode }) {
   const qc = useQueryClient();
 
   const initialToken = useMemo(() => {
-    if (typeof window === "undefined") return null;
     return extractTokenFromHash(window.location.hash);
   }, []);
 
@@ -39,9 +38,7 @@ export function AuthGate({ children }: { children?: ReactNode }) {
   useEffect(() => {
     if (!initialToken) return;
 
-    if (typeof window !== "undefined") {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
+    history.replaceState(null, "", window.location.pathname + window.location.search);
 
     if ("bad" in initialToken) {
       return;
@@ -71,7 +68,7 @@ export function AuthGate({ children }: { children?: ReactNode }) {
     return null;
   }
 
-  if (error) {
+  if (error && status === undefined) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <div role="alert" className="text-sm font-medium text-destructive">
