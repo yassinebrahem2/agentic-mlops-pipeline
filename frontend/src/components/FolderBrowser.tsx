@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorText, unwrap } from "@/lib/api";
 
+const CHOOSE_LABEL = "Use this folder";
+
 export interface FolderBrowserProps {
   initialPath?: string;
   onChoose: (path: string) => void;
@@ -136,10 +138,10 @@ export function FolderBrowser({
           {isSubmitting ? (
             <>
               <Loader2 className="mr-1.5 size-4 animate-spin" />
-              {busyLabel ?? "Use this folder"}
+              {busyLabel ?? CHOOSE_LABEL}
             </>
           ) : (
-            "Use this folder"
+            CHOOSE_LABEL
           )}
         </Button>
       </div>
