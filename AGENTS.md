@@ -24,9 +24,9 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
    | the blocker is resolved and you resume | In progress |
    | you stop working on it and unassign yourself | Todo |
    | the task is done, pushed and CI is green (no PR of its own) | close the issue: Done |
-   | a PR into `main` is opened | every issue it closes: In review (In review holds only work waiting on the lead) |
-   | the lead requests changes on your PR | the PR and every issue it closes: In progress (until you push the fixes) |
-   | you push the fixes for a PR with changes requested | the PR and every issue it closes: In review |
+   | a PR into `main` is opened | every open issue it closes: In review (In review holds only work waiting on the lead) |
+   | the lead requests changes on your PR | the PR and every open issue it closes: In progress (until you push the fixes) |
+   | you push the fixes for a PR with changes requested | the PR and every open issue it closes: In review (a closed issue stays Done) |
    | the issue is closed (rule 6) | Done |
 
    **Keep watching your Blocked and In review cards.** While one of your issues or PRs is Blocked or In review, check it about every 10 minutes, alongside your next task (do not sit idle on it), until it moves or the person running you stops you: a Decision answered or a blocking PR merged → resume; changes requested → fix them; merged → next task. If your agent cannot keep a session waiting, tell the person running you what you are waiting on.
@@ -130,6 +130,7 @@ Four types, each with its template and label. Blank issues are disabled.
 - Inline lint suppressions only at a third-party boundary, naming the rule and the reason; test-only exceptions go in the linter's per-file config.
 - Test-first for logic: write the failing test, then the code. Test at the cheapest level that proves the behavior.
 - Before saying a task is done, run the tests and checks and report their real output.
+- Never repeat yourself: every rule, type, message and constant has one source, which everything else uses (across backend and frontend too: generate or serve it, never copy it; logic that must run on both sides is specified once, by a shared fixture both test against). Separation of concerns: each module, class and function owns one concern; a component that needs another concern calls its owner.
 - Small focused files; a file past about 400 lines is doing too much. Comments explain why, not what. No commented-out or dead code.
 - Match the surrounding code's naming and idioms.
 

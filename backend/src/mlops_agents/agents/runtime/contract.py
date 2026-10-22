@@ -21,7 +21,7 @@ api-sessions builds it in the lifespan's AsyncExitStack and registers close.
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 AuthorKind = Literal["user", "agent", "system"]
 MessageStatus = Literal["complete", "streaming", "queued", "stopped", "interrupted"]
@@ -69,18 +69,89 @@ class SessionView(BaseModel):
     last_seq: int  # stream position this view matches
 
 
-class StreamEvent(BaseModel):
+class MessageData(BaseModel):
+    message: MessageView
+
+
+class TextDeltaData(BaseModel):
+    message_id: str
+    text: str
+
+
+class ToolStartedData(BaseModel):
+    message_id: str
+    tool_call_id: str
+    name: str
+    input: dict[str, Any]
+
+
+class ToolFinishedData(BaseModel):
+    message_id: str
+    tool_call_id: str
+    content: str
+    is_error: bool
+
+
+class TurnEndedData(BaseModel):
+    turn_id: str
+    status: TurnEnd
+    error: str | None
+
+
+class ResyncData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _Event(BaseModel):
     seq: int  # per session, increasing; sent as the SSE id
-    type: Literal[
-        "message.created",
-        "text.delta",
-        "tool.started",
-        "tool.finished",
-        "message.updated",
-        "turn.ended",
-        "resync",
-    ]
-    data: dict[str, Any]
+
+
+class MessageCreated(_Event):
+    """Every new message, the user's included."""
+
+    type: Literal["message.created"]
+    data: MessageData
+
+
+class TextDelta(_Event):
+    type: Literal["text.delta"]
+    data: TextDeltaData
+
+
+class ToolStarted(_Event):
+    type: Literal["tool.started"]
+    data: ToolStartedData
+
+
+class ToolFinished(_Event):
+    type: Literal["tool.finished"]
+    data: ToolFinishedData
+
+
+class MessageUpdated(_Event):
+    """A message's new final state."""
+
+    type: Literal["message.updated"]
+    data: MessageData
+
+
+class TurnEnded(_Event):
+    type: Literal["turn.ended"]
+    data: TurnEndedData
+
+
+class Resync(_Event):
+    """The client's position is unknown to the hub: it calls get again."""
+
+    type: Literal["resync"]
+    data: ResyncData
+
+
+# The one definition of the stream's events; the frontend's types are generated from it (#89).
+StreamEvent = Annotated[
+    MessageCreated | TextDelta | ToolStarted | ToolFinished | MessageUpdated | TurnEnded | Resync,
+    Field(discriminator="type"),
+]
 
 
 class AgentSessions(Protocol):
@@ -103,13 +174,26 @@ class AgentSessions(Protocol):
 __all__ = [
     "AgentSessions",
     "AuthorKind",
+    "MessageCreated",
+    "MessageData",
     "MessageStatus",
+    "MessageUpdated",
     "MessageView",
     "Part",
+    "Resync",
+    "ResyncData",
     "SessionView",
     "StreamEvent",
+    "TextDelta",
+    "TextDeltaData",
     "TextPart",
     "ToolCallPart",
+    "ToolFinished",
+    "ToolFinishedData",
     "ToolResultPart",
+    "ToolStarted",
+    "ToolStartedData",
     "TurnEnd",
+    "TurnEnded",
+    "TurnEndedData",
 ]
