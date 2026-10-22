@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -25,8 +26,18 @@ const fakeProjectsNewRoute: PageRoute = {
 const testRoutes: PageRoute[] = [fakeAppRoute, fakeProjectRoute, fakeProjectsNewRoute];
 
 function renderWithRouter(routes: PageRoute[], initialEntries: string[]) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
   const router = buildRouter(routes, (tree) => createMemoryRouter(tree, { initialEntries }));
-  return render(<RouterProvider router={router} />);
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 describe("AppShell and Router", () => {
