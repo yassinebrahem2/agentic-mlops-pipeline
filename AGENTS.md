@@ -50,6 +50,7 @@ Run from `frontend/`:
 - Tests: `npm test` (one file: `npx vitest run src/path/File.test.tsx`)
 - Lint and format: `npm run lint`, `npm run format:check`
 - Build into the backend package: `npm run build`
+- End-to-end tests (Playwright; starts the app and the fake provider itself, and serves the built UI, so run `npm run build` first): `npm run e2e`
 - Regenerate API types after the backend API changes: `npm run gen:api`
 
 ## Team workflow
