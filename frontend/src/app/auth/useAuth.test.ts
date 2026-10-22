@@ -18,6 +18,7 @@ describe("useAuth", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
 
   function wrapper({ children }: { children: ReactNode }) {
@@ -48,15 +49,18 @@ describe("useAuth", () => {
   });
 
   it("signOut calls POST /api/auth/logout, updates status, and clears query cache", async () => {
+    document.cookie = "csrf_token=test-csrf-token; path=/";
     const signedInStatus: AuthStatus = { mode: "server", signed_in: true };
     const signedOutStatus: AuthStatus = { mode: "server", signed_in: false };
 
     queryClient.setQueryData(["auth"], signedInStatus);
     queryClient.setQueryData(["some-other-data"], { data: 123 });
 
+    let csrfHeaderSeen: string | null = null;
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const req = new Request(input, init);
       if (req.url.includes("/api/auth/logout") && req.method === "POST") {
+        csrfHeaderSeen = req.headers.get("X-CSRF-Token");
         return Promise.resolve(
           new Response(JSON.stringify(signedOutStatus), {
             status: 200,
@@ -74,6 +78,7 @@ describe("useAuth", () => {
     await result.current.signOut();
 
     expect(fakeFetch).toHaveBeenCalled();
+    expect(csrfHeaderSeen).toBe("test-csrf-token");
 
     await waitFor(() => {
       expect(result.current.status).toEqual(signedOutStatus);

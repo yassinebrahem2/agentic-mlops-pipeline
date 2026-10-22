@@ -1,12 +1,11 @@
-import { QueryClientContext } from "@tanstack/react-query";
-import { useContext, useState, type SyntheticEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState, type SyntheticEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { APP_NAME } from "@/config";
 import { api, errorText, unwrap } from "@/lib/api";
-import { queryClient as fallbackClient } from "@/lib/query";
 
 export interface SignInProps {
   mode: "local" | "server";
@@ -15,8 +14,7 @@ export interface SignInProps {
 }
 
 export function SignIn({ mode, tokenError, onSuccess }: SignInProps) {
-  const contextClient = useContext(QueryClientContext);
-  const qc = contextClient ?? fallbackClient;
+  const qc = useQueryClient();
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);

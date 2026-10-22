@@ -26,6 +26,7 @@ describe("AuthGate", () => {
     vi.restoreAllMocks();
     window.location.hash = "";
     history.replaceState(null, "", "/");
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
 
   function renderWithClient(ui: React.ReactElement) {
@@ -180,7 +181,7 @@ describe("AuthGate", () => {
           } else {
             return new Response(
               JSON.stringify({
-                code: "invalid_credentials",
+                code: "bad_password",
                 message: "Wrong password.",
               }),
               {
@@ -226,8 +227,10 @@ describe("AuthGate", () => {
 
   it("4. Sign out posts logout and returns to the sign-in screen", async () => {
     const user = userEvent.setup();
+    document.cookie = "csrf_token=test-csrf-token; path=/";
 
     let signedIn = true;
+    let logoutCsrfHeader: string | null = null;
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const req = new Request(input, init);
       if (req.url.includes("/api/auth/status")) {
@@ -245,6 +248,7 @@ describe("AuthGate", () => {
         );
       }
       if (req.url.includes("/api/auth/logout") && req.method === "POST") {
+        logoutCsrfHeader = req.headers.get("X-CSRF-Token");
         signedIn = false;
         return Promise.resolve(
           new Response(
@@ -287,6 +291,7 @@ describe("AuthGate", () => {
       expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
     });
     expect(screen.queryByText("The App Shell Content")).not.toBeInTheDocument();
+    expect(logoutCsrfHeader).toBe("test-csrf-token");
   });
 
   it("5. token never appears in history after exchange (check href and hash)", async () => {
@@ -357,5 +362,121 @@ describe("AuthGate", () => {
     expect(
       screen.queryByText("Open the app with the link printed in the terminal where it runs."),
     ).not.toBeInTheDocument();
+  });
+
+  it("ignores hash when token is prefixed (e.g. #xtoken=abc)", async () => {
+    window.location.hash = "#xtoken=abc";
+    let tokenPostCalled = false;
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (req.url.includes("/api/auth/token")) {
+        tokenPostCalled = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ mode: "local", signed_in: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (req.url.includes("/api/auth/status")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ mode: "local", signed_in: false }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request to ${req.url}`));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderWithClient(
+      <AuthGate>
+        <div>The App Shell Content</div>
+      </AuthGate>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Open the app with the link printed in the terminal where it runs."),
+      ).toBeInTheDocument();
+    });
+    expect(tokenPostCalled).toBe(false);
+  });
+
+  it("treats malformed percent-encoding in hash token as a bad link without crashing", async () => {
+    window.location.hash = "#token=%invalid%";
+    let tokenPostCalled = false;
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (req.url.includes("/api/auth/token")) {
+        tokenPostCalled = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ mode: "local", signed_in: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (req.url.includes("/api/auth/status")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ mode: "local", signed_in: false }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request to ${req.url}`));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderWithClient(
+      <AuthGate>
+        <div>The App Shell Content</div>
+      </AuthGate>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("The access link is invalid or has expired.")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("Open the app with the link printed in the terminal where it runs."),
+    ).toBeInTheDocument();
+    expect(tokenPostCalled).toBe(false);
+    expect(window.location.hash).toBe("");
+  });
+
+  it("displays errorText when status request fails", async () => {
+    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (req.url.includes("/api/auth/status")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: "internal_error",
+              message: "Something went wrong on the server.",
+            }),
+            {
+              status: 500,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request to ${req.url}`));
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    renderWithClient(
+      <AuthGate>
+        <div>The App Shell Content</div>
+      </AuthGate>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Something went wrong on the server.");
+    });
+    expect(screen.queryByText("The App Shell Content")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sign in")).not.toBeInTheDocument();
   });
 });

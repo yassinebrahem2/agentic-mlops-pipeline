@@ -1,39 +1,55 @@
-import { QueryClientContext } from "@tanstack/react-query";
-import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Outlet } from "react-router";
 import { SignIn } from "./SignIn";
 import { exchangeTokenOnce, useAuth } from "./useAuth";
 import { errorText } from "@/lib/api";
-import { queryClient as fallbackClient } from "@/lib/query";
 
-function extractTokenFromHash(hash: string): string | null {
-  const match = hash.match(/token=([^&]+)/);
-  return match && match[1] ? decodeURIComponent(match[1]) : null;
+const BAD_LINK_MESSAGE = "The access link is invalid or has expired.";
+
+type ExtractedToken = { token: string } | { bad: true } | null;
+
+function extractTokenFromHash(hash: string): ExtractedToken {
+  const match = hash.match(/(?:^|[#&])token=([^&]+)/);
+  if (!match || !match[1]) return null;
+  try {
+    return { token: decodeURIComponent(match[1]) };
+  } catch {
+    return { bad: true };
+  }
 }
 
 export function AuthGate({ children }: { children?: ReactNode }) {
-  const contextClient = useContext(QueryClientContext);
-  const qc = contextClient ?? fallbackClient;
+  const qc = useQueryClient();
 
   const initialToken = useMemo(() => {
     if (typeof window === "undefined") return null;
     return extractTokenFromHash(window.location.hash);
   }, []);
 
-  const [isExchanging, setIsExchanging] = useState(initialToken !== null);
-  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [isExchanging, setIsExchanging] = useState(
+    initialToken !== null && "token" in initialToken,
+  );
+  const [tokenError, setTokenError] = useState<string | null>(
+    initialToken !== null && "bad" in initialToken ? BAD_LINK_MESSAGE : null,
+  );
 
-  const { status } = useAuth();
+  const { status, error } = useAuth();
 
   useEffect(() => {
     if (!initialToken) return;
 
+    if (typeof window !== "undefined") {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+
+    if ("bad" in initialToken) {
+      return;
+    }
+
     const state = { canceled: false };
     void (async () => {
-      const result = await exchangeTokenOnce(initialToken);
-      if (typeof window !== "undefined") {
-        history.replaceState(null, "", window.location.pathname + window.location.search);
-      }
+      const result = await exchangeTokenOnce(initialToken.token);
       if (state.canceled) return;
 
       if ("status" in result) {
@@ -53,6 +69,16 @@ export function AuthGate({ children }: { children?: ReactNode }) {
 
   if (isExchanging) {
     return null;
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <div role="alert" className="text-sm font-medium text-destructive">
+          {errorText(error)}
+        </div>
+      </div>
+    );
   }
 
   if (status === undefined) {

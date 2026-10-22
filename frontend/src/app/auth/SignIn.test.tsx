@@ -67,7 +67,7 @@ describe("SignIn component", () => {
         return Promise.resolve(
           new Response(
             JSON.stringify({
-              code: "invalid_credentials",
+              code: "bad_password",
               message: "Wrong password.",
             }),
             {

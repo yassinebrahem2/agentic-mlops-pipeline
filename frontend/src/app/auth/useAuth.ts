@@ -1,7 +1,6 @@
-import { QueryClientContext, useQuery } from "@tanstack/react-query";
-import { useCallback, useContext } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { api, unwrap } from "@/lib/api";
-import { queryClient as fallbackClient } from "@/lib/query";
 
 export type AuthStatus = { mode: "local" | "server"; signed_in: boolean };
 
@@ -36,10 +35,10 @@ export function exchangeTokenOnce(token: string): Promise<ExchangeResult> {
 
 export function useAuth(): {
   status: AuthStatus | undefined;
+  error: unknown;
   signOut(): Promise<void>;
 } {
-  const contextClient = useContext(QueryClientContext);
-  const qc = contextClient ?? fallbackClient;
+  const qc = useQueryClient();
 
   const query = useQuery<AuthStatus>(
     {
@@ -57,6 +56,7 @@ export function useAuth(): {
 
   return {
     status: query.data,
+    error: query.error,
     signOut,
   };
 }
