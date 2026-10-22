@@ -133,3 +133,57 @@ async def test_forwarded_headers_from_another_peer_are_ignored(server_app: FastA
 
     assert response.status_code == 400
     assert response.json() == BAD_HOST
+
+
+async def test_forwarded_host_uses_the_last_value_from_trusted_proxy(
+    server_app: FastAPI,
+) -> None:
+    async with _client(
+        server_app,
+        "http://10.0.0.5:8765",
+        peer="10.0.0.1",
+        headers={"X-Forwarded-Host": "evil.example, app.example.com", "X-Forwarded-Proto": "https"},
+    ) as http:
+        good = await http.get("/api/auth/status")
+
+    async with _client(
+        server_app,
+        "http://10.0.0.5:8765",
+        peer="10.0.0.1",
+        headers={"X-Forwarded-Host": "app.example.com, evil.example", "X-Forwarded-Proto": "https"},
+    ) as http:
+        bad = await http.get("/api/auth/status")
+
+    assert good.status_code == 200
+    assert bad.status_code == 400
+    assert bad.json() == BAD_HOST
+
+
+async def test_forwarded_proto_uses_the_last_value_from_trusted_proxy(
+    server_app: FastAPI,
+) -> None:
+    async def url(request: Request) -> dict[str, str]:
+        return {"url": str(request.url)}
+
+    server_app.add_api_route("/test/url-proto", url)
+
+    async with _client(
+        server_app,
+        "http://10.0.0.5:8765",
+        peer="10.0.0.1",
+        headers={"X-Forwarded-Host": "app.example.com", "X-Forwarded-Proto": "http, https"},
+    ) as http:
+        r1 = await http.get("/test/url-proto")
+
+    async with _client(
+        server_app,
+        "http://10.0.0.5:8765",
+        peer="10.0.0.1",
+        headers={"X-Forwarded-Host": "app.example.com", "X-Forwarded-Proto": "https, http"},
+    ) as http:
+        r2 = await http.get("/test/url-proto")
+
+    assert r1.status_code == 200
+    assert r1.json() == {"url": "https://app.example.com/test/url-proto"}
+    assert r2.status_code == 200
+    assert r2.json() == {"url": "http://app.example.com/test/url-proto"}
