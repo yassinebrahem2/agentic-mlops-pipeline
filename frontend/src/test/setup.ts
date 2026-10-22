@@ -1,7 +1,4 @@
 import "@testing-library/jest-dom/vitest";
-import { configure } from "@testing-library/react";
-
-configure({ asyncUtilTimeout: 5000 });
 
 // Node's Request rejects the relative URLs the app's client sends (a browser resolves them against the page),
 // so tests resolve them against the jsdom origin.
