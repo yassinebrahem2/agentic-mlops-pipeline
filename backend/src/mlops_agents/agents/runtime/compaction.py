@@ -63,7 +63,12 @@ async def compact_if_needed(
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                select(llm_calls.c.prompt_tokens, llm_calls.c.created_at)
+                select(
+                    llm_calls.c.prompt_tokens,
+                    llm_calls.c.created_at,
+                    llm_calls.c.turn_id,
+                    turns.c.trigger_message_id,
+                )
                 .select_from(llm_calls.join(turns, llm_calls.c.turn_id == turns.c.id))
                 .where(turns.c.session_id == session_id, llm_calls.c.prompt_tokens.is_not(None))
                 .order_by(llm_calls.c.created_at.desc(), llm_calls.c.id.desc())
@@ -74,7 +79,21 @@ async def compact_if_needed(
     if row is not None and row[0] is not None:
         prompt_tokens = int(row[0])
         call_created_at = str(row[1])
-        messages_after = [m for m in history if m.created_at > call_created_at]
+        call_turn_id = str(row[2]) if row[2] is not None else None
+        trigger_msg_id = str(row[3]) if row[3] is not None else None
+
+        last_turn_idx = -1
+        for i, m in enumerate(history):
+            if (call_turn_id and m.turn_id == call_turn_id) or (
+                trigger_msg_id and m.id == trigger_msg_id
+            ):
+                last_turn_idx = i
+
+        if last_turn_idx >= 0:
+            messages_after = history[last_turn_idx + 1 :]
+        else:
+            messages_after = [m for m in history if m.created_at > call_created_at]
+
         estimated_size = float(prompt_tokens) + sum(_message_len(m) for m in messages_after) / 4.0
     else:
         estimated_size = float(len(system_text)) / 4.0 + sum(_message_len(m) for m in history) / 4.0
