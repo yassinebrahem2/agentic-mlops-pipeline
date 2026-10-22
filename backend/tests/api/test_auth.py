@@ -245,6 +245,55 @@ async def test_behind_a_trusted_proxy_the_limit_uses_the_forwarded_address(
     assert same.status_code == 429
 
 
+async def test_forwarded_for_keys_on_rightmost_untrusted_hop(tmp_path: Path) -> None:
+    env = {**SERVER_ENV, "MLOPS_AGENTS_TRUSTED_PROXIES": "10.0.0.1, 10.0.0.2"}
+    async with (
+        started_app(tmp_path / "proxy", RunMode.SERVER, env) as application,
+        _anonymous(application, SERVER_URL, peer="10.0.0.2") as proxy,
+    ):
+        for _ in range(5):
+            await proxy.post(
+                "/api/auth/login",
+                json={"password": "x"},
+                headers={"X-Forwarded-For": "2.2.2.2, 10.0.0.1"},
+            )
+        other = await proxy.post(
+            "/api/auth/login",
+            json={"password": PASSWORD},
+            headers={"X-Forwarded-For": "3.3.3.3, 10.0.0.1"},
+        )
+        # Even with a forged hop prepended, the right-most untrusted hop is still 2.2.2.2 (10.0.0.1 is trusted proxy)
+        blocked = await proxy.post(
+            "/api/auth/login",
+            json={"password": PASSWORD},
+            headers={"X-Forwarded-For": "1.1.1.1, 2.2.2.2, 10.0.0.1"},
+        )
+
+    assert other.status_code == 200
+    assert blocked.status_code == 429
+
+
+async def test_rotating_first_hop_does_not_escape_rate_limit(tmp_path: Path) -> None:
+    env = {**SERVER_ENV, "MLOPS_AGENTS_TRUSTED_PROXIES": "10.0.0.2"}
+    async with (
+        started_app(tmp_path / "proxy2", RunMode.SERVER, env) as application,
+        _anonymous(application, SERVER_URL, peer="10.0.0.2") as proxy,
+    ):
+        for _ in range(5):
+            await proxy.post(
+                "/api/auth/login",
+                json={"password": "x"},
+                headers={"X-Forwarded-For": "1.1.1.1, 2.2.2.2"},
+            )
+        escaped_attempt = await proxy.post(
+            "/api/auth/login",
+            json={"password": PASSWORD},
+            headers={"X-Forwarded-For": "9.9.9.9, 2.2.2.2"},
+        )
+
+    assert escaped_attempt.status_code == 429
+
+
 async def test_a_lone_surrogate_password_is_a_failed_attempt(
     visitor: httpx2.AsyncClient,
 ) -> None:
