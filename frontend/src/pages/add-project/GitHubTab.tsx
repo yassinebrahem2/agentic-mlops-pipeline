@@ -19,7 +19,11 @@ export function GitHubTab() {
     projectId?: string;
   } | null>(null);
 
-  const { data: githubStatus, isPending: isStatusPending } = useQuery({
+  const {
+    data: githubStatus,
+    isPending: isStatusPending,
+    error: statusError,
+  } = useQuery({
     queryKey: ["github"],
     queryFn: async () => {
       const res = await api.GET("/api/github");
@@ -29,7 +33,11 @@ export function GitHubTab() {
 
   const isConnected = githubStatus && (githubStatus.mode === "gh" || githubStatus.mode === "token");
 
-  const { data: repos, isPending: isReposPending } = useQuery({
+  const {
+    data: repos,
+    isPending: isReposPending,
+    error: reposError,
+  } = useQuery({
     queryKey: ["github", "repos"],
     queryFn: async () => {
       const res = await api.GET("/api/github/repos");
@@ -90,6 +98,14 @@ export function GitHubTab() {
         <Loader2 className="mr-2 size-4 animate-spin" />
         Checking GitHub connection...
       </div>
+    );
+  }
+
+  if (statusError) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {errorText(statusError)}
+      </p>
     );
   }
 
@@ -180,6 +196,11 @@ export function GitHubTab() {
         />
 
         <div className="min-h-48 rounded-md border bg-muted/20">
+          {reposError && (
+            <p role="alert" className="p-3 text-sm text-destructive">
+              {errorText(reposError)}
+            </p>
+          )}
           {isReposPending && (
             <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" />
@@ -187,7 +208,7 @@ export function GitHubTab() {
             </div>
           )}
 
-          {!isReposPending && (
+          {!isReposPending && !reposError && (
             <div className="max-h-64 overflow-y-auto p-2">
               {filteredRepos.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">

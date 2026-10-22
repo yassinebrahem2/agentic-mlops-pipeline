@@ -180,6 +180,19 @@ describe("ProjectSwitcher", () => {
     expect(await screen.findByRole("button", { name: "Projects" })).toBeInTheDocument();
   });
 
+  it("shows a failed project list lookup in the switcher on a project page", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 503 }))),
+    );
+    renderPage("/projects/prj_alpha/settings", { routes: testRoutes });
+    await user.click(await screen.findByRole("button", { name: "Projects" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The server answered with an error (HTTP 503).",
+    );
+  });
+
   it("selecting another project opens it via POST /open and navigates to the project", async () => {
     const user = userEvent.setup();
     let openedId = "";

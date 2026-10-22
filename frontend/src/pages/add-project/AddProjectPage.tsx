@@ -3,10 +3,14 @@ import { Loader2 } from "lucide-react";
 import { GitHubTab } from "./GitHubTab";
 import { LocalFolderTab } from "./LocalFolderTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, unwrap } from "@/lib/api";
+import { api, errorText, unwrap } from "@/lib/api";
 
 export function AddProjectPage() {
-  const { data: appInfo, isPending } = useQuery({
+  const {
+    data: appInfo,
+    isPending,
+    error,
+  } = useQuery({
     queryKey: ["app"],
     queryFn: async () => {
       const res = await api.GET("/api/app");
@@ -21,9 +25,9 @@ export function AddProjectPage() {
       <div className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">Add project</h1>
         <p className="text-sm text-muted-foreground">
-          {isServerMode
-            ? "This server works with GitHub repositories."
-            : "Add a local repository or clone from GitHub to start working."}
+          {appInfo?.mode === "server" && "This server works with GitHub repositories."}
+          {appInfo?.mode === "local" &&
+            "Add a local repository or clone from GitHub to start working."}
         </p>
       </div>
 
@@ -34,13 +38,19 @@ export function AddProjectPage() {
         </div>
       )}
 
-      {!isPending && isServerMode && (
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {errorText(error)}
+        </p>
+      )}
+
+      {!error && isServerMode && (
         <div className="space-y-4">
           <GitHubTab />
         </div>
       )}
 
-      {!isPending && !isServerMode && (
+      {!error && appInfo?.mode === "local" && (
         <Tabs defaultValue="local" className="space-y-4">
           <TabsList>
             <TabsTrigger value="local">Local folder</TabsTrigger>

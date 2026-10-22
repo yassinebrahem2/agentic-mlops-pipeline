@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { api, unwrap } from "@/lib/api";
+import { api, errorText, unwrap } from "@/lib/api";
 import { useOpenProject } from "@/lib/useOpenProject";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export function ProjectSwitcher({
     }
   }, [openError]);
 
-  const { data: projects } = useQuery({
+  const { data: projects, error: projectsError } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => {
       const res = await api.GET("/api/projects");
@@ -71,6 +71,11 @@ export function ProjectSwitcher({
           Projects
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {projectsError && (
+          <div role="alert" className="px-2 py-1.5 text-xs text-destructive">
+            {errorText(projectsError)}
+          </div>
+        )}
         {openError && (
           <>
             <div role="alert" className="px-2 py-1.5 text-xs text-destructive">
