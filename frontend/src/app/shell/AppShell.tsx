@@ -55,7 +55,7 @@ export function AppShell({ routes }: { routes: PageRoute[] }) {
       </div>
 
       <main className="flex-1 overflow-auto">
-        <Outlet context={routes} />
+        <Outlet />
       </main>
     </div>
   );

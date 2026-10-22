@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
+import type { components } from "@/api/schema";
 import { api, unwrap } from "@/lib/api";
 
-export type AuthStatus = { mode: "local" | "server"; signed_in: boolean };
+export type AuthStatus = components["schemas"]["AuthStatus"];
 
 export type ExchangeResult = { status: AuthStatus } | { error: unknown };
 

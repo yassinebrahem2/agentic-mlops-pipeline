@@ -4,19 +4,12 @@ import { buildRouter } from "./app/router";
 import { pageRoutes } from "./app/routes";
 import { queryClient } from "./lib/query";
 
-let router: ReturnType<typeof buildRouter> | null = null;
-
-function getRouter() {
-  if (!router) {
-    router = buildRouter(pageRoutes);
-  }
-  return router;
-}
+const router = buildRouter(pageRoutes);
 
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={getRouter()} />
+      <RouterProvider router={router} />
     </QueryClientProvider>
   );
 }
