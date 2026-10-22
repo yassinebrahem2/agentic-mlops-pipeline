@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from sqlalchemy import select
 
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -13,7 +13,6 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.providers.bridge import ResolvedModel
-from mlops_agents.storage.tables import llm_calls, turns
 
 
 def _group_turns(messages: list[MessageView]) -> list[list[MessageView]]:
@@ -51,36 +50,30 @@ async def compact_if_needed(
     session_id: str,
     history: list[MessageView],
     system_text: str,
+    *,
+    turn_id: str | None = None,
+    agent_name: str = "orchestrator",
 ) -> None:
     """Summarize older whole turns if estimated size exceeds 75% of context window."""
-    turns_list = _group_turns(history)
-    if len(turns_list) <= 2:
+    old_summary, old_compacted_through = await store.summary(project_id, session_id)
+    if old_compacted_through:
+        compacted_idx = -1
+        for i, m in enumerate(history):
+            if m.id == old_compacted_through:
+                compacted_idx = i
+                break
+        uncompacted_history = history[compacted_idx + 1 :] if compacted_idx >= 0 else history
+    else:
+        uncompacted_history = history
+
+    uncompacted_turns = _group_turns(uncompacted_history)
+    if len(uncompacted_turns) <= 2:
         return
 
     # Check for prompt tokens reported for the session's last model call
-    databases = store._databases  # pyright: ignore[reportPrivateUsage]
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                select(
-                    llm_calls.c.prompt_tokens,
-                    llm_calls.c.created_at,
-                    llm_calls.c.turn_id,
-                    turns.c.trigger_message_id,
-                )
-                .select_from(llm_calls.join(turns, llm_calls.c.turn_id == turns.c.id))
-                .where(turns.c.session_id == session_id, llm_calls.c.prompt_tokens.is_not(None))
-                .order_by(llm_calls.c.created_at.desc(), llm_calls.c.id.desc())
-                .limit(1)
-            )
-        ).first()
-
-    if row is not None and row[0] is not None:
-        prompt_tokens = int(row[0])
-        call_created_at = str(row[1])
-        call_turn_id = str(row[2]) if row[2] is not None else None
-        trigger_msg_id = str(row[3]) if row[3] is not None else None
+    last_call = await store.last_llm_call_prompt_tokens(project_id, session_id)
+    if last_call is not None:
+        prompt_tokens, call_created_at, call_turn_id, trigger_msg_id = last_call
 
         last_turn_idx = -1
         for i, m in enumerate(history):
@@ -96,17 +89,18 @@ async def compact_if_needed(
 
         estimated_size = float(prompt_tokens) + sum(_message_len(m) for m in messages_after) / 4.0
     else:
-        estimated_size = float(len(system_text)) / 4.0 + sum(_message_len(m) for m in history) / 4.0
+        # Count only messages after compacted_through, plus system_text (which holds previous summary)
+        estimated_size = (
+            float(len(system_text)) / 4.0 + sum(_message_len(m) for m in uncompacted_history) / 4.0
+        )
 
     threshold = 0.75 * model.context_window
     if estimated_size <= threshold:
         return
 
-    # Keep last 2 turns, summarize everything earlier
-    turns_to_summarize = turns_list[:-2]
-    compacted_through = turns_to_summarize[-1][-1].id
-
-    old_summary, _ = await store.summary(project_id, session_id)
+    # Keep last 2 turns, summarize everything earlier from uncompacted turns
+    turns_to_summarize = uncompacted_turns[:-2]
+    new_compacted_through = turns_to_summarize[-1][-1].id
 
     lines: list[str] = []
     if old_summary:
@@ -139,7 +133,21 @@ async def compact_if_needed(
     async def _noop(_: str) -> None:
         pass
 
+    t0 = time.monotonic()
     reply = await caller.call(model, prompt_messages, tools=[], on_text=_noop)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    if turn_id is not None:
+        await store.add_llm_call(
+            project_id,
+            turn_id,
+            agent=agent_name,
+            model_address=model.address,
+            prompt_tokens=reply.prompt_tokens,
+            completion_tokens=reply.completion_tokens,
+            latency_ms=latency_ms,
+        )
+
     new_summary = (
         reply.message.content
         if isinstance(reply.message.content, str)
@@ -150,5 +158,5 @@ async def compact_if_needed(
         project_id,
         session_id,
         summary=new_summary,
-        compacted_through=compacted_through,
+        compacted_through=new_compacted_through,
     )

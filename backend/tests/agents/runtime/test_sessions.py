@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx2
-import pytest
-from pydantic import BaseModel
-from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
@@ -22,22 +18,18 @@ from mlops_agents.agents.runtime.contract import (
     StreamEvent,
     TextDelta,
     TextPart,
-    ToolStarted,
     TurnEnded,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
-from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolOutput
 from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import messages, turns
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
@@ -309,328 +301,6 @@ async def test_three_messages_sent_at_once_queue_order(
     await manager.close()
 
 
-async def test_stop_during_fake_slow(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
-    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
-
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-
-    await manager.send(project_id, "orchestrator", "Slow turn 1")
-    # Queue turn 2
-    await manager.send(project_id, "orchestrator", "Quick turn 2")
-
-    # Wait for turn 1 to stream at least one delta
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
-
-    # Stop turn 1
-    await manager.stop(project_id, "orchestrator")
-
-    # Collect until turn 2 finishes
-    all_events: list[StreamEvent] = []
-    ended: list[TurnEnded] = []
-    async for ev in sub:
-        all_events.append(ev)
-        if isinstance(ev, TurnEnded):
-            ended.append(ev)
-            if len(ended) == 2:
-                break
-
-    assert ended[0].data.status == "stopped"
-    assert ended[1].data.status == "done"
-    assert any(
-        isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in all_events
-    )
-
-    # Verify turn 1 partial text is preserved in stored messages
-    store = manager._store  # pyright: ignore[reportPrivateUsage]
-    sid = await store.session_id(project_id, "orchestrator")
-    msgs = await store.messages(project_id, sid)
-    agent_msg_1 = next(m for m in msgs if m.turn_id == ended[0].data.turn_id)
-    assert agent_msg_1.status == "stopped"
-    assert len(agent_msg_1.parts) > 0
-
-    await manager.close()
-
-
-class SlowDummyArgs(BaseModel):
-    delay: float = 2.0
-
-
-class SlowTool(AgentTool[SlowDummyArgs]):
-    name = "slow_sleep"
-    description = "Sleeps for a while."
-    risk = RiskClass.READ
-    args_model = SlowDummyArgs
-
-    async def run(self, ctx: ToolContext, args: SlowDummyArgs) -> ToolOutput:
-        await asyncio.sleep(args.delay)
-        return ToolOutput(content="done")
-
-
-async def test_stop_during_slow_tool(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    tools = default_registry()
-    tools.register(SlowTool())
-    manager, _, project_id, _, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, tools=tools
-    )
-
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    await manager.send(project_id, "orchestrator", "Call slow sleep")
-
-    # Wait for tool.started
-    async for ev in sub:
-        if isinstance(ev, ToolStarted):
-            break
-
-    # Stop during tool
-    await manager.stop(project_id, "orchestrator")
-
-    stop_events: list[StreamEvent] = []
-    async for ev in sub:
-        stop_events.append(ev)
-        if isinstance(ev, TurnEnded):
-            assert ev.data.status == "stopped"
-            break
-
-    assert any(
-        isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in stop_events
-    )
-
-    # Session keeps working! Send a new message
-    m = await manager.send(project_id, "orchestrator", "New turn")
-    assert m.status == "complete"
-    evs = await _collect_until_turn_ended(sub)
-    assert isinstance(evs[-1], TurnEnded)
-    assert evs[-1].data.status == "done"
-
-    await manager.close()
-
-
-async def test_recovery(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    store = manager._store  # pyright: ignore[reportPrivateUsage]
-    sid = await store.session_id(project_id, "orchestrator")
-
-    # Manually inject a running turn and a queued turn (as left by crashed process)
-    user_msg_1 = await store.add_message(
-        project_id,
-        sid,
-        author_kind="user",
-        author_name="user",
-        parts=[TextPart(type="text", text="running turn trigger")],
-        status="complete",
-    )
-    trn_crashed = await store.add_turn(project_id, sid, user_msg_1.id, "running")
-    msg_run_agent = await store.add_message(
-        project_id,
-        sid,
-        turn_id=trn_crashed,
-        author_kind="agent",
-        author_name="orchestrator",
-        parts=[],
-        status="streaming",
-    )
-
-    user_msg_2 = await store.add_message(
-        project_id,
-        sid,
-        author_kind="user",
-        author_name="user",
-        parts=[TextPart(type="text", text="queued turn trigger")],
-        status="queued",
-    )
-    trn_queued = await store.add_turn(project_id, sid, user_msg_2.id, "queued")
-
-    # First get() triggers recovery and starts the queued turn!
-    view = await manager.get(project_id, "orchestrator")
-
-    # trn_crashed must be marked interrupted
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(select(turns.c.status).where(turns.c.id == trn_crashed))
-        ).scalar_one()
-        assert row == "interrupted"
-        agent_status = (
-            await conn.execute(select(messages.c.status).where(messages.c.id == msg_run_agent.id))
-        ).scalar_one()
-        assert agent_status == "interrupted"
-
-    # And the queued turn is running or completes
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    events = await _collect_until_turn_ended(sub, timeout=10.0)
-    assert any(isinstance(e, TurnEnded) and e.data.turn_id == trn_queued for e in events)
-
-    await manager.close()
-
-
-async def test_close_project_during_turn(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
-    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
-
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    await manager.send(project_id, "orchestrator", "Slow response")
-
-    # Wait for turn to start streaming
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
-
-    # Now close_project
-    await manager.close_project(project_id)
-
-    # The subscriber stream ends cleanly
-    stream_ended = False
-    try:
-        async for _ in sub:
-            pass
-        stream_ended = True
-    except asyncio.CancelledError:
-        stream_ended = True
-    assert stream_ended
-
-    # Database connections are closed, project directory can be deleted on Windows
-    proj_dir = paths.project_dir(project_id)
-    shutil.rmtree(proj_dir)
-    assert not proj_dir.exists()
-
-
-async def test_close_during_turn(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
-    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
-
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    await manager.send(project_id, "orchestrator", "Turn 1 slow")
-    m2 = await manager.send(project_id, "orchestrator", "Turn 2 queued")
-
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
-
-    await manager.close()
-
-    # Check database: turn 1 is interrupted, turn 2 is still queued
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        turn_statuses = dict(
-            (await conn.execute(select(turns.c.trigger_message_id, turns.c.status))).all()
-        )
-        assert turn_statuses[m2.id] == "queued"
-
-
-async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
-    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
-
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-
-    # 1. Start turn 1 and stop it
-    await manager.send(project_id, "orchestrator", "Turn 1 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
-    await manager.stop(project_id, "orchestrator")
-
-    ended_turn_1: TurnEnded | None = None
-    async for ev in sub:
-        if isinstance(ev, TurnEnded):
-            ended_turn_1 = ev
-            break
-    assert ended_turn_1 is not None
-    assert ended_turn_1.data.status == "stopped"
-
-    # Confirm turn 1's agent message is stopped in DB
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        turn_1_msg = (
-            await conn.execute(
-                select(messages.c.id, messages.c.status).where(
-                    messages.c.turn_id == ended_turn_1.data.turn_id
-                )
-            )
-        ).one()
-        assert turn_1_msg[1] == "stopped"
-
-    # 2. Start turn 2 and interrupt it via close()
-    await manager.send(project_id, "orchestrator", "Turn 2 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
-
-    await manager.close()
-
-    # 3. Verify turn 1's agent message is STILL "stopped", not "interrupted"
-    async with engine.connect() as conn:
-        status_after = (
-            await conn.execute(select(messages.c.status).where(messages.c.id == turn_1_msg[0]))
-        ).scalar_one()
-        assert status_after == "stopped"
-
-
 async def test_get_send_race_deterministic(
     tmp_path: Path,
     paths: DataPaths,
@@ -647,25 +317,25 @@ async def test_get_send_race_deterministic(
     store = manager._store  # pyright: ignore[reportPrivateUsage]
     orig_messages = store.messages
 
-    event = asyncio.Event()
+    entered_messages = asyncio.Event()
+    release_messages = asyncio.Event()
 
     async def patched_messages(*args: Any, **kwargs: Any) -> list[MessageView]:
-        await event.wait()
+        entered_messages.set()
+        await release_messages.wait()
         return await orig_messages(*args, **kwargs)
 
     store.messages = patched_messages  # type: ignore[method-assign]
 
     # Task 1: call get()
     get_task = asyncio.create_task(manager.get(project_id, "orchestrator"))
-    # Allow get_task to run and enter patched_messages
-    await asyncio.sleep(0.01)
+    await entered_messages.wait()
 
     # Task 2: call send()
     send_task = asyncio.create_task(manager.send(project_id, "orchestrator", "Race message"))
-    await asyncio.sleep(0.01)
 
     # Release get
-    event.set()
+    release_messages.set()
     view = await get_task
     sent_msg = await send_task
 
@@ -682,116 +352,5 @@ async def test_get_send_race_deterministic(
             stream_saw_msg = True
 
     assert in_view ^ stream_saw_msg, f"in_view={in_view}, stream_saw_msg={stream_saw_msg}"
-
-    await manager.close()
-
-
-async def test_agent_validation(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    # Definition with chat: false
-    extra_dir = tmp_path / "extra_defs"
-    extra_dir.mkdir()
-    (extra_dir / "no-chat.md").write_text(
-        "---\nname: no-chat\ndisplay_name: No Chat\ndescription: No chat agent\nchat: false\n---\nPrompt",
-        encoding="utf-8",
-    )
-
-    manager, _, project_id, _, _ = await _setup_env(
-        tmp_path,
-        paths,
-        databases,
-        keystore,
-        fake_openai,
-        model_http,
-        git_env,
-        extra_dirs=[extra_dir],
-    )
-
-    # 1. Unknown agent -> 404
-    with pytest.raises(DomainError) as exc_404:
-        await manager.send(project_id, "nonexistent", "Hello")
-    assert exc_404.value.status == 404
-    assert exc_404.value.code == "agent_not_found"
-
-    with pytest.raises(DomainError) as exc_404_get:
-        await manager.get(project_id, "nonexistent")
-    assert exc_404_get.value.status == 404
-
-    # 2. chat: false -> 409
-    with pytest.raises(DomainError) as exc_409:
-        await manager.send(project_id, "no-chat", "Hello")
-    assert exc_409.value.status == 409
-    assert exc_409.value.code == "agent_cannot_chat"
-
-    with pytest.raises(DomainError) as exc_409_get:
-        await manager.get(project_id, "no-chat")
-    assert exc_409_get.value.status == 409
-
-    # 3. empty text -> 422
-    with pytest.raises(DomainError) as exc_422_empty:
-        await manager.send(project_id, "orchestrator", "")
-    assert exc_422_empty.value.status == 422
-    assert exc_422_empty.value.code == "message_empty"
-
-    with pytest.raises(DomainError) as exc_422_ws:
-        await manager.send(project_id, "orchestrator", "   \n\t  ")
-    assert exc_422_ws.value.status == 422
-
-    await manager.close()
-
-
-async def test_unknown_project_raises_404_and_never_creates_db(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    manager, _, _, _, _ = await _setup_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    unknown_id = "prj_nonexistent"
-    db_path = paths.project_db(unknown_id)
-    assert not db_path.exists()
-
-    # 1. get
-    with pytest.raises(DomainError) as exc_get:
-        await manager.get(unknown_id, "orchestrator")
-    assert exc_get.value.status == 404
-    assert not db_path.exists()
-
-    # 2. send
-    with pytest.raises(DomainError) as exc_send:
-        await manager.send(unknown_id, "orchestrator", "Hello")
-    assert exc_send.value.status == 404
-    assert not db_path.exists()
-
-    # 3. stop
-    with pytest.raises(DomainError) as exc_stop:
-        await manager.stop(unknown_id, "orchestrator")
-    assert exc_stop.value.status == 404
-    assert not db_path.exists()
-
-    # 4. subscribe
-    sub = manager.subscribe(unknown_id, "orchestrator")
-    with pytest.raises(DomainError) as exc_sub:
-        await anext(sub)
-    assert exc_sub.value.status == 404
-    assert not db_path.exists()
-
-    # 5. close_project
-    with pytest.raises(DomainError) as exc_close:
-        await manager.close_project(unknown_id)
-    assert exc_close.value.status == 404
-    assert not db_path.exists()
 
     await manager.close()

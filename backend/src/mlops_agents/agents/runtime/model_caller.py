@@ -29,6 +29,28 @@ class TurnFailed(Exception):  # message is safe to show and is stored as the tur
         self.message = message
 
 
+class _OnTextCallbackError(Exception):
+    """Wrapper so on_text exceptions are not caught and classified as provider errors."""
+
+
+def _extract_text_deltas(content: object) -> list[str]:
+    if isinstance(content, str):
+        return [content] if content else []
+    deltas: list[str] = []
+    if isinstance(content, list):
+        parts = cast(list[object], content)
+        for part in parts:
+            if isinstance(part, str) and part:
+                deltas.append(part)
+            elif isinstance(part, dict):
+                part_dict = cast(dict[object, object], part)
+                if part_dict.get("type") == "text":
+                    text = str(part_dict.get("text", ""))
+                    if text:
+                        deltas.append(text)
+    return deltas
+
+
 MAX_ATTEMPTS = 6
 TRANSIENT_BACKOFFS = (1.0, 2.0)
 
@@ -76,23 +98,13 @@ class ModelCaller:
                     last_chunk = aim_chunk
                     total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
 
-                    if isinstance(aim_chunk.content, str):
-                        if aim_chunk.content:
-                            res = on_text(aim_chunk.content)
+                    for delta in _extract_text_deltas(aim_chunk.content):
+                        try:
+                            res = on_text(delta)
                             if inspect.isawaitable(res):
                                 await res
-                    else:
-                        for part in aim_chunk.content:
-                            if isinstance(part, str) and part:
-                                res = on_text(part)
-                                if inspect.isawaitable(res):
-                                    await res
-                            elif isinstance(part, dict) and part.get("type") == "text":
-                                text = str(part.get("text", ""))
-                                if text:
-                                    res = on_text(text)
-                                    if inspect.isawaitable(res):
-                                        await res
+                        except Exception as cb_exc:
+                            raise _OnTextCallbackError() from cb_exc
 
                 prompt_tokens: int | None = None
                 completion_tokens: int | None = None
@@ -126,6 +138,11 @@ class ModelCaller:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
+
+            except _OnTextCallbackError as wrapper:
+                if wrapper.__cause__ is not None:
+                    raise wrapper.__cause__ from None
+                raise
 
             except Exception as exc:
                 error = classify(exc, secrets=model.keys)

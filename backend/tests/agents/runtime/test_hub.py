@@ -221,14 +221,16 @@ async def test_hub_close_terminates_stream() -> None:
     sub = hub.subscribe(after_seq=hub.last_seq)
 
     received: list[StreamEvent] = []
+    received_event = asyncio.Event()
 
     async def reader() -> None:
         async for ev in sub:
             received.append(ev)
+            received_event.set()
 
     task = asyncio.create_task(reader())
     await hub.text("msg_a1", "hi")
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(received_event.wait(), timeout=1.0)
     hub.close()
     await asyncio.wait_for(task, timeout=1.0)
     assert len(received) == 1

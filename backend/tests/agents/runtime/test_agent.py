@@ -257,3 +257,47 @@ async def test_agent_builder_success(
     assert "README.md" in agent.layout
     assert agent.tool_context.files.root == workspace_svc.repo_root(agent.project)
     assert agent.model.wire_model_id == "fake-tools"
+
+
+async def test_agent_builder_custom_agent_in_extra_dir(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    def_dir = tmp_path / "extra_defs"
+    def_dir.mkdir()
+    def_file = def_dir / "customagent.md"
+    def_file.write_text(
+        "---\nname: customagent\ndisplay_name: Custom Agent\ndescription: Test custom agent\ntools:\n  - Read\n---\nYou are custom agent.\n"
+    )
+
+    tools = default_registry()
+    catalog = AgentCatalog.load(tools.names(), extra_dirs=[def_dir])
+    providers_svc = ProvidersService(databases, keystore, model_http)
+    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
+    workspace_svc = _workspace_svc(paths, databases, keystore)
+    builder = AgentBuilder(
+        catalog=catalog,
+        tools=tools,
+        settings=settings_svc,
+        workspace=workspace_svc,
+        git=GitRunner(paths.bin),
+    )
+
+    prov = await providers_svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
+    await providers_svc.verify_model(f"{prov.name}:fake-tools")
+
+    repo_dir = make_repo(tmp_path / "repo_custom", {"README.md": "Line 1"}, git_env)
+    project = await workspace_svc.add_local(str(repo_dir))
+    await settings_svc.set_default_model("customagent", f"{prov.name}:fake-tools")
+
+    agent = await builder.build(project.id, "customagent")
+    assert agent.definition.name == "customagent"
+    assert tuple(t.name for t in agent.tools) == ("Read",)

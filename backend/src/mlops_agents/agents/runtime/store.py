@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import case, insert, or_, select, update
+from sqlalchemy import and_, case, insert, or_, select, update
 
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
@@ -23,6 +24,10 @@ _PARTS_ADAPTER: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
 class SessionStore:
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
+
+    def db_path(self, project_id: str) -> Path:
+        """Return the filesystem Path to the project database."""
+        return self._databases.paths.project_db(project_id)
 
     async def session_id(self, project_id: str, agent: str) -> str:
         """Get or create a stable session for the given agent."""
@@ -253,8 +258,23 @@ class SessionStore:
 
         return str(row[0]) if row else None
 
+    async def mark_interrupted(self, project_id: str, turn_id: str) -> None:
+        """Mark streaming or stopped messages for a turn as interrupted."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(messages)
+                .where(
+                    and_(
+                        messages.c.turn_id == turn_id,
+                        messages.c.status.in_(["streaming", "stopped"]),
+                    )
+                )
+                .values(status="interrupted")
+            )
+
     async def recover(self, project_id: str) -> None:
-        """Mark running turns and their messages (or any streaming messages) as interrupted."""
+        """Mark running turns and their incomplete messages (streaming/running/stopped) as interrupted."""
         engine = await self._databases.project(project_id)
         now = now_iso()
         async with engine.begin() as conn:
@@ -274,7 +294,10 @@ class SessionStore:
                     update(messages)
                     .where(
                         or_(
-                            messages.c.turn_id.in_(running_turn_ids),
+                            and_(
+                                messages.c.turn_id.in_(running_turn_ids),
+                                messages.c.status.in_(["streaming", "running", "stopped"]),
+                            ),
                             messages.c.status == "streaming",
                         )
                     )
@@ -343,3 +366,33 @@ class SessionStore:
                     created_at=created_at,
                 )
             )
+
+    async def last_llm_call_prompt_tokens(
+        self, project_id: str, session_id: str
+    ) -> tuple[int, str, str | None, str | None] | None:
+        """Return (prompt_tokens, created_at, turn_id, trigger_message_id) of last LLM call, or None."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(
+                        llm_calls.c.prompt_tokens,
+                        llm_calls.c.created_at,
+                        llm_calls.c.turn_id,
+                        turns.c.trigger_message_id,
+                    )
+                    .select_from(llm_calls.join(turns, llm_calls.c.turn_id == turns.c.id))
+                    .where(turns.c.session_id == session_id, llm_calls.c.prompt_tokens.is_not(None))
+                    .order_by(llm_calls.c.created_at.desc(), llm_calls.c.id.desc())
+                    .limit(1)
+                )
+            ).first()
+
+        if row is None or row[0] is None:
+            return None
+        return (
+            int(row[0]),
+            str(row[1]),
+            str(row[2]) if row[2] is not None else None,
+            str(row[3]) if row[3] is not None else None,
+        )

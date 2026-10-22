@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx2
-from sqlalchemy import and_, update
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import AgentBuilder
@@ -28,8 +29,9 @@ from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import messages
 from mlops_agents.workspace.service import WorkspaceService
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["SessionManager"]
 
@@ -73,8 +75,9 @@ class SessionManager(AgentSessions):
         self._locks: dict[tuple[str, str], AsyncRLock] = {}
         self._workers: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._child_tasks: dict[tuple[str, str], asyncio.Task[tuple[TurnEnd, str | None]]] = {}
-        self._stop_requested: dict[tuple[str, str], bool] = {}
+        self._stopped_tasks: set[asyncio.Task[Any]] = set()
         self._recovered_projects: set[str] = set()
+        self._recovery_lock = asyncio.Lock()
         self._session_ids: dict[tuple[str, str], str] = {}
         self._session_id_lock = asyncio.Lock()
 
@@ -92,7 +95,11 @@ class SessionManager(AgentSessions):
         return self._hubs[key]
 
     async def _ensure_recovered(self, project_id: str) -> None:
-        if project_id not in self._recovered_projects:
+        if project_id in self._recovered_projects:
+            return
+        async with self._recovery_lock:
+            if project_id in self._recovered_projects:
+                return
             await self._store.recover(project_id)
             self._recovered_projects.add(project_id)
 
@@ -207,45 +214,52 @@ class SessionManager(AgentSessions):
                 await self._store.set_turn(project_id, turn_id, "running")
 
                 # If trigger message was queued, update it to complete
-                history = await self._store.messages(project_id, session_id)
-                triggers = [m for m in history if m.id == trigger_msg_id]
-                if triggers and triggers[0].status == "queued":
-                    updated_msg = await self._store.update_message(
-                        project_id, trigger_msg_id, status="complete"
-                    )
-                    await hub.message(updated_msg, created=False)
+                async with lock:
+                    history = await self._store.messages(project_id, session_id)
+                    triggers = [m for m in history if m.id == trigger_msg_id]
+                    if triggers and triggers[0].status == "queued":
+                        updated_msg = await self._store.update_message(
+                            project_id, trigger_msg_id, status="complete"
+                        )
+                        await hub.message(updated_msg, created=False)
 
                 child_task = asyncio.create_task(
-                    self._executor.run(project_id, session_id, agent, turn_id, hub)
+                    self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
                 )
                 self._child_tasks[key] = child_task
 
                 try:
-                    end_status, error = await child_task
-                    await self._store.set_turn(project_id, turn_id, end_status, error=error)
-                    await hub.turn_ended(turn_id, status=end_status, error=error)
-                except asyncio.CancelledError:
-                    if self._stop_requested.get(key, False):
-                        self._stop_requested[key] = False
-                        await self._store.set_turn(project_id, turn_id, "stopped")
-                        await hub.turn_ended(turn_id, status="stopped", error=None)
-                        continue
-                    else:
+                    try:
+                        end_status, error = await child_task
+                        await self._store.set_turn(project_id, turn_id, end_status, error=error)
+                        await hub.turn_ended(turn_id, status=end_status, error=error)
+                    except asyncio.CancelledError:
+                        current = asyncio.current_task()
+                        if current is not None and current.cancelling() > 0:
+                            # The worker itself is being cancelled (close / close_project).
+                            # Do not swallow worker cancellation!
+                            if not child_task.done():
+                                child_task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError, Exception):
+                                    await child_task
+                            await self._store.set_turn(project_id, turn_id, "interrupted")
+                            await self._store.mark_interrupted(project_id, turn_id)
+                            raise
+                        if child_task in self._stopped_tasks:
+                            self._stopped_tasks.discard(child_task)
+                            await self._store.set_turn(project_id, turn_id, "stopped")
+                            await hub.turn_ended(turn_id, status="stopped", error=None)
+                            continue
                         await self._store.set_turn(project_id, turn_id, "interrupted")
-                        engine = await self._databases.project(project_id)
-                        async with engine.begin() as conn:
-                            await conn.execute(
-                                update(messages)
-                                .where(
-                                    and_(
-                                        messages.c.turn_id == turn_id,
-                                        messages.c.status.in_(["streaming", "stopped"]),
-                                    )
-                                )
-                                .values(status="interrupted")
-                            )
+                        await self._store.mark_interrupted(project_id, turn_id)
                         raise
+                    except Exception as exc:
+                        logger.exception("Unexpected error executing turn %s: %s", turn_id, exc)
+                        err_text = str(exc) or type(exc).__name__
+                        await self._store.set_turn(project_id, turn_id, "failed", error=err_text)
+                        await hub.turn_ended(turn_id, status="failed", error=err_text)
                 finally:
+                    self._stopped_tasks.discard(child_task)
                     self._child_tasks.pop(key, None)
 
         finally:
@@ -253,19 +267,21 @@ class SessionManager(AgentSessions):
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
+        self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
         key = (project_id, session_id)
         worker = self._workers.get(key)
         if worker is not None and not worker.done():
-            self._stop_requested[key] = True
             child = self._child_tasks.get(key)
             if child is not None and not child.done():
+                self._stopped_tasks.add(child)
                 child.cancel()
 
     async def _subscribe_stream(
         self, project_id: str, agent: str, after_seq: int | None = None
     ) -> AsyncIterator[StreamEvent]:
         await self._workspace.get(project_id)
+        self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
         hub = self._get_hub(project_id, session_id)
         async for event in hub.subscribe(after_seq):
@@ -309,9 +325,6 @@ class SessionManager(AgentSessions):
         for key in list(self._child_tasks.keys()):
             if key[0] == project_id:
                 self._child_tasks.pop(key, None)
-        for key in list(self._stop_requested.keys()):
-            if key[0] == project_id:
-                self._stop_requested.pop(key, None)
         for key in list(self._session_ids.keys()):
             if key[0] == project_id:
                 self._session_ids.pop(key, None)
@@ -319,13 +332,22 @@ class SessionManager(AgentSessions):
         self._recovered_projects.discard(project_id)
 
         # Mark any interrupted turns or messages in DB
-        with contextlib.suppress(Exception):
+        try:
             await self._store.recover(project_id)
+        except Exception as exc:
+            logger.exception("Failed to recover project %s on close_project: %s", project_id, exc)
 
         # Close SQLite database connections so directory can be removed
         await self._databases.close_project(project_id)
 
     async def close(self) -> None:
+        # Recover projects with running turns - capture projects BEFORE cancelling workers
+        projects = (
+            {p for (p, _) in self._workers}
+            | {p for (p, _) in self._child_tasks}
+            | set(self._recovered_projects)
+        )
+
         all_workers = list(self._workers.values())
         for task in all_workers:
             task.cancel()
@@ -338,13 +360,11 @@ class SessionManager(AgentSessions):
         if all_children:
             await asyncio.gather(*all_children, return_exceptions=True)
 
-        # Recover projects with running turns
-        projects = {p for (p, _) in list(self._workers.keys())} | {
-            p for (p, _) in list(self._child_tasks.keys())
-        }
         for project_id in projects:
-            with contextlib.suppress(Exception):
+            try:
                 await self._store.recover(project_id)
+            except Exception as exc:
+                logger.exception("Failed to recover project %s on close: %s", project_id, exc)
 
         for hub in list(self._hubs.values()):
             hub.close()
@@ -352,7 +372,7 @@ class SessionManager(AgentSessions):
         self._hubs.clear()
         self._workers.clear()
         self._child_tasks.clear()
-        self._stop_requested.clear()
+        self._stopped_tasks.clear()
         self._locks.clear()
         self._recovered_projects.clear()
         self._session_ids.clear()

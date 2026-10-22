@@ -145,6 +145,8 @@ class SessionHub:
             and self._live_message.id == event.data.message.id
         ):
             self._live_message = event.data.message.model_copy(deep=True)
+        elif isinstance(event, TurnEnded):
+            self._live_message = None
 
     def _publish_raw(self, event: StreamEvent) -> None:
         if len(self._buffer) == _RING_BUFFER_SIZE:

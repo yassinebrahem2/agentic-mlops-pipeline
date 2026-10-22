@@ -262,3 +262,105 @@ async def test_compaction_uses_reported_usage_from_llm_calls(
     summary, compacted_through = await store.summary("prj_1", session_id)
     assert summary == "New summary"
     assert compacted_through == m2.id
+
+
+async def test_compaction_without_reported_usage_does_not_fire_every_turn(
+    paths: DataPaths,
+    databases: Databases,
+) -> None:
+    store = SessionStore(databases)
+    caller = MockSummaryCaller("Initial summary")
+    # Context window 200 tokens -> 75% is 150 tokens
+    model = _make_model(context_window=200)
+
+    session_id = await store.session_id("prj_1", "orchestrator")
+
+    # Turn 1: Long message (~175 tokens)
+    m1 = await store.add_message(
+        "prj_1",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Q1 " + "a" * 700)],
+        status="complete",
+    )
+    t1 = await store.add_turn("prj_1", session_id, m1.id, "done")
+    m2 = await store.add_message(
+        "prj_1",
+        session_id,
+        turn_id=t1,
+        author_kind="agent",
+        author_name="orchestrator",
+        parts=[TextPart(type="text", text="A1")],
+        status="complete",
+    )
+
+    # Turn 2: Short
+    m3 = await store.add_message(
+        "prj_1",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Q2")],
+        status="complete",
+    )
+    t2 = await store.add_turn("prj_1", session_id, m3.id, "done")
+    m4 = await store.add_message(
+        "prj_1",
+        session_id,
+        turn_id=t2,
+        author_kind="agent",
+        author_name="orchestrator",
+        parts=[TextPart(type="text", text="A2")],
+        status="complete",
+    )
+
+    # Turn 3: Short
+    m5 = await store.add_message(
+        "prj_1",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Q3")],
+        status="complete",
+    )
+
+    history = [m1, m2, m3, m4, m5]
+    # First compaction: no usage reported, total length exceeds 150 tokens
+    await compact_if_needed(
+        store, caller, model, "prj_1", session_id, history, system_text="Short system"
+    )
+
+    assert len(caller.calls) == 1
+    summary, compacted_through = await store.summary("prj_1", session_id)
+    assert summary == "Initial summary"
+    assert compacted_through == m2.id
+
+    # Now Turn 4 arrives with another short message
+    t3 = await store.add_turn("prj_1", session_id, m5.id, "done")
+    m6 = await store.add_message(
+        "prj_1",
+        session_id,
+        turn_id=t3,
+        author_kind="agent",
+        author_name="orchestrator",
+        parts=[TextPart(type="text", text="A3")],
+        status="complete",
+    )
+    m7 = await store.add_message(
+        "prj_1",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Q4")],
+        status="complete",
+    )
+
+    history2 = [m1, m2, m3, m4, m5, m6, m7]
+    # Second check: no reported usage, but messages after compacted_through are only m3..m7 (very short)
+    await compact_if_needed(
+        store, caller, model, "prj_1", session_id, history2, system_text="Short system"
+    )
+
+    # Compaction must NOT have fired again! caller.calls remains 1
+    assert len(caller.calls) == 1

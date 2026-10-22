@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any, Protocol, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -46,8 +47,16 @@ def create_turn_graph(
     message_id: str,
     current_parts: list[Part],
     checkpointer: AsyncSqliteSaver | None = None,
+    lock: AbstractAsyncContextManager[Any] | None = None,
 ) -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
     """Build and compile the StateGraph for a single turn."""
+
+    async def _update_parts() -> None:
+        if lock is not None:
+            async with lock:
+                await store.update_message(project_id, message_id, parts=current_parts)
+        else:
+            await store.update_message(project_id, message_id, parts=current_parts)
 
     async def model_node(state: TurnState) -> dict[str, Any]:
         step_count = state.get("step_count", 0)
@@ -60,8 +69,13 @@ def create_turn_graph(
             )
             stop_part = TextPart(type="text", text=stop_text)
             current_parts.append(stop_part)
-            await sink.text(message_id, stop_text)
-            await store.update_message(project_id, message_id, parts=current_parts)
+            if lock is not None:
+                async with lock:
+                    await sink.text(message_id, stop_text)
+                    await store.update_message(project_id, message_id, parts=current_parts)
+            else:
+                await sink.text(message_id, stop_text)
+                await store.update_message(project_id, message_id, parts=current_parts)
             return {
                 "stopped_reason": "max_steps",
             }
@@ -72,7 +86,11 @@ def create_turn_graph(
 
         async def on_text(delta: str) -> None:
             streamed_chunks.append(delta)
-            await sink.text(message_id, delta)
+            if lock is not None:
+                async with lock:
+                    await sink.text(message_id, delta)
+            else:
+                await sink.text(message_id, delta)
 
         t0 = time.monotonic()
         try:
@@ -81,7 +99,7 @@ def create_turn_graph(
             if streamed_chunks:
                 partial_text = "".join(streamed_chunks)
                 current_parts.append(TextPart(type="text", text=partial_text))
-                await store.update_message(project_id, message_id, parts=current_parts)
+                await _update_parts()
             raise
         latency_ms = int((time.monotonic() - t0) * 1000)
 
@@ -106,16 +124,20 @@ def create_turn_graph(
 
         if reply.message.tool_calls:
             for tc in reply.message.tool_calls:
-                current_parts.append(
-                    ToolCallPart(
-                        type="tool_call",
-                        id=str(tc["id"]),
-                        name=str(tc["name"]),
-                        input=dict(tc["args"]),
-                    )
+                tc_part = ToolCallPart(
+                    type="tool_call",
+                    id=str(tc["id"]),
+                    name=str(tc["name"]),
+                    input=dict(tc["args"]),
                 )
+                current_parts.append(tc_part)
+                if lock is not None:
+                    async with lock:
+                        await sink.tool_started(message_id, tc_part)
+                else:
+                    await sink.tool_started(message_id, tc_part)
 
-        await store.update_message(project_id, message_id, parts=current_parts)
+        await _update_parts()
 
         return {
             "messages": [reply.message],
@@ -132,9 +154,6 @@ def create_turn_graph(
             call_id = str(tc["id"])
             name = str(tc["name"])
             args = dict(tc["args"])
-
-            call_part = ToolCallPart(type="tool_call", id=call_id, name=name, input=args)
-            await sink.tool_started(message_id, call_part)
 
             # Look up tool only in agent.tools, never in the registry
             tool = next((t for t in agent.tools if t.name == name), None)
@@ -154,11 +173,15 @@ def create_turn_graph(
                     is_error=True,
                 )
 
-            await sink.tool_finished(message_id, result_part)
+            if lock is not None:
+                async with lock:
+                    await sink.tool_finished(message_id, result_part)
+            else:
+                await sink.tool_finished(message_id, result_part)
             current_parts.append(result_part)
             tool_messages.append(ToolMessage(tool_call_id=call_id, content=result_part.content))
 
-        await store.update_message(project_id, message_id, parts=current_parts)
+        await _update_parts()
 
         return {
             "messages": tool_messages,
