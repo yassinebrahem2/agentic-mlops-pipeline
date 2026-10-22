@@ -104,7 +104,7 @@ SQLAlchemy Core in async mode over aiosqlite. Every connection, including the ch
 - Refresh (on open and on demand): `git fetch` then `git reset --hard origin/<default branch>`, re-reading the remote's default branch first. This survives force-pushes and renamed default branches.
 - Missing: a local project whose folder no longer exists, or is no longer a git repo, gets status `missing`; the user relinks it to a new path.
 - Remove: deletes `projects/<id>/` and the row. The user's local repo is never touched.
-- Backup: `mlops-agents backup` writes `VACUUM INTO` copies of `app.db` and every `project.db` into `backups/<timestamp>/`.
+- Backup: `mlops-agents backup` writes `VACUUM INTO` copies of `app.db` and every `project.db` into `backups/snapshots/<timestamp>/` (migration backups use their own folder under `backups/`).
 
 Promise to the user: the app never changes your working files or your checked-out branch. From stage 2 it adds agent branches to the repo's git data; worktrees live in the app's data folder.
 
