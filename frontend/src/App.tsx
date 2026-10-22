@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router";
 import { buildRouter } from "./app/router";
-import { pageRoutes } from "@/app/routes";
+import { pageRoutes } from "./app/routes";
 import { queryClient } from "./lib/query";
 
 let router: ReturnType<typeof buildRouter> | null = null;
