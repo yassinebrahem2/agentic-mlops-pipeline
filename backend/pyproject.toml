@@ -57,7 +57,8 @@ ignore = ["E501", "S603", "S607"]
 "tests/**" = ["S101", "S104", "S105", "S106"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "../scripts"]
+extraPaths = ["src", "../scripts"]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
 venvPath = "."
@@ -67,5 +68,6 @@ venv = ".venv"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+pythonpath = ["../scripts"]
 markers = ["live: calls a real external service (LLM provider or GitHub); run with -m live"]
 addopts = "-m 'not live'"
