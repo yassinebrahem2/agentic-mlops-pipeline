@@ -8,6 +8,8 @@ import pkgutil
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
+from importlib import resources
+from pathlib import Path
 from types import ModuleType
 
 from fastapi import APIRouter, FastAPI
@@ -18,13 +20,18 @@ from mlops_agents.api.hosts import HostCheck, HostRules
 from mlops_agents.api.routers.auth import LoginLimiter, PasswordHash
 from mlops_agents.api.security import SessionGuard, SessionSigner, load_secret
 from mlops_agents.api.services import build_services
+from mlops_agents.api.static import mount_ui
 from mlops_agents.config import APP_NAME, Settings
 from mlops_agents.credentials import KeyStore
 from mlops_agents.integrations.github.auth import GhLike
 
 
 def create_app(
-    settings: Settings, *, keystore: KeyStore | None = None, gh: GhLike | None = None
+    settings: Settings,
+    *,
+    keystore: KeyStore | None = None,
+    gh: GhLike | None = None,
+    web_dir: Path | None = None,
 ) -> FastAPI:
     """Builds the app without I/O; the lifespan touches the data folder, key store and network."""
 
@@ -47,6 +54,10 @@ def create_app(
     app.state.login_limiter = LoginLimiter()
     register_error_handlers(app)
     include_routers(app, routers)
+    if web_dir is None:
+        web_dir = Path(str(resources.files("mlops_agents").joinpath("web"))).resolve()
+    mount_ui(app, web_dir)
+
     # The last middleware added is the outermost. The catch-all 500 wraps everything of ours,
     # so an error in a check is the JSON 500 too; a bad Host or Origin is refused before the
     # session is looked at.
