@@ -501,6 +501,7 @@ async def test_executor_cancellation_during_slow_tool(
     assert agent_msg.status == "stopped"
     assert len(agent_msg.parts) == 1
     assert agent_msg.parts[0].type == "tool_call"
+    assert any(m.status == "stopped" and created is False for m, created in sink.messages)
 
     # Verify checkpointer thread is deleted after stopped (cancelled) turn
     await _assert_thread_deleted(paths.project_db(project.id), turn_id)
@@ -564,6 +565,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
         isinstance(p, TextPart) and p.text == "Streamed prefix before cancel"
         for p in agent_msg.parts
     )
+    assert any(m.status == "stopped" and created is False for m, created in sink.messages)
 
     # Verify checkpointer thread is deleted after cancelled stream turn
     await _assert_thread_deleted(paths.project_db(project_id), turn_id)

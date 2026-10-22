@@ -117,6 +117,7 @@ class SessionManager(AgentSessions):
             )
 
     async def get(self, project_id: str, agent: str) -> SessionView:
+        await self._workspace.get(project_id)
         await self._ensure_recovered(project_id)
         self._check_agent(agent)
 
@@ -154,6 +155,7 @@ class SessionManager(AgentSessions):
         )
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
+        await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
 
@@ -250,6 +252,7 @@ class SessionManager(AgentSessions):
             self._workers.pop(key, None)
 
     async def stop(self, project_id: str, agent: str) -> None:
+        await self._workspace.get(project_id)
         session_id = await self._get_session_id(project_id, agent)
         key = (project_id, session_id)
         worker = self._workers.get(key)
@@ -260,19 +263,21 @@ class SessionManager(AgentSessions):
                 child.cancel()
 
     async def _subscribe_stream(
-        self, project_id: str, agent: str, after_seq: int | None
+        self, project_id: str, agent: str, after_seq: int | None = None
     ) -> AsyncIterator[StreamEvent]:
+        await self._workspace.get(project_id)
         session_id = await self._get_session_id(project_id, agent)
         hub = self._get_hub(project_id, session_id)
         async for event in hub.subscribe(after_seq):
             yield event
 
     def subscribe(
-        self, project_id: str, agent: str, after_seq: int | None
+        self, project_id: str, agent: str, after_seq: int | None = None
     ) -> AsyncIterator[StreamEvent]:
         return self._subscribe_stream(project_id, agent, after_seq)
 
     async def close_project(self, project_id: str) -> None:
+        await self._workspace.get(project_id)
         # Cancel workers for this project
         project_workers = [task for (p, _), task in list(self._workers.items()) if p == project_id]
         for task in project_workers:

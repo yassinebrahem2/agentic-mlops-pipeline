@@ -103,8 +103,7 @@ class SessionHub:
         return self._live_message
 
     def _next_seq(self) -> int:
-        now_ms = int(time.time() * 1000)
-        self._last_seq = max(now_ms, self._last_seq + 1)
+        self._last_seq += 1
         return self._last_seq
 
     def _fold_event(self, event: StreamEvent) -> None:
@@ -246,7 +245,7 @@ class SessionHub:
             elif (
                 after_seq is None
                 or after_seq > current_seq
-                or (self._evicted_any and after_seq < self._buffer[0].seq - 1)
+                or (self._buffer and after_seq < self._buffer[0].seq - 1)
             ):
                 needs_resync = True
                 replay = []

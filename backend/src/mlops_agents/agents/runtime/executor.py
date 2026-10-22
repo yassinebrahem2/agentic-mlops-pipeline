@@ -149,9 +149,10 @@ class TurnExecutor:
             return ("done", None)
 
         except asyncio.CancelledError:
-            await self._store.update_message(
+            final_msg = await self._store.update_message(
                 project_id, agent_message_id, parts=current_parts, status="stopped"
             )
+            await sink.message(final_msg, created=False)
             raise
 
         except TurnFailed as err:

@@ -339,8 +339,10 @@ async def test_stop_during_fake_slow(
     await manager.stop(project_id, "orchestrator")
 
     # Collect until turn 2 finishes
+    all_events: list[StreamEvent] = []
     ended: list[TurnEnded] = []
     async for ev in sub:
+        all_events.append(ev)
         if isinstance(ev, TurnEnded):
             ended.append(ev)
             if len(ended) == 2:
@@ -348,6 +350,9 @@ async def test_stop_during_fake_slow(
 
     assert ended[0].data.status == "stopped"
     assert ended[1].data.status == "done"
+    assert any(
+        isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in all_events
+    )
 
     # Verify turn 1 partial text is preserved in stored messages
     store = manager._store  # pyright: ignore[reportPrivateUsage]
@@ -401,10 +406,16 @@ async def test_stop_during_slow_tool(
     # Stop during tool
     await manager.stop(project_id, "orchestrator")
 
+    stop_events: list[StreamEvent] = []
     async for ev in sub:
+        stop_events.append(ev)
         if isinstance(ev, TurnEnded):
             assert ev.data.status == "stopped"
             break
+
+    assert any(
+        isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in stop_events
+    )
 
     # Session keeps working! Send a new message
     m = await manager.send(project_id, "orchestrator", "New turn")
@@ -732,5 +743,55 @@ async def test_agent_validation(
     with pytest.raises(DomainError) as exc_422_ws:
         await manager.send(project_id, "orchestrator", "   \n\t  ")
     assert exc_422_ws.value.status == 422
+
+    await manager.close()
+
+
+async def test_unknown_project_raises_404_and_never_creates_db(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    manager, _, _, _, _ = await _setup_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    unknown_id = "prj_nonexistent"
+    db_path = paths.project_db(unknown_id)
+    assert not db_path.exists()
+
+    # 1. get
+    with pytest.raises(DomainError) as exc_get:
+        await manager.get(unknown_id, "orchestrator")
+    assert exc_get.value.status == 404
+    assert not db_path.exists()
+
+    # 2. send
+    with pytest.raises(DomainError) as exc_send:
+        await manager.send(unknown_id, "orchestrator", "Hello")
+    assert exc_send.value.status == 404
+    assert not db_path.exists()
+
+    # 3. stop
+    with pytest.raises(DomainError) as exc_stop:
+        await manager.stop(unknown_id, "orchestrator")
+    assert exc_stop.value.status == 404
+    assert not db_path.exists()
+
+    # 4. subscribe
+    sub = manager.subscribe(unknown_id, "orchestrator")
+    with pytest.raises(DomainError) as exc_sub:
+        await anext(sub)
+    assert exc_sub.value.status == 404
+    assert not db_path.exists()
+
+    # 5. close_project
+    with pytest.raises(DomainError) as exc_close:
+        await manager.close_project(unknown_id)
+    assert exc_close.value.status == 404
+    assert not db_path.exists()
 
     await manager.close()
