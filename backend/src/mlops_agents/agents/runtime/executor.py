@@ -86,9 +86,9 @@ class TurnExecutor:
         db_path = paths.project_db(project_id)
         conn = await connect_checkpointer(db_path)
         checkpointer = AsyncSqliteSaver(conn)
-        await checkpointer.setup()
 
         try:
+            await checkpointer.setup()
             # 3. Compaction
             summary, compacted_through = await self._store.summary(project_id, session_id)
             history = await self._store.messages(project_id, session_id)

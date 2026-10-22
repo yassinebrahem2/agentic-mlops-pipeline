@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx2
 import pytest
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 from sqlalchemy import update
 
@@ -20,7 +22,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
-from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
+from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentLimitsUpdate, AgentSettingsService
 from mlops_agents.agents.tools import default_registry
@@ -32,11 +34,20 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.integrations.test_github_auth import FakeGh
+
+
+async def _assert_thread_deleted(db_path: Path, thread_id: str) -> None:
+    conn = await connect_checkpointer(db_path)
+    saver = AsyncSqliteSaver(conn)
+    chk = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})  # pyright: ignore[reportUnknownMemberType]
+    assert chk is None
+    await conn.close()
 
 
 async def _set_project_status(
@@ -224,6 +235,9 @@ async def test_executor_fake_tools_on_orchestrator(
     for r in rows:
         assert r.latency_ms >= 0
 
+    # Verify checkpointer thread is deleted after done turn
+    await _assert_thread_deleted(paths.project_db(project_id), turn_id)
+
 
 async def test_executor_secret_and_untracked_error_handled(
     tmp_path: Path,
@@ -256,7 +270,7 @@ async def test_executor_secret_and_untracked_error_handled(
         git_env,
         files={"README.md": "Hello", ".env": "SECRET=123"},
     )
-    # Direct fake model to call Read on .env
+    # 1. Direct fake model to call Read on .env (tracked secret)
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "Read", {"file_path": ".env"})
 
     sink = RecordingSink()
@@ -269,6 +283,30 @@ async def test_executor_secret_and_untracked_error_handled(
     # Tool finished reported error
     assert len(sink.tools_finished) == 1
     assert sink.tools_finished[0].is_error
+
+    # 2. Untracked file: create untracked.txt in the repo and call Read on it
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "untracked.txt").write_text("untracked content")
+    monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "Read", {"file_path": "untracked.txt"})
+
+    user_msg2 = await _store.add_message(
+        project_id,
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Read untracked")],
+        status="complete",
+    )
+    turn_id2 = await _store.add_turn(project_id, session_id, user_msg2.id, "running")
+    sink2 = RecordingSink()
+    end_status2, error_text2 = await executor.run(
+        project_id, session_id, "orchestrator", turn_id2, sink2
+    )
+
+    assert end_status2 == "done"
+    assert error_text2 is None
+    assert len(sink2.tools_finished) == 1
+    assert sink2.tools_finished[0].is_error
 
 
 async def test_executor_step_limit_override(
@@ -464,6 +502,72 @@ async def test_executor_cancellation_during_slow_tool(
     assert len(agent_msg.parts) == 1
     assert agent_msg.parts[0].type == "tool_call"
 
+    # Verify checkpointer thread is deleted after stopped (cancelled) turn
+    await _assert_thread_deleted(paths.project_db(project.id), turn_id)
+
+
+async def test_executor_cancellation_during_streaming_preserves_partial_text(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        executor,
+        store,
+        _,
+        _,
+        project_id,
+        session_id,
+        turn_id,
+        _,
+        caller,
+    ) = await _setup_executor_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+
+    started_streaming = asyncio.Event()
+
+    async def slow_stream_call(*args: object, **kwargs: object) -> Any:
+        on_text = kwargs.get("on_text")
+        if on_text is None and len(args) >= 4:
+            on_text = args[3]
+        if on_text and callable(on_text):
+            res = on_text("Streamed prefix before cancel")
+            if asyncio.iscoroutine(res):
+                await res
+        started_streaming.set()
+        await asyncio.Event().wait()  # Wait until cancelled
+        return ModelReply(message=AIMessage(content="never"), prompt_tokens=1, completion_tokens=1)
+
+    monkeypatch.setattr(caller, "call", slow_stream_call)
+
+    sink = RecordingSink()
+    run_task = asyncio.create_task(
+        executor.run(project_id, session_id, "orchestrator", turn_id, sink)
+    )
+
+    await started_streaming.wait()
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    # Verify message in store has status 'stopped' and preserved partial text
+    msgs = await store.messages(project_id, session_id)
+    agent_msg = next(m for m in msgs if m.author_kind == "agent")
+    assert agent_msg.status == "stopped"
+    assert any(
+        isinstance(p, TextPart) and p.text == "Streamed prefix before cancel"
+        for p in agent_msg.parts
+    )
+
+    # Verify checkpointer thread is deleted after cancelled stream turn
+    await _assert_thread_deleted(paths.project_db(project_id), turn_id)
+
 
 async def test_executor_turn_failed_from_caller(
     tmp_path: Path,
@@ -490,6 +594,13 @@ async def test_executor_turn_failed_from_caller(
     )
 
     async def fail_call(*args: object, **kwargs: object) -> Any:
+        on_text = kwargs.get("on_text")
+        if on_text is None and len(args) >= 4:
+            on_text = args[3]
+        if on_text and callable(on_text):
+            res = on_text("Partial streamed text before crash")
+            if asyncio.iscoroutine(res):
+                await res
         raise TurnFailed("Simulated API failure")
 
     monkeypatch.setattr(caller, "call", fail_call)
@@ -504,11 +615,19 @@ async def test_executor_turn_failed_from_caller(
     msgs = await store.messages(project_id, session_id)
     agent_msg = next(m for m in msgs if m.author_kind == "agent")
     assert agent_msg.status == "complete"
+    # Verify partial text streamed before failure is present in final stored message parts
+    assert any(
+        isinstance(p, TextPart) and p.text == "Partial streamed text before crash"
+        for p in agent_msg.parts
+    )
 
     sys_msg = next(m for m in msgs if m.author_kind == "system")
     sys_part = sys_msg.parts[0]
     assert isinstance(sys_part, TextPart)
     assert sys_part.text == "Simulated API failure"
+
+    # Verify checkpointer thread is deleted after failed turn
+    await _assert_thread_deleted(paths.project_db(project_id), turn_id)
 
 
 async def test_executor_second_agent_in_tmp_path(

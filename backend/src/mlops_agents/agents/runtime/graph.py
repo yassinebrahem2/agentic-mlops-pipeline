@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Annotated, Any, Protocol, TypedDict
 
@@ -67,11 +68,21 @@ def create_turn_graph(
 
         tool_schemas = [t.schema() for t in agent.tools]
 
+        streamed_chunks: list[str] = []
+
         async def on_text(delta: str) -> None:
+            streamed_chunks.append(delta)
             await sink.text(message_id, delta)
 
         t0 = time.monotonic()
-        reply = await caller.call(agent.model, state["messages"], tool_schemas, on_text)
+        try:
+            reply = await caller.call(agent.model, state["messages"], tool_schemas, on_text)
+        except (Exception, asyncio.CancelledError):
+            if streamed_chunks:
+                partial_text = "".join(streamed_chunks)
+                current_parts.append(TextPart(type="text", text=partial_text))
+                await store.update_message(project_id, message_id, parts=current_parts)
+            raise
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         await store.add_llm_call(
