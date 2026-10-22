@@ -6,10 +6,11 @@ import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
 import { route as projectsRoute } from "./route";
 import { route as projectHomeRoute } from "../project-home/route";
+import { route as projectSettingsRoute } from "../project-settings/route";
 
 type Project = components["schemas"]["Project"];
 
-const testRoutes: PageRoute[] = [projectsRoute, projectHomeRoute];
+const testRoutes: PageRoute[] = [projectsRoute, projectHomeRoute, projectSettingsRoute];
 
 function getUrlAndMethod(
   input: RequestInfo | URL,
@@ -249,6 +250,36 @@ describe("ProjectsPage", () => {
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const { url, method } = getUrlAndMethod(input, init);
 
+      if (method === "GET") {
+        const app: components["schemas"]["AppInfo"] = {
+          name: "App",
+          version: "1",
+          mode: "local",
+          data_dir: "/data",
+        };
+        const agents: components["schemas"]["AgentInfo"][] = [];
+        const models: components["schemas"]["ModelEntry"][] = [];
+        const providers: components["schemas"]["Provider"][] = [];
+        const data: unknown = url.endsWith("/api/app")
+          ? app
+          : url.endsWith("/agents")
+            ? agents
+            : url.endsWith("/api/models")
+              ? models
+              : url.endsWith("/api/providers")
+                ? providers
+                : url.endsWith("/api/projects/prj_demo")
+                  ? projects[0]
+                  : undefined;
+        if (data !== undefined)
+          return Promise.resolve(
+            new Response(JSON.stringify(data), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+      }
+
       if (url.includes("/api/projects/prj_demo/open") && method === "POST") {
         openCalled = true;
         openedId = "prj_demo";
@@ -281,8 +312,8 @@ describe("ProjectsPage", () => {
     expect(openCalled).toBe(true);
     expect(openedId).toBe("prj_demo");
 
-    // Navigates to /projects/prj_demo which ProjectHome renders
-    expect(await screen.findByText("No project pages yet.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Project settings" })).toBeInTheDocument();
+    expect(await screen.findByText("/workspace/demo")).toBeInTheDocument();
   });
 
   it("shows error on the row whose open failed", async () => {

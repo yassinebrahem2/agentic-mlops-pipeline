@@ -6,6 +6,7 @@ import type { components } from "@/api/schema";
 import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
 import { route as projectHomeRoute } from "../../pages/project-home/route";
+import { route as projectSettingsRoute } from "../../pages/project-settings/route";
 
 type Project = components["schemas"]["Project"];
 
@@ -89,6 +90,34 @@ describe("ProjectSwitcher", () => {
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const { url, method } = getUrlAndMethod(input, init);
 
+      if (method === "GET") {
+        const app: components["schemas"]["AppInfo"] = {
+          name: "App",
+          version: "1",
+          mode: "local",
+          data_dir: "/data",
+        };
+        const agents: components["schemas"]["AgentInfo"][] = [];
+        const models: components["schemas"]["ModelEntry"][] = [];
+        const providers: components["schemas"]["Provider"][] = [];
+        const data: unknown = url.endsWith("/api/app")
+          ? app
+          : url.endsWith("/agents")
+            ? agents
+            : url.endsWith("/api/models")
+              ? models
+              : url.endsWith("/api/providers")
+                ? providers
+                : fakeProjects.find((project) => url.endsWith(`/api/projects/${project.id}`));
+        if (data !== undefined)
+          return Promise.resolve(
+            new Response(JSON.stringify(data), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+      }
+
       if (url.includes("/api/projects/") && url.endsWith("/open") && method === "POST") {
         const match = url.match(/\/api\/projects\/([^/]+)\/open/);
         const id = match?.[1] ?? "";
@@ -151,6 +180,19 @@ describe("ProjectSwitcher", () => {
     expect(await screen.findByRole("button", { name: "Projects" })).toBeInTheDocument();
   });
 
+  it("shows a failed project list lookup in the switcher on a project page", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 503 }))),
+    );
+    renderPage("/projects/prj_alpha/settings", { routes: testRoutes });
+    await user.click(await screen.findByRole("button", { name: "Projects" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The server answered with an error (HTTP 503).",
+    );
+  });
+
   it("selecting another project opens it via POST /open and navigates to the project", async () => {
     const user = userEvent.setup();
     let openedId = "";
@@ -158,7 +200,11 @@ describe("ProjectSwitcher", () => {
       openedId = id;
     });
 
-    renderPage("/projects/prj_alpha/settings", { routes: testRoutes });
+    renderPage("/projects/prj_alpha/settings", {
+      routes: testRoutes.map((route) =>
+        route === fakeProjectSettingsRoute ? projectSettingsRoute : route,
+      ),
+    });
 
     const switcherButton = await screen.findByRole("button", { name: "Alpha Project" });
     await user.click(switcherButton);
@@ -168,7 +214,8 @@ describe("ProjectSwitcher", () => {
 
     expect(openedId).toBe("prj_beta");
     expect(await screen.findByRole("button", { name: "Beta Project" })).toBeInTheDocument();
-    expect(await screen.findByText("No project pages yet.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Project settings" })).toBeInTheDocument();
+    expect(await screen.findByText("org/beta")).toBeInTheDocument();
   });
 
   it("shows open error alert in the dropdown when opening a project fails", async () => {
