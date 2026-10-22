@@ -11,6 +11,7 @@ function extractTokenFromHash(hash: string): string | null {
   try {
     return decodeURIComponent(match[1]);
   } catch {
+    // A malformed token is sent as-is so the server answers bad_token.
     return match[1];
   }
 }

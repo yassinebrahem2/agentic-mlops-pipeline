@@ -11,9 +11,15 @@ export interface FolderBrowserProps {
   initialPath?: string;
   onChoose: (path: string) => void;
   isSubmitting?: boolean;
+  busyLabel?: string;
 }
 
-export function FolderBrowser({ initialPath, onChoose, isSubmitting }: FolderBrowserProps) {
+export function FolderBrowser({
+  initialPath,
+  onChoose,
+  isSubmitting,
+  busyLabel,
+}: FolderBrowserProps) {
   const [currentPath, setCurrentPath] = useState<string | undefined>(initialPath);
   const [folderPathInput, setFolderPathInput] = useState<string>(initialPath ?? "");
 
@@ -130,7 +136,7 @@ export function FolderBrowser({ initialPath, onChoose, isSubmitting }: FolderBro
           {isSubmitting ? (
             <>
               <Loader2 className="mr-1.5 size-4 animate-spin" />
-              Adding project...
+              {busyLabel ?? "Use this folder"}
             </>
           ) : (
             "Use this folder"

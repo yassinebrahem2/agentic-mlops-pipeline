@@ -310,6 +310,23 @@ it.each(["local", "github"] as const)(
     });
   },
 );
+
+it("removes project queries so neither the project nor its agents are fetched again after delete", async () => {
+  const { user, requests } = setup();
+  await user.click(await screen.findByRole("button", { name: "Remove project" }));
+  const dialog = screen.getByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
+  expect(await screen.findByRole("heading", { name: "Projects home" })).toBeInTheDocument();
+
+  const deleteIndex = requests.findIndex(
+    (r) => r.method === "DELETE" && r.path === "/api/projects/prj_demo",
+  );
+  expect(deleteIndex).toBeGreaterThanOrEqual(0);
+
+  const postDeleteRequests = requests.slice(deleteIndex + 1);
+  expect(postDeleteRequests.some((r) => r.path === "/api/projects/prj_demo")).toBe(false);
+  expect(postDeleteRequests.some((r) => r.path === "/api/projects/prj_demo/agents")).toBe(false);
+});
 it.each(["not_local", "local_projects_disabled"])(
   "shows the server's relink error (%s)",
   async (failure) => {

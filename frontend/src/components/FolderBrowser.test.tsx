@@ -8,6 +8,7 @@ function renderFolderBrowser(props: {
   initialPath?: string;
   onChoose?: (path: string) => void;
   isSubmitting?: boolean;
+  busyLabel?: string;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -22,6 +23,7 @@ function renderFolderBrowser(props: {
         initialPath={props.initialPath}
         onChoose={props.onChoose ?? vi.fn()}
         isSubmitting={props.isSubmitting}
+        busyLabel={props.busyLabel}
       />
     </QueryClientProvider>,
   );
@@ -319,7 +321,7 @@ describe("FolderBrowser", () => {
     expect(onChoose).toHaveBeenCalledWith("/chosen/folder");
   });
 
-  it("disables 'Use this folder' button and shows progress text when isSubmitting is true", async () => {
+  it("disables button and shows custom busyLabel or default when isSubmitting is true", async () => {
     const fakeFetch = vi.fn().mockImplementation(() => {
       return Promise.resolve(
         new Response(
@@ -335,10 +337,16 @@ describe("FolderBrowser", () => {
     });
     vi.stubGlobal("fetch", fakeFetch);
 
-    renderFolderBrowser({ isSubmitting: true });
+    const { unmount } = renderFolderBrowser({ isSubmitting: true, busyLabel: "Working on it..." });
 
-    const submitBtn = await screen.findByRole("button", { name: /Adding project/i });
+    const submitBtn = await screen.findByRole("button", { name: /Working on it/i });
     expect(submitBtn).toBeDisabled();
-    expect(submitBtn).toHaveTextContent("Adding project...");
+    expect(submitBtn).toHaveTextContent("Working on it...");
+
+    unmount();
+    renderFolderBrowser({ isSubmitting: true });
+    const defaultBtn = await screen.findByRole("button", { name: "Use this folder" });
+    expect(defaultBtn).toBeDisabled();
+    expect(defaultBtn).toHaveTextContent("Use this folder");
   });
 });

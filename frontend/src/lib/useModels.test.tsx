@@ -1,20 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createQueryWrapper } from "../test/queryWrapper";
 import { useModels } from "./useModels";
-
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  });
-
-  return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-  };
-}
 
 describe("useModels", () => {
   beforeEach(() => {
@@ -50,7 +37,7 @@ describe("useModels", () => {
     vi.stubGlobal("fetch", fakeFetch);
 
     const { result } = renderHook(() => useModels(), {
-      wrapper: createWrapper(),
+      wrapper: createQueryWrapper(),
     });
 
     await waitFor(() => {
@@ -75,7 +62,7 @@ describe("useModels", () => {
     vi.stubGlobal("fetch", fakeFetch);
 
     const { result } = renderHook(() => useModels(), {
-      wrapper: createWrapper(),
+      wrapper: createQueryWrapper(),
     });
 
     await waitFor(() => {
