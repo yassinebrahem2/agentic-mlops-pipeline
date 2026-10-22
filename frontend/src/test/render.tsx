@@ -4,9 +4,14 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { buildRouter } from "../app/router";
 import { pageRoutes, type PageRoute } from "../app/routes";
 
-export function renderPage(path: string, options?: { routes?: PageRoute[] }): RenderResult {
-  const router = buildRouter(options?.routes ?? pageRoutes, (routes) =>
-    createMemoryRouter(routes, { initialEntries: [path], initialIndex: 0 }),
+export function renderPage(
+  path: string,
+  options?: { routes?: PageRoute[]; skipAuthGate?: boolean },
+): RenderResult {
+  const router = buildRouter(
+    options?.routes ?? pageRoutes,
+    (routes) => createMemoryRouter(routes, { initialEntries: [path], initialIndex: 0 }),
+    { skipAuthGate: options?.skipAuthGate ?? true },
   );
 
   const testQueryClient = new QueryClient({

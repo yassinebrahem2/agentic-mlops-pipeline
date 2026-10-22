@@ -1,5 +1,7 @@
-import { Settings } from "lucide-react";
+import { useState } from "react";
+import { LogOut, Settings } from "lucide-react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,10 +11,25 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { errorText } from "@/lib/api";
+import { useAuth } from "../auth/useAuth";
 import type { PageRoute } from "../routes";
 
 export function GearMenu({ appRoutes }: { appRoutes: PageRoute[] }) {
   const navRoutes = appRoutes.filter((r) => r.nav !== undefined);
+  const auth = useAuth();
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSignOut = async () => {
+    setError(null);
+    try {
+      await auth.signOut();
+    } catch (err) {
+      const msg = errorText(err);
+      setError(msg);
+      toast.error(msg);
+    }
+  };
 
   return (
     <DropdownMenu>
@@ -36,6 +53,22 @@ export function GearMenu({ appRoutes }: { appRoutes: PageRoute[] }) {
             </DropdownMenuItem>
           );
         })}
+        <DropdownMenuSeparator />
+        {error && (
+          <div role="alert" className="px-2 py-1.5 text-xs text-destructive">
+            {error}
+          </div>
+        )}
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault();
+            void handleSignOut();
+          }}
+          className="flex items-center gap-2 cursor-pointer"
+        >
+          <LogOut className="size-4 shrink-0" />
+          <span>Sign out</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
