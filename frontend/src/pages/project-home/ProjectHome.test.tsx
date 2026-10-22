@@ -1,35 +1,42 @@
 import { screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useParams } from "react-router";
+import { describe, expect, it, vi } from "vitest";
 import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
-import * as firstPathModule from "./firstProjectPath";
 import { route as projectHomeRoute } from "./route";
+
+const mockRoutes = vi.hoisted(() => ({ pageRoutes: [] as PageRoute[] }));
+
+vi.mock("@/app/routes", () => {
+  return {
+    get pageRoutes() {
+      return mockRoutes.pageRoutes;
+    },
+  };
+});
+
+function SettingsPage() {
+  const { projectId } = useParams();
+  return <div>Project Settings for {projectId}</div>;
+}
 
 const fakeSettingsRoute: PageRoute = {
   path: "/projects/:projectId/settings",
-  element: <div>Project Settings Page Content</div>,
+  element: <SettingsPage />,
   nav: { area: "project", label: "Project settings", order: 100 },
 };
 
 describe("ProjectHome", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("redirects to the first project-area route with projectId substituted", async () => {
-    vi.spyOn(firstPathModule, "firstProjectPath").mockReturnValue("/projects/prj_123/settings");
+    mockRoutes.pageRoutes = [fakeSettingsRoute];
 
     renderPage("/projects/prj_123", { routes: [projectHomeRoute, fakeSettingsRoute] });
 
-    expect(await screen.findByText("Project Settings Page Content")).toBeInTheDocument();
+    expect(await screen.findByText("Project Settings for prj_123")).toBeInTheDocument();
   });
 
   it("shows fallback message if no project-area route exists", async () => {
-    vi.spyOn(firstPathModule, "firstProjectPath").mockReturnValue(null);
+    mockRoutes.pageRoutes = [];
 
     renderPage("/projects/prj_123", { routes: [projectHomeRoute] });
 

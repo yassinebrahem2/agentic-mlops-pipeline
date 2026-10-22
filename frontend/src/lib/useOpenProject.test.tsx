@@ -43,29 +43,36 @@ describe("useOpenProject", () => {
 
   it("handles successful open and calls onNavigate", async () => {
     const onNavigate = vi.fn();
-    const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const { url, method } = getUrlAndMethod(input, init);
-      if (url.includes("/api/projects/prj_1/open") && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "prj_1",
-              name: "Prj 1",
-              source: "local",
-              status: "ok",
-              status_detail: null,
-              created_at: "2026-10-01T00:00:00Z",
-              last_opened_at: "2026-10-21T00:00:00Z",
-              local_path: "/workspace/prj1",
-              github_full_name: null,
-              default_branch: null,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
+    let finishOpen!: () => void;
+    const openResponse = new Promise<void>((resolve) => {
+      finishOpen = resolve;
     });
+    const fakeFetch = vi
+      .fn()
+      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url, method } = getUrlAndMethod(input, init);
+        if (url.includes("/api/projects/prj_1/open") && method === "POST") {
+          await openResponse;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: "prj_1",
+                name: "Prj 1",
+                source: "local",
+                status: "ok",
+                status_detail: null,
+                created_at: "2026-10-01T00:00:00Z",
+                last_opened_at: "2026-10-21T00:00:00Z",
+                local_path: "/workspace/prj1",
+                github_full_name: null,
+                default_branch: null,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
     vi.stubGlobal("fetch", fakeFetch);
 
     const { result } = renderHook(() => useOpenProject({ onNavigate }), {
@@ -76,9 +83,16 @@ describe("useOpenProject", () => {
       result.current.openProject("prj_1");
     });
 
-    expect(result.current.openingId).toBe("prj_1");
+    await waitFor(() => {
+      expect(result.current.openingId).toBe("prj_1");
+    });
+
+    act(() => {
+      finishOpen();
+    });
 
     await waitFor(() => {
+      expect(onNavigate).toHaveBeenCalled();
       expect(result.current.openingId).toBeNull();
     });
 
@@ -115,6 +129,7 @@ describe("useOpenProject", () => {
     });
 
     await waitFor(() => {
+      expect(result.current.error).toBe("Folder does not exist on disk");
       expect(result.current.openingId).toBeNull();
     });
 
@@ -125,7 +140,9 @@ describe("useOpenProject", () => {
     act(() => {
       result.current.clearError();
     });
-    expect(result.current.error).toBeNull();
-    expect(result.current.errorProjectId).toBeNull();
+    await waitFor(() => {
+      expect(result.current.error).toBeNull();
+      expect(result.current.errorProjectId).toBeNull();
+    });
   });
 });
