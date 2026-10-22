@@ -128,11 +128,16 @@ async def test_project_agent_model_and_limits(
         json={"address": "fake:fake-tools"},
     )
 
-    # Create a project
+    # Create two projects to test override isolation
     repo = make_repo(tmp_path / "project", {"README.md": "# Project\n"}, git_env)
     res = await client.post("/api/projects", json={"source": "local", "path": str(repo)})
     assert res.status_code == 201
     project_id = res.json()["id"]
+
+    repo2 = make_repo(tmp_path / "project2", {"README.md": "# Project 2\n"}, git_env)
+    res = await client.post("/api/projects", json={"source": "local", "path": str(repo2)})
+    assert res.status_code == 201
+    project2_id = res.json()["id"]
 
     # Initial project agent view inherits default model and definition limits
     res = await client.get(f"/api/projects/{project_id}/agents")
@@ -163,6 +168,15 @@ async def test_project_agent_model_and_limits(
     assert app_orch["settings"]["default_model"] == "fake:fake-tools"
     assert app_orch["settings"]["project_model"] is None
     assert app_orch["settings"]["effective_model"] == "fake:fake-tools"
+
+    # Second project still sees default model
+    res = await client.get(f"/api/projects/{project2_id}/agents")
+    assert res.status_code == 200
+    p2_agents: list[dict[str, Any]] = res.json()
+    p2_orch = next(a for a in p2_agents if a["name"] == "orchestrator")
+    assert p2_orch["settings"]["default_model"] == "fake:fake-tools"
+    assert p2_orch["settings"]["project_model"] is None
+    assert p2_orch["settings"]["effective_model"] == "fake:fake-tools"
 
     # Override limits: max_steps: 5
     res = await client.put(
@@ -242,6 +256,14 @@ async def test_agents_errors_and_validation(
     res = await client.post("/api/projects", json={"source": "local", "path": str(repo)})
     assert res.status_code == 201
     project_id = res.json()["id"]
+
+    # Setting unverified model at project level -> 409 model_not_usable
+    res = await client.put(
+        f"/api/projects/{project_id}/agents/orchestrator/model",
+        json={"address": "fake:unverified"},
+    )
+    assert res.status_code == 409
+    assert res.json()["code"] == "model_not_usable"
 
     res = await client.put(
         f"/api/projects/{project_id}/agents/unknown-agent/model",

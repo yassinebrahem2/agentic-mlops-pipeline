@@ -39,8 +39,8 @@ def _to_agent_info(definition: AgentDefinition, settings: AgentSettingsView) -> 
 
 @router.get("/agents", response_model=list[AgentInfo])
 async def list_agents(services: ServicesDep) -> list[AgentInfo]:
-    definitions = sorted(services.catalog.all(), key=lambda d: d.name)
-    return [_to_agent_info(d, await services.agent_settings.get(d.name)) for d in definitions]
+    views = await services.agent_settings.list_settings()
+    return [_to_agent_info(services.catalog.get(v.agent), v) for v in views]
 
 
 @router.put("/agents/{agent}/model", response_model=AgentInfo)
@@ -52,11 +52,8 @@ async def set_agent_model(agent: str, body: SetAgentModel, services: ServicesDep
 
 @router.get("/projects/{project_id}/agents", response_model=list[AgentInfo])
 async def list_project_agents(project: ProjectDep, services: ServicesDep) -> list[AgentInfo]:
-    definitions = sorted(services.catalog.all(), key=lambda d: d.name)
-    return [
-        _to_agent_info(d, await services.agent_settings.get(d.name, project_id=project.id))
-        for d in definitions
-    ]
+    views = await services.agent_settings.list_settings(project_id=project.id)
+    return [_to_agent_info(services.catalog.get(v.agent), v) for v in views]
 
 
 @router.put("/projects/{project_id}/agents/{agent}/model", response_model=AgentInfo)
