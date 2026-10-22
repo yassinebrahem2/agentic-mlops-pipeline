@@ -83,6 +83,7 @@ export function LocalFolderTab() {
   });
 
   const handleChoose = (path: string, initGit = false) => {
+    if (addProjectMutation.isPending) return;
     setLocalError(null);
     addProjectMutation.mutate({ path, initGit });
   };
@@ -130,6 +131,8 @@ export function LocalFolderTab() {
         onChoose={(path) => {
           handleChoose(path, false);
         }}
+        isSubmitting={addProjectMutation.isPending}
+        busyLabel="Adding project..."
       />
 
       <Dialog open={initDialogOpen} onOpenChange={setInitDialogOpen}>
@@ -142,13 +145,18 @@ export function LocalFolderTab() {
             <Button
               type="button"
               variant="outline"
+              disabled={addProjectMutation.isPending}
               onClick={() => {
                 setInitDialogOpen(false);
               }}
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleConfirmInitGit}>
+            <Button
+              type="button"
+              disabled={addProjectMutation.isPending}
+              onClick={handleConfirmInitGit}
+            >
               Run git init
             </Button>
           </DialogFooter>

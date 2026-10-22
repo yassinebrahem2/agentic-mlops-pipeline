@@ -26,6 +26,7 @@ export function RemoveProjectDialog({ project }: { project: components["schemas"
       );
     },
     onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ["projects", project.id] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void navigate("/");
     },

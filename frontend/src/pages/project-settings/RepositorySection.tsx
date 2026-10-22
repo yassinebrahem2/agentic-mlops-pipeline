@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { components } from "@/api/schema";
 import { FolderBrowser } from "@/components/FolderBrowser";
@@ -12,15 +12,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, errorText, unwrap } from "@/lib/api";
+import { useAppInfo } from "@/lib/useAppInfo";
 
 export function RepositorySection({ project }: { project: components["schemas"]["Project"] }) {
   const queryClient = useQueryClient();
   const [relinkOpen, setRelinkOpen] = useState(false);
   const params = { path: { project_id: project.id } };
-  const app = useQuery({
-    queryKey: ["app"],
-    queryFn: async () => unwrap(await api.GET("/api/app")),
-  });
+  const app = useAppInfo();
   const updateProject = (updated: components["schemas"]["Project"]) => {
     queryClient.setQueryData(["projects", project.id], updated);
     void queryClient.invalidateQueries({ queryKey: ["projects"] });
