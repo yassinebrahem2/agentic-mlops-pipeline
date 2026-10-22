@@ -5,10 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { APP_NAME } from "@/config";
 import { errorText } from "@/lib/api";
-import { useAuth } from "./useAuth";
+import { type AuthStatus, useAuth } from "./useAuth";
 
 export interface SignInProps {
-  mode: "local" | "server";
+  mode: AuthStatus["mode"];
   tokenError?: string | null;
 }
 
