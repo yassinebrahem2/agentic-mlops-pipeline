@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, errorText, unwrap } from "@/lib/api";
 import { AddModelDialog } from "./AddModelDialog";
 import { AddProviderDialog } from "./AddProviderDialog";
+import { AgentDefaults } from "./AgentDefaults";
 import { DetectedKeys } from "./DetectedKeys";
 import { ModelsTable } from "./ModelsTable";
 import { ProviderCard } from "./ProviderCard";
@@ -46,6 +47,8 @@ export function ProvidersPage() {
         </div>
         <ModelsTable />
       </section>
+
+      <AgentDefaults />
     </div>
   );
 }
