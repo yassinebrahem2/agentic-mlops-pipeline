@@ -560,6 +560,66 @@ async def test_close_during_turn(
         assert turn_statuses[m2.id] == "queued"
 
 
+async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    manager, _, project_id, prov_name, _ = await _setup_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
+    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
+
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+
+    # 1. Start turn 1 and stop it
+    await manager.send(project_id, "orchestrator", "Turn 1 slow")
+    async for ev in sub:
+        if isinstance(ev, TextDelta):
+            break
+    await manager.stop(project_id, "orchestrator")
+
+    ended_turn_1: TurnEnded | None = None
+    async for ev in sub:
+        if isinstance(ev, TurnEnded):
+            ended_turn_1 = ev
+            break
+    assert ended_turn_1 is not None
+    assert ended_turn_1.data.status == "stopped"
+
+    # Confirm turn 1's agent message is stopped in DB
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        turn_1_msg = (
+            await conn.execute(
+                select(messages.c.id, messages.c.status).where(
+                    messages.c.turn_id == ended_turn_1.data.turn_id
+                )
+            )
+        ).one()
+        assert turn_1_msg[1] == "stopped"
+
+    # 2. Start turn 2 and interrupt it via close()
+    await manager.send(project_id, "orchestrator", "Turn 2 slow")
+    async for ev in sub:
+        if isinstance(ev, TextDelta):
+            break
+
+    await manager.close()
+
+    # 3. Verify turn 1's agent message is STILL "stopped", not "interrupted"
+    async with engine.connect() as conn:
+        status_after = (
+            await conn.execute(select(messages.c.status).where(messages.c.id == turn_1_msg[0]))
+        ).scalar_one()
+        assert status_after == "stopped"
+
+
 async def test_get_send_race_deterministic(
     tmp_path: Path,
     paths: DataPaths,

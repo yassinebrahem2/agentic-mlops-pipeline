@@ -5,7 +5,7 @@ import contextlib
 from collections.abc import AsyncIterator
 
 import httpx2
-from sqlalchemy import or_, update
+from sqlalchemy import and_, update
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import AgentBuilder
@@ -235,7 +235,7 @@ class SessionManager(AgentSessions):
                             await conn.execute(
                                 update(messages)
                                 .where(
-                                    or_(
+                                    and_(
                                         messages.c.turn_id == turn_id,
                                         messages.c.status.in_(["streaming", "stopped"]),
                                     )
@@ -246,9 +246,8 @@ class SessionManager(AgentSessions):
                 finally:
                     self._child_tasks.pop(key, None)
 
-        except asyncio.CancelledError:
+        finally:
             self._workers.pop(key, None)
-            raise
 
     async def stop(self, project_id: str, agent: str) -> None:
         session_id = await self._get_session_id(project_id, agent)
