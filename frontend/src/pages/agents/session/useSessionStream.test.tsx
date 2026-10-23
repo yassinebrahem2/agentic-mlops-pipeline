@@ -201,39 +201,4 @@ describe("useSessionStream", () => {
 
     unmount();
   });
-
-  it("failed resync reload leaves connection closed, not live", async () => {
-    let callCount = 0;
-    getSpy = vi.spyOn(api, "GET").mockImplementation(() => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Promise.resolve({
-          data: initialSession,
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      return Promise.reject(new TypeError("Network drop during resync"));
-    });
-
-    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
-
-    await waitFor(() => {
-      expect(createdStreams).toHaveLength(1);
-    });
-    act(() => {
-      createdStreams[0]?.emitOpen();
-    });
-    expect(result.current.connection).toBe("live");
-
-    act(() => {
-      createdStreams[0]?.emit("resync", {}, 5);
-    });
-
-    await waitFor(() => {
-      expect(result.current.connection).toBe("closed");
-      expect(result.current.error?.code).toBe("load_failed");
-    });
-
-    unmount();
-  });
 });

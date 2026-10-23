@@ -15,6 +15,10 @@ export type UseSessionResult = {
   reload(): Promise<void>;
 };
 
+function isRefusal(status: number | undefined): boolean {
+  return status === 404 || status === 401;
+}
+
 export function useSession(projectId: string, agent: string): UseSessionResult {
   const [state, setState] = useState<SessionState>();
   const [error, setError] = useState<ApiError>();
@@ -104,7 +108,6 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
               );
         if (!disposed) {
           setError(apiErr);
-          setConnection((prev) => (prev === "reconnecting" ? "reconnecting" : "closed"));
         }
         return { error: apiErr };
       }
@@ -124,7 +127,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
       setConnection("reconnecting");
       void load().then((result) => {
         if (disposed) return;
-        if (result.error?.status === 404 || result.error?.status === 401) {
+        if (isRefusal(result.error?.status)) {
           setConnection("closed");
           return;
         }
@@ -140,7 +143,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         const result = await load();
         if (disposed) return;
         if (!result.state) {
-          if (result.error?.status === 404 || result.error?.status === 401) {
+          if (isRefusal(result.error?.status)) {
             setConnection("closed");
             return;
           }
@@ -190,8 +193,11 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
             if (disposed) return;
             if (result.state) {
               void connect(false);
-            } else {
+            } else if (isRefusal(result.error?.status)) {
               setConnection("closed");
+            } else {
+              setConnection("reconnecting");
+              schedule();
             }
           });
           return;
@@ -226,12 +232,16 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
       const result = await load();
       if (result.state && !disposed) {
         void connect(false);
+      } else if (!disposed) {
+        setConnection("closed");
       }
     };
 
     void load().then((result) => {
       if (result.state && !disposed) {
         void connect(false);
+      } else if (!disposed) {
+        setConnection("closed");
       }
     });
 

@@ -4,9 +4,15 @@ import { api } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { route } from "./route";
 import * as streamModule from "./session/stream";
-import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "./session/stream";
+import {
+  FakeStream,
+  STREAM_CLOSED,
+  STREAM_CONNECTING,
+  STREAM_OPEN,
+  type StreamLike,
+} from "./session/testing";
 
-export { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./session/stream";
+export { FakeStream, STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike };
 
 export const testRoutes: PageRoute[] = [
   route,
@@ -17,39 +23,6 @@ export const testRoutes: PageRoute[] = [
     element: <div>Project settings</div>,
   },
 ];
-
-export class FakeStream implements StreamLike {
-  url: string;
-  readyState = STREAM_OPEN;
-  onerror: ((event: Event) => void) | null = null;
-  listeners = new Map<string, (event: Event) => void>();
-
-  constructor(url: string = "") {
-    this.url = url;
-  }
-
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      this.listeners.set(type, listener);
-    }
-  }
-
-  close = vi.fn(() => {
-    this.readyState = STREAM_CLOSED;
-  });
-
-  emitOpen(): void {
-    this.listeners.get("open")?.(new Event("open"));
-  }
-
-  emit(type: string, data: unknown, seq: number): void {
-    this.listeners.get(type)?.({
-      type,
-      data: JSON.stringify(data),
-      lastEventId: String(seq),
-    } as MessageEvent);
-  }
-}
 
 export interface DefaultMockOverrides {
   projectStatus?: "ok" | "missing" | "empty" | "clone_failed";
