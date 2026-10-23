@@ -172,6 +172,17 @@ async def test_recover_turns_running_into_interrupted(databases: Databases) -> N
         turn_id=t_running,
     )
 
+    # a finished system message of the running turn is not an incomplete message
+    msg_system = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="system",
+        author_name="system",
+        parts=[TextPart(type="text", text="Note")],
+        status="complete",
+        turn_id=t_running,
+    )
+
     # queued turn
     t_queued = await store.add_turn("prj_test", session_id, "msg_2", "queued")
 
@@ -195,6 +206,7 @@ async def test_recover_turns_running_into_interrupted(databases: Databases) -> N
     messages = await store.messages("prj_test", session_id)
     recovered_msg = next(m for m in messages if m.id == msg_running.id)
     assert recovered_msg.status == "interrupted"
+    assert next(m for m in messages if m.id == msg_system.id).status == "complete"
 
 
 async def test_set_summary_and_summary_round_trip(databases: Databases) -> None:
