@@ -63,6 +63,7 @@ Task 1 can be written and tested against a test double as soon as agent-runtime 
 
 **Files:**
 - Test: `backend/tests/api/test_sessions_live.py`
+- Modify: `backend/tests/fakes/fake_openai.py` (#106): when the offered tools include `report_capabilities` (the verifier's probe), `fake-slow` calls it as `fake-tools` would; every other `fake-slow` request streams its slow text as now, so the runtime tests that use it are unchanged. The setup in `test_sessions_live.py` verifying `fake-slow` through `POST /api/models/verify` with tool calling is its test. The plan PR also says `Closes #106`.
 
 **Interfaces:**
 - Consumes: task 1's routes; the real `SessionManager`; the fake OpenAI-compatible server; api-resources' providers, models, agents and projects routes to set everything up through HTTP.
