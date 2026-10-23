@@ -18,6 +18,11 @@ class Databases:
         self._projects: dict[str, AsyncEngine] = {}
         self._lock = asyncio.Lock()
 
+    @property
+    def paths(self) -> DataPaths:
+        """The data paths used by these databases."""
+        return self._paths
+
     async def app(self) -> AsyncEngine:
         async with self._lock:
             if self._app is None:
