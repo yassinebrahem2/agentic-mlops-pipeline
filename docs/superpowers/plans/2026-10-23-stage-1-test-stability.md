@@ -17,6 +17,7 @@
 | 1 | The executor's cancel path and the write lock (#109) | merged code |
 | 2 | Frontend page tests that wait on data (#110) | merged code |
 | 3 | Agent-runtime session tests hold turns with the gate | the hold gate (api-sessions task 2, #56) on `main` |
+| 4 | The remaining timing assumptions and copied helpers | task 3 |
 
 Task 1 is merged (early PR #118). Task 2 was resolved by Decision #120 with no code change: the measured cause is CPU work in testing-library's role queries under heavy concurrent load, not a defect in our code; #110 is closed as an environment limit and testing-library's defaults stay. Task 3 can start: everything it consumes is on `main`.
 
@@ -61,3 +62,20 @@ Resolved by Decision #120 without a code change (see the note above the tasks). 
 - `test_graph_checkpointer.py` grew past the ~400-line limit with task 1's guarantee test (PR #118). Move that test and its `GatedSaver` into `test_checkpoint_durability.py`; the helpers both files use (`RecordingSink`, `_make_agent`) move once into a shared test module, not copied. Assert the held write's checkpoint is step 0 (`== 0`), and await the cancelled event-wait tasks in both task 1 tests.
 
 **Tests (stop condition):** the runtime session tests pass 20 times in a loop (`--basetemp=$TMP/test-stability-a`) while `uv run pytest --basetemp=$TMP/test-stability-b` runs in a load loop; full suite, ruff, format, pyright; CI green on Linux and Windows.
+
+---
+
+### Task 4: The remaining timing assumptions and copied helpers
+
+Found while doing task 3 (#111): the Goal covers every agent-runtime session test, not only the `fake-slow` ones.
+
+**Files:** `backend/tests/agents/runtime/test_sessions_stop.py`, `test_sessions.py`, `test_sessions_lifecycle.py`, `session_env.py`, `graph_env.py`, `test_executor.py`, `test_executor_cancel.py`, `test_executor_errors.py`, `test_executor_refusal.py`, `test_graph.py`, `test_graph_tools.py`, a new `backend/tests/stream_helpers.py`, and `backend/tests/api/test_sessions_live.py` (its import and the removal of `_through_delta`; fixes task 1 (#123) also edits this file, so merge `origin/main` first if it has landed).
+
+**Interfaces:** Consumes merged code. Produces none.
+
+**Implementation notes:**
+- `test_stop_during_slow_tool`: the slow tool waits on an event the test controls instead of `asyncio.sleep(args.delay)`. The test sends, waits for `tool.started`, stops while the tool is held, and asserts the turn ends `stopped`. No timing assumption.
+- The six tests that subscribe and then send on `fake-tools` with no hold: make the subscription unable to miss early events, the way clients do it (I1, "Two tabs and reconnects"): read `get()` first and subscribe with `after_seq=view.last_seq` (`SessionView.last_seq`), so the hub replays anything sent after that point. On a fresh session the hub's buffer is empty and `after_seq` equals its current seq, so no `Resync` comes first (`hub.py`, `subscribe`). Name the six tests in the PR.
+- One source for each test helper. Every copy of `RecordingSink` and `_make_agent` in the runtime tests is replaced by `graph_env.py`'s; diff each copy first, and if one behaves differently, keep it as its own named helper in `graph_env.py` and say so in the PR. The read-until-first-text helper moves to `backend/tests/stream_helpers.py` (neutral, so API tests don't import runtime test setup) as `through_first_delta`, used by `session_env.py`'s callers and `test_sessions_live.py`. The two copies differ: keep both behaviors, a bounded wait (`asyncio.timeout(10)`, the API copy's) and failing when the stream closes before any text (the runtime copy's).
+
+**Tests (stop condition):** the runtime session tests pass 20 times in a loop (`--basetemp=$TMP/test-stability-a`) while `uv run pytest --basetemp=$TMP/test-stability-b` runs in a load loop; `git grep -nE "class RecordingSink|def _?make_agent|def _?through(_first)?_delta" -- backend/tests` finds exactly one definition of each; full suite, ruff, format, pyright; CI green on Linux and Windows.
