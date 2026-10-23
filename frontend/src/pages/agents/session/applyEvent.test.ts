@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import sessionFold from "../../../../../shared/fixtures/session-fold.json";
 import { applyEvent, type SessionState } from "./applyEvent";
 import { parseEvent, type MessageView } from "./events";
 
-const message = (
+const createMessage = (
   id: string,
   author_kind: MessageView["author_kind"],
   parts: MessageView["parts"],
@@ -19,96 +20,220 @@ const message = (
 });
 
 describe("parseEvent", () => {
-  it("parses the event payloads and rejects malformed data", () => {
-    const value = message("m1", "agent", []);
-    expect(parseEvent("message.created", JSON.stringify({ message: value }))).toEqual({
+  it("parses valid event payloads", () => {
+    const msg = createMessage("m1", "agent", [{ type: "text", text: "hello" }]);
+    expect(parseEvent("message.created", JSON.stringify({ message: msg }))).toEqual({
       type: "message.created",
-      message: value,
+      message: msg,
     });
-    expect(parseEvent("text.delta", JSON.stringify({ message_id: "m1", text: "hello" }))).toEqual({
+    expect(parseEvent("message.updated", JSON.stringify({ message: msg }))).toEqual({
+      type: "message.updated",
+      message: msg,
+    });
+    expect(parseEvent("text.delta", JSON.stringify({ message_id: "m1", text: " world" }))).toEqual({
       type: "text.delta",
       message_id: "m1",
-      text: "hello",
+      text: " world",
     });
-    expect(parseEvent("text.delta", "{bad")).toBeNull();
-    expect(parseEvent("text.delta", JSON.stringify({ message_id: 1, text: "hello" }))).toBeNull();
+    expect(
+      parseEvent(
+        "tool.started",
+        JSON.stringify({
+          message_id: "m1",
+          id: "t1",
+          name: "Read",
+          input: { path: "README.md" },
+        }),
+      ),
+    ).toEqual({
+      type: "tool.started",
+      message_id: "m1",
+      id: "t1",
+      name: "Read",
+      input: { path: "README.md" },
+    });
+    expect(
+      parseEvent(
+        "tool.started",
+        JSON.stringify({
+          message_id: "m1",
+          tool_call_id: "t2",
+          name: "Grep",
+          input: { pattern: "test" },
+        }),
+      ),
+    ).toEqual({
+      type: "tool.started",
+      message_id: "m1",
+      id: "t2",
+      name: "Grep",
+      input: { pattern: "test" },
+    });
+    expect(
+      parseEvent(
+        "tool.finished",
+        JSON.stringify({
+          message_id: "m1",
+          tool_call_id: "t1",
+          content: "file content",
+          is_error: false,
+        }),
+      ),
+    ).toEqual({
+      type: "tool.finished",
+      message_id: "m1",
+      tool_call_id: "t1",
+      content: "file content",
+      is_error: false,
+    });
     expect(
       parseEvent("turn.ended", JSON.stringify({ turn_id: "turn_1", status: "done", error: null })),
-    ).toEqual({ type: "turn.ended", turn_id: "turn_1", status: "done", error: null });
+    ).toEqual({
+      type: "turn.ended",
+      turn_id: "turn_1",
+      status: "done",
+      error: null,
+    });
     expect(parseEvent("resync", "{}")).toEqual({ type: "resync" });
+  });
+
+  it("rejects malformed data and invalid shapes", () => {
+    expect(parseEvent("text.delta", "{not json")).toBeNull();
+    expect(parseEvent("text.delta", JSON.stringify("string value"))).toBeNull();
+    expect(parseEvent("text.delta", JSON.stringify({ message_id: 123, text: "hi" }))).toBeNull();
+    expect(parseEvent("text.delta", JSON.stringify({ message_id: "m1" }))).toBeNull();
+    expect(
+      parseEvent("tool.started", JSON.stringify({ message_id: "m1", name: "Read" })),
+    ).toBeNull();
+    expect(
+      parseEvent("tool.finished", JSON.stringify({ message_id: "m1", tool_call_id: "t1" })),
+    ).toBeNull();
+    expect(
+      parseEvent("turn.ended", JSON.stringify({ turn_id: "t1", status: "invalid_status" })),
+    ).toBeNull();
+    expect(
+      parseEvent(
+        "message.created",
+        JSON.stringify({ message: { id: "m1", parts: [{ type: "unknown" }] } }),
+      ),
+    ).toBeNull();
+    expect(parseEvent("unknown.event", JSON.stringify({}))).toBeNull();
   });
 });
 
 describe("applyEvent", () => {
-  it("folds a streamed message and ignores replayed events", () => {
+  it("folds session-fold fixture from start through events to intermediate and end states", () => {
+    let state: SessionState = {
+      messages: sessionFold.start.messages,
+      busy: sessionFold.start.busy,
+      lastSeq: sessionFold.start.last_seq,
+    };
+
+    const events: { seq: number; type: string; data: unknown }[] = sessionFold.events;
+    for (const event of events) {
+      state = applyEvent(state, event);
+      const seqKey = String(event.seq);
+      if (seqKey in sessionFold.after_event) {
+        const intermediate =
+          sessionFold.after_event[seqKey as keyof typeof sessionFold.after_event];
+        expect(state.messages).toEqual(intermediate.messages);
+        expect(state.busy).toBe(intermediate.busy);
+        expect(state.lastSeq).toBe(intermediate.last_seq);
+      }
+    }
+
+    expect(state.messages).toEqual(sessionFold.end.messages);
+    expect(state.busy).toBe(sessionFold.end.busy);
+    expect(state.lastSeq).toBe(sessionFold.end.last_seq);
+
+    const lastEvent = events[events.length - 1];
+    expect(lastEvent).toBeDefined();
+    if (lastEvent) {
+      const replayed = applyEvent(state, lastEvent);
+      expect(replayed).toBe(state);
+    }
+  });
+
+  it("deltas after a tool result start a new text part", () => {
     let state: SessionState = { messages: [], busy: false, lastSeq: 0 };
-    const user = message("u1", "user", [], "queued");
-    const answer = message("a1", "agent", []);
+    const agentMsg = createMessage("a1", "agent", []);
     state = applyEvent(state, {
       seq: 1,
       type: "message.created",
-      data: { type: "message.created", message: user },
+      data: { message: agentMsg },
     });
     state = applyEvent(state, {
       seq: 2,
-      type: "message.created",
-      data: { type: "message.created", message: answer },
+      type: "text.delta",
+      data: { message_id: "a1", text: "Before tool. " },
     });
     state = applyEvent(state, {
       seq: 3,
-      type: "text.delta",
-      data: { type: "text.delta", message_id: "a1", text: "hello" },
+      type: "tool.started",
+      data: { message_id: "a1", id: "t1", name: "Read", input: { path: "a.txt" } },
     });
     state = applyEvent(state, {
       seq: 4,
-      type: "tool.started",
-      data: {
-        type: "tool.started",
-        message_id: "a1",
-        id: "t1",
-        name: "Read",
-        input: { path: "README.md" },
-      },
+      type: "tool.finished",
+      data: { message_id: "a1", tool_call_id: "t1", content: "data", is_error: false },
     });
     state = applyEvent(state, {
       seq: 5,
-      type: "tool.finished",
-      data: {
-        type: "tool.finished",
-        message_id: "a1",
-        tool_call_id: "t1",
-        content: "file",
-        is_error: false,
-      },
+      type: "text.delta",
+      data: { message_id: "a1", text: "After tool." },
+    });
+
+    const msg = state.messages[0];
+    expect(msg?.parts).toHaveLength(4);
+    expect(msg?.parts).toEqual([
+      { type: "text", text: "Before tool. " },
+      { type: "tool_call", id: "t1", name: "Read", input: { path: "a.txt" } },
+      { type: "tool_result", tool_call_id: "t1", content: "data", is_error: false },
+      { type: "text", text: "After tool." },
+    ]);
+  });
+
+  it("busy follows queued messages", () => {
+    let state: SessionState = { messages: [], busy: false, lastSeq: 0 };
+    const userMsg = createMessage("u1", "user", [{ type: "text", text: "Question 1" }], "queued");
+    state = applyEvent(state, {
+      seq: 1,
+      type: "message.created",
+      data: { message: userMsg },
+    });
+    expect(state.busy).toBe(true);
+
+    const queuedMsg = createMessage("u2", "user", [{ type: "text", text: "Question 2" }], "queued");
+    state = applyEvent(state, {
+      seq: 2,
+      type: "message.created",
+      data: { message: queuedMsg },
+    });
+    expect(state.busy).toBe(true);
+
+    state = applyEvent(state, {
+      seq: 3,
+      type: "turn.ended",
+      data: { turn_id: "t1", status: "done", error: null },
+    });
+    expect(state.busy).toBe(true);
+
+    const completeMsg = { ...userMsg, status: "complete" as const };
+    const completeMsg2 = { ...queuedMsg, status: "complete" as const };
+    state = applyEvent(state, {
+      seq: 4,
+      type: "message.updated",
+      data: { message: completeMsg },
+    });
+    state = applyEvent(state, {
+      seq: 5,
+      type: "message.updated",
+      data: { message: completeMsg2 },
     });
     state = applyEvent(state, {
       seq: 6,
-      type: "text.delta",
-      data: { type: "text.delta", message_id: "a1", text: " world" },
-    });
-    expect(state.messages[1]?.parts).toEqual([
-      { type: "text", text: "hello" },
-      { type: "tool_call", id: "t1", name: "Read", input: { path: "README.md" } },
-      { type: "tool_result", tool_call_id: "t1", content: "file", is_error: false },
-      { type: "text", text: " world" },
-    ]);
-    expect(
-      applyEvent(state, {
-        seq: 6,
-        type: "text.delta",
-        data: { type: "text.delta", message_id: "a1", text: "!" },
-      }),
-    ).toBe(state);
-    const complete = message("u1", "user", [], "complete");
-    state = applyEvent(state, {
-      seq: 7,
-      type: "message.updated",
-      data: { type: "message.updated", message: complete },
-    });
-    state = applyEvent(state, {
-      seq: 8,
       type: "turn.ended",
-      data: { type: "turn.ended", turn_id: "turn_1", status: "done", error: null },
+      data: { turn_id: "t1", status: "done", error: null },
     });
     expect(state.busy).toBe(false);
   });

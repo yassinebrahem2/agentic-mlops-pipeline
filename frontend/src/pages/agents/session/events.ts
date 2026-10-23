@@ -1,36 +1,20 @@
-export type TextPart = { type: "text"; text: string };
-export type ToolCallPart = {
-  type: "tool_call";
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-};
-export type ToolResultPart = {
-  type: "tool_result";
-  tool_call_id: string;
-  content: string;
-  is_error: boolean;
-};
-export type Part = TextPart | ToolCallPart | ToolResultPart;
+import type { components } from "@/api/schema";
 
-export type MessageView = {
-  id: string;
-  turn_id: string | null;
-  author_kind: "user" | "agent" | "system";
-  author_name: string;
-  from_agent: string | null;
-  parts: Part[];
-  status: "complete" | "streaming" | "queued" | "stopped" | "interrupted";
-  created_at: string;
-};
+type Schemas = components["schemas"];
 
-export type SessionView = {
-  id: string;
-  agent: string;
-  busy: boolean;
-  messages: MessageView[];
-  last_seq: number;
-};
+export type MessageView = Schemas["MessageView"];
+export type SessionView = Schemas["SessionView"];
+export type TextPart = Schemas["TextPart"];
+export type ToolCallPart = Schemas["ToolCallPart"];
+export type ToolResultPart = Schemas["ToolResultPart"];
+export type Part = Schemas["MessageView"]["parts"][number];
+export type MessageCreated = Schemas["MessageCreated"];
+export type MessageUpdated = Schemas["MessageUpdated"];
+export type TextDelta = Schemas["TextDelta"];
+export type ToolStarted = Schemas["ToolStarted"];
+export type ToolFinished = Schemas["ToolFinished"];
+export type TurnEnded = Schemas["TurnEnded"];
+export type Resync = Schemas["Resync"];
 
 export type StreamEventData =
   | { type: "message.created"; message: MessageView }
