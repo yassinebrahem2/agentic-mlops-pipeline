@@ -86,7 +86,9 @@ async def test_live_turn_orchestrator_readme(
         project = await workspace_svc.add_local(str(repo_root))
         await settings_svc.set_default_model("orchestrator", live_model)
 
-        sub = manager.subscribe(project.id, "orchestrator", after_seq=None)
+        # Subscribing after the snapshot's last_seq replays what was published before the first read.
+        start = await manager.get(project.id, "orchestrator")
+        sub = manager.subscribe(project.id, "orchestrator", after_seq=start.last_seq)
         await manager.send(project.id, "orchestrator", "What does this repository's README say?")
 
         events: list[StreamEvent] = []

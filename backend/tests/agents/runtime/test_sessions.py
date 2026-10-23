@@ -41,16 +41,17 @@ async def test_ask_orchestrator_fake_tools(
     manager = env.manager
     project_id = env.project_id
 
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    # Subscribing after the snapshot's last_seq replays anything published before the first read.
+    view = await manager.get(project_id, "orchestrator")
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
     user_msg = await manager.send(project_id, "orchestrator", "Check readme")
     assert user_msg.status == "complete"
     assert user_msg.author_kind == "user"
 
-    events = await collect_until_turn_ended(sub)
+    live_events = await collect_until_turn_ended(sub)
 
-    # First event is Resync because after_seq was None
-    assert isinstance(events[0], Resync)
-    live_events = events[1:]
+    # A fresh session's hub is at view.last_seq, so the stream starts with the turn, not a Resync.
+    assert not any(isinstance(e, Resync) for e in live_events)
 
     types = [e.type for e in live_events]
     assert "message.created" in types
@@ -87,8 +88,9 @@ async def test_two_subscribers_receive_identical_events(
     manager = env.manager
     project_id = env.project_id
 
-    sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    sub2 = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    view = await manager.get(project_id, "orchestrator")
+    sub1 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
+    sub2 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
 
     task1 = asyncio.create_task(collect_until_turn_ended(sub1))
     task2 = asyncio.create_task(collect_until_turn_ended(sub2))
@@ -171,8 +173,12 @@ async def test_three_messages_sent_at_once_queue_order(
     )
     manager = env.manager
     project_id = env.project_id
+    # Turn 1 runs on the held slow model, so it is still running when the queue is checked.
+    await env.settings.set_default_model("orchestrator", f"{env.provider}:fake-slow")
+    fake_openai.state.hold_slow()
 
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    view_start = await manager.get(project_id, "orchestrator")
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=view_start.last_seq)
 
     m1 = await manager.send(project_id, "orchestrator", "Msg 1")
     m2 = await manager.send(project_id, "orchestrator", "Msg 2")
@@ -184,6 +190,10 @@ async def test_three_messages_sent_at_once_queue_order(
 
     view = await manager.get(project_id, "orchestrator")
     assert view.busy is True
+
+    # Turns 2 and 3 build their agent after turn 1 ends, so they run on the fast model.
+    await env.settings.set_default_model("orchestrator", f"{env.provider}:fake-tools")
+    fake_openai.state.release_slow()
 
     # Collect events until 3 turn.ended events have arrived
     all_events: list[StreamEvent] = []
