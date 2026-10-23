@@ -180,7 +180,9 @@ async def test_executor_cancellation_during_slow_tool(
     assert len(sink.tools_started) == 1
 
     # A checkpoint write cancelled before its commit leaves the write lock held by this connection.
-    await checkpointer_connections[0].execute("BEGIN IMMEDIATE")
+    abandoned = checkpointer_connections[0]
+    await abandoned.execute("CREATE TABLE IF NOT EXISTS abandoned (x)")
+    await abandoned.execute("INSERT INTO abandoned VALUES (1)")
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
