@@ -18,7 +18,7 @@
 | 2 | Frontend page tests that wait on data (#110) | merged code |
 | 3 | Agent-runtime session tests hold turns with the gate | the hold gate (api-sessions task 2, #56) on `main` |
 
-Tasks 1 and 2 start now and each gets an early PR (its issue says so), because every PR's CI depends on these failures being gone. Task 2's branch is cut after task 1, so task 1's PR merges first. Task 3 starts once api-sessions' plan PR (#107) is on `main`.
+Task 1 is merged (early PR #118). Task 2 was resolved by Decision #120 with no code change: the measured cause is CPU work in testing-library's role queries under heavy concurrent load, not a defect in our code; #110 is closed as an environment limit and testing-library's defaults stay. Task 3 can start: everything it consumes is on `main`.
 
 ---
 
@@ -45,18 +45,7 @@ Tasks 1 and 2 start now and each gets an early PR (its issue says so), because e
 
 ### Task 2: Frontend page tests that wait on data (#110)
 
-**Files:** the tests listed in #110 and whatever shared test code or production code the cause lives in (`frontend/src/test/`, the pages' query hooks). Name every file you change in the PR and why.
-
-**Interfaces:** Consumes merged code. Produces none.
-
-**Implementation notes:**
-- First find the cause, with evidence. Measure where the time goes in one failing test on a cold run, for example `vitest --reporter=verbose` timings and timestamps around the stubbed fetch and the `findBy*` call. Candidates to rule in or out: the first transform of a page's module graph on a cold Vite cache, a stub that answers only after another request settles, real timers or `setTimeout` in a page, a query that waits on another query. Write the cause in the PR description.
-- Fix that cause. Not allowed: raising `asyncUtilTimeout`, `testTimeout` or a `findBy*` timeout; retries; pool or sequence settings changed only to hide load.
-- If the measured cause is not a defect in our code (the cold transform of a module graph, or plain CPU contention, with the test, its stub and the page all correct), report the measurement in a Decision issue linked to this task and stop: what the suite's setup must do then is the lead's decision.
-
-**Tests (stop condition), from `frontend/`:**
-- 10 runs of `npx vitest run`, clearing the caches (`node_modules/.vite` and `node_modules/.vitest` if present) before each one, while `cd backend && uv run pytest --basetemp=$TMP/test-stability-b` runs in a load loop: all 10 pass.
-- `npm run lint`, `npm run format:check`, `npm run build` pass; CI green.
+Resolved by Decision #120 without a code change (see the note above the tasks). Nothing to implement.
 
 ---
 
