@@ -18,7 +18,7 @@ SessionManager's constructor and lifecycle (implemented in task 5):
 api-sessions builds it in the lifespan's AsyncExitStack and registers close.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -163,7 +163,7 @@ class AgentSessions(Protocol):
 
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
-    ) -> AsyncIterator[StreamEvent]: ...
+    ) -> AsyncGenerator[StreamEvent, None]: ...
 
     async def close_project(self, project_id: str) -> None:
         """Before a project is removed: ends its running turns (interrupted), drops its hubs and
