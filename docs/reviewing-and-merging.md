@@ -1,0 +1,55 @@
+# Reviewing and merging PRs (lead)
+
+How the lead's Claude Code session reviews and merges PRs, locally or in a cloud session. It applies AGENTS.md (rules 5 to 7, Lead rules, Code quality); it adds no new rules. Only the lead's Claude Code session does this (AGENTS.md, "Know which role you are serving").
+
+## 1. Find what needs the lead
+
+- Open PRs: `gh pr list --json number,author,headRefName,reviewDecision,isDraft,headRefOid,updatedAt`.
+- A PR needs the lead when it is not a draft and either has no review yet or has new commits since the last "changes requested".
+- Board: only the open cards in In review and Blocked matter; a closed issue anywhere but Done is a wrong card (step 6).
+
+## 2. One review subagent per PR
+
+Start one background subagent per PR, all at once, on model `sonnet`, each told to call the advisor before it reports and to post nothing to GitHub. Its prompt names:
+- the plan and task (`docs/superpowers/plans/...`, the task issue numbers) and the interfaces it produces or consumes (`docs/superpowers/plans/2026-10-16-stage-1-overview.md`, I1 to I7);
+- the diff to review: `git diff origin/main...origin/<head branch>` (only the new task's commits if earlier tasks are already on main);
+- for a re-review: "read the lead's last review and verify each point";
+- the checks: AGENTS.md Code quality (DRY and separation of concerns, no swallowed errors, no workarounds, no test-only code in production, comments say why, files under ~400 lines), the plan's full test list, no secrets anywhere, PR body (template, `Closes #<plan issue>`, honest "Not done", no AI attribution, no control characters);
+- to run backend (`uv sync`, `uv run pytest`, `ruff check`, `ruff format --check`, `pyright`, `python -m mlops_agents.api.openapi_export --check`) and/or frontend (`npm ci`, `npm test`, `npm run lint`, `npm run format:check`, `npm run build`) in a new `git worktree` under the scratchpad, never switching the main checkout, and to remove that worktree afterwards;
+- to return Critical / Important / Minor with `file:line`, a verdict (merge / changes) and the head SHA.
+
+Verify a Critical finding in the code yourself before acting on it. Reviewers can be wrong about process: under rule 6 an owner closes a task without an early PR once it is done, so "closed by hand" is not a finding for such tasks.
+
+## 3. Post the verdict
+
+- Changes: `gh pr review <n> --request-changes --body-file <file>`, short: the Important items, then Minor. The board moves the PR and its open issues to In progress.
+- Your own PR (`yassinebrahem2` is the author): GitHub refuses approve and request-changes, so `gh pr comment <n> --body-file <file>` and move the cards yourself (`scripts/board-status.sh <n> "In progress"` for the PR and its open issues).
+- Write review bodies to a file and pass `--body-file`; inline backslashes become control characters.
+- Minor findings that block nothing but break a rule go to a Bug issue (template Bug, label `bug`, milestone Stage 1, assigned to `yassinebrahem2`) instead of holding the merge; say so in the approval.
+
+## 4. Merge
+
+All of these, every time (rule 6, Lead rules):
+1. The verdict is merge.
+2. CI on the PR's head: every job completed and green (`gh pr checks <n>`), including Backend's Windows job and Package's `install` jobs. Queued, running, cancelled or red means wait.
+3. Up to date with `main`: `gh api repos/yassinebrahem2/agentic-mlops-pipeline/compare/main...<head branch> --jq .behind_by` is 0. If not, update the branch (`gh api -X PUT repos/yassinebrahem2/agentic-mlops-pipeline/pulls/<n>/update-branch -f expected_head_sha=<head>`), wait for CI on the new head, then check again.
+4. Approve (`gh pr review <n> --approve --body "..."`; a comment on your own PR), then merge with a merge commit pinned to the reviewed head:
+   `gh api -X PUT repos/yassinebrahem2/agentic-mlops-pipeline/pulls/<n>/merge -f merge_method=merge -f sha=<head>`. Never squash or rebase.
+5. Delete the head branch (`git push origin --delete <branch>`) unless an owner's worktree still uses it, and check that the issues it closes are closed.
+6. Tell the owners whose work this unblocks, in their plan issue.
+
+Fix small PR-body problems yourself instead of another round: a stale test count, a real `#token=` value (replace with `<redacted>`), a stray AI footer. Edit with `gh api -X PATCH repos/yassinebrahem2/agentic-mlops-pipeline/pulls/<n> -F body=@<file>`.
+
+## 5. Board
+
+- Columns: Todo, In progress, Blocked, In review, Done. Move a card with `scripts/board-status.sh <n> "<Status>"`.
+- In a cloud session the Projects API is not reachable: run the `board` workflow instead, `gh api -X POST repos/yassinebrahem2/agentic-mlops-pipeline/actions/workflows/board.yml/dispatches -f ref=main -f 'inputs[number]=<n>' -f 'inputs[status]=<Status>'`, and check the run succeeded.
+- `board.yml` moves cards on PR open, on "changes requested" and on the owner's next push; it skips closed issues. Owners' agents sometimes move a closed issue back to In review by hand: put it back in Done.
+- A Blocked card is right only while what it waits for is not on `main`; when its blocker merges, move it to In progress (or Todo if nobody has started) and tell the owner.
+
+## 6. Known traps
+
+- Windows: `git worktree remove` fails on long `node_modules`/`.venv` paths. Prune the registration (`git worktree prune`) and leave the folder; it is outside the repository.
+- A plan branch that carries several early PRs' tasks: an early PR is opened from `plan/<stage>-<topic>-task<n>` (rule 5). If a later PR's branch also contains an earlier unmerged task, merge the earlier PR first and update the later branch.
+- Generated files after a merge: `frontend/openapi.json` must match a fresh export (`openapi_export --check` in CI); owners regenerate it rather than resolving conflicts by hand.
+- Python on the lead's Windows machine: use `py -3.12` for helper scripts; bash heredocs with backslashes are fragile, so write scripts and bodies to files.

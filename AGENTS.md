@@ -24,10 +24,12 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
    | the blocker is resolved and you resume | In progress |
    | you stop working on it and unassign yourself | Todo |
    | the task is done, pushed and CI is green (no PR of its own) | close the issue: Done |
-   | a PR into `main` is opened | every issue it closes: In review (In review holds only work waiting on the lead) |
-   | the lead requests changes on your PR | the PR and every issue it closes: In progress (until you push the fixes) |
-   | you push the fixes for a PR with changes requested | the PR and every issue it closes: In review |
+   | a PR into `main` is opened | every open issue it closes: In review (In review holds only work waiting on the lead) |
+   | the lead requests changes on your PR | the PR and every open issue it closes: In progress (until you push the fixes) |
+   | you push the fixes for a PR with changes requested | the PR and every open issue it closes: In review (a closed issue stays Done) |
    | the issue is closed (rule 6) | Done |
+
+   **Keep watching your open PRs and Blocked cards.** The lead talks to you through them. While you have an open PR or a Blocked card, check it about every 10 minutes, alongside your next task (do not sit idle on it), until it moves or the person running you stops you: a Decision answered or a blocking PR merged → resume; changes requested → fix them; merged → next task. If your agent cannot keep a session waiting, tell the person running you what you are waiting on.
 
    Move a card with `scripts/board-status.sh <number> "<Status>"` (needs `gh`, `jq` and a token with the `project` scope) or, where the Projects API is not reachable (cloud agent sessions), by running the `board` workflow with `workflow_dispatch` inputs `number` and `status` (cloud sessions block `gh workflow run`, which uses GraphQL; use the REST call `gh api -X POST repos/yassinebrahem2/agentic-mlops-pipeline/actions/workflows/board.yml/dispatches -f ref=main -f 'inputs[number]=42' -f 'inputs[status]=Blocked'`, or your agent's GitHub tool for a workflow dispatch, e.g. the GitHub MCP `actions_run_trigger`). Check that the run succeeded. If you cannot move the card, say so in the issue so a person moves it in the GitHub UI. Column names are exactly: Todo, In progress, Blocked, In review, Done.
 
@@ -44,7 +46,7 @@ Run from `backend/`:
 
 Run from `frontend/`:
 - Install: `npm ci`
-- Dev server with hot reload (proxies `/api` to the backend on port 8765): `npm run dev`
+- Dev server with hot reload (start the backend first with `cd backend && uv run mlops-agents start --dev`; proxies `/api` to the backend on port 8765): `npm run dev`
 - Tests: `npm test` (one file: `npx vitest run src/path/File.test.tsx`)
 - Lint and format: `npm run lint`, `npm run format:check`
 - Build into the backend package: `npm run build`
@@ -128,6 +130,7 @@ Four types, each with its template and label. Blank issues are disabled.
 - Inline lint suppressions only at a third-party boundary, naming the rule and the reason; test-only exceptions go in the linter's per-file config.
 - Test-first for logic: write the failing test, then the code. Test at the cheapest level that proves the behavior.
 - Before saying a task is done, run the tests and checks and report their real output.
+- Never repeat yourself: every rule, type, message and constant has one source, which everything else uses (across backend and frontend too: generate or serve it, never copy it; logic that must run on both sides is specified once, by a shared fixture both test against). Separation of concerns: each module, class and function owns one concern; a component that needs another concern calls its owner.
 - Small focused files; a file past about 400 lines is doing too much. Comments explain why, not what. No commented-out or dead code.
 - Match the surrounding code's naming and idioms.
 

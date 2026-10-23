@@ -1,0 +1,50 @@
+name: Package
+
+on:
+  push:
+    branches: ["main", "plan/**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: python scripts/build_wheel.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: backend/dist/*.whl
+          if-no-files-found: error
+
+  install:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: wheel
+      - name: Check installed wheel
+        shell: bash
+        run: python scripts/install_check.py wheel/*.whl

@@ -9,6 +9,9 @@ from dataclasses import dataclass
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.runtime.contract import AgentSessions
+from mlops_agents.agents.runtime.sessions import SessionManager
+from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
@@ -32,6 +35,8 @@ class Services:
     workspace: WorkspaceService
     catalog: AgentCatalog
     tools: ToolRegistry
+    agent_settings: AgentSettingsService
+    sessions: AgentSessions
 
 
 async def build_services(
@@ -59,6 +64,18 @@ async def build_services(
     providers = ProvidersService(databases, keystore, http)
     tools = default_registry()
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    agent_settings = AgentSettingsService(databases, providers, catalog)
+    sessions = SessionManager(
+        databases=databases,
+        workspace=workspace,
+        catalog=catalog,
+        tools=tools,
+        settings=agent_settings,
+        providers=providers,
+        http=http,
+        git=git,
+    )
+    stack.push_async_callback(sessions.close)
 
     return Services(
         settings=settings,
@@ -70,4 +87,6 @@ async def build_services(
         workspace=workspace,
         catalog=catalog,
         tools=tools,
+        agent_settings=agent_settings,
+        sessions=sessions,
     )
