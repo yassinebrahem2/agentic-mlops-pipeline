@@ -1,48 +1,14 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { PageRoute } from "@/app/routes";
-import { api } from "@/lib/api";
-import { queryClient } from "@/lib/query";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance } from "vitest";
 import { renderPage } from "@/test/render";
-import { route } from "./route";
-import * as streamModule from "./session/stream";
-import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "./session/stream";
-
-const testRoutes: PageRoute[] = [
-  route,
-  { path: "/", element: <div>Projects</div> },
-  { path: "/providers", element: <div>AI providers</div> },
-  { path: "/projects/:projectId/settings", element: <div>Project settings</div> },
-];
-
-class FakeStream implements StreamLike {
-  readyState = STREAM_OPEN;
-  onerror: ((event: Event) => void) | null = null;
-  listeners = new Map<string, (event: Event) => void>();
-
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      this.listeners.set(type, listener);
-    }
-  }
-
-  close = vi.fn(() => {
-    this.readyState = STREAM_CLOSED;
-  });
-
-  emitOpen(): void {
-    this.listeners.get("open")?.(new Event("open"));
-  }
-
-  emit(type: string, data: unknown, seq: number): void {
-    this.listeners.get(type)?.({
-      type,
-      data: JSON.stringify(data),
-      lastEventId: String(seq),
-    } as MessageEvent);
-  }
-}
+import {
+  type DefaultMockOverrides,
+  FakeStream,
+  setupAgentsOpenStreamMock,
+  setupDefaultMocks as createDefaultMocks,
+  testRoutes,
+} from "./testing";
 
 describe("AgentsPage", () => {
   let fakeStream: FakeStream;
@@ -51,14 +17,8 @@ describe("AgentsPage", () => {
   let openStreamSpy: MockInstance | undefined;
 
   beforeEach(() => {
-    queryClient.clear();
     fakeStream = new FakeStream();
-    openStreamSpy = vi.spyOn(streamModule, "openStream").mockImplementation(() => {
-      setTimeout(() => {
-        fakeStream.emitOpen();
-      }, 0);
-      return fakeStream;
-    });
+    openStreamSpy = setupAgentsOpenStreamMock(fakeStream);
   });
 
   afterEach(() => {
@@ -67,62 +27,10 @@ describe("AgentsPage", () => {
     openStreamSpy?.mockRestore();
   });
 
-  const setupDefaultMocks = (overrides?: {
-    projectStatus?: "ok" | "missing" | "empty" | "clone_failed";
-    statusDetail?: string | null;
-    modelProblem?: string | null;
-    busy?: boolean;
-    messages?: unknown[];
-    agents?: unknown[];
-  }) => {
-    getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
-      if (path === "/api/projects/{project_id}") {
-        return Promise.resolve({
-          data: {
-            id: "prj_1",
-            name: "Test Project",
-            status: overrides?.projectStatus ?? "ok",
-            status_detail: overrides?.statusDetail ?? null,
-            source: "local",
-            path: "/test",
-            last_opened: "2026-10-21T00:00:00Z",
-          },
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      if (path === "/api/projects/{project_id}/agents") {
-        return Promise.resolve({
-          data: overrides?.agents ?? [
-            {
-              name: "orchestrator",
-              display_name: "Orchestrator",
-              chat: true,
-              settings: {
-                model_problem: overrides?.modelProblem ?? null,
-              },
-            },
-          ],
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      if (path === "/api/projects/{project_id}/agents/{agent}/session") {
-        return Promise.resolve({
-          data: {
-            id: "s1",
-            agent: "orchestrator",
-            busy: overrides?.busy ?? false,
-            messages: overrides?.messages ?? [],
-            last_seq: 10,
-          },
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      return Promise.resolve({ data: null, response: new Response(null, { status: 404 }) });
-    });
-
-    postSpy = vi.spyOn(api, "POST").mockImplementation(() => {
-      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) });
-    });
+  const setupDefaultMocks = (overrides?: DefaultMockOverrides) => {
+    const mocks = createDefaultMocks(overrides);
+    getSpy = mocks.getSpy;
+    postSpy = mocks.postSpy;
   };
 
   it("renders a recorded turn with user message, closed tool step with file path, and markdown answer", async () => {

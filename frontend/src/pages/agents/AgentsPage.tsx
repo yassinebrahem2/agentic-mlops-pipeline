@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { useProject } from "@/lib/useProject";
+import { useProjectAgents } from "@/lib/useProjectAgents";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { useSession } from "./session/useSession";
@@ -13,31 +14,8 @@ export function AgentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const projectQuery = useQuery({
-    queryKey: ["projects", projectId],
-    queryFn: async () => {
-      if (!projectId) throw new Error("No projectId");
-      return unwrap(
-        await api.GET("/api/projects/{project_id}", {
-          params: { path: { project_id: projectId } },
-        }),
-      );
-    },
-    enabled: Boolean(projectId),
-  });
-
-  const agentsQuery = useQuery({
-    queryKey: ["projects", projectId, "agents"],
-    queryFn: async () => {
-      if (!projectId) throw new Error("No projectId");
-      return unwrap(
-        await api.GET("/api/projects/{project_id}/agents", {
-          params: { path: { project_id: projectId } },
-        }),
-      );
-    },
-    enabled: Boolean(projectId),
-  });
+  const projectQuery = useProject(projectId);
+  const agentsQuery = useProjectAgents(projectId);
 
   const chatAgents = (agentsQuery.data ?? []).filter((agent) => agent.chat);
   const agentParam = searchParams.get("agent");
