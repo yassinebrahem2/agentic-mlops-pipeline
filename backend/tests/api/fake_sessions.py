@@ -122,6 +122,7 @@ class FakeSessions(AgentSessions):
         self.subscriptions: list[FakeSubscription] = []
         self.subscribe_calls: list[tuple[str, str, int | None]] = []
         self.live_queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        self.subscribed = asyncio.Event()
 
     def _check_agent(self, agent: str) -> None:
         if agent in self.unknown_agents:
@@ -180,6 +181,7 @@ class FakeSessions(AgentSessions):
         self.subscribe_calls.append((project_id, agent, after_seq))
         sub = FakeSubscription(self.scripted_events.copy(), self.live_queue)
         self.subscriptions.append(sub)
+        self.subscribed.set()
         return sub
 
     async def close_project(self, project_id: str) -> None:
