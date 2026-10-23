@@ -40,6 +40,44 @@ class TurnExecutor:
         self._caller = caller
         self._builder = builder
 
+    async def record_failure(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+        text: str,
+        *,
+        parts: list[Part] | None = None,
+    ) -> None:
+        """Leave a failed turn's visible end state: its message complete, plus a system message.
+
+        The one owner of that state; the worker calls it too when an error escapes `run`.
+        `parts=None` keeps the parts already stored for the message.
+        """
+        async with lock:
+            for message in await self._store.messages(project_id, session_id):
+                if (
+                    message.turn_id == turn_id
+                    and message.author_kind == "agent"
+                    and message.status == "streaming"
+                ):
+                    updated = await self._store.update_message(
+                        project_id, message.id, parts=parts, status="complete"
+                    )
+                    await sink.message(updated, created=False)
+            system_message = await self._store.add_message(
+                project_id,
+                session_id,
+                turn_id=turn_id,
+                author_kind="system",
+                author_name="system",
+                parts=[TextPart(type="text", text=text)],
+                status="complete",
+            )
+            await sink.message(system_message, created=True)
+
     async def run(
         self,
         project_id: str,
@@ -85,8 +123,9 @@ class TurnExecutor:
                 await sink.message(message, created=False)
 
         async def fail(text: str) -> tuple[TurnEnd, str | None]:
-            await finish_agent_message("complete")
-            await add_message("system", "system", [TextPart(type="text", text=text)], "complete")
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, text, parts=current_parts
+            )
             return ("failed", text)
 
         try:

@@ -258,10 +258,12 @@ class SessionManager(AgentSessions):
                         raise
                     except Exception:
                         logger.exception("Turn %s failed outside the executor", turn_id)
+                        await self._executor.record_failure(
+                            project_id, session_id, turn_id, hub, lock, UNEXPECTED_FAILURE_TEXT
+                        )
                         await self._store.set_turn(
                             project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT
                         )
-                        await self._store.mark_interrupted(project_id, turn_id)
                         await hub.turn_ended(
                             turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT
                         )

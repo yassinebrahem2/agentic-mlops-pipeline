@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from mlops_agents.agents.runtime.contract import (
+    MessageCreated,
     MessageUpdated,
     MessageView,
     TextDelta,
@@ -240,6 +241,16 @@ async def test_error_escaping_the_executor_fails_the_turn_and_the_worker_goes_on
         nonlocal calls
         calls += 1
         if calls == 1:
+            session_id, turn_id = args[1], args[3]
+            await env.store.add_message(
+                project_id,
+                session_id,
+                turn_id=turn_id,
+                author_kind="agent",
+                author_name="orchestrator",
+                parts=[],
+                status="streaming",
+            )
             raise RuntimeError("boom with details")
         return await orig_run(self, *args, **kwargs)
 
@@ -248,8 +259,27 @@ async def test_error_escaping_the_executor_fails_the_turn_and_the_worker_goes_on
     stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
     await manager.send(project_id, "orchestrator", "Turn 1")
     await manager.send(project_id, "orchestrator", "Turn 2")
-    first = (await collect_until_turn_ended(stream))[-1]
+    first_events = await collect_until_turn_ended(stream)
+    first = first_events[-1]
     second = (await collect_until_turn_ended(stream))[-1]
+
+    # The turn ends with the same visible state as a failure inside the executor.
+    created = [e for e in first_events if isinstance(e, MessageCreated)]
+    system_created = [e for e in created if e.data.message.author_kind == "system"]
+    assert [m.data.message.parts for m in system_created] == [
+        [TextPart(type="text", text=UNEXPECTED_FAILURE_TEXT)]
+    ]
+    agent_updates = [
+        e
+        for e in first_events
+        if isinstance(e, MessageUpdated) and e.data.message.author_kind == "agent"
+    ]
+    assert [e.data.message.status for e in agent_updates] == ["complete"]
+    stored = (await manager.get(project_id, "orchestrator")).messages
+    assert {m.author_kind: m.status for m in stored if m.turn_id == first.data.turn_id} == {
+        "agent": "complete",
+        "system": "complete",
+    }
 
     assert isinstance(first, TurnEnded)
     assert first.data.status == "failed"
