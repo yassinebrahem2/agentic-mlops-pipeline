@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 
 from mlops_agents.agents.runtime.contract import (
@@ -64,38 +64,23 @@ async def parse_sse_events(lines: AsyncIterator[str]) -> AsyncIterator[SseMessag
 
 
 class FakeSubscription:
-    """Subscription yielding scripted events first, then live events from a queue."""
+    """Scripted events first, then live events from a queue; records when it is closed."""
 
-    def __init__(
-        self,
-        events: list[StreamEvent],
-        queue: asyncio.Queue[StreamEvent | None],
-    ) -> None:
+    def __init__(self, events: list[StreamEvent], queue: asyncio.Queue[StreamEvent]) -> None:
         self.events = list(events)
         self.queue = queue
         self.closed = False
         self.closed_event = asyncio.Event()
-        self._index = 0
 
-    def __aiter__(self) -> AsyncIterator[StreamEvent]:
-        return self
-
-    async def __anext__(self) -> StreamEvent:
-        if self.closed:
-            raise StopAsyncIteration
-        if self._index < len(self.events):
-            event = self.events[self._index]
-            self._index += 1
-            return event
-        item = await self.queue.get()
-        if item is None or self.closed:
-            raise StopAsyncIteration
-        return item
-
-    async def aclose(self) -> None:
-        self.closed = True
-        self.closed_event.set()
-        self.queue.put_nowait(None)
+    async def stream(self) -> AsyncGenerator[StreamEvent, None]:
+        try:
+            for event in self.events:
+                yield event
+            while True:
+                yield await self.queue.get()
+        finally:
+            self.closed = True
+            self.closed_event.set()
 
 
 class FakeSessions(AgentSessions):
@@ -121,7 +106,7 @@ class FakeSessions(AgentSessions):
         self.sent_messages: list[tuple[str, str, str]] = []
         self.subscriptions: list[FakeSubscription] = []
         self.subscribe_calls: list[tuple[str, str, int | None]] = []
-        self.live_queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        self.live_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self.subscribed = asyncio.Event()
 
     def _check_agent(self, agent: str) -> None:
@@ -176,13 +161,13 @@ class FakeSessions(AgentSessions):
 
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncGenerator[StreamEvent, None]:
         self._check_agent(agent)
         self.subscribe_calls.append((project_id, agent, after_seq))
         sub = FakeSubscription(self.scripted_events.copy(), self.live_queue)
         self.subscriptions.append(sub)
         self.subscribed.set()
-        return sub
+        return sub.stream()
 
     async def close_project(self, project_id: str) -> None:
         self.closed_projects.append(project_id)

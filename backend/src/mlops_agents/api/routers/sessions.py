@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -118,11 +117,7 @@ async def stream_session(
                     data=event.data.model_dump_json(),
                 )
         finally:
-            aclose = getattr(subscription, "aclose", None)
-            if callable(aclose):
-                close_result = aclose()
-                if inspect.isawaitable(close_result):
-                    await close_result
+            await subscription.aclose()
 
     return _EventSourceResponse(
         event_generator(),

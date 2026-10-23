@@ -21,6 +21,7 @@ from mlops_agents.agents.runtime.contract import (
     TurnEndedData,
 )
 from mlops_agents.api.routers import sessions as sessions_module
+from tests.agents.runtime.hub_spy import watch_hub_subscriptions
 from tests.api.conftest import add_local_project, live_server, signed_in
 from tests.api.fake_sessions import FakeSessions, SseMessage, parse_sse_events
 
@@ -206,3 +207,24 @@ async def test_live_app_shuts_down_within_5s_with_open_stream(
             async with asyncio.timeout(5.0):
                 await live.stop()
             assert time.monotonic() - started < 5.0
+
+
+async def test_client_disconnect_closes_the_hub_stream(
+    live_app: FastAPI,
+    live_client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = await add_local_project(live_app, tmp_path, git_env)
+    closed = watch_hub_subscriptions(monkeypatch)
+
+    async with live_client.stream(
+        "GET", f"/api/projects/{project_id}/agents/orchestrator/session/stream"
+    ) as response:
+        async for msg in parse_sse_events(response.aiter_lines()):
+            if msg.event == "resync":
+                break
+        assert not closed.is_set()
+
+    await asyncio.wait_for(closed.wait(), 2.0)
