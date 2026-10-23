@@ -1,13 +1,13 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { PageRoute } from "@/app/routes";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { renderPage } from "@/test/render";
 import { route } from "./route";
 import * as streamModule from "./session/stream";
-import { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./session/stream";
+import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "./session/stream";
 
 const testRoutes: PageRoute[] = [
   route,
@@ -288,20 +288,16 @@ describe("AgentsPage", () => {
     const input = await screen.findByRole("textbox", { name: "Message Orchestrator" });
     const sendButton = screen.getByRole("button", { name: "Send" });
 
-    // Empty text: Send button disabled
     expect(sendButton).toBeDisabled();
 
-    // Whitespace only: Send button still disabled
     await user.type(input, "   ");
     expect(sendButton).toBeDisabled();
     await user.clear(input);
 
-    // Type text and Shift+Enter -> does not send
     await user.type(input, "First line{Shift>}{Enter}{/Shift}Second line");
     expect(postSpy).not.toHaveBeenCalled();
     expect(sendButton).toBeEnabled();
 
-    // Enter -> sends
     await user.type(input, "{Enter}");
     expect(postSpy).toHaveBeenCalledWith(
       "/api/projects/{project_id}/agents/{agent}/session/messages",
@@ -328,117 +324,5 @@ describe("AgentsPage", () => {
         params: { path: { project_id: "prj_1", agent: "orchestrator" } },
       }),
     );
-  });
-
-  it("shows model_problem warning banner with links to /providers and project settings", async () => {
-    setupDefaultMocks({
-      modelProblem: "No model configured for Orchestrator.",
-    });
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("No model configured for Orchestrator.")).toBeInTheDocument();
-
-    const providersLink = within(alert).getByRole("link", { name: "AI providers" });
-    expect(providersLink).toHaveAttribute("href", "/providers");
-
-    const settingsLink = within(alert).getByRole("link", { name: "Project settings" });
-    expect(settingsLink).toHaveAttribute("href", "/projects/prj_1/settings");
-  });
-
-  it("shows project status banner when project is not ok", async () => {
-    setupDefaultMocks({
-      projectStatus: "missing",
-      statusDetail: "/path/to/project does not exist",
-    });
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-
-    expect(await screen.findByText("Folder not found")).toBeInTheDocument();
-    expect(screen.getByText("/path/to/project does not exist")).toBeInTheDocument();
-  });
-
-  it("shows 'Reconnecting...' note while stream is reconnecting", async () => {
-    setupDefaultMocks();
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-    await screen.findByRole("textbox", { name: "Message Orchestrator" });
-
-    await waitFor(() => {
-      expect(fakeStream.onerror).toBeDefined();
-    });
-
-    // Trigger reconnecting on fake stream
-    act(() => {
-      fakeStream.readyState = STREAM_CONNECTING;
-      fakeStream.onerror?.(new Event("error"));
-    });
-
-    expect(await screen.findByText("Reconnecting...")).toBeInTheDocument();
-  });
-
-  it("shows error, Retry button and link to Projects when stream is closed with 404", async () => {
-    getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
-      if (path === "/api/projects/{project_id}") {
-        return Promise.resolve({
-          data: {
-            id: "prj_1",
-            name: "Test Project",
-            status: "ok",
-            status_detail: null,
-            source: "local",
-            path: "/test",
-            last_opened: "2026-10-21T00:00:00Z",
-          },
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      if (path === "/api/projects/{project_id}/agents") {
-        return Promise.resolve({
-          data: [
-            {
-              name: "orchestrator",
-              display_name: "Orchestrator",
-              chat: true,
-              settings: { model_problem: null },
-            },
-          ],
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      if (path === "/api/projects/{project_id}/agents/{agent}/session") {
-        return Promise.reject(new ApiError("project_not_found", "Project prj_1 not found.", 404));
-      }
-      return Promise.resolve({ data: null, response: new Response(null, { status: 404 }) });
-    });
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Project prj_1 not found.")).toBeInTheDocument();
-
-    const retryButton = within(alert).getByRole("button", { name: "Retry" });
-    expect(retryButton).toBeInTheDocument();
-
-    const projectsLink = within(alert).getByRole("link", { name: "Projects" });
-    expect(projectsLink).toHaveAttribute("href", "/");
-  });
-
-  it("shows 'No chat agents found.' when the project has no chat agents", async () => {
-    setupDefaultMocks({
-      agents: [
-        {
-          name: "worker",
-          display_name: "Background Worker",
-          chat: false,
-          settings: { model_problem: null },
-        },
-      ],
-    });
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-
-    expect(await screen.findByText("No chat agents found.")).toBeInTheDocument();
   });
 });

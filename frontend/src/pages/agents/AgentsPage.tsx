@@ -58,6 +58,23 @@ export function AgentsPage() {
     );
   }
 
+  if (agentsQuery.isError) {
+    return (
+      <div className="p-8">
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Failed to load agents</AlertTitle>
+          <AlertDescription className="mt-2 flex flex-col items-start gap-2">
+            <span>{errorText(agentsQuery.error)}</span>
+            <Button variant="outline" size="sm" onClick={() => void agentsQuery.refetch()}>
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
   if (chatAgents.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">

@@ -1,7 +1,7 @@
-import { parseEvent, type MessageView } from "./events";
+import type { MessageView, StreamEventData } from "./events";
 
 export type SessionState = { messages: MessageView[]; busy: boolean; lastSeq: number };
-export type SequencedEvent = { seq: number; type: string; data: unknown };
+export type SequencedEvent = { seq: number } & StreamEventData;
 
 function queued(messages: MessageView[]): boolean {
   return messages.some((message) => message.status === "queued");
@@ -17,60 +17,58 @@ function withMessage(
 
 export function applyEvent(state: SessionState, event: SequencedEvent): SessionState {
   if (event.seq <= state.lastSeq) return state;
-  const data = parseEvent(event.type, event.data);
-  if (!data) return state;
   let messages = state.messages;
   let busy = state.busy;
-  switch (data.type) {
+  switch (event.type) {
     case "message.created":
-      if (!messages.some((message) => message.id === data.message.id)) {
-        messages = [...messages, data.message];
+      if (!messages.some((message) => message.id === event.message.id)) {
+        messages = [...messages, event.message];
       }
-      busy = busy || data.message.author_kind === "user";
+      busy = busy || event.message.author_kind === "user";
       break;
     case "text.delta":
-      messages = withMessage(messages, data.message_id, (message) => {
+      messages = withMessage(messages, event.message_id, (message) => {
         const parts = [...message.parts];
         const last = parts.at(-1);
         if (last?.type === "text")
-          parts[parts.length - 1] = { ...last, text: last.text + data.text };
-        else parts.push({ type: "text", text: data.text });
+          parts[parts.length - 1] = { ...last, text: last.text + event.text };
+        else parts.push({ type: "text", text: event.text });
         return { ...message, parts, status: "streaming" };
       });
       break;
     case "tool.started":
-      messages = withMessage(messages, data.message_id, (message) => ({
+      messages = withMessage(messages, event.message_id, (message) => ({
         ...message,
         parts: [
           ...message.parts,
           {
             type: "tool_call",
-            id: data.tool_call_id,
-            name: data.name,
-            input: data.input,
+            id: event.tool_call_id,
+            name: event.name,
+            input: event.input,
           },
         ],
         status: "streaming",
       }));
       break;
     case "tool.finished":
-      messages = withMessage(messages, data.message_id, (message) => ({
+      messages = withMessage(messages, event.message_id, (message) => ({
         ...message,
         parts: [
           ...message.parts,
           {
             type: "tool_result",
-            tool_call_id: data.tool_call_id,
-            content: data.content,
-            is_error: data.is_error,
+            tool_call_id: event.tool_call_id,
+            content: event.content,
+            is_error: event.is_error,
           },
         ],
       }));
       break;
     case "message.updated":
-      messages = messages.some((message) => message.id === data.message.id)
-        ? messages.map((message) => (message.id === data.message.id ? data.message : message))
-        : [...messages, data.message];
+      messages = messages.some((message) => message.id === event.message.id)
+        ? messages.map((message) => (message.id === event.message.id ? event.message : message))
+        : [...messages, event.message];
       break;
     case "turn.ended":
       busy = queued(messages);

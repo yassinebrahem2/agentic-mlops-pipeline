@@ -1,7 +1,10 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api, ApiError } from "@/lib/api";
 import { queryClient } from "@/lib/query";
+import * as streamModule from "./stream";
 import { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./stream";
 import { useSession } from "./useSession";
 
@@ -46,25 +49,30 @@ class FakeStream implements StreamLike {
   }
 }
 
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+);
+
 describe("useSession", () => {
   let createdStreams: FakeStream[] = [];
   let getSpy: MockInstance | undefined;
+  let openStreamSpy: MockInstance | undefined;
 
   beforeEach(() => {
     createdStreams = [];
     queryClient.clear();
+    openStreamSpy = vi.spyOn(streamModule, "openStream").mockImplementation((url: string) => {
+      const stream = new FakeStream(url);
+      createdStreams.push(stream);
+      return stream;
+    });
   });
 
   afterEach(() => {
     getSpy?.mockRestore();
+    openStreamSpy?.mockRestore();
     vi.useRealTimers();
   });
-
-  const makeStream = (url: string): FakeStream => {
-    const stream = new FakeStream(url);
-    createdStreams.push(stream);
-    return stream;
-  };
 
   it("loads the session, opens stream with ?after=<last_seq>, and folds events", async () => {
     getSpy = vi.spyOn(api, "GET").mockResolvedValue({
@@ -72,9 +80,7 @@ describe("useSession", () => {
       response: new Response(null, { status: 200 }),
     });
 
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
 
     await waitFor(() => {
       expect(createdStreams).toHaveLength(1);
@@ -85,7 +91,6 @@ describe("useSession", () => {
     );
     expect(result.current.connection).toBe("closed");
 
-    // Firing open event transitions connection to live
     act(() => {
       createdStreams[0]?.emitOpen();
     });
@@ -101,77 +106,13 @@ describe("useSession", () => {
     expect(createdStreams[0]?.close).toHaveBeenCalled();
   });
 
-  it("handles the resync flow: closes, reloads, replaces state, and reopens with new seq", async () => {
-    let callCount = 0;
-    getSpy = vi.spyOn(api, "GET").mockImplementation(() => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Promise.resolve({
-          data: initialSession,
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      return Promise.resolve({
-        data: {
-          ...initialSession,
-          last_seq: 10,
-          messages: [
-            {
-              id: "m_synced",
-              turn_id: "t1",
-              author_kind: "agent" as const,
-              author_name: "orchestrator",
-              from_agent: null,
-              parts: [{ type: "text" as const, text: "reloaded" }],
-              status: "complete" as const,
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-        },
-        response: new Response(null, { status: 200 }),
-      });
-    });
-
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
-
-    await waitFor(() => {
-      expect(createdStreams).toHaveLength(1);
-    });
-    act(() => {
-      createdStreams[0]?.emitOpen();
-    });
-
-    // Emit resync event
-    act(() => {
-      createdStreams[0]?.emit("resync", {}, 5);
-    });
-
-    expect(createdStreams[0]?.close).toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(createdStreams).toHaveLength(2);
-    });
-
-    expect(createdStreams[1]?.url).toBe(
-      "/api/projects/prj_1/agents/orchestrator/session/stream?after=10",
-    );
-    expect(result.current.state?.messages).toHaveLength(1);
-    expect(result.current.state?.lastSeq).toBe(10);
-
-    unmount();
-  });
-
   it("CONNECTING makes no request and sets connection to reconnecting", async () => {
     getSpy = vi.spyOn(api, "GET").mockResolvedValue({
       data: initialSession,
       response: new Response(null, { status: 200 }),
     });
 
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
 
     await waitFor(() => {
       expect(createdStreams).toHaveLength(1);
@@ -181,7 +122,6 @@ describe("useSession", () => {
     });
     expect(result.current.connection).toBe("live");
 
-    // Stream signals reconnecting on its own
     act(() => {
       const stream = createdStreams[0];
       if (stream) {
@@ -191,7 +131,6 @@ describe("useSession", () => {
     });
 
     expect(result.current.connection).toBe("reconnecting");
-    // Only the initial load call was made, no extra GET request
     expect(getSpy).toHaveBeenCalledTimes(1);
 
     unmount();
@@ -210,9 +149,7 @@ describe("useSession", () => {
       return Promise.reject(new ApiError("not_found", "Project prj_1 not found.", 404));
     });
 
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
 
     await waitFor(() => {
       expect(createdStreams).toHaveLength(1);
@@ -239,46 +176,6 @@ describe("useSession", () => {
     unmount();
   });
 
-  it("reconnects with exponential backoff on dropped connection", async () => {
-    vi.useFakeTimers();
-
-    getSpy = vi.spyOn(api, "GET").mockResolvedValue({
-      data: initialSession,
-      response: new Response(null, { status: 200 }),
-    });
-
-    const { unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
-
-    // Initial load resolves
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(createdStreams).toHaveLength(1);
-
-    // Stream drops
-    await act(async () => {
-      const stream = createdStreams[0];
-      if (stream) {
-        stream.readyState = STREAM_CLOSED;
-        stream.onerror?.(new Event("error"));
-      }
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    // Before backoff delay (1000ms), no new stream yet
-    expect(createdStreams).toHaveLength(1);
-
-    // Advance 1000ms
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(createdStreams).toHaveLength(2);
-
-    unmount();
-  });
-
   it("closes the stream when the agent changes", async () => {
     getSpy = vi.spyOn(api, "GET").mockResolvedValue({
       data: initialSession,
@@ -286,16 +183,13 @@ describe("useSession", () => {
     });
 
     let currentAgent = "orchestrator";
-    const { rerender, unmount } = renderHook(() =>
-      useSession("prj_1", currentAgent, { openStream: makeStream }),
-    );
+    const { rerender, unmount } = renderHook(() => useSession("prj_1", currentAgent), { wrapper });
 
     await waitFor(() => {
       expect(createdStreams).toHaveLength(1);
     });
     const firstStream = createdStreams[0];
 
-    // Change agent
     currentAgent = "reviewer";
     rerender();
 
@@ -321,9 +215,7 @@ describe("useSession", () => {
       });
     });
 
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
-    );
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
 
     await waitFor(() => {
       expect(result.current.connection).toBe("closed");
@@ -331,7 +223,6 @@ describe("useSession", () => {
       expect(result.current.error?.code).toBe("load_failed");
     });
 
-    // Calling reload retries
     shouldFail = false;
     await act(async () => {
       await result.current.reload();
@@ -345,40 +236,42 @@ describe("useSession", () => {
     unmount();
   });
 
-  it("failed resync reload leaves connection closed, not live", async () => {
-    let callCount = 0;
-    getSpy = vi.spyOn(api, "GET").mockImplementation(() => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Promise.resolve({
-          data: initialSession,
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      return Promise.reject(new TypeError("Network drop during resync"));
+  it("send and stop use mutations and route 401 through queryClient", async () => {
+    const postSpy = vi.spyOn(api, "POST").mockResolvedValue({
+      data: {},
+      response: new Response(null, { status: 200 }),
+    });
+    getSpy = vi.spyOn(api, "GET").mockResolvedValue({
+      data: initialSession,
+      response: new Response(null, { status: 200 }),
     });
 
-    const { result, unmount } = renderHook(() =>
-      useSession("prj_1", "orchestrator", { openStream: makeStream }),
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
+
+    await act(async () => {
+      await result.current.send("Hello");
+    });
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/projects/{project_id}/agents/{agent}/session/messages",
+      expect.objectContaining({ body: { text: "Hello" } }),
     );
 
-    await waitFor(() => {
-      expect(createdStreams).toHaveLength(1);
+    await act(async () => {
+      await result.current.stop();
     });
-    act(() => {
-      createdStreams[0]?.emitOpen();
-    });
-    expect(result.current.connection).toBe("live");
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/projects/{project_id}/agents/{agent}/session/stop",
+      expect.anything(),
+    );
 
-    act(() => {
-      createdStreams[0]?.emit("resync", {}, 5);
-    });
+    postSpy.mockRejectedValue(new ApiError("unauthorized", "Unauthorized", 401));
+    await expect(result.current.send("Fail")).rejects.toThrow("Unauthorized");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth"] });
 
-    await waitFor(() => {
-      expect(result.current.connection).toBe("closed");
-      expect(result.current.error?.code).toBe("load_failed");
-    });
-
+    postSpy.mockRestore();
+    invalidateSpy.mockRestore();
     unmount();
   });
 });

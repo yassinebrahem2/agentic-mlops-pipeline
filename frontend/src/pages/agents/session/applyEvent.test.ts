@@ -20,13 +20,13 @@ const createMessage = (
 });
 
 describe("parseEvent", () => {
-  it("parses valid event payloads from string or object", () => {
+  it("parses valid event payloads by SSE event name directly into generated schema types", () => {
     const msg = createMessage("m1", "agent", [{ type: "text", text: "hello" }]);
     expect(parseEvent("message.created", JSON.stringify({ message: msg }))).toEqual({
       type: "message.created",
       message: msg,
     });
-    expect(parseEvent("message.updated", { message: msg })).toEqual({
+    expect(parseEvent("message.updated", JSON.stringify({ message: msg }))).toEqual({
       type: "message.updated",
       message: msg,
     });
@@ -80,27 +80,11 @@ describe("parseEvent", () => {
     expect(parseEvent("resync", "{}")).toEqual({ type: "resync" });
   });
 
-  it("rejects malformed data and invalid shapes", () => {
+  it("returns null on malformed JSON or unknown event name", () => {
     expect(parseEvent("text.delta", "{not json")).toBeNull();
     expect(parseEvent("text.delta", JSON.stringify("string value"))).toBeNull();
-    expect(parseEvent("text.delta", JSON.stringify({ message_id: 123, text: "hi" }))).toBeNull();
-    expect(parseEvent("text.delta", JSON.stringify({ message_id: "m1" }))).toBeNull();
-    expect(
-      parseEvent("tool.started", JSON.stringify({ message_id: "m1", name: "Read" })),
-    ).toBeNull();
-    expect(
-      parseEvent(
-        "tool.started",
-        JSON.stringify({ message_id: "m1", id: "t1", name: "Read", input: {} }),
-      ),
-    ).toBeNull();
-    expect(
-      parseEvent("tool.finished", JSON.stringify({ message_id: "m1", tool_call_id: "t1" })),
-    ).toBeNull();
-    expect(
-      parseEvent("turn.ended", JSON.stringify({ turn_id: "t1", status: "invalid_status" })),
-    ).toBeNull();
-    expect(parseEvent("message.created", JSON.stringify({ message: { id: 123 } }))).toBeNull();
+    expect(parseEvent("text.delta", JSON.stringify(123))).toBeNull();
+    expect(parseEvent("text.delta", "null")).toBeNull();
     expect(parseEvent("unknown.event", JSON.stringify({}))).toBeNull();
   });
 });
@@ -113,9 +97,13 @@ describe("applyEvent", () => {
       lastSeq: sessionFold.start.last_seq,
     };
 
-    const events: { seq: number; type: string; data: unknown }[] = sessionFold.events;
+    const events = sessionFold.events;
     for (const event of events) {
-      state = applyEvent(state, event);
+      const parsed = parseEvent(event.type, JSON.stringify(event.data));
+      expect(parsed).not.toBeNull();
+      if (!parsed) continue;
+
+      state = applyEvent(state, { seq: event.seq, ...parsed });
       const seqKey = String(event.seq);
       if (seqKey in sessionFold.after_event) {
         const intermediate =
@@ -133,8 +121,12 @@ describe("applyEvent", () => {
     const lastEvent = events[events.length - 1];
     expect(lastEvent).toBeDefined();
     if (lastEvent) {
-      const replayed = applyEvent(state, lastEvent);
-      expect(replayed).toBe(state);
+      const parsed = parseEvent(lastEvent.type, JSON.stringify(lastEvent.data));
+      expect(parsed).not.toBeNull();
+      if (parsed) {
+        const replayed = applyEvent(state, { seq: lastEvent.seq, ...parsed });
+        expect(replayed).toBe(state);
+      }
     }
   });
 
@@ -144,27 +136,35 @@ describe("applyEvent", () => {
     state = applyEvent(state, {
       seq: 1,
       type: "message.created",
-      data: { message: agentMsg },
+      message: agentMsg,
     });
     state = applyEvent(state, {
       seq: 2,
       type: "text.delta",
-      data: { message_id: "a1", text: "Before tool. " },
+      message_id: "a1",
+      text: "Before tool. ",
     });
     state = applyEvent(state, {
       seq: 3,
       type: "tool.started",
-      data: { message_id: "a1", tool_call_id: "t1", name: "Read", input: { path: "a.txt" } },
+      message_id: "a1",
+      tool_call_id: "t1",
+      name: "Read",
+      input: { path: "a.txt" },
     });
     state = applyEvent(state, {
       seq: 4,
       type: "tool.finished",
-      data: { message_id: "a1", tool_call_id: "t1", content: "data", is_error: false },
+      message_id: "a1",
+      tool_call_id: "t1",
+      content: "data",
+      is_error: false,
     });
     state = applyEvent(state, {
       seq: 5,
       type: "text.delta",
-      data: { message_id: "a1", text: "After tool." },
+      message_id: "a1",
+      text: "After tool.",
     });
 
     const msg = state.messages[0];
@@ -183,7 +183,7 @@ describe("applyEvent", () => {
     state = applyEvent(state, {
       seq: 1,
       type: "message.created",
-      data: { message: userMsg },
+      message: userMsg,
     });
     expect(state.busy).toBe(true);
 
@@ -191,14 +191,16 @@ describe("applyEvent", () => {
     state = applyEvent(state, {
       seq: 2,
       type: "message.created",
-      data: { message: queuedMsg },
+      message: queuedMsg,
     });
     expect(state.busy).toBe(true);
 
     state = applyEvent(state, {
       seq: 3,
       type: "turn.ended",
-      data: { turn_id: "t1", status: "done", error: null },
+      turn_id: "t1",
+      status: "done",
+      error: null,
     });
     expect(state.busy).toBe(true);
 
@@ -207,17 +209,19 @@ describe("applyEvent", () => {
     state = applyEvent(state, {
       seq: 4,
       type: "message.updated",
-      data: { message: completeMsg },
+      message: completeMsg,
     });
     state = applyEvent(state, {
       seq: 5,
       type: "message.updated",
-      data: { message: completeMsg2 },
+      message: completeMsg2,
     });
     state = applyEvent(state, {
       seq: 6,
       type: "turn.ended",
-      data: { turn_id: "t1", status: "done", error: null },
+      turn_id: "t1",
+      status: "done",
+      error: null,
     });
     expect(state.busy).toBe(false);
   });

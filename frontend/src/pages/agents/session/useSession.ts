@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, unwrap } from "@/lib/api";
 import { queryClient } from "@/lib/query";
@@ -24,28 +25,38 @@ export type UseSessionResult = {
   reload(): Promise<void>;
 };
 
-export function useSession(
-  projectId: string,
-  agent: string,
-  options?: { openStream?: (url: string) => StreamLike },
-): UseSessionResult {
+export function useSession(projectId: string, agent: string): UseSessionResult {
   const [state, setState] = useState<SessionState>();
   const [error, setError] = useState<ApiError>();
   const [connection, setConnection] = useState<"live" | "reconnecting" | "closed">("closed");
 
   const streamRef = useRef<StreamLike | undefined>(undefined);
   const retryRef = useRef(0);
-  const streamErrorsRef = useRef(0);
   const stateRef = useRef<SessionState | undefined>(undefined);
-  const open = options?.openStream ?? openStream;
-  const openRef = useRef(open);
-  openRef.current = open;
 
   const reloadRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
+  const sendMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/messages", {
+        params: { path: { project_id: projectId, agent } },
+        body: { text },
+      });
+      unwrap(result);
+    },
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/stop", {
+        params: { path: { project_id: projectId, agent } },
+      });
+      unwrap(result);
+    },
+  });
+
   useEffect(() => {
     retryRef.current = 0;
-    streamErrorsRef.current = 0;
     stateRef.current = undefined;
     setState(undefined);
     setError(undefined);
@@ -118,6 +129,19 @@ export function useSession(
       }, delay);
     };
 
+    const handleStreamError = () => {
+      close();
+      setConnection("reconnecting");
+      void load().then((result) => {
+        if (disposed) return;
+        if (result.error?.status === 404 || result.error?.status === 401) {
+          setConnection("closed");
+          return;
+        }
+        schedule();
+      });
+    };
+
     const connect = async (reloadSession = false) => {
       const loaded = reloadSession
         ? (await load()).state
@@ -127,7 +151,7 @@ export function useSession(
       close();
 
       const url = `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agent)}/session/stream?after=${String(loaded.lastSeq)}`;
-      const stream = openRef.current(url);
+      const stream = openStream(url);
       streamRef.current = stream;
 
       stream.addEventListener("open", () => {
@@ -143,7 +167,7 @@ export function useSession(
         const seq = Number(message.lastEventId);
 
         if (!parsed || !Number.isSafeInteger(seq)) {
-          streamErrorsRef.current += 1;
+          handleStreamError();
           return;
         }
 
@@ -166,13 +190,12 @@ export function useSession(
           return;
         }
 
-        setState((current) => {
-          if (!current) return current;
-          const next = applyEvent(current, { seq, type: parsed.type, data: parsed });
-          stateRef.current = next;
-          queryClient.setQueryData(queryKey, next);
-          return next;
-        });
+        const current = stateRef.current;
+        if (!current) return;
+        const next = applyEvent(current, { seq, ...parsed });
+        stateRef.current = next;
+        queryClient.setQueryData(queryKey, next);
+        setState(next);
       };
 
       for (const name of eventNames) {
@@ -185,17 +208,7 @@ export function useSession(
           setConnection("reconnecting");
           return;
         }
-
-        close();
-        setConnection("reconnecting");
-        void load().then((result) => {
-          if (disposed) return;
-          if (result.error?.status === 404 || result.error?.status === 401) {
-            setConnection("closed");
-            return;
-          }
-          schedule();
-        });
+        handleStreamError();
       };
     };
 
@@ -224,21 +237,14 @@ export function useSession(
 
   const send = useCallback(
     async (text: string) => {
-      const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/messages", {
-        params: { path: { project_id: projectId, agent } },
-        body: { text },
-      });
-      unwrap(result);
+      await sendMutation.mutateAsync(text);
     },
-    [projectId, agent],
+    [sendMutation],
   );
 
   const stop = useCallback(async () => {
-    const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/stop", {
-      params: { path: { project_id: projectId, agent } },
-    });
-    unwrap(result);
-  }, [projectId, agent]);
+    await stopMutation.mutateAsync();
+  }, [stopMutation]);
 
   const reload = useCallback(async () => {
     await reloadRef.current();

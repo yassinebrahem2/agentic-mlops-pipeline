@@ -1,11 +1,10 @@
 import { Navigate, useOutletContext, useParams } from "react-router";
-import { pageRoutes, type PageRoute } from "@/app/routes";
+import type { PageRoute } from "@/app/routes";
 import { firstProjectPath } from "./firstProjectPath";
 
 export function ProjectHome() {
   const { projectId } = useParams<{ projectId: string }>();
-  const contextRoutes = useOutletContext<PageRoute[] | undefined>();
-  const routes = contextRoutes ?? pageRoutes;
+  const routes = useOutletContext<PageRoute[]>();
 
   const targetPath = firstProjectPath(routes, projectId ?? "");
   if (!targetPath) {
