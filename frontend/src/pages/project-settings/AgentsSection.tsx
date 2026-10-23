@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { api, errorText, unwrap } from "@/lib/api";
 import { hostedModelWarning } from "@/lib/models";
 import { useModels } from "@/lib/useModels";
+import { projectAgentsKey, useProjectAgents } from "@/lib/useProjectAgents";
 import { useProviders } from "@/lib/useProviders";
 
 type Agent = components["schemas"]["AgentInfo"];
@@ -14,15 +15,7 @@ type Model = components["schemas"]["ModelEntry"];
 type Provider = components["schemas"]["Provider"];
 
 export function AgentsSection({ projectId }: { projectId: string }) {
-  const agents = useQuery({
-    queryKey: ["projects", projectId, "agents"],
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/api/projects/{project_id}/agents", {
-          params: { path: { project_id: projectId } },
-        }),
-      ),
-  });
+  const agents = useProjectAgents(projectId);
   const models = useModels();
   const providers = useProviders();
   return (
@@ -75,10 +68,10 @@ function AgentRow({
   const effectiveModel = models.find((model) => model.address === settings.effective_model);
   const provider = providers.find((provider) => provider.name === effectiveModel?.provider_name);
   const updateAgent = (updated: Agent) => {
-    queryClient.setQueryData<Agent[]>(["projects", projectId, "agents"], (current) =>
+    queryClient.setQueryData<Agent[]>(projectAgentsKey(projectId), (current) =>
       current?.map((entry) => (entry.name === updated.name ? updated : entry)),
     );
-    void queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents"] });
+    void queryClient.invalidateQueries({ queryKey: projectAgentsKey(projectId) });
   };
   const model = useMutation({
     mutationFn: async (address: string | null) =>
