@@ -11,23 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from mlops_agents.agents.runtime.contract import (
-    AgentSessions,
     MessageView,
     SessionView,
     StreamEvent,
 )
 from mlops_agents.api.deps import ProjectDep, ServicesDep
-from mlops_agents.api.services import Services
 
 router = APIRouter(tags=["sessions"])
 
 PING_SECONDS: float = 15.0
-
-
-def _require_sessions(services: Services) -> AgentSessions:
-    if services.sessions is None:
-        raise RuntimeError("Agent sessions service is not configured.")
-    return services.sessions
 
 
 def _parse_after_seq(last_event_id: str | None, after: str | None) -> int | None:
@@ -56,8 +48,7 @@ async def get_session(
     services: ServicesDep,
     _project: ProjectDep,
 ) -> SessionView:
-    sessions = _require_sessions(services)
-    return await sessions.get(project_id, agent)
+    return await services.sessions.get(project_id, agent)
 
 
 @router.post(
@@ -72,8 +63,7 @@ async def send_message(
     services: ServicesDep,
     _project: ProjectDep,
 ) -> MessageView:
-    sessions = _require_sessions(services)
-    return await sessions.send(project_id, agent, body.text)
+    return await services.sessions.send(project_id, agent, body.text)
 
 
 @router.post(
@@ -86,8 +76,7 @@ async def stop_session(
     services: ServicesDep,
     _project: ProjectDep,
 ) -> Response:
-    sessions = _require_sessions(services)
-    await sessions.stop(project_id, agent)
+    await services.sessions.stop(project_id, agent)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -114,7 +103,7 @@ async def stream_session(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     after: Annotated[str | None, Query()] = None,
 ) -> _EventSourceResponse:
-    sessions = _require_sessions(services)
+    sessions = services.sessions
     # Check agent and project before returning EventSourceResponse
     await sessions.get(project_id, agent)
 

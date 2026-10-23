@@ -4,8 +4,6 @@ import asyncio
 import json
 import socket
 import time
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx2
@@ -13,7 +11,6 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 
-import mlops_agents.api.routers as api_routers
 from mlops_agents.agents.runtime.contract import (
     MessageCreated,
     MessageData,
@@ -26,57 +23,13 @@ from mlops_agents.agents.runtime.contract import (
     TurnEnded,
     TurnEndedData,
 )
+from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.api.routers import sessions as sessions_module
-from tests.api.conftest import build_app, signed_in
-from tests.api.fake_sessions import FakeSessions
+from mlops_agents.storage.databases import Databases
+from mlops_agents.workspace.service import WorkspaceService
+from tests.api.conftest import LOCAL_URL, build_app, signed_in, started_app
+from tests.api.fake_sessions import FakeSessions, SseMessage, parse_sse_events
 from tests.conftest import make_repo
-
-
-@dataclass
-class SseMessage:
-    id: str | None = None
-    event: str | None = None
-    data: str | None = None
-    comment: str | None = None
-
-
-async def parse_sse_events(lines: AsyncIterator[str]) -> AsyncIterator[SseMessage]:
-    cur_id: str | None = None
-    cur_event: str | None = None
-    cur_data: list[str] = []
-    cur_comment: str | None = None
-
-    async for raw_line in lines:
-        line = raw_line.rstrip("\r\n")
-        if not line:
-            if cur_id is not None or cur_event is not None or cur_data or cur_comment is not None:
-                yield SseMessage(
-                    id=cur_id,
-                    event=cur_event,
-                    data="\n".join(cur_data) if cur_data else None,
-                    comment=cur_comment,
-                )
-                cur_id = None
-                cur_event = None
-                cur_data = []
-                cur_comment = None
-            continue
-        if line.startswith(":"):
-            cur_comment = line[1:].strip()
-        elif line.startswith("id:"):
-            cur_id = line[3:].strip()
-        elif line.startswith("event:"):
-            cur_event = line[6:].strip()
-        elif line.startswith("data:"):
-            cur_data.append(line[5:].strip())
-
-    if cur_id is not None or cur_event is not None or cur_data or cur_comment is not None:
-        yield SseMessage(
-            id=cur_id,
-            event=cur_event,
-            data="\n".join(cur_data) if cur_data else None,
-            comment=cur_comment,
-        )
 
 
 async def _create_project(app: FastAPI, tmp_path: Path, git_env: dict[str, str]) -> str:
@@ -85,9 +38,35 @@ async def _create_project(app: FastAPI, tmp_path: Path, git_env: dict[str, str])
     return project.id
 
 
-# ---------------------------------------------------------------------------
-# Basic route operations (in-process client)
-# ---------------------------------------------------------------------------
+async def test_lifespan_builds_real_sessions_and_closes_before_databases(
+    tmp_path: Path, git_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+    close_sessions = SessionManager.close
+    dispose_databases = Databases.dispose
+
+    async def close(manager: SessionManager) -> None:
+        await close_sessions(manager)
+        order.append("sessions")
+
+    async def dispose(databases: Databases) -> None:
+        order.append("databases")
+        await dispose_databases(databases)
+
+    monkeypatch.setattr(SessionManager, "close", close)
+    monkeypatch.setattr(Databases, "dispose", dispose)
+    async with started_app(tmp_path / "real-runtime") as application:
+        assert isinstance(application.state.services.sessions, SessionManager)
+        project_id = await _create_project(application, tmp_path, git_env)
+        async with signed_in(application, LOCAL_URL) as http:
+            response = await http.get(f"/api/projects/{project_id}/agents/orchestrator/session")
+        assert response.status_code == 200
+        assert response.json()["agent"] == "orchestrator"
+        assert response.json()["messages"] == []
+        assert response.json()["busy"] is False
+        assert order == []
+
+    assert order == ["sessions", "databases"]
 
 
 async def test_get_session_returns_fake_view(
@@ -119,13 +98,7 @@ async def test_get_session_returns_fake_view(
     response = await client.get(f"/api/projects/{project_id}/agents/orchestrator/session")
 
     assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == "ses_custom"
-    assert data["agent"] == "orchestrator"
-    assert data["busy"] is True
-    assert data["last_seq"] == 5
-    assert len(data["messages"]) == 1
-    assert data["messages"][0]["parts"][0]["text"] == "hello"
+    assert response.json() == (await fake.get(project_id, "orchestrator")).model_dump()
 
 
 async def test_send_message_creates_message_and_validates_body(
@@ -135,7 +108,6 @@ async def test_send_message_creates_message_and_validates_body(
     fake = FakeSessions()
     app.state.services.sessions = fake
 
-    # 1. Valid send
     response = await client.post(
         f"/api/projects/{project_id}/agents/orchestrator/session/messages",
         json={"text": "hi"},
@@ -146,34 +118,16 @@ async def test_send_message_creates_message_and_validates_body(
     assert msg_data["parts"][0]["text"] == "hi"
     assert fake.sent_messages == [(project_id, "orchestrator", "hi")]
 
-    # Check updated view contains the message
     view = await fake.get(project_id, "orchestrator")
     assert len(view.messages) == 1
     assert view.messages[0].parts[0].type == "text"
 
-    # 2. Empty body field -> 422
-    empty_resp = await client.post(
-        f"/api/projects/{project_id}/agents/orchestrator/session/messages",
-        json={"text": ""},
-    )
-    assert empty_resp.status_code == 422
-    assert empty_resp.json()["code"] == "invalid_request"
-
-    # 3. Extra field -> 422
-    extra_resp = await client.post(
-        f"/api/projects/{project_id}/agents/orchestrator/session/messages",
-        json={"text": "hi", "extra": "forbidden"},
-    )
-    assert extra_resp.status_code == 422
-    assert extra_resp.json()["code"] == "invalid_request"
-
-    # 4. Missing required field -> 422
-    missing_resp = await client.post(
-        f"/api/projects/{project_id}/agents/orchestrator/session/messages",
-        json={},
-    )
-    assert missing_resp.status_code == 422
-    assert missing_resp.json()["code"] == "invalid_request"
+    for body in ({"text": ""}, {"text": "hi", "extra": "forbidden"}, {}):
+        invalid_resp = await client.post(
+            f"/api/projects/{project_id}/agents/orchestrator/session/messages", json=body
+        )
+        assert invalid_resp.status_code == 422
+        assert invalid_resp.json()["code"] == "invalid_request"
 
 
 async def test_stop_session(
@@ -186,11 +140,6 @@ async def test_stop_session(
     response = await client.post(f"/api/projects/{project_id}/agents/orchestrator/session/stop")
     assert response.status_code == 204
     assert fake.stopped == [(project_id, "orchestrator")]
-
-
-# ---------------------------------------------------------------------------
-# Stream behaviors (through live_client)
-# ---------------------------------------------------------------------------
 
 
 async def test_stream_events_arrive_in_order(
@@ -262,49 +211,37 @@ async def test_stream_events_arrive_in_order(
     assert [json.loads(m.data or "{}") for m in received] == [e.data.model_dump() for e in events]
 
 
+@pytest.mark.parametrize(
+    ("query", "headers", "expected"),
+    [
+        ("?after=41", {}, 41),
+        ("?after=41", {"Last-Event-ID": "57"}, 57),
+        ("?after=41", {"Last-Event-ID": "abc"}, None),
+        ("?after=-10", {}, None),
+        ("", {}, None),
+        ("?after=0", {}, 0),
+    ],
+)
 async def test_stream_start_positions_and_headers(
     live_app: FastAPI,
     live_client: httpx2.AsyncClient,
     tmp_path: Path,
     git_env: dict[str, str],
+    query: str,
+    headers: dict[str, str],
+    expected: int | None,
 ) -> None:
     project_id = await _create_project(live_app, tmp_path, git_env)
     fake = FakeSessions()
     live_app.state.services.sessions = fake
 
-    # 1. ?after=41 reaches subscribe as after_seq=41
     async with live_client.stream(
         "GET",
-        f"/api/projects/{project_id}/agents/orchestrator/session/stream?after=41",
+        f"/api/projects/{project_id}/agents/orchestrator/session/stream{query}",
+        headers=headers,
     ):
         pass
-    assert fake.subscribe_calls[-1][2] == 41
-
-    # 2. Last-Event-ID: 57 header wins over ?after=41
-    async with live_client.stream(
-        "GET",
-        f"/api/projects/{project_id}/agents/orchestrator/session/stream?after=41",
-        headers={"Last-Event-ID": "57"},
-    ):
-        pass
-    assert fake.subscribe_calls[-1][2] == 57
-
-    # 3. Last-Event-ID: abc -> after_seq=None
-    async with live_client.stream(
-        "GET",
-        f"/api/projects/{project_id}/agents/orchestrator/session/stream?after=41",
-        headers={"Last-Event-ID": "abc"},
-    ):
-        pass
-    assert fake.subscribe_calls[-1][2] is None
-
-    # 4. Negative integer -> after_seq=None
-    async with live_client.stream(
-        "GET",
-        f"/api/projects/{project_id}/agents/orchestrator/session/stream?after=-10",
-    ):
-        pass
-    assert fake.subscribe_calls[-1][2] is None
+    assert fake.subscribe_calls[-1] == (project_id, "orchestrator", expected)
 
 
 async def test_stream_ping_comment_arrives_when_idle(
@@ -318,7 +255,6 @@ async def test_stream_ping_comment_arrives_when_idle(
     fake = FakeSessions()
     live_app.state.services.sessions = fake
 
-    # Patch PING_SECONDS to 0.1 for fast ping test
     monkeypatch.setattr(sessions_module, "PING_SECONDS", 0.1)
 
     async with live_client.stream(
@@ -348,12 +284,10 @@ async def test_closing_client_stream_closes_fake_iterator(
         "GET", f"/api/projects/{project_id}/agents/orchestrator/session/stream"
     ) as response:
         assert response.status_code == 200
-        # Wait until subscription is established
         assert len(fake.subscriptions) == 1
         sub = fake.subscriptions[0]
         assert sub.closed is False
 
-    # After client exits stream context, check subscription is closed within 2 s
     async with asyncio.timeout(2.0):
         await sub.closed_event.wait()
 
@@ -382,7 +316,6 @@ async def test_live_app_shuts_down_within_5s_with_open_stream(
         fake = FakeSessions()
         application.state.services.sessions = fake
 
-        # Open stream over real socket with signed-in client
         async with signed_in(application, f"http://127.0.0.1:{port}", in_process=False) as http:
             stream_ctx = http.stream(
                 "GET", f"/api/projects/{project_id}/agents/orchestrator/session/stream"
@@ -391,22 +324,15 @@ async def test_live_app_shuts_down_within_5s_with_open_stream(
             assert response.status_code == 200
             assert len(fake.subscriptions) == 1
 
-            # While stream is open, trigger server shutdown
             start_time = time.monotonic()
             server.should_exit = True
 
-            # Server serving task must shut down within 5 seconds
             async with asyncio.timeout(5.0):
                 await serving
             elapsed = time.monotonic() - start_time
             assert elapsed < 5.0
 
             await stream_ctx.__aexit__(None, None, None)
-
-
-# ---------------------------------------------------------------------------
-# Rejections: JSON errors not stream
-# ---------------------------------------------------------------------------
 
 
 async def test_unknown_project_returns_json_404_not_stream(
@@ -436,22 +362,15 @@ async def test_rejected_agent_returns_json_404_or_409_not_stream(
     )
     app.state.services.sessions = fake
 
-    # 1. Unknown agent -> 404 JSON
     resp404 = await client.get(f"/api/projects/{project_id}/agents/unknown_agent/session/stream")
     assert resp404.status_code == 404
     assert "application/json" in resp404.headers["content-type"]
     assert resp404.json()["code"] == "agent_not_found"
 
-    # 2. Agent without chat -> 409 JSON
     resp409 = await client.get(f"/api/projects/{project_id}/agents/no_chat_agent/session/stream")
     assert resp409.status_code == 409
     assert "application/json" in resp409.headers["content-type"]
     assert resp409.json()["code"] == "agent_has_no_chat"
-
-
-# ---------------------------------------------------------------------------
-# Anonymous access: 401 on all 4 routes
-# ---------------------------------------------------------------------------
 
 
 async def test_anonymous_gets_401_on_all_four_routes(
@@ -464,44 +383,42 @@ async def test_anonymous_gets_401_on_all_four_routes(
     fake = FakeSessions()
     app.state.services.sessions = fake
 
-    get_resp = await anonymous.get(f"/api/projects/{project_id}/agents/orchestrator/session")
-    assert get_resp.status_code == 401
-    assert get_resp.json()["code"] == "not_signed_in"
-
-    post_resp = await anonymous.post(
-        f"/api/projects/{project_id}/agents/orchestrator/session/messages",
-        json={"text": "hi"},
-    )
-    assert post_resp.status_code == 401
-    assert post_resp.json()["code"] == "not_signed_in"
-
-    stop_resp = await anonymous.post(f"/api/projects/{project_id}/agents/orchestrator/session/stop")
-    assert stop_resp.status_code == 401
-    assert stop_resp.json()["code"] == "not_signed_in"
-
-    stream_resp = await anonymous.get(
-        f"/api/projects/{project_id}/agents/orchestrator/session/stream"
-    )
-    assert stream_resp.status_code == 401
-    assert stream_resp.json()["code"] == "not_signed_in"
-
-
-# ---------------------------------------------------------------------------
-# Projects router delete order (if present)
-# ---------------------------------------------------------------------------
+    for method, suffix in (
+        ("GET", ""),
+        ("POST", "/messages"),
+        ("POST", "/stop"),
+        ("GET", "/stream"),
+    ):
+        response = await anonymous.request(
+            method,
+            f"/api/projects/{project_id}/agents/orchestrator/session{suffix}",
+            json={"text": "hi"} if suffix == "/messages" else None,
+        )
+        assert response.status_code == 401
+        assert response.json()["code"] == "not_signed_in"
 
 
 async def test_delete_project_calls_close_project_before_workspace_remove(
-    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not hasattr(api_routers, "projects"):
-        pytest.skip("Projects router is not on main yet (api-resources plan)")
     project_id = await _create_project(app, tmp_path, git_env)
     shared_order: list[str] = []
     fake = FakeSessions(order_log=shared_order)
     app.state.services.sessions = fake
+    remove_project = WorkspaceService.remove
 
-    # If projects router exists, DELETE /projects/{project_id} calls close_project then remove
+    async def remove(workspace: WorkspaceService, project_id: str) -> None:
+        shared_order.append(f"remove:{project_id}")
+        await remove_project(workspace, project_id)
+
+    monkeypatch.setattr(WorkspaceService, "remove", remove)
+
     response = await client.delete(f"/api/projects/{project_id}")
-    assert response.status_code in (200, 204)
-    assert f"close_project:{project_id}" in shared_order
+    assert response.status_code == 204
+    assert shared_order == [f"close_project:{project_id}", f"remove:{project_id}"]
+    assert not app.state.services.paths.project_dir(project_id).exists()
+    assert (await client.get(f"/api/projects/{project_id}")).status_code == 404

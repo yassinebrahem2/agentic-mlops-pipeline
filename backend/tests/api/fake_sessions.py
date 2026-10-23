@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
@@ -13,6 +14,53 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.clock import now_iso
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
+
+
+@dataclass
+class SseMessage:
+    id: str | None = None
+    event: str | None = None
+    data: str | None = None
+    comment: str | None = None
+
+
+async def parse_sse_events(lines: AsyncIterator[str]) -> AsyncIterator[SseMessage]:
+    cur_id: str | None = None
+    cur_event: str | None = None
+    cur_data: list[str] = []
+    cur_comment: str | None = None
+
+    async for raw_line in lines:
+        line = raw_line.rstrip("\r\n")
+        if not line:
+            if cur_id is not None or cur_event is not None or cur_data or cur_comment is not None:
+                yield SseMessage(
+                    id=cur_id,
+                    event=cur_event,
+                    data="\n".join(cur_data) if cur_data else None,
+                    comment=cur_comment,
+                )
+                cur_id = None
+                cur_event = None
+                cur_data = []
+                cur_comment = None
+            continue
+        if line.startswith(":"):
+            cur_comment = line[1:].strip()
+        elif line.startswith("id:"):
+            cur_id = line[3:].strip()
+        elif line.startswith("event:"):
+            cur_event = line[6:].strip()
+        elif line.startswith("data:"):
+            cur_data.append(line[5:].strip())
+
+    if cur_id is not None or cur_event is not None or cur_data or cur_comment is not None:
+        yield SseMessage(
+            id=cur_id,
+            event=cur_event,
+            data="\n".join(cur_data) if cur_data else None,
+            comment=cur_comment,
+        )
 
 
 class FakeSubscription:
