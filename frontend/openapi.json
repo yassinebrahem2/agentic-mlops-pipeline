@@ -429,6 +429,161 @@
         "title": "KeyHint",
         "type": "object"
       },
+      "MessageCreated": {
+        "description": "Every new message, the user's included.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MessageData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "message.created",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "MessageCreated",
+        "type": "object"
+      },
+      "MessageData": {
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/MessageView"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "MessageData",
+        "type": "object"
+      },
+      "MessageUpdated": {
+        "description": "A message's new final state.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MessageData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "message.updated",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "MessageUpdated",
+        "type": "object"
+      },
+      "MessageView": {
+        "properties": {
+          "author_kind": {
+            "enum": [
+              "user",
+              "agent",
+              "system"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Agent"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "text": "#/components/schemas/TextPart",
+                  "tool_call": "#/components/schemas/ToolCallPart",
+                  "tool_result": "#/components/schemas/ToolResultPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ToolCallPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ToolResultPart"
+                }
+              ]
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "streaming",
+              "queued",
+              "stopped",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "id",
+          "turn_id",
+          "author_kind",
+          "author_name",
+          "from_agent",
+          "parts",
+          "status",
+          "created_at"
+        ],
+        "title": "MessageView",
+        "type": "object"
+      },
       "ModelCreate": {
         "properties": {
           "context_window": {
@@ -838,6 +993,87 @@
         "title": "RepoSummary",
         "type": "object"
       },
+      "Resync": {
+        "description": "The client's position is unknown to the hub: it calls get again.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ResyncData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "resync",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "Resync",
+        "type": "object"
+      },
+      "ResyncData": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "ResyncData",
+        "type": "object"
+      },
+      "SendMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SendMessage",
+        "type": "object"
+      },
+      "SessionView": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageView"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "busy",
+          "messages",
+          "last_seq"
+        ],
+        "title": "SessionView",
+        "type": "object"
+      },
       "SetAgentModel": {
         "additionalProperties": false,
         "properties": {
@@ -892,6 +1128,66 @@
         "title": "SetGitHubToken",
         "type": "object"
       },
+      "TextDelta": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TextDeltaData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "text.delta",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "TextDelta",
+        "type": "object"
+      },
+      "TextDeltaData": {
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text"
+        ],
+        "title": "TextDeltaData",
+        "type": "object"
+      },
+      "TextPart": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "TextPart",
+        "type": "object"
+      },
       "TokenSignIn": {
         "properties": {
           "token": {
@@ -903,6 +1199,227 @@
           "token"
         ],
         "title": "TokenSignIn",
+        "type": "object"
+      },
+      "ToolCallPart": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_call",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "name",
+          "input"
+        ],
+        "title": "ToolCallPart",
+        "type": "object"
+      },
+      "ToolFinished": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ToolFinishedData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "tool.finished",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "ToolFinished",
+        "type": "object"
+      },
+      "ToolFinishedData": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "tool_call_id",
+          "content",
+          "is_error"
+        ],
+        "title": "ToolFinishedData",
+        "type": "object"
+      },
+      "ToolResultPart": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "is_error": {
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_result",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "tool_call_id",
+          "content",
+          "is_error"
+        ],
+        "title": "ToolResultPart",
+        "type": "object"
+      },
+      "ToolStarted": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ToolStartedData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "tool.started",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "ToolStarted",
+        "type": "object"
+      },
+      "ToolStartedData": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "tool_call_id",
+          "name",
+          "input"
+        ],
+        "title": "ToolStartedData",
+        "type": "object"
+      },
+      "TurnEnded": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TurnEndedData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "turn.ended",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "TurnEnded",
+        "type": "object"
+      },
+      "TurnEndedData": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "status": {
+            "enum": [
+              "done",
+              "stopped",
+              "interrupted",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "status",
+          "error"
+        ],
+        "title": "TurnEndedData",
         "type": "object"
       },
       "ValidationError": {
@@ -1945,6 +2462,281 @@
         "summary": "Set Project Agent Model",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session": {
+      "get": {
+        "operationId": "get_session_api_projects__project_id__agents__agent__session_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/messages": {
+      "post": {
+        "operationId": "send_message_api_projects__project_id__agents__agent__session_messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Message",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/stop": {
+      "post": {
+        "operationId": "stop_session_api_projects__project_id__agents__agent__session_stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/stream": {
+      "get": {
+        "operationId": "stream_session_api_projects__project_id__agents__agent__session_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "message.created": "#/components/schemas/MessageCreated",
+                      "message.updated": "#/components/schemas/MessageUpdated",
+                      "resync": "#/components/schemas/Resync",
+                      "text.delta": "#/components/schemas/TextDelta",
+                      "tool.finished": "#/components/schemas/ToolFinished",
+                      "tool.started": "#/components/schemas/ToolStarted",
+                      "turn.ended": "#/components/schemas/TurnEnded"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MessageCreated"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TextDelta"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ToolStarted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ToolFinished"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MessageUpdated"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TurnEnded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Resync"
+                    }
+                  ],
+                  "title": "Response 200 Stream Session Api Projects  Project Id  Agents  Agent  Session Stream Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "I1 stream events"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Session",
+        "tags": [
+          "sessions"
         ]
       }
     },

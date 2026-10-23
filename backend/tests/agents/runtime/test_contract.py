@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
@@ -250,14 +250,10 @@ class DummySessions:
     async def stop(self, project_id: str, agent: str) -> None:
         pass
 
-    async def _dummy_stream(self) -> AsyncIterator[StreamEvent]:
-        if False:
-            yield Resync(seq=1, type="resync", data=ResyncData())
-
-    def subscribe(
+    async def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
-    ) -> AsyncIterator[StreamEvent]:
-        return self._dummy_stream()
+    ) -> AsyncGenerator[StreamEvent, None]:
+        yield Resync(seq=1, type="resync", data=ResyncData())
 
     async def close_project(self, project_id: str) -> None:
         """Before a project is removed: ends its running turns (interrupted), drops its hubs and

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from typing import Any
 
 import httpx2
@@ -288,17 +289,20 @@ class SessionManager(AgentSessions):
 
     async def _subscribe_stream(
         self, project_id: str, agent: str, after_seq: int | None = None
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncGenerator[StreamEvent, None]:
         await self._workspace.get(project_id)
         self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
         hub = self._get_hub(project_id, session_id)
-        async for event in hub.subscribe(after_seq):
-            yield event
+        # The hub drops its subscriber in the generator's finally, which runs when the
+        # generator is closed, not when it is garbage collected.
+        async with aclosing(hub.subscribe(after_seq)) as events:
+            async for event in events:
+                yield event
 
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None = None
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncGenerator[StreamEvent, None]:
         return self._subscribe_stream(project_id, agent, after_seq)
 
     async def close_project(self, project_id: str) -> None:
