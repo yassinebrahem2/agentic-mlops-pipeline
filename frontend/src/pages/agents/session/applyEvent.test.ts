@@ -20,13 +20,13 @@ const createMessage = (
 });
 
 describe("parseEvent", () => {
-  it("parses valid event payloads", () => {
+  it("parses valid event payloads from string or object", () => {
     const msg = createMessage("m1", "agent", [{ type: "text", text: "hello" }]);
     expect(parseEvent("message.created", JSON.stringify({ message: msg }))).toEqual({
       type: "message.created",
       message: msg,
     });
-    expect(parseEvent("message.updated", JSON.stringify({ message: msg }))).toEqual({
+    expect(parseEvent("message.updated", { message: msg })).toEqual({
       type: "message.updated",
       message: msg,
     });
@@ -40,7 +40,7 @@ describe("parseEvent", () => {
         "tool.started",
         JSON.stringify({
           message_id: "m1",
-          id: "t1",
+          tool_call_id: "t1",
           name: "Read",
           input: { path: "README.md" },
         }),
@@ -48,26 +48,9 @@ describe("parseEvent", () => {
     ).toEqual({
       type: "tool.started",
       message_id: "m1",
-      id: "t1",
+      tool_call_id: "t1",
       name: "Read",
       input: { path: "README.md" },
-    });
-    expect(
-      parseEvent(
-        "tool.started",
-        JSON.stringify({
-          message_id: "m1",
-          tool_call_id: "t2",
-          name: "Grep",
-          input: { pattern: "test" },
-        }),
-      ),
-    ).toEqual({
-      type: "tool.started",
-      message_id: "m1",
-      id: "t2",
-      name: "Grep",
-      input: { pattern: "test" },
     });
     expect(
       parseEvent(
@@ -106,17 +89,18 @@ describe("parseEvent", () => {
       parseEvent("tool.started", JSON.stringify({ message_id: "m1", name: "Read" })),
     ).toBeNull();
     expect(
+      parseEvent(
+        "tool.started",
+        JSON.stringify({ message_id: "m1", id: "t1", name: "Read", input: {} }),
+      ),
+    ).toBeNull();
+    expect(
       parseEvent("tool.finished", JSON.stringify({ message_id: "m1", tool_call_id: "t1" })),
     ).toBeNull();
     expect(
       parseEvent("turn.ended", JSON.stringify({ turn_id: "t1", status: "invalid_status" })),
     ).toBeNull();
-    expect(
-      parseEvent(
-        "message.created",
-        JSON.stringify({ message: { id: "m1", parts: [{ type: "unknown" }] } }),
-      ),
-    ).toBeNull();
+    expect(parseEvent("message.created", JSON.stringify({ message: { id: 123 } }))).toBeNull();
     expect(parseEvent("unknown.event", JSON.stringify({}))).toBeNull();
   });
 });
@@ -170,7 +154,7 @@ describe("applyEvent", () => {
     state = applyEvent(state, {
       seq: 3,
       type: "tool.started",
-      data: { message_id: "a1", id: "t1", name: "Read", input: { path: "a.txt" } },
+      data: { message_id: "a1", tool_call_id: "t1", name: "Read", input: { path: "a.txt" } },
     });
     state = applyEvent(state, {
       seq: 4,

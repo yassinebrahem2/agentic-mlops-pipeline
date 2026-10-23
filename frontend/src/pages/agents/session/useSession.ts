@@ -1,18 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api, unwrap } from "../../../lib/api";
-import { queryClient } from "../../../lib/query";
+import { api, ApiError, unwrap } from "@/lib/api";
+import { queryClient } from "@/lib/query";
 import { applyEvent, type SessionState } from "./applyEvent";
-import { parseEvent, type SessionView } from "./events";
+import { parseEvent } from "./events";
 import { openStream, STREAM_CONNECTING, type StreamLike } from "./stream";
 
-type ApiResult = { data?: unknown; error?: unknown; response: Response };
-type SessionApi = {
-  GET(path: string): Promise<ApiResult>;
-  POST(path: string, options: { body: unknown }): Promise<ApiResult>;
-};
-type LoadResult = { state?: SessionState; error?: ApiError };
-
-const sessionApi = api as unknown as SessionApi;
 const eventNames = [
   "message.created",
   "text.delta",
@@ -29,15 +21,8 @@ export type UseSessionResult = {
   connection: "live" | "reconnecting" | "closed";
   send(text: string): Promise<void>;
   stop(): Promise<void>;
+  reload(): Promise<void>;
 };
-
-function sessionPath(projectId: string, agent: string): string {
-  return `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agent)}/session`;
-}
-
-function asSession(value: unknown): SessionView {
-  return value as SessionView;
-}
 
 export function useSession(
   projectId: string,
@@ -47,92 +32,162 @@ export function useSession(
   const [state, setState] = useState<SessionState>();
   const [error, setError] = useState<ApiError>();
   const [connection, setConnection] = useState<"live" | "reconnecting" | "closed">("closed");
+
   const streamRef = useRef<StreamLike | undefined>(undefined);
   const retryRef = useRef(0);
+  const streamErrorsRef = useRef(0);
   const stateRef = useRef<SessionState | undefined>(undefined);
-  const errorRef = useRef<ApiError | undefined>(undefined);
   const open = options?.openStream ?? openStream;
   const openRef = useRef(open);
   openRef.current = open;
 
+  const reloadRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   useEffect(() => {
-    let disposed = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    retryRef.current = 0;
+    streamErrorsRef.current = 0;
     stateRef.current = undefined;
-    errorRef.current = undefined;
     setState(undefined);
     setError(undefined);
     setConnection("closed");
+
+    if (!projectId || !agent) {
+      return;
+    }
+
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const queryKey = ["session", projectId, agent] as const;
+
     const close = () => {
       streamRef.current?.close();
       streamRef.current = undefined;
     };
-    const load = async (): Promise<LoadResult> => {
+
+    const fetchSessionSnapshot = async (): Promise<SessionState> => {
+      const result = await api.GET("/api/projects/{project_id}/agents/{agent}/session", {
+        params: { path: { project_id: projectId, agent } },
+      });
+      const session = unwrap(result);
+      return {
+        messages: session.messages,
+        busy: session.busy,
+        lastSeq: session.last_seq,
+      };
+    };
+
+    const load = async (): Promise<{ state?: SessionState; error?: ApiError }> => {
       try {
-        const result = await sessionApi.GET(sessionPath(projectId, agent));
-        const session = asSession(unwrap(result));
-        const next = { messages: session.messages, busy: session.busy, lastSeq: session.last_seq };
+        const next = await queryClient.query({
+          queryKey,
+          queryFn: fetchSessionSnapshot,
+          staleTime: 0,
+          retry: false,
+        });
         if (!disposed) {
           stateRef.current = next;
           setState(next);
-          errorRef.current = undefined;
           setError(undefined);
         }
         return { state: next };
       } catch (caught) {
-        if (!disposed && caught instanceof ApiError) {
-          errorRef.current = caught;
-          setError(caught);
-          if (caught.status === 401) void queryClient.invalidateQueries({ queryKey: ["auth"] });
+        const apiErr =
+          caught instanceof ApiError
+            ? caught
+            : new ApiError(
+                "load_failed",
+                caught instanceof Error ? caught.message : "Failed to load session",
+                500,
+                caught,
+              );
+        if (!disposed) {
+          setError(apiErr);
+          setConnection("closed");
         }
-        return { error: caught instanceof ApiError ? caught : undefined };
+        return { error: apiErr };
       }
     };
+
     const schedule = () => {
-      const delay = retryRef.current < 3 ? [1000, 2000, 5000][retryRef.current] : 10000;
+      const delays = [1000, 2000, 5000];
+      const delay = retryRef.current < delays.length ? delays[retryRef.current] : 10000;
       retryRef.current += 1;
-      retryTimer = setTimeout(() => void connect(true), delay);
+      retryTimer = setTimeout(() => {
+        void connect(true);
+      }, delay);
     };
-    const connect = async (reload = false) => {
-      const loaded = reload ? (await load()).state : (stateRef.current ?? (await load()).state);
+
+    const connect = async (reloadSession = false) => {
+      const loaded = reloadSession
+        ? (await load()).state
+        : (stateRef.current ?? (await load()).state);
       if (disposed || !loaded) return;
+
       close();
-      const url = `${sessionPath(projectId, agent)}/stream?after=${String(loaded.lastSeq)}`;
+
+      const url = `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agent)}/session/stream?after=${String(loaded.lastSeq)}`;
       const stream = openRef.current(url);
       streamRef.current = stream;
-      setConnection("live");
+
       stream.addEventListener("open", () => {
-        if (!disposed) setConnection("live");
+        if (!disposed) {
+          setConnection("live");
+          retryRef.current = 0;
+        }
       });
+
       const handle = (event: Event) => {
         const message = event as MessageEvent<string>;
         const parsed = parseEvent(event.type, message.data);
         const seq = Number(message.lastEventId);
-        if (!parsed || !Number.isSafeInteger(seq)) return;
-        setConnection("live");
-        retryRef.current = 0;
+
+        if (!parsed || !Number.isSafeInteger(seq)) {
+          streamErrorsRef.current += 1;
+          return;
+        }
+
+        if (!disposed) {
+          setConnection("live");
+          retryRef.current = 0;
+        }
+
         if (parsed.type === "resync") {
           close();
+          setConnection("reconnecting");
           void load().then((result) => {
-            if (result.state && !disposed) void connect();
+            if (disposed) return;
+            if (result.state) {
+              void connect(false);
+            } else {
+              setConnection("closed");
+            }
           });
           return;
         }
+
         setState((current) => {
           if (!current) return current;
           const next = applyEvent(current, { seq, type: parsed.type, data: parsed });
           stateRef.current = next;
+          queryClient.setQueryData(queryKey, next);
           return next;
         });
       };
-      for (const name of eventNames) stream.addEventListener(name, handle);
+
+      for (const name of eventNames) {
+        stream.addEventListener(name, handle);
+      }
+
       stream.onerror = () => {
         if (disposed) return;
         if (stream.readyState === STREAM_CONNECTING) {
           setConnection("reconnecting");
           return;
         }
+
         close();
+        setConnection("reconnecting");
         void load().then((result) => {
           if (disposed) return;
           if (result.error?.status === 404 || result.error?.status === 401) {
@@ -143,9 +198,23 @@ export function useSession(
         });
       };
     };
+
+    reloadRef.current = async () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryRef.current = 0;
+      close();
+      const result = await load();
+      if (result.state && !disposed) {
+        void connect(false);
+      }
+    };
+
     void load().then((result) => {
-      if (result.state) void connect();
+      if (result.state && !disposed) {
+        void connect(false);
+      }
     });
+
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
@@ -155,28 +224,25 @@ export function useSession(
 
   const send = useCallback(
     async (text: string) => {
-      try {
-        const result = await sessionApi.POST(`${sessionPath(projectId, agent)}/messages`, {
-          body: { text },
-        });
-        unwrap(result);
-      } catch (caught) {
-        if (caught instanceof ApiError) {
-          setError(caught);
-          if (caught.status === 401) void queryClient.invalidateQueries({ queryKey: ["auth"] });
-        }
-        throw caught;
-      }
+      const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/messages", {
+        params: { path: { project_id: projectId, agent } },
+        body: { text },
+      });
+      unwrap(result);
     },
     [projectId, agent],
   );
 
   const stop = useCallback(async () => {
-    const result = await sessionApi.POST(`${sessionPath(projectId, agent)}/stop`, {
-      body: undefined,
+    const result = await api.POST("/api/projects/{project_id}/agents/{agent}/session/stop", {
+      params: { path: { project_id: projectId, agent } },
     });
     unwrap(result);
   }, [projectId, agent]);
 
-  return { state, error, connection, send, stop };
+  const reload = useCallback(async () => {
+    await reloadRef.current();
+  }, []);
+
+  return { state, error, connection, send, stop, reload };
 }

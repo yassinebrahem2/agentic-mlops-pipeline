@@ -23,10 +23,7 @@ export function MessageList({ messages, className }: MessageListProps) {
 
   useEffect(() => {
     if (isAtBottomRef.current) {
-      const el = bottomRef.current;
-      if (el && typeof el.scrollIntoView === "function") {
-        el.scrollIntoView({ behavior: "smooth" });
-      }
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
 

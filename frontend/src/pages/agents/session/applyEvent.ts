@@ -17,7 +17,7 @@ function withMessage(
 
 export function applyEvent(state: SessionState, event: SequencedEvent): SessionState {
   if (event.seq <= state.lastSeq) return state;
-  const data = parseEvent(event.type, JSON.stringify(event.data));
+  const data = parseEvent(event.type, event.data);
   if (!data) return state;
   let messages = state.messages;
   let busy = state.busy;
@@ -43,7 +43,12 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
         ...message,
         parts: [
           ...message.parts,
-          { type: "tool_call", id: data.id, name: data.name, input: data.input },
+          {
+            type: "tool_call",
+            id: data.tool_call_id,
+            name: data.name,
+            input: data.input,
+          },
         ],
         status: "streaming",
       }));
@@ -69,6 +74,8 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
       break;
     case "turn.ended":
       busy = queued(messages);
+      break;
+    case "resync":
       break;
   }
   return { messages, busy, lastSeq: event.seq };

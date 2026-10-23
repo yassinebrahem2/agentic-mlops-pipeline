@@ -3,17 +3,13 @@ import { AlertCircle } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { api, errorText, unwrap } from "@/lib/api";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
-import type { StreamLike } from "./session/stream";
 import { useSession } from "./session/useSession";
 
-export interface AgentsPageProps {
-  openStream?: (url: string) => StreamLike;
-}
-
-export function AgentsPage({ openStream }: AgentsPageProps = {}) {
+export function AgentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -47,17 +43,31 @@ export function AgentsPage({ openStream }: AgentsPageProps = {}) {
   const agentParam = searchParams.get("agent");
   const selectedAgent = chatAgents.find((agent) => agent.name === agentParam) ?? chatAgents[0];
 
-  const selectedAgentName = selectedAgent?.name ?? "orchestrator";
+  const selectedAgentName = selectedAgent?.name ?? "";
   const selectedAgentDisplayName = selectedAgent?.display_name ?? selectedAgentName;
 
-  const session = useSession(projectId ?? "", selectedAgentName, {
-    openStream,
-  });
+  const session = useSession(projectId ?? "", selectedAgentName);
 
   if (!projectId) return null;
 
+  if (agentsQuery.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center p-8 text-muted-foreground">
+        Loading agents...
+      </div>
+    );
+  }
+
+  if (chatAgents.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
+        No chat agents found.
+      </div>
+    );
+  }
+
   const project = projectQuery.data;
-  const showProjectStatus = project && (project.status !== "ok" || Boolean(project.status_detail));
+  const showProjectStatus = project && project.status !== "ok";
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -66,11 +76,8 @@ export function AgentsPage({ openStream }: AgentsPageProps = {}) {
           <ProjectStatus status={project.status} status_detail={project.status_detail} />
         )}
         {selectedAgent?.settings.model_problem && (
-          <Alert
-            variant="destructive"
-            className="border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200"
-          >
-            <AlertCircle className="size-4 text-amber-600 dark:text-amber-400" />
+          <Alert variant="warning">
+            <AlertCircle className="size-4" />
             <AlertTitle>Model configuration</AlertTitle>
             <AlertDescription className="space-y-1">
               <p>{selectedAgent.settings.model_problem}</p>
@@ -92,9 +99,19 @@ export function AgentsPage({ openStream }: AgentsPageProps = {}) {
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between gap-4">
               <span>{errorText(session.error)}</span>
-              <Link to="/" className="font-medium underline">
-                Projects
-              </Link>
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void session.reload()}
+                >
+                  Retry
+                </Button>
+                <Link to="/" className="font-medium underline">
+                  Projects
+                </Link>
+              </div>
             </AlertDescription>
           </Alert>
         )}

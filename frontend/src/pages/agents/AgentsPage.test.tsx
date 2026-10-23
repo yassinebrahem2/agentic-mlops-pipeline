@@ -1,9 +1,10 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { PageRoute } from "../../app/routes";
-import { ApiError, api } from "../../lib/api";
-import { renderPage } from "../../test/render";
+import type { PageRoute } from "@/app/routes";
+import { ApiError, api } from "@/lib/api";
+import { queryClient } from "@/lib/query";
+import { renderPage } from "@/test/render";
 import { route } from "./route";
 import * as streamModule from "./session/stream";
 import { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./session/stream";
@@ -30,6 +31,10 @@ class FakeStream implements StreamLike {
     this.readyState = STREAM_CLOSED;
   });
 
+  emitOpen(): void {
+    this.listeners.get("open")?.(new Event("open"));
+  }
+
   emit(type: string, data: unknown, seq: number): void {
     this.listeners.get(type)?.({
       type,
@@ -46,8 +51,14 @@ describe("AgentsPage", () => {
   let openStreamSpy: MockInstance | undefined;
 
   beforeEach(() => {
+    queryClient.clear();
     fakeStream = new FakeStream();
-    openStreamSpy = vi.spyOn(streamModule, "openStream").mockReturnValue(fakeStream);
+    openStreamSpy = vi.spyOn(streamModule, "openStream").mockImplementation(() => {
+      setTimeout(() => {
+        fakeStream.emitOpen();
+      }, 0);
+      return fakeStream;
+    });
   });
 
   afterEach(() => {
@@ -94,7 +105,7 @@ describe("AgentsPage", () => {
           response: new Response(null, { status: 200 }),
         });
       }
-      if (path.startsWith("/api/projects/prj_1/agents/orchestrator/session")) {
+      if (path === "/api/projects/{project_id}/agents/{agent}/session") {
         return Promise.resolve({
           data: {
             id: "s1",
@@ -144,16 +155,16 @@ describe("AgentsPage", () => {
             {
               type: "tool_result",
               tool_call_id: "c1",
-              content: "1\t# Demo Project\n2\tMLOps pipeline.",
+              content: "1\t# Demo Project\n2\tPipeline overview",
               is_error: false,
             },
             {
               type: "text",
-              text: "It says **Demo Project**.",
+              text: "The README outlines the **Demo Project** and its pipeline.",
             },
           ],
           status: "complete",
-          created_at: "2026-10-21T18:00:01Z",
+          created_at: "2026-10-21T18:00:05Z",
         },
       ],
     });
@@ -161,15 +172,114 @@ describe("AgentsPage", () => {
     renderPage("/projects/prj_1/agents", { routes: testRoutes });
 
     expect(await screen.findByText("What does the README say?")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Read README\.md/i })).toBeInTheDocument();
-    expect(screen.getByText("Demo Project")).toBeInTheDocument();
 
-    // Open tool step reveals file content
-    await user.click(screen.getByRole("button", { name: /Read README\.md/i }));
-    expect(screen.getByText(/MLOps pipeline\./)).toBeInTheDocument();
+    const toolSummary = screen.getByText("README.md");
+    expect(toolSummary).toBeInTheDocument();
+    expect(screen.getByText("Read")).toBeInTheDocument();
+
+    expect(screen.queryByText(/Demo Project.*Pipeline overview/)).not.toBeInTheDocument();
+
+    const toolButton = screen.getByRole("button", { name: /Read/ });
+    await user.click(toolButton);
+
+    expect(screen.getByText(/Pipeline overview/)).toBeInTheDocument();
+
+    const markdownAnswer = screen.getByText(/The README outlines the/);
+    expect(markdownAnswer).toBeInTheDocument();
+    expect(screen.getByText("Demo Project")).toHaveProperty("tagName", "STRONG");
   });
 
-  it("sending: Enter sends, Shift+Enter does not, empty text cannot be sent", async () => {
+  it("untrusted model output does not inject raw HTML and javascript: links are stripped", async () => {
+    setupDefaultMocks({
+      messages: [
+        {
+          id: "m_a1",
+          turn_id: "trn_1",
+          author_kind: "agent",
+          author_name: "orchestrator",
+          from_agent: null,
+          parts: [
+            {
+              type: "text",
+              text: "Here is raw html: <script>window.pwned = true;</script><img src='x' onerror='alert(1)' /> and a [malicious link](javascript:alert(1))",
+            },
+          ],
+          status: "complete",
+          created_at: "2026-10-21T18:00:00Z",
+        },
+      ],
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(await screen.findByText(/<script>window\.pwned = true;<\/script>/)).toBeInTheDocument();
+
+    expect(document.querySelector("script:not([src])")).toBeNull();
+    expect(document.querySelector("img[onerror]")).toBeNull();
+
+    const link = screen.queryByRole("link", { name: "malicious link" });
+    if (link) {
+      expect(link.getAttribute("href")).not.toMatch(/^javascript:/i);
+    } else {
+      expect(screen.getByText("malicious link")).toBeInTheDocument();
+    }
+  });
+
+  it("marks queued, stopped and interrupted messages, and renders system notices", async () => {
+    setupDefaultMocks({
+      messages: [
+        {
+          id: "m1",
+          turn_id: null,
+          author_kind: "user",
+          author_name: "user",
+          from_agent: null,
+          parts: [{ type: "text", text: "Queued question" }],
+          status: "queued",
+          created_at: "2026-10-21T18:00:00Z",
+        },
+        {
+          id: "m2",
+          turn_id: "t1",
+          author_kind: "agent",
+          author_name: "orchestrator",
+          from_agent: null,
+          parts: [{ type: "text", text: "Answer stopped" }],
+          status: "stopped",
+          created_at: "2026-10-21T18:00:01Z",
+        },
+        {
+          id: "m3",
+          turn_id: "t2",
+          author_kind: "agent",
+          author_name: "orchestrator",
+          from_agent: null,
+          parts: [{ type: "text", text: "Answer interrupted" }],
+          status: "interrupted",
+          created_at: "2026-10-21T18:00:02Z",
+        },
+        {
+          id: "m4",
+          turn_id: null,
+          author_kind: "system",
+          author_name: "system",
+          from_agent: null,
+          parts: [{ type: "text", text: "Turn failed: Model context length exceeded." }],
+          status: "complete",
+          created_at: "2026-10-21T18:00:03Z",
+        },
+      ],
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
+    expect(screen.getByText("Interrupted: the app stopped during this answer")).toBeInTheDocument();
+    expect(screen.getByText("Turn failed: Model context length exceeded.")).toBeInTheDocument();
+  });
+
+  it("handles composer sending: Enter sends, Shift+Enter does not, Send disabled on empty", async () => {
     const user = userEvent.setup();
     setupDefaultMocks();
 
@@ -194,8 +304,9 @@ describe("AgentsPage", () => {
     // Enter -> sends
     await user.type(input, "{Enter}");
     expect(postSpy).toHaveBeenCalledWith(
-      "/api/projects/prj_1/agents/orchestrator/session/messages",
+      "/api/projects/{project_id}/agents/{agent}/session/messages",
       expect.objectContaining({
+        params: { path: { project_id: "prj_1", agent: "orchestrator" } },
         body: { text: "First line\nSecond line" },
       }),
     );
@@ -212,9 +323,9 @@ describe("AgentsPage", () => {
 
     await user.click(stopButton);
     expect(postSpy).toHaveBeenCalledWith(
-      "/api/projects/prj_1/agents/orchestrator/session/stop",
+      "/api/projects/{project_id}/agents/{agent}/session/stop",
       expect.objectContaining({
-        body: undefined,
+        params: { path: { project_id: "prj_1", agent: "orchestrator" } },
       }),
     );
   });
@@ -254,6 +365,10 @@ describe("AgentsPage", () => {
     renderPage("/projects/prj_1/agents", { routes: testRoutes });
     await screen.findByRole("textbox", { name: "Message Orchestrator" });
 
+    await waitFor(() => {
+      expect(fakeStream.onerror).toBeDefined();
+    });
+
     // Trigger reconnecting on fake stream
     act(() => {
       fakeStream.readyState = STREAM_CONNECTING;
@@ -263,7 +378,7 @@ describe("AgentsPage", () => {
     expect(await screen.findByText("Reconnecting...")).toBeInTheDocument();
   });
 
-  it("shows error and link to Projects when stream is closed with 404", async () => {
+  it("shows error, Retry button and link to Projects when stream is closed with 404", async () => {
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
@@ -292,7 +407,7 @@ describe("AgentsPage", () => {
           response: new Response(null, { status: 200 }),
         });
       }
-      if (path.startsWith("/api/projects/prj_1/agents/orchestrator/session")) {
+      if (path === "/api/projects/{project_id}/agents/{agent}/session") {
         return Promise.reject(new ApiError("project_not_found", "Project prj_1 not found.", 404));
       }
       return Promise.resolve({ data: null, response: new Response(null, { status: 404 }) });
@@ -303,7 +418,27 @@ describe("AgentsPage", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Project prj_1 not found.")).toBeInTheDocument();
 
+    const retryButton = within(alert).getByRole("button", { name: "Retry" });
+    expect(retryButton).toBeInTheDocument();
+
     const projectsLink = within(alert).getByRole("link", { name: "Projects" });
     expect(projectsLink).toHaveAttribute("href", "/");
+  });
+
+  it("shows 'No chat agents found.' when the project has no chat agents", async () => {
+    setupDefaultMocks({
+      agents: [
+        {
+          name: "worker",
+          display_name: "Background Worker",
+          chat: false,
+          settings: { model_problem: null },
+        },
+      ],
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(await screen.findByText("No chat agents found.")).toBeInTheDocument();
   });
 });
