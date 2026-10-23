@@ -24,6 +24,11 @@ from tests.integrations.test_github_auth import FakeGh
 
 pytestmark = pytest.mark.live
 
+_BASE_URLS = {
+    "groq": "https://api.groq.com/openai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+}
+
 
 async def test_live_turn_orchestrator_readme(
     tmp_path: Path,
@@ -35,10 +40,17 @@ async def test_live_turn_orchestrator_readme(
     if not live_model:
         pytest.skip("set MLOPS_AGENTS_LIVE_MODEL to run this live test")
 
-    provider_name = live_model.split(":")[0] if ":" in live_model else "groq"
+    provider_name, separator, wire_id = live_model.partition(":")
+    if not separator or not wire_id:
+        pytest.fail(
+            "MLOPS_AGENTS_LIVE_MODEL must be 'provider:model', e.g. groq:openai/gpt-oss-20b"
+        )
+    base_url = _BASE_URLS.get(provider_name)
+    if base_url is None:
+        pytest.fail(f"MLOPS_AGENTS_LIVE_MODEL provider must be one of {sorted(_BASE_URLS)}")
     key_env = f"{provider_name.upper()}_API_KEY"
     key_val = os.environ.get(key_env)
-    if not key_val and provider_name in ("groq", "gemini", "anthropic", "openai"):
+    if not key_val:
         pytest.skip(f"set {key_env} to run this live test")
 
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
@@ -63,29 +75,10 @@ async def test_live_turn_orchestrator_readme(
             git=git,
         )
 
-        # Set up provider and model
-        if provider_name == "groq":
-            prov = await providers_svc.create_provider(
-                ProviderCreate(
-                    name="groq",
-                    kind="hosted",
-                    base_url="https://api.groq.com/openai/v1",
-                )
-            )
-            if key_val:
-                await providers_svc.add_key(prov.name, key_val)
-        elif provider_name == "gemini":
-            prov = await providers_svc.create_provider(
-                ProviderCreate(
-                    name="gemini",
-                    kind="hosted",
-                    base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-                )
-            )
-            if key_val:
-                await providers_svc.add_key(prov.name, key_val)
-
-        wire_id = live_model.split(":", 1)[1] if ":" in live_model else live_model
+        prov = await providers_svc.create_provider(
+            ProviderCreate(name=provider_name, kind="hosted", base_url=base_url)
+        )
+        await providers_svc.add_key(prov.name, key_val)
         await providers_svc.add_model(ModelCreate(provider=provider_name, wire_model_id=wire_id))
         await providers_svc.verify_model(live_model)
 
