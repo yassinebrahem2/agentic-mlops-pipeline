@@ -1,3 +1,6 @@
+import asyncio
+
+import pytest
 from sqlalchemy import select
 
 from mlops_agents.agents.runtime.contract import (
@@ -141,21 +144,6 @@ async def test_queued_turns_come_back_oldest_first(databases: Databases) -> None
     assert next_turn2 == (t2, "msg_2")
 
 
-async def test_active_turn_sees_running_and_queued(databases: Databases) -> None:
-    store = SessionStore(databases)
-    session_id = await store.session_id("prj_test", "orchestrator")
-    assert await store.active_turn("prj_test", session_id) is None
-
-    t1 = await store.add_turn("prj_test", session_id, "msg_1", "queued")
-    assert await store.active_turn("prj_test", session_id) == t1
-
-    await store.set_turn("prj_test", t1, "running")
-    assert await store.active_turn("prj_test", session_id) == t1
-
-    await store.set_turn("prj_test", t1, "done")
-    assert await store.active_turn("prj_test", session_id) is None
-
-
 async def test_recover_turns_running_into_interrupted(databases: Databases) -> None:
     store = SessionStore(databases)
     session_id = await store.session_id("prj_test", "orchestrator")
@@ -252,3 +240,33 @@ async def test_add_llm_call(databases: Databases) -> None:
     assert rows[0]["completion_tokens"] == 42
     assert rows[0]["latency_ms"] == 850
     assert rows[0]["created_at"] is not None
+
+
+async def test_write_cancelled_by_its_caller_still_completes(databases: Databases) -> None:
+    store = SessionStore(databases)
+    session_id = await store.session_id("prj_test", "orchestrator")
+    message = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="agent",
+        author_name="orchestrator",
+        parts=[],
+        status="streaming",
+    )
+
+    write = asyncio.create_task(
+        store.update_message(
+            "prj_test", message.id, parts=[TextPart(type="text", text="kept")], status="stopped"
+        )
+    )
+    await asyncio.sleep(0)
+    write.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await write
+
+    # Stop and shutdown cancel a turn anywhere; the interrupted write must not be lost or
+    # leave the database locked for the writes that follow.
+    await store.set_summary("prj_test", session_id, "later write", message.id)
+    stored = next(m for m in await store.messages("prj_test", session_id) if m.id == message.id)
+    assert stored.status == "stopped"
+    assert stored.parts == [TextPart(type="text", text="kept")]

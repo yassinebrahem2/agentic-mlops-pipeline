@@ -112,6 +112,7 @@ async def test_stop_during_slow_tool(
     await manager.send(project_id, "orchestrator", "Call slow sleep")
 
     async for ev in sub:
+        assert not isinstance(ev, TurnEnded), ev
         if isinstance(ev, ToolStarted):
             break
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import and_, case, insert, or_, select, update
+from sqlalchemy import and_, insert, or_, select, update
 
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
@@ -13,6 +13,7 @@ from mlops_agents.agents.runtime.contract import (
     MessageView,
     Part,
 )
+from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.clock import now_iso
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
@@ -29,6 +30,7 @@ class SessionStore:
         """Return the filesystem Path to the project database."""
         return self._databases.paths.project_db(project_id)
 
+    @shielded
     async def session_id(self, project_id: str, agent: str) -> str:
         """Get or create a stable session for the given agent."""
         engine = await self._databases.project(project_id)
@@ -51,6 +53,7 @@ class SessionStore:
             )
             return sid
 
+    @shielded
     async def add_message(
         self,
         project_id: str,
@@ -96,6 +99,7 @@ class SessionStore:
             created_at=created_at,
         )
 
+    @shielded
     async def update_message(
         self,
         project_id: str,
@@ -175,6 +179,7 @@ class SessionStore:
             for row in rows
         ]
 
+    @shielded
     async def add_turn(
         self, project_id: str, session_id: str, trigger_message_id: str, status: str
     ) -> str:
@@ -200,6 +205,7 @@ class SessionStore:
             )
         return turn_id
 
+    @shielded
     async def set_turn(
         self, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
@@ -240,24 +246,7 @@ class SessionStore:
             return None
         return (str(row[0]), str(row[1]))
 
-    async def active_turn(self, project_id: str, session_id: str) -> str | None:
-        """Return the turn_id of any running or queued turn for session_id, or None if idle."""
-        engine = await self._databases.project(project_id)
-        query = (
-            select(turns.c.id)
-            .where(turns.c.session_id == session_id, turns.c.status.in_(["running", "queued"]))
-            .order_by(
-                case((turns.c.status == "running", 1), else_=2),
-                turns.c.created_at.asc(),
-                turns.c.id.asc(),
-            )
-            .limit(1)
-        )
-        async with engine.connect() as conn:
-            row = (await conn.execute(query)).first()
-
-        return str(row[0]) if row else None
-
+    @shielded
     async def mark_interrupted(self, project_id: str, turn_id: str) -> None:
         """Mark streaming or stopped messages for a turn as interrupted."""
         engine = await self._databases.project(project_id)
@@ -273,6 +262,7 @@ class SessionStore:
                 .values(status="interrupted")
             )
 
+    @shielded
     async def recover(self, project_id: str) -> None:
         """Mark running turns and their incomplete messages (streaming/running/stopped) as interrupted."""
         engine = await self._databases.project(project_id)
@@ -310,6 +300,7 @@ class SessionStore:
                     .values(status="interrupted")
                 )
 
+    @shielded
     async def set_summary(
         self, project_id: str, session_id: str, summary: str, compacted_through: str
     ) -> None:
@@ -338,6 +329,7 @@ class SessionStore:
             return (None, None)
         return (cast(str | None, row[0]), cast(str | None, row[1]))
 
+    @shielded
     async def add_llm_call(
         self,
         project_id: str,
