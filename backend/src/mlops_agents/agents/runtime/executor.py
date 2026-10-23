@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import aiosqlite
+from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -89,8 +87,6 @@ class TurnExecutor:
     ) -> tuple[TurnEnd, str | None]:
         agent_message_id: str | None = None
         current_parts: list[Part] = []
-        conn: aiosqlite.Connection | None = None
-        checkpointer: AsyncSqliteSaver | None = None
 
         async def add_message(
             author_kind: AuthorKind,
@@ -142,10 +138,6 @@ class TurnExecutor:
             agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             agent_message_id = agent_msg.id
 
-            conn = await connect_checkpointer(self._store.db_path(project_id))
-            checkpointer = AsyncSqliteSaver(conn)
-            await checkpointer.setup()
-
             summary, compacted_through = await self._store.summary(project_id, session_id)
             history = await self._store.messages(project_id, session_id)
             history_for_compaction = [m for m in history if m.id != agent_message_id]
@@ -177,26 +169,28 @@ class TurnExecutor:
                 active_history,
             )
 
-            graph = create_turn_graph(
-                agent=built_agent,
-                caller=self._caller,
-                store=self._store,
-                sink=sink,
-                project_id=project_id,
-                turn_id=turn_id,
-                message_id=agent_message_id,
-                current_parts=current_parts,
-                checkpointer=checkpointer,
-                lock=lock,
-            )
-
-            config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
-            initial_state: TurnState = {
-                "messages": initial_messages,
-                "step_count": 0,
-                "stopped_reason": None,
-            }
-            await graph.ainvoke(initial_state, config=config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
+            # The checkpointer connection is gone before any handler below writes the end state:
+            # a cancelled checkpoint write can leave its transaction open, which locks the file.
+            async with self._checkpointer(project_id, turn_id) as checkpointer:
+                graph = create_turn_graph(
+                    agent=built_agent,
+                    caller=self._caller,
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    checkpointer=checkpointer,
+                    lock=lock,
+                )
+                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+                initial_state: TurnState = {
+                    "messages": initial_messages,
+                    "step_count": 0,
+                    "stopped_reason": None,
+                }
+                await graph.ainvoke(initial_state, config=config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
 
             await finish_agent_message("complete")
             return ("done", None)
@@ -212,14 +206,22 @@ class TurnExecutor:
             logger.exception("Turn %s failed unexpectedly", turn_id)
             return await fail(UNEXPECTED_FAILURE_TEXT)
 
-        finally:
+    @asynccontextmanager
+    async def _checkpointer(
+        self, project_id: str, turn_id: str
+    ) -> AsyncGenerator[AsyncSqliteSaver]:
+        conn = await connect_checkpointer(self._store.db_path(project_id))
+        try:
+            checkpointer = AsyncSqliteSaver(conn)
+            await checkpointer.setup()
             try:
-                if checkpointer is not None:
-                    await checkpointer.adelete_thread(turn_id)
-            except Exception:
-                logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
+                yield checkpointer
             finally:
-                # Windows keeps the project folder locked until the connection is closed, also
-                # when a second cancel interrupts the thread cleanup.
-                if conn is not None:
-                    await conn.close()
+                try:
+                    await checkpointer.adelete_thread(turn_id)
+                except Exception:
+                    logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
+        finally:
+            # Windows keeps the project folder locked until the connection is closed, also
+            # when a second cancel interrupts the thread cleanup.
+            await conn.close()

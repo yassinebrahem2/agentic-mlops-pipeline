@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 import httpx2
 import pytest
 from langchain_core.messages import AIMessage
@@ -12,6 +13,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.runtime import executor as executor_module
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -157,6 +159,15 @@ async def test_executor_cancellation_during_slow_tool(
 
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "SlowTool", {})
 
+    checkpointer_connections: list[aiosqlite.Connection] = []
+
+    async def recording_connect(path: Path) -> aiosqlite.Connection:
+        conn = await connect_checkpointer(path)
+        checkpointer_connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(executor_module, "connect_checkpointer", recording_connect)
+
     sink = RecordingSink()
     task = asyncio.create_task(
         executor.run(project.id, session_id, "slowagent", turn_id, sink, AsyncRLock())
@@ -167,6 +178,9 @@ async def test_executor_cancellation_during_slow_tool(
             break
         await asyncio.sleep(0.02)
     assert len(sink.tools_started) == 1
+
+    # A checkpoint write cancelled before its commit leaves the write lock held by this connection.
+    await checkpointer_connections[0].execute("BEGIN IMMEDIATE")
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
