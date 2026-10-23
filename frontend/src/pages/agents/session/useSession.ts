@@ -3,18 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, unwrap } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { applyEvent, type SessionState } from "./applyEvent";
-import { parseEvent } from "./events";
+import { eventNames, parseEvent } from "./events";
 import { openStream, STREAM_CONNECTING, type StreamLike } from "./stream";
-
-const eventNames = [
-  "message.created",
-  "text.delta",
-  "tool.started",
-  "tool.finished",
-  "message.updated",
-  "turn.ended",
-  "resync",
-];
 
 export type UseSessionResult = {
   state: SessionState | undefined;
@@ -114,7 +104,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
               );
         if (!disposed) {
           setError(apiErr);
-          setConnection("closed");
+          setConnection((prev) => (prev === "reconnecting" ? "reconnecting" : "closed"));
         }
         return { error: apiErr };
       }
@@ -138,15 +128,32 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
           setConnection("closed");
           return;
         }
+        setConnection("reconnecting");
         schedule();
       });
     };
 
     const connect = async (reloadSession = false) => {
-      const loaded = reloadSession
-        ? (await load()).state
-        : (stateRef.current ?? (await load()).state);
-      if (disposed || !loaded) return;
+      let loaded: SessionState | undefined;
+      if (reloadSession) {
+        setConnection("reconnecting");
+        const result = await load();
+        if (disposed) return;
+        if (!result.state) {
+          if (result.error?.status === 404 || result.error?.status === 401) {
+            setConnection("closed");
+            return;
+          }
+          setConnection("reconnecting");
+          schedule();
+          return;
+        }
+        loaded = result.state;
+      } else {
+        const result = stateRef.current ? { state: stateRef.current } : await load();
+        if (disposed || !result.state) return;
+        loaded = result.state;
+      }
 
       close();
 
