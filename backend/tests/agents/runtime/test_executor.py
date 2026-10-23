@@ -11,10 +11,7 @@ import tests.fakes.fake_openai as fake_openai_module
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
-    MessageView,
     TextPart,
-    ToolCallPart,
-    ToolResultPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.hub import AsyncRLock
@@ -31,6 +28,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.graph_env import RecordingSink
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.integrations.test_github_auth import FakeGh
@@ -42,26 +40,6 @@ async def _assert_thread_deleted(db_path: Path, thread_id: str) -> None:
     chk = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})  # pyright: ignore[reportUnknownMemberType]
     assert chk is None
     await conn.close()
-
-
-class RecordingSink:
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.tools_started: list[ToolCallPart] = []
-        self.tools_finished: list[ToolResultPart] = []
-        self.messages: list[tuple[MessageView, bool]] = []
-
-    async def text(self, message_id: str, text: str) -> None:
-        self.texts.append(text)
-
-    async def tool_started(self, message_id: str, call: ToolCallPart) -> None:
-        self.tools_started.append(call)
-
-    async def tool_finished(self, message_id: str, result: ToolResultPart) -> None:
-        self.tools_finished.append(result)
-
-    async def message(self, message: MessageView, *, created: bool) -> None:
-        self.messages.append((message, created))
 
 
 def _settings(paths: DataPaths) -> Settings:

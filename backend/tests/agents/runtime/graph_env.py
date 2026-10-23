@@ -1,4 +1,4 @@
-"""The agent and sink the turn-graph checkpointer tests build their graph run with."""
+"""The agent and the recording sink the runtime tests build their graph and executor runs with."""
 
 from __future__ import annotations
 
@@ -36,12 +36,19 @@ class RecordingSink:
         self.messages.append((message, created))
 
 
-def make_agent(repo_dir: Path, bin_dir: Path) -> Agent:
+def make_agent(
+    repo_dir: Path,
+    bin_dir: Path,
+    *,
+    project_id: str = "prj_chk",
+    max_steps: int | None = 25,
+    tool_names: tuple[str, ...] | None = None,
+) -> Agent:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names())
     definition = catalog.get("orchestrator")
     project = Project(
-        id="prj_chk",
+        id=project_id,
         name="test",
         source="local",
         local_path=str(repo_dir),
@@ -64,7 +71,7 @@ def make_agent(repo_dir: Path, bin_dir: Path) -> Agent:
     repo_files = RepoFiles(repo_dir, GitRunner(bin_dir))
     tool_ctx = ToolContext(files=repo_files)
     agent_tools: list[Any] = []
-    for name in definition.tools:
+    for name in tool_names if tool_names is not None else definition.tools:
         t = tools.get(name)
         if t is not None:
             agent_tools.append(t)
@@ -74,7 +81,7 @@ def make_agent(repo_dir: Path, bin_dir: Path) -> Agent:
         project=project,
         layout="README.md",
         model=model,
-        max_steps=25,
+        max_steps=max_steps,
         tools=tuple(agent_tools),
         tool_context=tool_ctx,
     )
