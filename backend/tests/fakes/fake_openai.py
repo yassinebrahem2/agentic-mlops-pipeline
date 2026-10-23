@@ -28,6 +28,12 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
 SLOW_TEXT = " ".join(f"word{i}" for i in range(40))
 
 
+def _open_gate() -> threading.Event:
+    event = threading.Event()
+    event.set()
+    return event
+
+
 @dataclass
 class FakeState:
     required_key: str | None = None
@@ -38,8 +44,16 @@ class FakeState:
     drop_after_chunks: int | None = None
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    _slow_gate: threading.Event = field(default_factory=_open_gate)
+
+    def hold_slow(self) -> None:
+        self._slow_gate.clear()
+
+    def release_slow(self) -> None:
+        self._slow_gate.set()
 
     def reset(self) -> None:
+        self.release_slow()
         self.required_key = None
         self.rate_limit_remaining = 0
         self.server_error_remaining = 0
@@ -125,6 +139,9 @@ async def _stream(
                 await asyncio.sleep(0.05)
             maybe_drop()
             yield _chunk(model, {"content": word if i == 0 else " " + word})
+            if model == "fake-slow" and i == 0:
+                while not state._slow_gate.is_set():  # pyright: ignore[reportPrivateUsage]  # noqa: ASYNC110 - cross-thread gate
+                    await asyncio.sleep(0.02)
         finish = "stop"
     maybe_drop()
     yield _chunk(model, {}, finish)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,28 +29,18 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.paths import DataPaths
-from mlops_agents.workspace.models import Project
+from tests.api.conftest import add_local_project, live_server, signed_in
 from tests.api.fake_sessions import parse_sse_events
-from tests.conftest import make_repo
 from tests.fakes.fake_openai import SLOW_TEXT, RunningFake
 
 EVENT = TypeAdapter(StreamEvent)
-README = "# Live session repository"
+README = "# Test"
 
 
 @pytest.fixture
-async def session_url(
-    live_client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
-) -> str:
-    repo = await asyncio.to_thread(
-        make_repo, tmp_path / "repo", {"README.md": README + "\nRead through HTTP.\n"}, git_env
-    )
-    response = await live_client.post(
-        "/api/projects", json={"source": "local", "path": str(repo), "init_git": False}
-    )
-    assert response.status_code == 201, response.text
-    project = Project.model_validate(response.json())
-    return f"/api/projects/{project.id}/agents/orchestrator/session"
+async def session_url(live_app: FastAPI, tmp_path: Path, git_env: dict[str, str]) -> str:
+    project_id = await add_local_project(live_app, tmp_path, git_env)
+    return f"/api/projects/{project_id}/agents/orchestrator/session"
 
 
 async def _assign_model(http: httpx2.AsyncClient, fake: RunningFake, model: str) -> None:
@@ -225,6 +216,7 @@ def _deltas(events: list[StreamEvent]) -> str:
 async def test_two_tabs_and_mid_turn_snapshot_converge_without_missing_or_doubled_text(
     live_client: httpx2.AsyncClient, fake_openai: RunningFake, session_url: str
 ) -> None:
+    fake_openai.state.hold_slow()
     await _assign_model(live_client, fake_openai, "fake-slow")
     async with (
         _stream(live_client, session_url) as first,
@@ -232,11 +224,12 @@ async def test_two_tabs_and_mid_turn_snapshot_converge_without_missing_or_double
     ):
         await _send(live_client, session_url, "Reply slowly")
         prefix = await _through_delta(first)
+        assert _deltas(prefix) == "word0"
         snapshot = await _view(live_client, session_url)
         assert snapshot.busy
         message = snapshot.messages[-1]
         assert message.author_kind == "agent" and message.status == "streaming"
-        assert 0 < len(_text(message)) < len(SLOW_TEXT)
+        assert _text(message) == "word0"
         async with (
             _stream(live_client, session_url, after=snapshot.last_seq) as third,
             asyncio.TaskGroup() as readers,
@@ -244,6 +237,7 @@ async def test_two_tabs_and_mid_turn_snapshot_converge_without_missing_or_double
             first_tail = readers.create_task(_until_end(first))
             second_turn = readers.create_task(_until_end(second))
             third_tail = readers.create_task(_until_end(third))
+            fake_openai.state.release_slow()
 
     first_events = prefix + first_tail.result()
     second_events, third_events = second_turn.result(), third_tail.result()
@@ -260,12 +254,15 @@ async def test_two_tabs_and_mid_turn_snapshot_converge_without_missing_or_double
 async def test_reconnect_with_last_event_id_continues_text_exactly_once(
     live_client: httpx2.AsyncClient, fake_openai: RunningFake, session_url: str
 ) -> None:
+    fake_openai.state.hold_slow()
     await _assign_model(live_client, fake_openai, "fake-slow")
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
         prefix = await _through_delta(stream)
+        assert _deltas(prefix) == "word0"
     assert (await _view(live_client, session_url)).busy
     async with _stream(live_client, session_url, after=prefix[-1].seq, header=True) as stream:
+        fake_openai.state.release_slow()
         suffix = await _until_end(stream)
 
     events = prefix + suffix
@@ -286,10 +283,12 @@ async def test_reconnect_with_last_event_id_continues_text_exactly_once(
 async def test_stop_preserves_partial_output_and_next_message_completes(
     live_client: httpx2.AsyncClient, fake_openai: RunningFake, session_url: str
 ) -> None:
+    fake_openai.state.hold_slow()
     await _assign_model(live_client, fake_openai, "fake-slow")
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
         prefix = await _through_delta(stream)
+        assert _deltas(prefix) == "word0"
         response = await live_client.post(session_url + "/stop")
         assert response.status_code == 204
         stopped_events = prefix + await _until_end(stream)
@@ -297,8 +296,8 @@ async def test_stop_preserves_partial_output_and_next_message_completes(
         assert isinstance(ended, TurnEnded) and ended.data.status == "stopped"
         stopped = (await _view(live_client, session_url, idle=True)).messages[-1]
         assert stopped.status == "stopped"
-        assert _text(stopped) == _deltas(stopped_events)
-        assert 0 < len(_text(stopped)) < len(SLOW_TEXT)
+        assert _text(stopped) == _deltas(stopped_events) == "word0"
+        fake_openai.state.release_slow()
         sent = await _send(live_client, session_url, "Try again")
         next_events = await _until_end(stream)
 
@@ -319,6 +318,7 @@ async def test_delete_project_during_turn_closes_stream_and_removes_project_fold
     session_url: str,
     tmp_path: Path,
 ) -> None:
+    fake_openai.state.hold_slow()
     await _assign_model(live_client, fake_openai, "fake-slow")
     project_url = session_url.split("/agents/")[0]
     project_id = project_url.rsplit("/", 1)[1]
@@ -328,7 +328,8 @@ async def test_delete_project_during_turn_closes_stream_and_removes_project_fold
     project_dir = paths.project_dir(project_id)
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
-        await _through_delta(stream)
+        prefix = await _through_delta(stream)
+        assert _deltas(prefix) == "word0"
         assert (await _view(live_client, session_url)).busy
         assert project_dir.is_dir()
         async with asyncio.timeout(10):
@@ -339,4 +340,34 @@ async def test_delete_project_during_turn_closes_stream_and_removes_project_fold
 
     assert not project_dir.exists()
     assert (await live_client.get(project_url)).status_code == 404
-    assert (tmp_path / "repo" / "README.md").is_file()
+    assert (tmp_path / "test-repo" / "README.md").is_file()
+
+
+async def test_held_turn_stopped_without_releasing_gate_shuts_down_cleanly(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_openai: RunningFake,
+) -> None:
+    fake_openai.state.hold_slow()
+    async with live_server(tmp_path / "live-shutdown-held") as live:
+        project_id = await add_local_project(live.app, tmp_path, git_env)
+        port = live.app.state.services.settings.port
+        url = f"/api/projects/{project_id}/agents/orchestrator/session"
+        async with (
+            signed_in(live.app, f"http://127.0.0.1:{port}", in_process=False) as http,
+            _stream(http, url) as stream,
+        ):
+            await _assign_model(http, fake_openai, "fake-slow")
+            await _send(http, url, "Reply slowly")
+            prefix = await _through_delta(stream)
+            assert _deltas(prefix) == "word0"
+            stop_resp = await http.post(url + "/stop")
+            assert stop_resp.status_code == 204
+            stopped_events = prefix + await _until_end(stream)
+            assert isinstance(stopped_events[-1], TurnEnded)
+            assert stopped_events[-1].data.status == "stopped"
+
+            started = time.monotonic()
+            async with asyncio.timeout(5.0):
+                await live.stop()
+            assert time.monotonic() - started < 5.0
