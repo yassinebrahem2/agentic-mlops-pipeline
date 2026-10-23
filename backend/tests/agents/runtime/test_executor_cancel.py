@@ -53,9 +53,13 @@ class SlowDummyTool(AgentTool[SlowDummyArgs]):
     risk = RiskClass.READ
     args_model = SlowDummyArgs
 
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
     async def run(self, ctx: ToolContext, args: SlowDummyArgs) -> ToolOutput:
-        await asyncio.sleep(10.0)
-        return ToolOutput(content="done")
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable: the turn is cancelled")
 
 
 class RecordingSink(TurnSink):
@@ -76,6 +80,19 @@ class RecordingSink(TurnSink):
 
     async def message(self, message: MessageView, *, created: bool) -> None:
         self.messages.append((message, created))
+
+
+class EndStateSink(RecordingSink):
+    """Logs when the stopped end state is published, to order it against other events."""
+
+    def __init__(self, log: list[str]) -> None:
+        super().__init__()
+        self.log = log
+
+    async def message(self, message: MessageView, *, created: bool) -> None:
+        if message.status == "stopped":
+            self.log.append("end state")
+        await super().message(message, created=created)
 
 
 async def _assert_thread_deleted(db_path: Path, thread_id: str) -> None:
@@ -118,8 +135,9 @@ async def test_executor_cancellation_during_slow_tool(
         "---\nname: slowagent\ndisplay_name: Slow Agent\ndescription: Test\ntools:\n  - SlowTool\n---\nPrompt\n"
     )
 
+    slow_tool = SlowDummyTool()
     tools = default_registry()
-    tools.register(SlowDummyTool())
+    tools.register(slow_tool)
     catalog = AgentCatalog.load(tools.names(), extra_dirs=[def_dir])
 
     providers_svc = ProvidersService(databases, keystore, model_http)
@@ -159,30 +177,32 @@ async def test_executor_cancellation_during_slow_tool(
 
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "SlowTool", {})
 
-    checkpointer_connections: list[aiosqlite.Connection] = []
+    log: list[str] = []
 
     async def recording_connect(path: Path) -> aiosqlite.Connection:
         conn = await connect_checkpointer(path)
-        checkpointer_connections.append(conn)
+        close = conn.close
+
+        async def recording_close() -> None:
+            await close()
+            log.append("checkpointer closed")
+
+        monkeypatch.setattr(conn, "close", recording_close)
         return conn
 
     monkeypatch.setattr(executor_module, "connect_checkpointer", recording_connect)
 
-    sink = RecordingSink()
+    sink = EndStateSink(log)
     task = asyncio.create_task(
         executor.run(project.id, session_id, "slowagent", turn_id, sink, AsyncRLock())
     )
 
-    for _ in range(50):
-        if sink.tools_started:
-            break
-        await asyncio.sleep(0.02)
+    tool_started = asyncio.create_task(slow_tool.started.wait())
+    # Racing the run makes a turn that ends before its tool runs fail here instead of hanging.
+    done, _ = await asyncio.wait({tool_started, task}, return_when=asyncio.FIRST_COMPLETED)
+    tool_started.cancel()
+    assert done == {tool_started}
     assert len(sink.tools_started) == 1
-
-    # A checkpoint write cancelled before its commit leaves the write lock held by this connection.
-    abandoned = checkpointer_connections[0]
-    await abandoned.execute("CREATE TABLE IF NOT EXISTS abandoned (x)")
-    await abandoned.execute("INSERT INTO abandoned VALUES (1)")
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -194,6 +214,7 @@ async def test_executor_cancellation_during_slow_tool(
     assert len(agent_msg.parts) == 1
     assert agent_msg.parts[0].type == "tool_call"
     assert any(m.status == "stopped" and created is False for m, created in sink.messages)
+    assert log == ["checkpointer closed", "end state"]
 
     await _assert_thread_deleted(paths.project_db(project.id), turn_id)
 
