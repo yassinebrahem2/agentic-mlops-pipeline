@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -19,18 +18,16 @@ from mlops_agents.api.deps import ProjectDep, ServicesDep
 
 router = APIRouter(tags=["sessions"])
 
+# A comment line this often keeps proxies from closing an idle stream.
 PING_SECONDS: float = 15.0
 
 
 def _parse_after_seq(last_event_id: str | None, after: str | None) -> int | None:
     raw = last_event_id if last_event_id is not None else after
-    if raw is None:
+    # int() would also accept "+5", "1_0" and non-ASCII digits, which are not seqs.
+    if raw is None or not (raw.isascii() and raw.isdigit()):
         return None
-    try:
-        val = int(raw)
-        return val if val >= 0 else None
-    except (ValueError, TypeError):
-        return None
+    return int(raw)
 
 
 class SendMessage(BaseModel):
@@ -104,7 +101,8 @@ async def stream_session(
     after: Annotated[str | None, Query()] = None,
 ) -> _EventSourceResponse:
     sessions = services.sessions
-    # Check agent and project before returning EventSourceResponse
+    # Errors cannot be sent once the stream's headers are out, and subscribe only raises on
+    # its first event, so an unknown or chat-less agent must fail here as a JSON error.
     await sessions.get(project_id, agent)
 
     after_seq = _parse_after_seq(last_event_id, after)
@@ -119,11 +117,7 @@ async def stream_session(
                     data=event.data.model_dump_json(),
                 )
         finally:
-            aclose = getattr(subscription, "aclose", None)
-            if callable(aclose):
-                close_result = aclose()
-                if inspect.isawaitable(close_result):
-                    await close_result
+            await subscription.aclose()
 
     return _EventSourceResponse(
         event_generator(),

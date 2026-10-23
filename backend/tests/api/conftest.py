@@ -3,6 +3,7 @@ import socket
 import tempfile
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -15,7 +16,7 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, SessionSigner
 from mlops_agents.config import DEFAULT_PORT, RunMode, load_settings
 from mlops_agents.errors import DomainError
-from tests.conftest import MemoryKeyStore
+from tests.conftest import MemoryKeyStore, make_repo
 
 LOCAL_URL = "http://127.0.0.1:8765"
 SERVER_URL = "https://app.example.com"
@@ -127,28 +128,45 @@ async def server_client(make_client: MakeClient) -> AsyncIterator[httpx2.AsyncCl
         yield http
 
 
-@pytest.fixture
-async def live_app(tmp_path: Path) -> AsyncIterator[FastAPI]:
+@dataclass
+class LiveServer:
+    app: FastAPI
+    server: uvicorn.Server
+    serving: asyncio.Task[None]
+
+    async def stop(self) -> None:
+        self.server.should_exit = True
+        await self.serving
+
+
+@asynccontextmanager
+async def live_server(home: Path) -> AsyncGenerator[LiveServer]:
     """The local-mode app served by uvicorn on a free 127.0.0.1 port (the one `live_client`
     calls). The port is picked first so that `settings.port` is the port it is served on."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         port: int = sock.getsockname()[1]
-        application = build_app(tmp_path / "live", port=port)
+        application = build_app(home, port=port)
         server = uvicorn.Server(
             uvicorn.Config(application, timeout_graceful_shutdown=5, log_config=None)
         )
         serving = asyncio.create_task(server.serve(sockets=[sock]))
+        live = LiveServer(application, server, serving)
         try:
             async with asyncio.timeout(10):
                 while not server.started:
                     if serving.done():
                         serving.result()
                     await asyncio.sleep(0.01)
-            yield application
+            yield live
         finally:
-            server.should_exit = True
-            await serving
+            await live.stop()
+
+
+@pytest.fixture
+async def live_app(tmp_path: Path) -> AsyncIterator[FastAPI]:
+    async with live_server(tmp_path / "live") as live:
+        yield live.app
 
 
 @pytest.fixture
@@ -157,3 +175,9 @@ async def live_client(live_app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
     port = live_app.state.services.settings.port
     async with signed_in(live_app, f"http://127.0.0.1:{port}", in_process=False) as http:
         yield http
+
+
+async def add_local_project(app: FastAPI, tmp_path: Path, git_env: dict[str, str]) -> str:
+    """A project on a fresh local repository; returns its id."""
+    repo = make_repo(tmp_path / "test-repo", {"README.md": "# Test"}, git_env)
+    return (await app.state.services.workspace.add_local(str(repo))).id
