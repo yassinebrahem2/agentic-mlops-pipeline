@@ -159,3 +159,9 @@ async def test_compaction_triggered_when_size_exceeds_threshold(
     summary, compacted_through = await store.summary("prj_1", session_id)
     assert summary == "Key decisions: decided on A and B."
     assert compacted_through == m2.id
+
+    # The summary call is reported like any other model call.
+    last_call = await store.last_llm_call_prompt_tokens("prj_1", session_id)
+    assert last_call is not None
+    assert last_call[0] == 50
+    assert last_call[2] == t2
