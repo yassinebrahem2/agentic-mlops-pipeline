@@ -201,6 +201,8 @@ async def test_executor_cancellation_during_slow_tool(
     # Racing the run makes a turn that ends before its tool runs fail here instead of hanging.
     done, _ = await asyncio.wait({tool_started, task}, return_when=asyncio.FIRST_COMPLETED)
     tool_started.cancel()
+    # Waits for the cancel to land, so no waiter task outlives the test.
+    await asyncio.wait({tool_started})
     assert done == {tool_started}
     assert len(sink.tools_started) == 1
 

@@ -9,12 +9,16 @@ import httpx2
 import pytest
 from sqlalchemy import select
 
-from mlops_agents.agents.runtime.contract import TextDelta
+from mlops_agents.agents.runtime.contract import Resync, TurnEnded
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, turns
-from tests.agents.runtime.session_env import build_session_env
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    through_first_delta,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -37,13 +41,10 @@ async def test_close_project_during_turn(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
+    fake_openai.state.hold_slow()
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
     await manager.send(project_id, "orchestrator", "Slow response")
-
-    # Wait for turn to start streaming
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
 
     # Close project
     await manager.close_project(project_id)
@@ -88,13 +89,11 @@ async def test_close_during_turn_leaves_turn_and_message_interrupted(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
+    fake_openai.state.hold_slow()
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
     await manager.send(project_id, "orchestrator", "Turn 1 slow")
     m2 = await manager.send(project_id, "orchestrator", "Turn 2 queued")
-
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
 
     await manager.close()
 
@@ -141,20 +140,25 @@ async def test_stop_after_turn_ended_does_not_swallow_a_later_shutdown(
 
     monkeypatch.setattr(SessionStore, "set_turn", hold_worker_after_turn_one)
 
+    # Reading the snapshot starts the subscription now, so it sees every event of both turns.
     stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(stream), Resync)
     await manager.send(project_id, "orchestrator", "Turn 1 fast")
     await turn_one_ended.wait()
 
     # The turn's child task has ended but the worker has not moved on: this Stop has no target.
     await env.settings.set_default_model("orchestrator", f"{env.provider}:fake-slow")
+    fake_openai.state.hold_slow()
     await manager.send(project_id, "orchestrator", "Turn 2 slow")
     third = await manager.send(project_id, "orchestrator", "Turn 3 queued")
     await manager.stop(project_id, "orchestrator")
     release_worker.set()
 
-    async for ev in stream:
-        if isinstance(ev, TextDelta):
-            break
+    # Turn 1 streamed text of its own, so its end is read first: the next delta is turn 2's.
+    first = (await collect_until_turn_ended(stream))[-1]
+    assert isinstance(first, TurnEnded)
+    assert first.data.status == "done"
+    await through_first_delta(stream)
     await manager.close()
 
     engine = await databases.project(project_id)

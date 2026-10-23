@@ -12,7 +12,6 @@ from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
     MessageView,
     Resync,
-    SessionView,
     StreamEvent,
     TextDelta,
     TextPart,
@@ -21,7 +20,11 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    through_first_delta,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -124,36 +127,28 @@ async def test_mid_turn_subscriber_after_get(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
-    # Subscriber 1 from the beginning
+    fake_openai.state.hold_slow()
     sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    task1 = asyncio.create_task(collect_until_turn_ended(sub1, timeout=15.0))
-
     await manager.send(project_id, "orchestrator", "Slow response please")
+    prefix = await through_first_delta(sub1)
 
-    # Wait until turn is running and streaming deltas
-    view: SessionView | None = None
-    for _ in range(50):
-        await asyncio.sleep(0.05)
-        v = await manager.get(project_id, "orchestrator")
-        if v.busy and len(v.messages) >= 2:
-            agent_msg = v.messages[-1]
-            if agent_msg.parts and isinstance(agent_msg.parts[-1], TextPart):
-                view = v
-                break
-
-    assert view is not None
+    # The turn is held after its first word, so the view is taken mid-turn.
+    view = await manager.get(project_id, "orchestrator")
     assert view.busy is True
     initial_text = "".join(p.text for p in view.messages[-1].parts if isinstance(p, TextPart))
+    assert initial_text == "word0"
 
     # Now subscriber 2 joins mid-turn with view.last_seq
     sub2 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    events2 = await collect_until_turn_ended(sub2, timeout=15.0)
+    fake_openai.state.release_slow()
+    tail1, events2 = await asyncio.gather(
+        collect_until_turn_ended(sub1, timeout=15.0), collect_until_turn_ended(sub2, timeout=15.0)
+    )
 
     delta_text = "".join(e.data.text for e in events2 if isinstance(e, TextDelta))
     combined_text = initial_text + delta_text
 
-    events1 = await task1
-    final_updated = [e for e in events1 if isinstance(e, MessageUpdated)]
+    final_updated = [e for e in prefix + tail1 if isinstance(e, MessageUpdated)]
     assert final_updated
     final_text = "".join(
         p.text for p in final_updated[-1].data.message.parts if isinstance(p, TextPart)

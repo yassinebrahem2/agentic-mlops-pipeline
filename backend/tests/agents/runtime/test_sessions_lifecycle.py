@@ -12,7 +12,6 @@ from mlops_agents.agents.runtime.contract import (
     MessageCreated,
     MessageUpdated,
     MessageView,
-    TextDelta,
     TextPart,
     TurnEnded,
 )
@@ -21,7 +20,11 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, turns
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    through_first_delta,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -172,21 +175,17 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
+    # The gate stays held: both turns are acted on mid-turn and neither needs to finish.
+    fake_openai.state.hold_slow()
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
 
     # 1. Start turn 1 and stop it
     await manager.send(project_id, "orchestrator", "Turn 1 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
     await manager.stop(project_id, "orchestrator")
 
-    ended_turn_1: TurnEnded | None = None
-    async for ev in sub:
-        if isinstance(ev, TurnEnded):
-            ended_turn_1 = ev
-            break
-    assert ended_turn_1 is not None
+    ended_turn_1 = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(ended_turn_1, TurnEnded)
     assert ended_turn_1.data.status == "stopped"
 
     # Confirm turn 1's agent message is stopped in DB
@@ -203,9 +202,7 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
 
     # 2. Start turn 2 and interrupt it via close()
     await manager.send(project_id, "orchestrator", "Turn 2 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
 
     await manager.close()
 

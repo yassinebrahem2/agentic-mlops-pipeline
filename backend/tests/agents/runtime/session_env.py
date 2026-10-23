@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.contract import StreamEvent, TextDelta, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -86,9 +87,7 @@ async def build_session_env(
     await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
     await providers_svc.verify_model(f"{prov.name}:fake-tools")
     await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-slow"))
-    await providers_svc.record_verification(
-        f"{prov.name}:fake-slow", tool_calling=True, streaming=True, detail=None
-    )
+    await providers_svc.verify_model(f"{prov.name}:fake-slow")
 
     project = await workspace_svc.add_local(str(repo_dir))
     await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
@@ -116,3 +115,17 @@ async def collect_until_turn_ended(
 
     await asyncio.wait_for(collector(), timeout=timeout)
     return events
+
+
+async def through_first_delta(sub: AsyncIterator[StreamEvent]) -> list[StreamEvent]:
+    """Read up to the first text delta: with the fake's gate held, the turn is then held there.
+
+    A turn that ends before any text fails here instead of leaving the test waiting.
+    """
+    received: list[StreamEvent] = []
+    async for event in sub:
+        received.append(event)
+        assert not isinstance(event, TurnEnded), received
+        if isinstance(event, TextDelta) and event.data.text:
+            return received
+    raise AssertionError(f"the stream closed before any text: {received}")

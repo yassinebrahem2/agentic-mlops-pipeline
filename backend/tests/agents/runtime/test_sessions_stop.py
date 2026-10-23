@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
     StreamEvent,
-    TextDelta,
     ToolStarted,
     TurnEnded,
 )
@@ -17,7 +16,11 @@ from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolOutput
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    through_first_delta,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -40,28 +43,26 @@ async def test_stop_during_fake_slow(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
+    fake_openai.state.hold_slow()
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
 
     await manager.send(project_id, "orchestrator", "Slow turn 1")
     await manager.send(project_id, "orchestrator", "Quick turn 2")
-
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
 
     await manager.stop(project_id, "orchestrator")
+    all_events = await collect_until_turn_ended(sub)
+    stopped = all_events[-1]
+    assert isinstance(stopped, TurnEnded)
+    assert stopped.data.status == "stopped"
 
-    all_events: list[StreamEvent] = []
-    ended: list[TurnEnded] = []
-    async for ev in sub:
-        all_events.append(ev)
-        if isinstance(ev, TurnEnded):
-            ended.append(ev)
-            if len(ended) == 2:
-                break
+    # Turn 2 runs on the same held model, so it can only finish once the gate opens.
+    fake_openai.state.release_slow()
+    turn_2_events = await collect_until_turn_ended(sub, timeout=15.0)
+    finished = turn_2_events[-1]
+    assert isinstance(finished, TurnEnded)
+    assert finished.data.status == "done"
 
-    assert ended[0].data.status == "stopped"
-    assert ended[1].data.status == "done"
     assert any(
         isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in all_events
     )
@@ -69,7 +70,7 @@ async def test_stop_during_fake_slow(
     store = env.store
     sid = await store.session_id(project_id, "orchestrator")
     msgs = await store.messages(project_id, sid)
-    agent_msg_1 = next(m for m in msgs if m.turn_id == ended[0].data.turn_id)
+    agent_msg_1 = next(m for m in msgs if m.turn_id == stopped.data.turn_id)
     assert agent_msg_1.status == "stopped"
     assert len(agent_msg_1.parts) > 0
 
