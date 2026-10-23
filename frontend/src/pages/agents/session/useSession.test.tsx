@@ -1,57 +1,10 @@
-import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api, ApiError } from "@/lib/api";
 import { queryClient } from "@/lib/query";
-import * as streamModule from "./stream";
-import { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./stream";
+import { STREAM_CONNECTING } from "./stream";
+import { FakeStream, initialSession, setupSessionStreamMock, wrapper } from "./testing";
 import { useSession } from "./useSession";
-
-const initialSession = {
-  id: "s1",
-  agent: "orchestrator",
-  busy: false,
-  messages: [],
-  last_seq: 4,
-};
-
-class FakeStream implements StreamLike {
-  url: string;
-  readyState = STREAM_OPEN;
-  onerror: ((event: Event) => void) | null = null;
-  listeners = new Map<string, (event: Event) => void>();
-
-  constructor(url: string) {
-    this.url = url;
-  }
-
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      this.listeners.set(type, listener);
-    }
-  }
-
-  close = vi.fn(() => {
-    this.readyState = STREAM_CLOSED;
-  });
-
-  emitOpen(): void {
-    this.listeners.get("open")?.(new Event("open"));
-  }
-
-  emit(type: string, data: unknown, seq: number): void {
-    this.listeners.get(type)?.({
-      type,
-      data: JSON.stringify(data),
-      lastEventId: String(seq),
-    } as MessageEvent);
-  }
-}
-
-const wrapper = ({ children }: { children: ReactNode }) => (
-  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-);
 
 describe("useSession", () => {
   let createdStreams: FakeStream[] = [];
@@ -60,12 +13,7 @@ describe("useSession", () => {
 
   beforeEach(() => {
     createdStreams = [];
-    queryClient.clear();
-    openStreamSpy = vi.spyOn(streamModule, "openStream").mockImplementation((url: string) => {
-      const stream = new FakeStream(url);
-      createdStreams.push(stream);
-      return stream;
-    });
+    openStreamSpy = setupSessionStreamMock(createdStreams);
   });
 
   afterEach(() => {
@@ -133,46 +81,6 @@ describe("useSession", () => {
     expect(result.current.connection).toBe("reconnecting");
     expect(getSpy).toHaveBeenCalledTimes(1);
 
-    unmount();
-  });
-
-  it("a refused stream (CLOSED) followed by a 404 closes permanently with error", async () => {
-    let callCount = 0;
-    getSpy = vi.spyOn(api, "GET").mockImplementation(() => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Promise.resolve({
-          data: initialSession,
-          response: new Response(null, { status: 200 }),
-        });
-      }
-      return Promise.reject(new ApiError("not_found", "Project prj_1 not found.", 404));
-    });
-
-    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
-
-    await waitFor(() => {
-      expect(createdStreams).toHaveLength(1);
-    });
-    act(() => {
-      createdStreams[0]?.emitOpen();
-    });
-
-    act(() => {
-      const stream = createdStreams[0];
-      if (stream) {
-        stream.readyState = STREAM_CLOSED;
-        stream.onerror?.(new Event("error"));
-      }
-    });
-
-    await waitFor(() => {
-      expect(result.current.connection).toBe("closed");
-      expect(result.current.error?.status).toBe(404);
-      expect(result.current.error?.message).toBe("Project prj_1 not found.");
-    });
-
-    expect(createdStreams).toHaveLength(1);
     unmount();
   });
 

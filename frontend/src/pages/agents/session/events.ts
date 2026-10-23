@@ -23,6 +23,18 @@ export type ToolStartedData = Schemas["ToolStartedData"];
 export type ToolFinishedData = Schemas["ToolFinishedData"];
 export type TurnEndedData = Schemas["TurnEndedData"];
 
+export const eventNames = [
+  "message.created",
+  "text.delta",
+  "tool.started",
+  "tool.finished",
+  "message.updated",
+  "turn.ended",
+  "resync",
+] as const;
+
+export type StreamEventName = (typeof eventNames)[number];
+
 export type StreamEventData =
   | ({ type: "message.created" } & MessageData)
   | ({ type: "text.delta" } & TextDeltaData)

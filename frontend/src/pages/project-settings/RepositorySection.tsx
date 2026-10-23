@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { api, errorText, unwrap } from "@/lib/api";
 import { useAppInfo } from "@/lib/useAppInfo";
+import { projectKey } from "@/lib/useProject";
 
 export function RepositorySection({ project }: { project: components["schemas"]["Project"] }) {
   const queryClient = useQueryClient();
@@ -20,7 +21,7 @@ export function RepositorySection({ project }: { project: components["schemas"][
   const params = { path: { project_id: project.id } };
   const app = useAppInfo();
   const updateProject = (updated: components["schemas"]["Project"]) => {
-    queryClient.setQueryData(["projects", project.id], updated);
+    queryClient.setQueryData(projectKey(project.id), updated);
     void queryClient.invalidateQueries({ queryKey: ["projects"] });
   };
   const refresh = useMutation({
