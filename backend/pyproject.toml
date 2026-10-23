@@ -55,6 +55,8 @@ ignore = ["E501", "S603", "S607"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S104", "S105", "S106"]
+# The fake server polls the gate across threads.
+"tests/fakes/fake_openai.py" = ["ASYNC110"]
 
 [tool.pyright]
 include = ["src", "tests", "../scripts"]
@@ -63,6 +65,11 @@ typeCheckingMode = "strict"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
+# The fake server polls the gate across threads.
+executionEnvironments = [
+  { root = "tests/fakes", extraPaths = ["src", "../scripts"], reportPrivateUsage = false },
+  { root = "." },
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
