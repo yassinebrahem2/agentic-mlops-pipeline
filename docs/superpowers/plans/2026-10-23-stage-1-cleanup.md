@@ -44,7 +44,7 @@
 
 **Implementation notes:**
 - `board.yml`: add a one-line comment above `move_if_open` saying why it checks the state: a closed issue stays Done whatever happens to the PR or Decision that names it.
-- `fake_openai.py`: the only two routes, and the only suppressions in `tests/fakes`, are the two routes (`list_models`, `chat`) carry `pyright: ignore[reportUnusedFunction]` because they are registered by decorator. Register them with `app.add_api_route("/v1/models", list_models, methods=["GET"])` and `app.add_api_route("/v1/chat/completions", chat, methods=["POST"])` after their definitions instead. The functions are then used, so both suppressions go. Behavior is unchanged.
+- `fake_openai.py`: its two routes (`list_models`, `chat`), the only routes and the only suppressions in `tests/fakes`, carry `pyright: ignore[reportUnusedFunction]` because they are registered by decorator. Register them with `app.add_api_route("/v1/models", list_models, methods=["GET"])` and `app.add_api_route("/v1/chat/completions", chat, methods=["POST"])` after their definitions instead. The functions are then used, so both suppressions go. Behavior is unchanged.
 
 **Tests (stop condition):**
 - From `backend/`: full `uv run pytest`, `uv run ruff check`, `uv run ruff format --check` and `uv run pyright` pass, and `git grep -n "pyright: ignore" -- backend/tests/fakes` finds nothing.
