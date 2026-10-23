@@ -28,7 +28,7 @@ from mlops_agents.storage.sqlite import connect_checkpointer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["UNEXPECTED_FAILURE_TEXT", "TurnExecutor", "TurnSink"]
+__all__ = ["TURN_DURABILITY", "UNEXPECTED_FAILURE_TEXT", "TurnExecutor", "TurnSink"]
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 
@@ -176,8 +176,8 @@ class TurnExecutor:
                 active_history,
             )
 
-            # The checkpointer connection is gone before any handler below writes the end state:
-            # a cancelled checkpoint write can leave its transaction open, which locks the file.
+            # The checkpointer connection is closed before any handler below writes the end state,
+            # so once a turn reports how it ended, nothing of it still holds the project file.
             async with self._checkpointer(project_id, turn_id) as checkpointer:
                 graph = create_turn_graph(
                     agent=built_agent,

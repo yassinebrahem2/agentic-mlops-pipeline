@@ -197,7 +197,11 @@ async def test_executor_cancellation_during_slow_tool(
         executor.run(project.id, session_id, "slowagent", turn_id, sink, AsyncRLock())
     )
 
-    await slow_tool.started.wait()
+    tool_started = asyncio.create_task(slow_tool.started.wait())
+    # Racing the run makes a turn that ends before its tool runs fail here instead of hanging.
+    done, _ = await asyncio.wait({tool_started, task}, return_when=asyncio.FIRST_COMPLETED)
+    tool_started.cancel()
+    assert done == {tool_started}
     assert len(sink.tools_started) == 1
 
     task.cancel()

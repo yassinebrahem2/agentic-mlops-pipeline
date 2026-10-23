@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolCall
 from langchain_core.runnables import RunnableConfig
@@ -366,7 +367,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_failure(
 class GatedSaver(AsyncSqliteSaver):
     """Holds the checkpoint write after the first model step until the test releases it."""
 
-    def __init__(self, conn: Any, log: list[str]) -> None:
+    def __init__(self, conn: aiosqlite.Connection, log: list[str]) -> None:
         super().__init__(conn)
         self.log = log
         self.write_started = asyncio.Event()
@@ -449,7 +450,7 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
     await saver.setup()
     graph = create_turn_graph(
         agent=agent,
-        caller=ToolThenBlockCaller(),  # pyright: ignore[reportArgumentType]
+        caller=ToolThenBlockCaller(),  # pyright: ignore[reportArgumentType]  # test double with ModelCaller's call signature only
         store=store,
         sink=RecordingSink(),
         project_id="prj_durable",
@@ -468,10 +469,14 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
     try:
         # The executor's own arguments, so this pins the durability the turn runs with.
         run = asyncio.create_task(
-            graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]
+            graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
         )
         run.add_done_callback(lambda _: log.append("cancel returned"))
-        await saver.write_started.wait()
+        write_started = asyncio.create_task(saver.write_started.wait())
+        # Racing the run makes a run that ends without a step-0 write fail here instead of hanging.
+        done, _ = await asyncio.wait({write_started, run}, return_when=asyncio.FIRST_COMPLETED)
+        write_started.cancel()
+        assert done == {write_started}
         run.cancel()
         saver.release.set()
         with pytest.raises(asyncio.CancelledError):
@@ -480,7 +485,7 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
 
         reader = await connect_checkpointer(db_path)
         try:
-            saved = await AsyncSqliteSaver(reader).aget_tuple(config)  # pyright: ignore[reportUnknownMemberType]
+            saved = await AsyncSqliteSaver(reader).aget_tuple(config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph aget_tuple is partially untyped
         finally:
             await reader.close()
         assert saved is not None
