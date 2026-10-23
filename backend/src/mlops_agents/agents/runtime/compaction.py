@@ -51,8 +51,8 @@ async def compact_if_needed(
     history: list[MessageView],
     system_text: str,
     *,
-    turn_id: str | None = None,
-    agent_name: str = "orchestrator",
+    turn_id: str,
+    agent_name: str,
 ) -> None:
     """Summarize older whole turns if estimated size exceeds 75% of context window."""
     old_summary, old_compacted_through = await store.summary(project_id, session_id)
@@ -137,16 +137,15 @@ async def compact_if_needed(
     reply = await caller.call(model, prompt_messages, tools=[], on_text=_noop)
     latency_ms = int((time.monotonic() - t0) * 1000)
 
-    if turn_id is not None:
-        await store.add_llm_call(
-            project_id,
-            turn_id,
-            agent=agent_name,
-            model_address=model.address,
-            prompt_tokens=reply.prompt_tokens,
-            completion_tokens=reply.completion_tokens,
-            latency_ms=latency_ms,
-        )
+    await store.add_llm_call(
+        project_id,
+        turn_id,
+        agent=agent_name,
+        model_address=model.address,
+        prompt_tokens=reply.prompt_tokens,
+        completion_tokens=reply.completion_tokens,
+        latency_ms=latency_ms,
+    )
 
     new_summary = (
         reply.message.content

@@ -20,6 +20,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnSink
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -157,7 +158,9 @@ async def test_executor_cancellation_during_slow_tool(
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "SlowTool", {})
 
     sink = RecordingSink()
-    task = asyncio.create_task(executor.run(project.id, session_id, "slowagent", turn_id, sink))
+    task = asyncio.create_task(
+        executor.run(project.id, session_id, "slowagent", turn_id, sink, AsyncRLock())
+    )
 
     for _ in range(50):
         if sink.tools_started:
@@ -244,7 +247,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
 
     sink = RecordingSink()
     run_task = asyncio.create_task(
-        executor.run(project.id, session_id, "orchestrator", turn_id, sink)
+        executor.run(project.id, session_id, "orchestrator", turn_id, sink, AsyncRLock())
     )
 
     await started_streaming.wait()

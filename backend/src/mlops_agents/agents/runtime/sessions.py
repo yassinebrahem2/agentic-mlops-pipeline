@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -19,7 +18,7 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnd,
 )
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -240,8 +239,12 @@ class SessionManager(AgentSessions):
                             # Do not swallow worker cancellation!
                             if not child_task.done():
                                 child_task.cancel()
-                                with contextlib.suppress(asyncio.CancelledError, Exception):
+                                try:
                                     await child_task
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception:
+                                    logger.exception("Turn %s failed while closing", turn_id)
                             await self._store.set_turn(project_id, turn_id, "interrupted")
                             await self._store.mark_interrupted(project_id, turn_id)
                             raise
@@ -253,11 +256,15 @@ class SessionManager(AgentSessions):
                         await self._store.set_turn(project_id, turn_id, "interrupted")
                         await self._store.mark_interrupted(project_id, turn_id)
                         raise
-                    except Exception as exc:
-                        logger.exception("Unexpected error executing turn %s: %s", turn_id, exc)
-                        err_text = str(exc) or type(exc).__name__
-                        await self._store.set_turn(project_id, turn_id, "failed", error=err_text)
-                        await hub.turn_ended(turn_id, status="failed", error=err_text)
+                    except Exception:
+                        logger.exception("Turn %s failed outside the executor", turn_id)
+                        await self._store.set_turn(
+                            project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT
+                        )
+                        await self._store.mark_interrupted(project_id, turn_id)
+                        await hub.turn_ended(
+                            turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT
+                        )
                 finally:
                     self._stopped_tasks.discard(child_task)
                     self._child_tasks.pop(key, None)

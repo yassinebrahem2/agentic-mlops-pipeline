@@ -18,7 +18,8 @@ from mlops_agents.agents.runtime.contract import (
     ToolCallPart,
     ToolResultPart,
 )
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -105,6 +106,7 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names())
@@ -143,10 +145,13 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     monkeypatch.setattr(builder, "build", failing_build)
 
     sink = RecordingSink()
-    status, error = await executor.run(project.id, session_id, "orchestrator", turn_id, sink)
+    status, error = await executor.run(
+        project.id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
+    )
 
     assert status == "failed"
-    assert error == "Unexpected failure during agent build"
+    assert error == UNEXPECTED_FAILURE_TEXT
+    assert "Unexpected failure during agent build" in caplog.text
 
     # Turn execution created a system message with the failure
     msgs = await store.messages(project.id, session_id)
@@ -154,7 +159,7 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     assert len(sys_msgs) == 1
     assert sys_msgs[0].status == "complete"
     assert sys_msgs[0].parts[0].type == "text"
-    assert "Unexpected failure during agent build" in sys_msgs[0].parts[0].text  # pyright: ignore[reportAttributeAccessIssue]
+    assert sys_msgs[0].parts[0] == TextPart(type="text", text=UNEXPECTED_FAILURE_TEXT)
 
     # Sink saw the system message created
     assert any(m.author_kind == "system" and created is True for m, created in sink.messages)
@@ -220,7 +225,9 @@ async def test_executor_turn_failed_from_caller(
     monkeypatch.setattr(caller, "call", fail_call)
 
     sink = RecordingSink()
-    status, err = await executor.run(project.id, session_id, "orchestrator", turn_id, sink)
+    status, err = await executor.run(
+        project.id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
+    )
 
     assert status == "failed"
     assert err == "Simulated API failure"

@@ -15,6 +15,9 @@ from mlops_agents.agents.runtime.agent import AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.compaction import compact_if_needed
 from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
+    AuthorKind,
+    MessageStatus,
+    MessageView,
     Part,
     TextPart,
     TurnEnd,
@@ -26,7 +29,9 @@ from mlops_agents.storage.sqlite import connect_checkpointer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TurnExecutor", "TurnSink"]
+__all__ = ["UNEXPECTED_FAILURE_TEXT", "TurnExecutor", "TurnSink"]
+
+UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 
 
 class TurnExecutor:
@@ -42,101 +47,66 @@ class TurnExecutor:
         agent: str,
         turn_id: str,
         sink: TurnSink,
-        lock: AbstractAsyncContextManager[Any] | None = None,
+        lock: AbstractAsyncContextManager[Any],
     ) -> tuple[TurnEnd, str | None]:
         agent_message_id: str | None = None
         current_parts: list[Part] = []
         conn: aiosqlite.Connection | None = None
         checkpointer: AsyncSqliteSaver | None = None
 
-        try:
-            # 1. Build agent
-            try:
-                built_agent = await self._builder.build(project_id, agent)
-            except TurnRefused as exc:
-                if exc.end == "done":
-                    if lock is not None:
-                        async with lock:
-                            agent_msg = await self._store.add_message(
-                                project_id,
-                                session_id,
-                                turn_id=turn_id,
-                                author_kind="agent",
-                                author_name=agent,
-                                parts=[TextPart(type="text", text=exc.text)],
-                                status="complete",
-                            )
-                            await sink.message(agent_msg, created=True)
-                    else:
-                        agent_msg = await self._store.add_message(
-                            project_id,
-                            session_id,
-                            turn_id=turn_id,
-                            author_kind="agent",
-                            author_name=agent,
-                            parts=[TextPart(type="text", text=exc.text)],
-                            status="complete",
-                        )
-                        await sink.message(agent_msg, created=True)
-                    return ("done", None)
-                else:
-                    if lock is not None:
-                        async with lock:
-                            sys_msg = await self._store.add_message(
-                                project_id,
-                                session_id,
-                                turn_id=turn_id,
-                                author_kind="system",
-                                author_name="system",
-                                parts=[TextPart(type="text", text=exc.text)],
-                                status="complete",
-                            )
-                            await sink.message(sys_msg, created=True)
-                    else:
-                        sys_msg = await self._store.add_message(
-                            project_id,
-                            session_id,
-                            turn_id=turn_id,
-                            author_kind="system",
-                            author_name="system",
-                            parts=[TextPart(type="text", text=exc.text)],
-                            status="complete",
-                        )
-                        await sink.message(sys_msg, created=True)
-                    return ("failed", exc.text)
-
-            # 2. Create streaming agent message
-            if lock is not None:
-                async with lock:
-                    agent_msg = await self._store.add_message(
-                        project_id,
-                        session_id,
-                        turn_id=turn_id,
-                        author_kind="agent",
-                        author_name=built_agent.definition.name,
-                        parts=[],
-                        status="streaming",
-                    )
-                    await sink.message(agent_msg, created=True)
-            else:
-                agent_msg = await self._store.add_message(
+        async def add_message(
+            author_kind: AuthorKind,
+            author_name: str,
+            parts: list[Part],
+            status: MessageStatus,
+        ) -> MessageView:
+            # The stored write and its publish are one step under the session lock, so a
+            # concurrent get() never returns a message whose event the subscriber gets again.
+            async with lock:
+                message = await self._store.add_message(
                     project_id,
                     session_id,
                     turn_id=turn_id,
-                    author_kind="agent",
-                    author_name=built_agent.definition.name,
-                    parts=[],
-                    status="streaming",
+                    author_kind=author_kind,
+                    author_name=author_name,
+                    parts=parts,
+                    status=status,
                 )
-                await sink.message(agent_msg, created=True)
+                await sink.message(message, created=True)
+            return message
+
+        async def finish_agent_message(status: MessageStatus) -> None:
+            if agent_message_id is None:
+                return
+            async with lock:
+                message = await self._store.update_message(
+                    project_id, agent_message_id, parts=current_parts, status=status
+                )
+                await sink.message(message, created=False)
+
+        async def fail(text: str) -> tuple[TurnEnd, str | None]:
+            await finish_agent_message("complete")
+            await add_message("system", "system", [TextPart(type="text", text=text)], "complete")
+            return ("failed", text)
+
+        try:
+            try:
+                built_agent = await self._builder.build(project_id, agent)
+            except TurnRefused as exc:
+                text_part: list[Part] = [TextPart(type="text", text=exc.text)]
+                if exc.end == "done":
+                    await add_message("agent", agent, text_part, "complete")
+                    return ("done", None)
+                await add_message("system", "system", text_part, "complete")
+                return ("failed", exc.text)
+
+            agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             agent_message_id = agent_msg.id
 
-            db_path = self._store.db_path(project_id)
-            conn = await connect_checkpointer(db_path)
+            conn = await connect_checkpointer(self._store.db_path(project_id))
             checkpointer = AsyncSqliteSaver(conn)
             await checkpointer.setup()
 
-            # 3. Compaction
             summary, compacted_through = await self._store.summary(project_id, session_id)
             history = await self._store.messages(project_id, session_id)
             history_for_compaction = [m for m in history if m.id != agent_message_id]
@@ -155,7 +125,6 @@ class TurnExecutor:
                 agent_name=built_agent.definition.name,
             )
 
-            # 4. Initial messages for graph
             summary, compacted_through = await self._store.summary(project_id, session_id)
             active_history = await self._store.messages(
                 project_id, session_id, after=compacted_through
@@ -169,7 +138,6 @@ class TurnExecutor:
                 active_history,
             )
 
-            # 5. Graph
             graph = create_turn_graph(
                 agent=built_agent,
                 caller=self._caller,
@@ -191,122 +159,28 @@ class TurnExecutor:
             }
             await graph.ainvoke(initial_state, config=config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
 
-            if lock is not None:
-                async with lock:
-                    final_agent_msg = await self._store.update_message(
-                        project_id, agent_message_id, parts=current_parts, status="complete"
-                    )
-                    await sink.message(final_agent_msg, created=False)
-            else:
-                final_agent_msg = await self._store.update_message(
-                    project_id, agent_message_id, parts=current_parts, status="complete"
-                )
-                await sink.message(final_agent_msg, created=False)
-
+            await finish_agent_message("complete")
             return ("done", None)
 
         except asyncio.CancelledError:
-            if agent_message_id is not None:
-                if lock is not None:
-                    async with lock:
-                        final_msg = await self._store.update_message(
-                            project_id, agent_message_id, parts=current_parts, status="stopped"
-                        )
-                        await sink.message(final_msg, created=False)
-                else:
-                    final_msg = await self._store.update_message(
-                        project_id, agent_message_id, parts=current_parts, status="stopped"
-                    )
-                    await sink.message(final_msg, created=False)
+            await finish_agent_message("stopped")
             raise
 
         except TurnFailed as err:
-            if agent_message_id is not None:
-                if lock is not None:
-                    async with lock:
-                        final_agent_msg = await self._store.update_message(
-                            project_id, agent_message_id, parts=current_parts, status="complete"
-                        )
-                        await sink.message(final_agent_msg, created=False)
-                else:
-                    final_agent_msg = await self._store.update_message(
-                        project_id, agent_message_id, parts=current_parts, status="complete"
-                    )
-                    await sink.message(final_agent_msg, created=False)
+            return await fail(err.message)
 
-            if lock is not None:
-                async with lock:
-                    sys_msg = await self._store.add_message(
-                        project_id,
-                        session_id,
-                        turn_id=turn_id,
-                        author_kind="system",
-                        author_name="system",
-                        parts=[TextPart(type="text", text=err.message)],
-                        status="complete",
-                    )
-                    await sink.message(sys_msg, created=True)
-            else:
-                sys_msg = await self._store.add_message(
-                    project_id,
-                    session_id,
-                    turn_id=turn_id,
-                    author_kind="system",
-                    author_name="system",
-                    parts=[TextPart(type="text", text=err.message)],
-                    status="complete",
-                )
-                await sink.message(sys_msg, created=True)
-
-            return ("failed", err.message)
-
-        except Exception as exc:
-            logger.exception("Turn executor failed for turn %s: %s", turn_id, exc)
-            err_text = str(exc) or type(exc).__name__
-            if agent_message_id is not None:
-                if lock is not None:
-                    async with lock:
-                        final_agent_msg = await self._store.update_message(
-                            project_id, agent_message_id, parts=current_parts, status="complete"
-                        )
-                        await sink.message(final_agent_msg, created=False)
-                else:
-                    final_agent_msg = await self._store.update_message(
-                        project_id, agent_message_id, parts=current_parts, status="complete"
-                    )
-                    await sink.message(final_agent_msg, created=False)
-
-            if lock is not None:
-                async with lock:
-                    sys_msg = await self._store.add_message(
-                        project_id,
-                        session_id,
-                        turn_id=turn_id,
-                        author_kind="system",
-                        author_name="system",
-                        parts=[TextPart(type="text", text=err_text)],
-                        status="complete",
-                    )
-                    await sink.message(sys_msg, created=True)
-            else:
-                sys_msg = await self._store.add_message(
-                    project_id,
-                    session_id,
-                    turn_id=turn_id,
-                    author_kind="system",
-                    author_name="system",
-                    parts=[TextPart(type="text", text=err_text)],
-                    status="complete",
-                )
-                await sink.message(sys_msg, created=True)
-
-            return ("failed", err_text)
+        except Exception:
+            logger.exception("Turn %s failed unexpectedly", turn_id)
+            return await fail(UNEXPECTED_FAILURE_TEXT)
 
         finally:
-            if checkpointer is not None:
-                try:
+            try:
+                if checkpointer is not None:
                     await checkpointer.adelete_thread(turn_id)
-                except Exception as exc:
-                    logger.exception("Failed to delete checkpointer thread %s: %s", turn_id, exc)
-            if conn is not None:
-                await conn.close()
+            except Exception:
+                logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
+            finally:
+                # Windows keeps the project folder locked until the connection is closed, also
+                # when a second cancel interrupts the thread cleanup.
+                if conn is not None:
+                    await conn.close()

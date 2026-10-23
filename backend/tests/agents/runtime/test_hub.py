@@ -241,11 +241,8 @@ async def test_hub_reconnect_old_seq_without_eviction_yields_resync() -> None:
     for i in range(5):
         await hub.text("msg_a1", f"chunk_{i}")
 
-    assert hub._evicted_any is False  # pyright: ignore[reportPrivateUsage]
-    oldest_buffered_seq = hub._buffer[0].seq  # pyright: ignore[reportPrivateUsage]
-
-    # Reconnect with after_seq below oldest_buffered_seq - 1 (e.g. from before restart)
-    old_seq = oldest_buffered_seq - 100
+    # Reconnect with a position from before the hub started (e.g. from before a restart)
+    old_seq = hub.last_seq - 100
     async with aclosing(hub.subscribe(after_seq=old_seq)) as sub:
         first_event = await anext(sub)
         assert isinstance(first_event, Resync)

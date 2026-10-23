@@ -13,6 +13,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, TextPart, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.graph import TurnState, create_turn_graph
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools import default_registry
@@ -160,6 +161,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_done(
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
+        lock=AsyncRLock(),
         checkpointer=checkpointer,
     )
 
@@ -248,6 +250,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_cancellation(
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
+        lock=AsyncRLock(),
         checkpointer=checkpointer,
     )
 
@@ -334,6 +337,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_failure(
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
+        lock=AsyncRLock(),
         checkpointer=checkpointer,
     )
 

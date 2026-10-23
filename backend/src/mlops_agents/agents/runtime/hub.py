@@ -84,7 +84,6 @@ class SessionHub:
         self._subscribers: set[asyncio.Queue[StreamEvent | None]] = set()
         self._live_message: MessageView | None = None
         self._closed = False
-        self._evicted_any = False
 
     @property
     def session_id(self) -> str:
@@ -149,8 +148,6 @@ class SessionHub:
             self._live_message = None
 
     def _publish_raw(self, event: StreamEvent) -> None:
-        if len(self._buffer) == _RING_BUFFER_SIZE:
-            self._evicted_any = True
         self._last_seq = max(self._last_seq, event.seq)
         self._fold_event(event)
         self._buffer.append(event)

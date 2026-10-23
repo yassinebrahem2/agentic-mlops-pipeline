@@ -17,6 +17,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentLimitsUpdate, AgentSettingsService
@@ -178,7 +179,7 @@ async def test_executor_fake_tools_on_orchestrator(
     sink = RecordingSink()
 
     end_status, error_text = await executor.run(
-        project_id, session_id, "orchestrator", turn_id, sink
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"
@@ -256,7 +257,7 @@ async def test_executor_secret_and_untracked_error_handled(
 
     sink = RecordingSink()
     end_status, error_text = await executor.run(
-        project_id, session_id, "orchestrator", turn_id, sink
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"
@@ -281,7 +282,7 @@ async def test_executor_secret_and_untracked_error_handled(
     turn_id2 = await _store.add_turn(project_id, session_id, user_msg2.id, "running")
     sink2 = RecordingSink()
     end_status2, error_text2 = await executor.run(
-        project_id, session_id, "orchestrator", turn_id2, sink2
+        project_id, session_id, "orchestrator", turn_id2, sink2, AsyncRLock()
     )
 
     assert end_status2 == "done"
@@ -319,7 +320,7 @@ async def test_executor_step_limit_override(
 
     sink = RecordingSink()
     end_status, _error_text = await executor.run(
-        project_id, session_id, "orchestrator", turn_id, sink
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"

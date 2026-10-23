@@ -46,16 +46,13 @@ def create_turn_graph(
     turn_id: str,
     message_id: str,
     current_parts: list[Part],
+    lock: AbstractAsyncContextManager[Any],
     checkpointer: AsyncSqliteSaver | None = None,
-    lock: AbstractAsyncContextManager[Any] | None = None,
 ) -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
     """Build and compile the StateGraph for a single turn."""
 
     async def _update_parts() -> None:
-        if lock is not None:
-            async with lock:
-                await store.update_message(project_id, message_id, parts=current_parts)
-        else:
+        async with lock:
             await store.update_message(project_id, message_id, parts=current_parts)
 
     async def model_node(state: TurnState) -> dict[str, Any]:
@@ -69,11 +66,7 @@ def create_turn_graph(
             )
             stop_part = TextPart(type="text", text=stop_text)
             current_parts.append(stop_part)
-            if lock is not None:
-                async with lock:
-                    await sink.text(message_id, stop_text)
-                    await store.update_message(project_id, message_id, parts=current_parts)
-            else:
+            async with lock:
                 await sink.text(message_id, stop_text)
                 await store.update_message(project_id, message_id, parts=current_parts)
             return {
@@ -86,10 +79,7 @@ def create_turn_graph(
 
         async def on_text(delta: str) -> None:
             streamed_chunks.append(delta)
-            if lock is not None:
-                async with lock:
-                    await sink.text(message_id, delta)
-            else:
+            async with lock:
                 await sink.text(message_id, delta)
 
         t0 = time.monotonic()
@@ -131,10 +121,7 @@ def create_turn_graph(
                     input=dict(tc["args"]),
                 )
                 current_parts.append(tc_part)
-                if lock is not None:
-                    async with lock:
-                        await sink.tool_started(message_id, tc_part)
-                else:
+                async with lock:
                     await sink.tool_started(message_id, tc_part)
 
         await _update_parts()
@@ -173,10 +160,7 @@ def create_turn_graph(
                     is_error=True,
                 )
 
-            if lock is not None:
-                async with lock:
-                    await sink.tool_finished(message_id, result_part)
-            else:
+            async with lock:
                 await sink.tool_finished(message_id, result_part)
             current_parts.append(result_part)
             tool_messages.append(ToolMessage(tool_call_id=call_id, content=result_part.content))

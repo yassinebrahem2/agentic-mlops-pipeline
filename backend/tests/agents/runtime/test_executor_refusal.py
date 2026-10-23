@@ -10,6 +10,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import MessageView, TextPart, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnSink
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -180,7 +181,9 @@ async def test_executor_refusals(
     # 1. Project missing refusal
     await _set_project_status(databases, project_id, status="missing", detail="Missing repo")
     sink = RecordingSink()
-    status, err = await executor.run(project_id, session_id, "orchestrator", turn_id, sink)
+    status, err = await executor.run(
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
+    )
     assert status == "failed"
     assert err == "Missing repo"
     assert len(sink.messages) == 1
@@ -189,7 +192,9 @@ async def test_executor_refusals(
     # 2. Project empty refusal
     await _set_project_status(databases, project_id, status="empty", detail=None)
     sink = RecordingSink()
-    status, err = await executor.run(project_id, session_id, "orchestrator", turn_id, sink)
+    status, err = await executor.run(
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
+    )
     assert status == "done"
     assert err is None
     assert len(sink.messages) == 1
@@ -202,7 +207,9 @@ async def test_executor_refusals(
     await _set_project_status(databases, project_id, status="ok", detail=None)
     await settings_svc.set_default_model("orchestrator", None)
     sink = RecordingSink()
-    status, err = await executor.run(project_id, session_id, "orchestrator", turn_id, sink)
+    status, err = await executor.run(
+        project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
+    )
     assert status == "failed"
     assert err is not None
     assert "Choose a model" in err
