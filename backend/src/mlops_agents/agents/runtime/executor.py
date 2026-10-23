@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.types import Durability
 
 from mlops_agents.agents.runtime.agent import AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.compaction import compact_if_needed
@@ -30,6 +31,12 @@ logger = logging.getLogger(__name__)
 __all__ = ["UNEXPECTED_FAILURE_TEXT", "TurnExecutor", "TurnSink"]
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
+
+# "async" runs each checkpoint write as a background task that a cancel does not cancel, and the
+# run's exit waits for it: a Stop or close_project never leaves a checkpoint transaction open,
+# which would lock the project file. "sync" awaits the write in the turn's own task, where a
+# cancel lands inside it.
+TURN_DURABILITY: Durability = "async"
 
 
 class TurnExecutor:
@@ -190,7 +197,7 @@ class TurnExecutor:
                     "step_count": 0,
                     "stopped_reason": None,
                 }
-                await graph.ainvoke(initial_state, config=config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
+                await graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
 
             await finish_agent_message("complete")
             return ("done", None)
