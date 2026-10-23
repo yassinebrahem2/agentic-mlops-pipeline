@@ -1,4 +1,5 @@
 import { createBrowserRouter, type DataRouter, type RouteObject } from "react-router";
+import { AuthGate } from "./auth/AuthGate";
 import { NotFound } from "./NotFound";
 import type { PageRoute } from "./routes";
 import { AppShell } from "./shell/AppShell";
@@ -6,6 +7,7 @@ import { AppShell } from "./shell/AppShell";
 export function buildRouter(
   routes: PageRoute[],
   createRouter: (routes: RouteObject[]) => DataRouter = createBrowserRouter,
+  options?: { skipAuthGate?: boolean },
 ): DataRouter {
   const hasRootRoute = routes.some((r) => r.path === "/");
 
@@ -32,9 +34,11 @@ export function buildRouter(
     },
   ];
 
+  const shell = <AppShell routes={routes} />;
+
   const routeTree: RouteObject[] = [
     {
-      element: <AppShell routes={routes} />,
+      element: options?.skipAuthGate ? shell : <AuthGate>{shell}</AuthGate>,
       children,
     },
   ];

@@ -29,7 +29,7 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
    | you push the fixes for a PR with changes requested | the PR and every open issue it closes: In review (a closed issue stays Done) |
    | the issue is closed (rule 6) | Done |
 
-   **Keep watching your Blocked and In review cards.** While one of your issues or PRs is Blocked or In review, check it about every 10 minutes, alongside your next task (do not sit idle on it), until it moves or the person running you stops you: a Decision answered or a blocking PR merged → resume; changes requested → fix them; merged → next task. If your agent cannot keep a session waiting, tell the person running you what you are waiting on.
+   **Keep watching your open PRs and Blocked cards.** The lead talks to you through them. While you have an open PR or a Blocked card, check it about every 10 minutes, alongside your next task (do not sit idle on it), until it moves or the person running you stops you: a Decision answered or a blocking PR merged → resume; changes requested → fix them; merged → next task. If your agent cannot keep a session waiting, tell the person running you what you are waiting on.
 
    Move a card with `scripts/board-status.sh <number> "<Status>"` (needs `gh`, `jq` and a token with the `project` scope) or, where the Projects API is not reachable (cloud agent sessions), by running the `board` workflow with `workflow_dispatch` inputs `number` and `status` (cloud sessions block `gh workflow run`, which uses GraphQL; use the REST call `gh api -X POST repos/yassinebrahem2/agentic-mlops-pipeline/actions/workflows/board.yml/dispatches -f ref=main -f 'inputs[number]=42' -f 'inputs[status]=Blocked'`, or your agent's GitHub tool for a workflow dispatch, e.g. the GitHub MCP `actions_run_trigger`). Check that the run succeeded. If you cannot move the card, say so in the issue so a person moves it in the GitHub UI. Column names are exactly: Todo, In progress, Blocked, In review, Done.
 
@@ -46,7 +46,7 @@ Run from `backend/`:
 
 Run from `frontend/`:
 - Install: `npm ci`
-- Dev server with hot reload (proxies `/api` to the backend on port 8765): `npm run dev`
+- Dev server with hot reload (start the backend first with `cd backend && uv run mlops-agents start --dev`; proxies `/api` to the backend on port 8765): `npm run dev`
 - Tests: `npm test` (one file: `npx vitest run src/path/File.test.tsx`)
 - Lint and format: `npm run lint`, `npm run format:check`
 - Build into the backend package: `npm run build`
