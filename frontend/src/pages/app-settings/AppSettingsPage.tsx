@@ -1,8 +1,9 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { api, errorText, unwrap } from "@/lib/api";
+import { useAppInfo } from "@/lib/useAppInfo";
 
 type AppInfo = components["schemas"]["AppInfo"];
 
@@ -12,10 +13,7 @@ const MODE_LABELS: Record<AppInfo["mode"], string> = {
 };
 
 export function AppSettingsPage() {
-  const app = useQuery({
-    queryKey: ["app"],
-    queryFn: async () => unwrap(await api.GET("/api/app")),
-  });
+  const app = useAppInfo();
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8 p-6">

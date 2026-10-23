@@ -28,6 +28,12 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
 SLOW_TEXT = " ".join(f"word{i}" for i in range(40))
 
 
+def _open_gate() -> threading.Event:
+    event = threading.Event()
+    event.set()
+    return event
+
+
 @dataclass
 class FakeState:
     required_key: str | None = None
@@ -35,15 +41,27 @@ class FakeState:
     server_error_remaining: int = 0
     auth_fail: bool = False
     usage_in_stream: bool = True
+    drop_after_chunks: int | None = None
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    _slow_gate: threading.Event = field(default_factory=_open_gate)
+
+    def hold_slow(self) -> None:
+        self._slow_gate.clear()
+
+    def release_slow(self) -> None:
+        self._slow_gate.set()
 
     def reset(self) -> None:
+        self.release_slow()
         self.required_key = None
         self.rate_limit_remaining = 0
         self.server_error_remaining = 0
         self.auth_fail = False
         self.usage_in_stream = True
+        self.drop_after_chunks = None
         self.requests.clear()
+        self.request_headers.clear()
 
 
 def _error(status: int, message: str, code: str, headers: dict[str, str] | None = None) -> Response:
@@ -67,6 +85,10 @@ def _reply(
 ) -> tuple[str, str | None]:
     """(text, name of the tool to call or None)."""
     last = messages[-1]
+    if model == "fake-slow" and any(
+        tool["function"]["name"] == "report_capabilities" for tool in tools
+    ):
+        return "", "report_capabilities"
     if model == "fake-slow":
         return SLOW_TEXT, None
     if model == "fake-no-tools" or not tools:
@@ -85,7 +107,16 @@ async def _stream(
     tools: list[dict[str, Any]],
     usage: bool,
 ) -> AsyncIterator[str]:
+    yielded = 0
+
+    def maybe_drop() -> None:
+        nonlocal yielded
+        if state.drop_after_chunks is not None and yielded >= state.drop_after_chunks:
+            raise RuntimeError("fake connection drop")
+        yielded += 1
+
     text, tool = _reply(model, messages, tools)
+    maybe_drop()
     yield _chunk(model, {"role": "assistant", "content": ""})
     if tool is not None:
         args = json.dumps(TOOL_ARGS.get(tool, {}))
@@ -97,15 +128,22 @@ async def _stream(
             "type": "function",
             "function": {"name": tool, "arguments": args[:half]},
         }
+        maybe_drop()
         yield _chunk(model, {"tool_calls": [first]})
+        maybe_drop()
         yield _chunk(model, {"tool_calls": [{"index": 0, "function": {"arguments": args[half:]}}]})
         finish = "tool_calls"
     else:
         for i, word in enumerate(text.split(" ")):
             if model == "fake-slow":
                 await asyncio.sleep(0.05)
+            maybe_drop()
             yield _chunk(model, {"content": word if i == 0 else " " + word})
+            if model == "fake-slow" and i == 0:
+                while not state._slow_gate.is_set():  # pyright: ignore[reportPrivateUsage]  # noqa: ASYNC110 - cross-thread gate
+                    await asyncio.sleep(0.02)
         finish = "stop"
+    maybe_drop()
     yield _chunk(model, {}, finish)
     if usage:
         tail: dict[str, Any] = {
@@ -116,7 +154,9 @@ async def _stream(
             "choices": [],
             "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
         }
+        maybe_drop()
         yield f"data: {json.dumps(tail)}\n\n"
+    maybe_drop()
     yield "data: [DONE]\n\n"
 
 
@@ -143,6 +183,7 @@ def create_fake_app(state: FakeState) -> FastAPI:
             return _error(401, "Invalid API key", "invalid_api_key")
         body: dict[str, Any] = await request.json()
         state.requests.append(body)
+        state.request_headers.append(dict(request.headers))
         if state.rate_limit_remaining > 0:
             state.rate_limit_remaining -= 1
             return _error(429, "Rate limit reached", "rate_limit_exceeded", {"retry-after": "0"})

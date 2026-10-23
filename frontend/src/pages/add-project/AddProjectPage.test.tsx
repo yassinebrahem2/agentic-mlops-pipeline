@@ -230,7 +230,6 @@ describe("AddProjectPage", () => {
     expect(screen.getByText("octocat/hello-world")).toBeInTheDocument();
     expect(screen.queryByText("octocat/second-project")).not.toBeInTheDocument();
 
-    // Click repository to fill the Repository input
     await user.click(screen.getByRole("button", { name: /octocat\/hello-world/i }));
 
     const repoInput = screen.getByRole("textbox", { name: "Repository" });
@@ -308,18 +307,15 @@ describe("AddProjectPage", () => {
     const addBtn = screen.getByRole("button", { name: "Add" });
     await user.click(addBtn);
 
-    // Progress text shown and button disabled
     expect(await screen.findByText("Downloading octocat/hello-world...")).toBeInTheDocument();
     expect(addBtn).toBeDisabled();
 
-    // Check request body
     const postReq = requests.find((r) => r.url.includes("/api/projects") && r.method === "POST");
     expect(postReq?.body).toEqual({
       source: "github",
       repo: "octocat/hello-world",
     });
 
-    // Resolve mutation
     resolveAdd(
       new Response(
         JSON.stringify({
@@ -338,13 +334,16 @@ describe("AddProjectPage", () => {
       ),
     );
 
-    // Navigates to project page
     expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
   });
 
   it("adding a non-git folder shows the dialog and the retry sends init_git: true", async () => {
     const requests: { url: string; method: string; body: unknown }[] = [];
     let addCount = 0;
+    let resolveRetry!: (res: Response) => void;
+    const retryPromise = new Promise<Response>((resolve) => {
+      resolveRetry = resolve;
+    });
 
     const fakeFetch = vi
       .fn()
@@ -388,21 +387,7 @@ describe("AddProjectPage", () => {
               { status: 422, headers: { "Content-Type": "application/json" } },
             );
           }
-          return new Response(
-            JSON.stringify({
-              id: "prj_local_1",
-              name: "newbie",
-              source: "local",
-              status: "ok",
-              status_detail: null,
-              created_at: "2026-10-21T12:00:00Z",
-              last_opened_at: null,
-              local_path: "/workspace/newbie",
-              github_full_name: null,
-              default_branch: "main",
-            }),
-            { status: 201, headers: { "Content-Type": "application/json" } },
-          );
+          return retryPromise;
         }
         return new Response(null, { status: 404 });
       });
@@ -414,7 +399,6 @@ describe("AddProjectPage", () => {
     const chooseBtn = await screen.findByRole("button", { name: "Use this folder" });
     await user.click(chooseBtn);
 
-    // Dialog appears with message and "Run git init" button
     expect(
       await screen.findByText(
         "/workspace/newbie is not a git repository. The app can run git init in it for you.",
@@ -423,8 +407,26 @@ describe("AddProjectPage", () => {
 
     const runInitBtn = screen.getByRole("button", { name: "Run git init" });
     await user.click(runInitBtn);
+    expect(runInitBtn).toBeDisabled();
 
-    // Verify retry sent init_git: true
+    resolveRetry(
+      new Response(
+        JSON.stringify({
+          id: "prj_local_1",
+          name: "newbie",
+          source: "local",
+          status: "ok",
+          status_detail: null,
+          created_at: "2026-10-21T12:00:00Z",
+          last_opened_at: null,
+          local_path: "/workspace/newbie",
+          github_full_name: null,
+          default_branch: "main",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
     await waitFor(() => {
       const secondPost = requests.filter(
         (r) => r.url.includes("/api/projects") && r.method === "POST",
@@ -588,5 +590,90 @@ describe("AddProjectPage", () => {
 
     const openLink = screen.getByRole("link", { name: "Open it" });
     expect(openLink).toHaveAttribute("href", "/projects/prj_existing_99");
+  });
+
+  it("adding a local folder shows progress text, disables submit, and prevents double submission", async () => {
+    let resolveAdd!: (res: Response) => void;
+    const addPromise = new Promise<Response>((resolve) => {
+      resolveAdd = resolve;
+    });
+
+    const requests: { url: string; method: string; body: unknown }[] = [];
+
+    const fakeFetch = vi
+      .fn()
+      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const parsed = await getUrlAndMethod(input, init);
+        requests.push(parsed);
+        const { url, method } = parsed;
+
+        if (url.includes("/api/app")) {
+          return new Response(
+            JSON.stringify({
+              mode: "local",
+              name: "mlops_agents",
+              version: "0.1.0",
+              data_dir: "/data",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/api/folders")) {
+          return new Response(
+            JSON.stringify({
+              path: "/workspace/local-project",
+              parent: "/workspace",
+              roots: ["/"],
+              entries: [],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/api/projects") && method === "POST") {
+          return addPromise;
+        }
+        return new Response(null, { status: 404 });
+      });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    const user = userEvent.setup();
+    renderPage("/projects/new", { routes: testRoutes });
+
+    const chooseBtn = await screen.findByRole("button", { name: "Use this folder" });
+    await user.click(chooseBtn);
+
+    expect(screen.getAllByText("Adding project...")).toHaveLength(1);
+    expect(chooseBtn).toBeDisabled();
+
+    const postRequests = requests.filter(
+      (r) => r.url.endsWith("/api/projects") && r.method === "POST",
+    );
+    expect(postRequests.length).toBe(1);
+
+    await user.click(chooseBtn);
+    const postRequestsAfter = requests.filter(
+      (r) => r.url.endsWith("/api/projects") && r.method === "POST",
+    );
+    expect(postRequestsAfter.length).toBe(1);
+
+    resolveAdd(
+      new Response(
+        JSON.stringify({
+          id: "prj_local_123",
+          name: "local-project",
+          source: "local",
+          status: "ok",
+          status_detail: null,
+          created_at: "2026-10-21T12:00:00Z",
+          last_opened_at: null,
+          local_path: "/workspace/local-project",
+          github_full_name: null,
+          default_branch: "main",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
   });
 });

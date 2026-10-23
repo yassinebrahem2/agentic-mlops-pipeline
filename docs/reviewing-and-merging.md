@@ -52,4 +52,5 @@ Fix small PR-body problems yourself instead of another round: a stale test count
 - Windows: `git worktree remove` fails on long `node_modules`/`.venv` paths. Prune the registration (`git worktree prune`) and leave the folder; it is outside the repository.
 - A plan branch that carries several early PRs' tasks: an early PR is opened from `plan/<stage>-<topic>-task<n>` (rule 5). If a later PR's branch also contains an earlier unmerged task, merge the earlier PR first and update the later branch.
 - Generated files after a merge: `frontend/openapi.json` must match a fresh export (`openapi_export --check` in CI); owners regenerate it rather than resolving conflicts by hand.
+- Frontend tests are CPU-bound in testing-library's role queries (#120): run `npm test` with no other test suite or review agent running at the same time, or a page test can time out.
 - Python on the lead's Windows machine: use `py -3.12` for helper scripts; bash heredocs with backslashes are fragile, so write scripts and bodies to files.

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
+import { useModels } from "@/lib/useModels";
 
 type ModelEntry = components["schemas"]["ModelEntry"];
 
@@ -29,10 +30,7 @@ function storeModel(queryClient: QueryClient, model: ModelEntry): void {
 }
 
 export function ModelsTable() {
-  const models = useQuery({
-    queryKey: ["models"],
-    queryFn: async () => unwrap(await api.GET("/api/models")),
-  });
+  const models = useModels();
 
   if (models.isPending) return <p className="text-muted-foreground">Loading models…</p>;
   if (models.isError) return <p className="text-destructive">{errorText(models.error)}</p>;

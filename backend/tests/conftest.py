@@ -93,6 +93,9 @@ def _fake_openai_server() -> Iterator[RunningFake]:
 
 
 @pytest.fixture
-def fake_openai(_fake_openai_server: RunningFake) -> RunningFake:
+def fake_openai(_fake_openai_server: RunningFake) -> Iterator[RunningFake]:
     _fake_openai_server.state.reset()
-    return _fake_openai_server
+    try:
+        yield _fake_openai_server
+    finally:
+        _fake_openai_server.state.release_slow()

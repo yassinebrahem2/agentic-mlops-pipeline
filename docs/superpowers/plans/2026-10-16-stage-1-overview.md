@@ -32,6 +32,8 @@ Each plan has one owner, who claims it by assigning themselves to its plan issue
 | frontend-chat | `plan/stage-1-frontend-chat` | Agents page: Orchestrator session, streamed answers, collapsible tool steps, queued messages, Stop, interrupted turns, reconnect | I5, I7 | coding: after frontend-foundation's client task (I7's shapes are fixed here); merging: after I7 is on `main` | Ready: plan issue open |
 | packaging | `plan/stage-1-packaging` | `scripts/build_wheel.py`, wheel contents check, install check on Windows and Linux in CI | api-foundation task 4 for the install check | now | Ready: plan issue open |
 | e2e | `plan/stage-1-e2e` | The Playwright test of the stage 1 flow below, through the installed app and the fake provider | every plan above | after frontend-workspace, frontend-providers and frontend-chat | Ready: plan issue open |
+| test-stability | `plan/stage-1-test-stability` | Fixes the intermittent test failure #109 (executor cancel and the write lock; #110 was closed by Decision #120 as an environment limit); moves the agent-runtime session tests onto api-sessions' hold gate | none; task 3 needs the hold gate (api-sessions task 2) | now; task 3 after api-sessions' plan PR (#107) | Ready: plan issue open |
+| fixes | `plan/stage-1-fixes` | Small review defects: #119 (api-sessions live test timing assertion and inline suppressions), #121 (board moves a closed task when a Decision closes), #117 (repeated project queries), #125 (agents page reconnect, copied test setup) | none | now | Ready: plan issue open |
 
 The five plans written first include full implementation code. They were written before the "How plans are written" rule in `AGENTS.md` and are kept as they are. The plans still to write follow that rule: tests as code or as behaviors to verify, full code only where a mistake is costly, at most 5 tasks, one PR per plan plus early PRs for tasks other plans consume (named in the task issues).
 
@@ -96,7 +98,9 @@ class AgentSessions(Protocol):
     async def get(self, project_id: str, agent: str) -> SessionView: ...
     async def send(self, project_id: str, agent: str, text: str) -> MessageView: ...
     async def stop(self, project_id: str, agent: str) -> None: ...
-    def subscribe(self, project_id: str, agent: str, after_seq: int | None) -> AsyncIterator[StreamEvent]: ...
+    def subscribe(self, project_id: str, agent: str, after_seq: int | None) -> AsyncGenerator[StreamEvent, None]: ...
+    # An async generator so the caller can aclose() it: closing it unsubscribes from the hub at once,
+    # not when the garbage collector finalizes it (the stream route closes it when the client leaves).
     async def close_project(self, project_id: str) -> None: ...
         # before a project is removed: ends its running turns (interrupted), drops its hubs and
         # subscribers, closes its database handles; later calls for that project start fresh
@@ -169,6 +173,8 @@ class AgentSettingsService:
 - App: `GET /api/app` → `{"name", "version", "mode", "data_dir"}`; `POST /api/app/backup` → `{"path"}`.
 
 **I7. Session API** (api-sessions, task 1): `GET /api/projects/{project_id}/agents/{agent}/session` → `SessionView`; `POST .../session/messages` `{"text"}` → `MessageView`; `POST .../session/stop`; `GET .../session/stream` (SSE: each event's `id` is `StreamEvent.seq`, `event` its `type`, `data` its JSON `data`; `Last-Event-ID` resumes after that seq).
+
+**Hold gate** (api-sessions, task 2; test code, consumed by test-stability task 3): `FakeState.hold_slow() -> None` and `FakeState.release_slow() -> None` in `backend/tests/fakes/fake_openai.py`. Open by default; `reset()` and the `fake_openai` fixture's teardown release it.
 
 ## Global Constraints
 

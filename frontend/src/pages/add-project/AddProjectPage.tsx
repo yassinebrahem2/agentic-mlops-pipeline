@@ -1,22 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { GitHubTab } from "./GitHubTab";
 import { LocalFolderTab } from "./LocalFolderTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { useAppInfo } from "@/lib/useAppInfo";
 
 export function AddProjectPage() {
-  const {
-    data: appInfo,
-    isPending,
-    error,
-  } = useQuery({
-    queryKey: ["app"],
-    queryFn: async () => {
-      const res = await api.GET("/api/app");
-      return unwrap(res);
-    },
-  });
+  const { data: appInfo, isPending, error } = useAppInfo();
 
   const isServerMode = appInfo?.mode === "server";
 

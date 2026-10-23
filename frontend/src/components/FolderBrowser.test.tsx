@@ -4,7 +4,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FolderBrowser } from "./FolderBrowser";
 
-function renderFolderBrowser(props: { initialPath?: string; onChoose?: (path: string) => void }) {
+function renderFolderBrowser(props: {
+  initialPath?: string;
+  onChoose?: (path: string) => void;
+  isSubmitting?: boolean;
+  busyLabel?: string;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -14,7 +19,12 @@ function renderFolderBrowser(props: { initialPath?: string; onChoose?: (path: st
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <FolderBrowser initialPath={props.initialPath} onChoose={props.onChoose ?? vi.fn()} />
+      <FolderBrowser
+        initialPath={props.initialPath}
+        onChoose={props.onChoose ?? vi.fn()}
+        isSubmitting={props.isSubmitting}
+        busyLabel={props.busyLabel}
+      />
     </QueryClientProvider>,
   );
 }
@@ -309,5 +319,34 @@ describe("FolderBrowser", () => {
     await user.click(chooseBtn);
 
     expect(onChoose).toHaveBeenCalledWith("/chosen/folder");
+  });
+
+  it("disables button and shows custom busyLabel or default when isSubmitting is true", async () => {
+    const fakeFetch = vi.fn().mockImplementation(() => {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            path: "/chosen/folder",
+            parent: "/chosen",
+            roots: ["/"],
+            entries: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    const { unmount } = renderFolderBrowser({ isSubmitting: true, busyLabel: "Working on it..." });
+
+    const submitBtn = await screen.findByRole("button", { name: /Working on it/i });
+    expect(submitBtn).toBeDisabled();
+    expect(submitBtn).toHaveTextContent("Working on it...");
+
+    unmount();
+    renderFolderBrowser({ isSubmitting: true });
+    const defaultBtn = await screen.findByRole("button", { name: "Use this folder" });
+    expect(defaultBtn).toBeDisabled();
+    expect(defaultBtn).toHaveTextContent("Use this folder");
   });
 });
