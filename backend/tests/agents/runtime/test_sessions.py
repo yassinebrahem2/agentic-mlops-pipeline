@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx2
+import pytest
 
-from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
     MessageCreated,
     MessageUpdated,
@@ -20,102 +18,12 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnded,
 )
-from mlops_agents.agents.runtime.sessions import SessionManager
-from mlops_agents.agents.settings import AgentSettingsService
-from mlops_agents.agents.tools import ToolRegistry, default_registry
-from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.integrations.github.auth import GitHubAuth
-from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
-from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.integrations.test_github_auth import FakeGh
-
-
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
-
-
-def _workspace_svc(
-    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
-) -> WorkspaceService:
-    http = httpx2.AsyncClient()
-    github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    return WorkspaceService(
-        _settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
-    )
-
-
-async def _setup_env(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-    *,
-    files: dict[str, str] | None = None,
-    extra_dirs: list[Path] | None = None,
-    tools: ToolRegistry | None = None,
-) -> tuple[SessionManager, WorkspaceService, str, str, ProvidersService]:
-    repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
-    repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
-
-    tool_reg = tools if tools is not None else default_registry()
-    catalog = AgentCatalog.load(tool_reg.names(), extra_dirs=extra_dirs or ())
-    providers_svc = ProvidersService(databases, keystore, model_http)
-    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
-    git = GitRunner(paths.bin)
-
-    manager = SessionManager(
-        databases=databases,
-        workspace=workspace_svc,
-        catalog=catalog,
-        tools=tool_reg,
-        settings=settings_svc,
-        providers=providers_svc,
-        http=model_http,
-        git=git,
-    )
-
-    prov = await providers_svc.create_provider(
-        ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
-    )
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
-    await providers_svc.verify_model(f"{prov.name}:fake-tools")
-
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-slow"))
-    await providers_svc.record_verification(
-        f"{prov.name}:fake-slow", tool_calling=True, streaming=True, detail=None
-    )
-
-    project = await workspace_svc.add_local(str(repo_dir))
-    await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
-
-    return manager, workspace_svc, project.id, prov.name, providers_svc
-
-
-async def _collect_until_turn_ended(
-    sub: AsyncIterator[StreamEvent],
-    timeout: float = 10.0,  # noqa: ASYNC109
-) -> list[StreamEvent]:
-    events: list[StreamEvent] = []
-
-    async def _gather() -> None:
-        async for ev in sub:
-            events.append(ev)
-            if isinstance(ev, TurnEnded):
-                break
-
-    await asyncio.wait_for(_gather(), timeout=timeout)
-    return events
 
 
 async def test_ask_orchestrator_fake_tools(
@@ -127,16 +35,18 @@ async def test_ask_orchestrator_fake_tools(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
+    project_id = env.project_id
 
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
     user_msg = await manager.send(project_id, "orchestrator", "Check readme")
     assert user_msg.status == "complete"
     assert user_msg.author_kind == "user"
 
-    events = await _collect_until_turn_ended(sub)
+    events = await collect_until_turn_ended(sub)
 
     # First event is Resync because after_seq was None
     assert isinstance(events[0], Resync)
@@ -171,15 +81,17 @@ async def test_two_subscribers_receive_identical_events(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
+    project_id = env.project_id
 
     sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
     sub2 = manager.subscribe(project_id, "orchestrator", after_seq=None)
 
-    task1 = asyncio.create_task(_collect_until_turn_ended(sub1))
-    task2 = asyncio.create_task(_collect_until_turn_ended(sub2))
+    task1 = asyncio.create_task(collect_until_turn_ended(sub1))
+    task2 = asyncio.create_task(collect_until_turn_ended(sub2))
 
     await manager.send(project_id, "orchestrator", "Check readme")
     events1, events2 = await asyncio.gather(task1, task2)
@@ -202,16 +114,19 @@ async def test_mid_turn_subscriber_after_get(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
+    project_id = env.project_id
+    prov_name = env.provider
     # Set orchestrator model to fake-slow
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
+    settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     # Subscriber 1 from the beginning
     sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    task1 = asyncio.create_task(_collect_until_turn_ended(sub1, timeout=15.0))
+    task1 = asyncio.create_task(collect_until_turn_ended(sub1, timeout=15.0))
 
     await manager.send(project_id, "orchestrator", "Slow response please")
 
@@ -232,7 +147,7 @@ async def test_mid_turn_subscriber_after_get(
 
     # Now subscriber 2 joins mid-turn with view.last_seq
     sub2 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    events2 = await _collect_until_turn_ended(sub2, timeout=15.0)
+    events2 = await collect_until_turn_ended(sub2, timeout=15.0)
 
     delta_text = "".join(e.data.text for e in events2 if isinstance(e, TextDelta))
     combined_text = initial_text + delta_text
@@ -257,9 +172,11 @@ async def test_three_messages_sent_at_once_queue_order(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
+    project_id = env.project_id
 
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
 
@@ -309,23 +226,25 @@ async def test_get_send_race_deterministic(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
+    project_id = env.project_id
 
-    store = manager._store  # pyright: ignore[reportPrivateUsage]
-    orig_messages = store.messages
+    orig_messages = SessionStore.messages
 
     entered_messages = asyncio.Event()
     release_messages = asyncio.Event()
 
-    async def patched_messages(*args: Any, **kwargs: Any) -> list[MessageView]:
+    async def patched_messages(self: SessionStore, *args: Any, **kwargs: Any) -> list[MessageView]:
         entered_messages.set()
         await release_messages.wait()
-        return await orig_messages(*args, **kwargs)
+        return await orig_messages(self, *args, **kwargs)
 
-    store.messages = patched_messages  # type: ignore[method-assign]
+    monkeypatch.setattr(SessionStore, "messages", patched_messages)
 
     # Task 1: call get()
     get_task = asyncio.create_task(manager.get(project_id, "orchestrator"))
@@ -346,7 +265,7 @@ async def test_get_send_race_deterministic(
     in_view = any(m.id == sent_msg.id for m in view.messages)
 
     stream_saw_msg = False
-    events = await _collect_until_turn_ended(sub)
+    events = await collect_until_turn_ended(sub)
     for ev in events:
         if isinstance(ev, MessageCreated) and ev.data.message.id == sent_msg.id:
             stream_saw_msg = True

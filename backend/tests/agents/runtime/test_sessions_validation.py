@@ -1,93 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import httpx2
 import pytest
 
-from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.runtime.sessions import SessionManager
-from mlops_agents.agents.settings import AgentSettingsService
-from mlops_agents.agents.tools import ToolRegistry, default_registry
-from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.errors import DomainError
-from mlops_agents.integrations.github.auth import GitHubAuth
-from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
-from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.agents.runtime.session_env import build_session_env
+from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.integrations.test_github_auth import FakeGh
-
-
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
-
-
-def _workspace_svc(
-    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
-) -> WorkspaceService:
-    http = httpx2.AsyncClient()
-    github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    return WorkspaceService(
-        _settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
-    )
-
-
-async def _setup_env(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-    *,
-    files: dict[str, str] | None = None,
-    extra_dirs: list[Path] | None = None,
-    tools: ToolRegistry | None = None,
-) -> tuple[SessionManager, WorkspaceService, str, str, ProvidersService]:
-    repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
-    repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
-
-    tool_reg = tools if tools is not None else default_registry()
-    catalog = AgentCatalog.load(tool_reg.names(), extra_dirs=extra_dirs or ())
-    providers_svc = ProvidersService(databases, keystore, model_http)
-    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
-    git = GitRunner(paths.bin)
-
-    manager = SessionManager(
-        databases=databases,
-        workspace=workspace_svc,
-        catalog=catalog,
-        tools=tool_reg,
-        settings=settings_svc,
-        providers=providers_svc,
-        http=model_http,
-        git=git,
-    )
-
-    prov = await providers_svc.create_provider(
-        ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
-    )
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
-    await providers_svc.verify_model(f"{prov.name}:fake-tools")
-
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-slow"))
-    await providers_svc.record_verification(
-        f"{prov.name}:fake-slow", tool_calling=True, streaming=True, detail=None
-    )
-
-    project = await workspace_svc.add_local(str(repo_dir))
-    await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
-
-    return manager, workspace_svc, project.id, prov.name, providers_svc
 
 
 async def test_agent_validation(
@@ -107,7 +30,7 @@ async def test_agent_validation(
         encoding="utf-8",
     )
 
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path,
         paths,
         databases,
@@ -117,6 +40,10 @@ async def test_agent_validation(
         git_env,
         extra_dirs=[extra_dir],
     )
+
+    manager = env.manager
+
+    project_id = env.project_id
 
     # 1. Unknown agent -> 404
     with pytest.raises(DomainError) as exc_404:
@@ -169,9 +96,10 @@ async def test_unknown_project_raises_404_and_never_creates_db(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, _, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
+    manager = env.manager
     unknown_id = "prj_nonexistent"
     db_path = paths.project_db(unknown_id)
     assert not db_path.exists()

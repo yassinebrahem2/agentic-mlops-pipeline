@@ -1,92 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx2
+import pytest
 from sqlalchemy import select
 
-from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
+    MessageUpdated,
     MessageView,
     TextDelta,
     TextPart,
     TurnEnded,
 )
-from mlops_agents.agents.runtime.sessions import SessionManager
-from mlops_agents.agents.settings import AgentSettingsService
-from mlops_agents.agents.tools import default_registry
-from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.integrations.github.auth import GitHubAuth
-from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
-from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, turns
-from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.integrations.test_github_auth import FakeGh
-
-
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
-
-
-def _workspace_svc(
-    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
-) -> WorkspaceService:
-    http = httpx2.AsyncClient()
-    github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    return WorkspaceService(
-        _settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
-    )
-
-
-async def _setup_env(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> tuple[SessionManager, WorkspaceService, str, str, Path]:
-    repo_dir = make_repo(tmp_path / "repo", {"README.md": "Hello\n"}, git_env)
-    tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
-    providers_svc = ProvidersService(databases, keystore, model_http)
-    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
-    project = await workspace_svc.add_local(str(repo_dir))
-
-    prov = await providers_svc.create_provider(
-        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
-    )
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-slow"))
-    await providers_svc.verify_model(f"{prov.name}:fake-tools")
-    await providers_svc.record_verification(
-        f"{prov.name}:fake-slow", tool_calling=True, streaming=True, detail=None
-    )
-
-    await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
-
-    manager = SessionManager(
-        databases=databases,
-        workspace=workspace_svc,
-        catalog=catalog,
-        tools=tools,
-        settings=settings_svc,
-        providers=providers_svc,
-        http=model_http,
-        git=GitRunner(paths.bin),
-    )
-    return manager, workspace_svc, project.id, prov.name, repo_dir
 
 
 async def test_recovery(
@@ -98,10 +34,12 @@ async def test_recovery(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, _, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    store = manager._store  # pyright: ignore[reportPrivateUsage]
+    manager = env.manager
+    project_id = env.project_id
+    store = env.store
     sid = await store.session_id(project_id, "orchestrator")
 
     # Manually inject a running turn and a queued turn (as left by crashed process)
@@ -151,29 +89,13 @@ async def test_recovery(
 
     # And the queued turn is running or completes
     sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    events = await _collect_until_turn_ended(sub, timeout=10.0)
+    events = await collect_until_turn_ended(sub, timeout=10.0)
     assert any(isinstance(e, TurnEnded) and e.data.turn_id == trn_queued for e in events)
 
     await manager.close()
 
 
-async def _collect_until_turn_ended(
-    sub: Any,
-    timeout: float = 5.0,  # noqa: ASYNC109
-) -> list[Any]:
-    events: list[Any] = []
-
-    async def collector() -> None:
-        async for ev in sub:
-            events.append(ev)
-            if isinstance(ev, TurnEnded):
-                break
-
-    await asyncio.wait_for(collector(), timeout=timeout)
-    return events
-
-
-async def test_deterministic_race_executor_write_holds_lock(
+async def test_executor_final_write_and_publish_are_one_step_under_the_session_lock(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -181,49 +103,52 @@ async def test_deterministic_race_executor_write_holds_lock(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Critical 3 test: executor write + publish happens under the session lock."""
-    manager, _, project_id, prov_name, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
-    await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-tools")
+    manager = env.manager
+    project_id = env.project_id
 
-    store = manager._store  # pyright: ignore[reportPrivateUsage]
-    orig_update_message = store.update_message
+    orig_update_message = SessionStore.update_message
+    written = asyncio.Event()
+    release = asyncio.Event()
 
-    executor_in_update = asyncio.Event()
-    release_update = asyncio.Event()
+    async def update_then_wait(self: SessionStore, *args: Any, **kwargs: Any) -> MessageView:
+        result = await orig_update_message(self, *args, **kwargs)
+        if "parts" in kwargs and kwargs.get("status") == "complete":
+            written.set()
+            await release.wait()
+        return result
 
-    async def patched_update(*args: Any, **kwargs: Any) -> MessageView:
-        if kwargs.get("status") == "complete":
-            executor_in_update.set()
-            await release_update.wait()
-        return await orig_update_message(*args, **kwargs)
+    monkeypatch.setattr(SessionStore, "update_message", update_then_wait)
 
-    store.update_message = patched_update  # type: ignore[method-assign]
+    stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    collector = asyncio.create_task(collect_until_turn_ended(stream))
+    await manager.send(project_id, "orchestrator", "Do turn")
+    await written.wait()
 
-    # Start turn
-    send_task = asyncio.create_task(manager.send(project_id, "orchestrator", "Do turn"))
-    await executor_in_update.wait()
-
-    # Concurrent get() must wait for lock, cannot see half-updated message
+    # The executor has stored the final message and not yet published it: get() must wait.
     get_task = asyncio.create_task(manager.get(project_id, "orchestrator"))
+    done, _ = await asyncio.wait({get_task}, timeout=0.3)
+    assert not done
 
-    # Release executor update
-    release_update.set()
-
-    await send_task
+    release.set()
     view = await get_task
+    events = await collector
 
-    # Subscriber starting with view.last_seq
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    await _collect_until_turn_ended(sub, timeout=3.0)
-
-    # Any agent message in view is complete
-    agent_views = [m for m in view.messages if m.author_kind == "agent"]
-    if agent_views:
-        assert agent_views[0].status == "complete"
+    agent_message = next(m for m in view.messages if m.author_kind == "agent")
+    assert agent_message.status == "complete"
+    published_again = [
+        e
+        for e in events
+        if isinstance(e, MessageUpdated)
+        and e.data.message.id == agent_message.id
+        and e.data.message.status == "complete"
+        and e.seq > view.last_seq
+    ]
+    assert published_again == []
 
     await manager.close()
 
@@ -237,10 +162,13 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    manager, _, project_id, prov_name, _ = await _setup_env(
+    env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    settings_svc = manager._settings  # pyright: ignore[reportPrivateUsage]
+    manager = env.manager
+    project_id = env.project_id
+    prov_name = env.provider
+    settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
@@ -286,3 +214,48 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
             await conn.execute(select(messages.c.status).where(messages.c.id == turn_1_msg[0]))
         ).scalar_one()
         assert status_after == "stopped"
+
+
+async def test_error_escaping_the_executor_fails_the_turn_and_the_worker_goes_on(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    project_id = env.project_id
+
+    orig_run = TurnExecutor.run
+    calls = 0
+
+    async def run_failing_once(self: TurnExecutor, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("boom with details")
+        return await orig_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(TurnExecutor, "run", run_failing_once)
+
+    stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    await manager.send(project_id, "orchestrator", "Turn 1")
+    await manager.send(project_id, "orchestrator", "Turn 2")
+    first = (await collect_until_turn_ended(stream))[-1]
+    second = (await collect_until_turn_ended(stream))[-1]
+
+    assert isinstance(first, TurnEnded)
+    assert first.data.status == "failed"
+    assert first.data.error == UNEXPECTED_FAILURE_TEXT
+    assert isinstance(second, TurnEnded)
+    assert second.data.status == "done"
+    assert "boom with details" in caplog.text
+
+    await manager.close()
