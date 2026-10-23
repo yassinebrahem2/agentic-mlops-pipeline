@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -367,7 +366,5 @@ async def test_held_turn_stopped_without_releasing_gate_shuts_down_cleanly(
             assert isinstance(stopped_events[-1], TurnEnded)
             assert stopped_events[-1].data.status == "stopped"
 
-            started = time.monotonic()
             async with asyncio.timeout(5.0):
                 await live.stop()
-            assert time.monotonic() - started < 5.0

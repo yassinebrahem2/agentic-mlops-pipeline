@@ -140,7 +140,7 @@ async def _stream(
             maybe_drop()
             yield _chunk(model, {"content": word if i == 0 else " " + word})
             if model == "fake-slow" and i == 0:
-                while not state._slow_gate.is_set():  # pyright: ignore[reportPrivateUsage]  # noqa: ASYNC110 - cross-thread gate
+                while not state._slow_gate.is_set():
                     await asyncio.sleep(0.02)
         finish = "stop"
     maybe_drop()
