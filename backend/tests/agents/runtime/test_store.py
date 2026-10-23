@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import (
     Part,
@@ -242,7 +243,9 @@ async def test_add_llm_call(databases: Databases) -> None:
     assert rows[0]["created_at"] is not None
 
 
-async def test_write_cancelled_by_its_caller_still_completes(databases: Databases) -> None:
+async def test_cancel_waits_for_the_write_in_flight(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = SessionStore(databases)
     session_id = await store.session_id("prj_test", "orchestrator")
     message = await store.add_message(
@@ -254,19 +257,33 @@ async def test_write_cancelled_by_its_caller_still_completes(databases: Database
         status="streaming",
     )
 
+    orig_project = Databases.project
+    in_write = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_project(self: Databases, project_id: str) -> AsyncEngine:
+        in_write.set()
+        await release.wait()
+        return await orig_project(self, project_id)
+
+    monkeypatch.setattr(Databases, "project", slow_project)
     write = asyncio.create_task(
         store.update_message(
             "prj_test", message.id, parts=[TextPart(type="text", text="kept")], status="stopped"
         )
     )
-    await asyncio.sleep(0)
+    await in_write.wait()
     write.cancel()
+
+    # The cancel is held back until the write has finished, so the caller (which holds the
+    # session lock) never lets go while a write is still in flight.
+    done, _ = await asyncio.wait({write}, timeout=0.2)
+    assert not done
+
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await write
-
-    # Stop and shutdown cancel a turn anywhere; the interrupted write must not be lost or
-    # leave the database locked for the writes that follow.
-    await store.set_summary("prj_test", session_id, "later write", message.id)
+    monkeypatch.undo()
     stored = next(m for m in await store.messages("prj_test", session_id) if m.id == message.id)
     assert stored.status == "stopped"
     assert stored.parts == [TextPart(type="text", text="kept")]
