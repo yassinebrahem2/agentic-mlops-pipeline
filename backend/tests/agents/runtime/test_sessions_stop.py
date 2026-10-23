@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx2
@@ -77,19 +78,32 @@ async def test_stop_during_fake_slow(
     await manager.close()
 
 
-class SlowDummyArgs(BaseModel):
-    delay: float = 2.0
+class HeldArgs(BaseModel):
+    pass
 
 
-class SlowTool(AgentTool[SlowDummyArgs]):
-    name = "slow_sleep"
-    description = "Sleeps for a while."
+class HeldTool(AgentTool[HeldArgs]):
+    """Runs until the test releases it, so a Stop lands while the tool is running."""
+
+    name = "HeldTool"
+    description = "Waits until the test releases it."
     risk = RiskClass.READ
-    args_model = SlowDummyArgs
+    args_model = HeldArgs
 
-    async def run(self, ctx: ToolContext, args: SlowDummyArgs) -> ToolOutput:
-        await asyncio.sleep(args.delay)
-        return ToolOutput(content="done")
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    async def run(self, ctx: ToolContext, args: HeldArgs) -> ToolOutput:
+        await self.release.wait()
+        return ToolOutput(content="released")
+
+
+async def _through_tool_started(sub: AsyncIterator[StreamEvent]) -> ToolStarted:
+    async for ev in sub:
+        assert not isinstance(ev, TurnEnded), ev
+        if isinstance(ev, ToolStarted):
+            return ev
+    raise AssertionError("the stream closed before any tool started")
 
 
 async def test_stop_during_slow_tool(
@@ -101,36 +115,50 @@ async def test_stop_during_slow_tool(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
+    # The fake model calls an agent's first tool: an agent with only HeldTool runs it.
+    def_dir = tmp_path / "defs"
+    def_dir.mkdir()
+    (def_dir / "heldagent.md").write_text(
+        "---\nname: heldagent\ndisplay_name: Held Agent\ndescription: Test\n"
+        "tools:\n  - HeldTool\n---\nPrompt\n"
+    )
+    held = HeldTool()
     tools = default_registry()
-    tools.register(SlowTool())
+    tools.register(held)
     env = await build_session_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, tools=tools
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[def_dir],
+        tools=tools,
     )
     manager = env.manager
     project_id = env.project_id
+    await env.settings.set_default_model("heldagent", f"{env.provider}:fake-tools")
 
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    await manager.send(project_id, "orchestrator", "Call slow sleep")
+    # Subscribing after the snapshot's last_seq replays anything published before the first read.
+    view = await manager.get(project_id, "heldagent")
+    sub = manager.subscribe(project_id, "heldagent", after_seq=view.last_seq)
+    await manager.send(project_id, "heldagent", "Call the held tool")
 
-    async for ev in sub:
-        assert not isinstance(ev, TurnEnded), ev
-        if isinstance(ev, ToolStarted):
-            break
+    started = await _through_tool_started(sub)
+    assert started.data.name == "HeldTool"
 
-    await manager.stop(project_id, "orchestrator")
-
-    stop_events: list[StreamEvent] = []
-    async for ev in sub:
-        stop_events.append(ev)
-        if isinstance(ev, TurnEnded):
-            assert ev.data.status == "stopped"
-            break
-
+    await manager.stop(project_id, "heldagent")
+    stop_events = await collect_until_turn_ended(sub)
+    stopped = stop_events[-1]
+    assert isinstance(stopped, TurnEnded)
+    assert stopped.data.status == "stopped"
     assert any(
         isinstance(ev, MessageUpdated) and ev.data.message.status == "stopped" for ev in stop_events
     )
 
-    m = await manager.send(project_id, "orchestrator", "New turn")
+    held.release.set()
+    m = await manager.send(project_id, "heldagent", "New turn")
     assert m.status == "complete"
     evs = await collect_until_turn_ended(sub)
     assert isinstance(evs[-1], TurnEnded)
