@@ -71,6 +71,10 @@ def _reply(
 ) -> tuple[str, str | None]:
     """(text, name of the tool to call or None)."""
     last = messages[-1]
+    if model == "fake-slow" and any(
+        tool["function"]["name"] == "report_capabilities" for tool in tools
+    ):
+        return "", "report_capabilities"
     if model == "fake-slow":
         return SLOW_TEXT, None
     if model == "fake-no-tools" or not tools:
