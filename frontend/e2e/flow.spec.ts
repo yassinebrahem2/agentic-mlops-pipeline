@@ -57,7 +57,7 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
       "Yes",
       "Yes",
       // The fake reports its own context window; any positive size it reports will do.
-      /^\d+$/,
+      /^[1-9]\d*$/,
       "Verified",
       /.+/,
       /Verify/,
