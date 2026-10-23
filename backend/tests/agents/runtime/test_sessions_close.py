@@ -42,7 +42,9 @@ async def test_close_project_during_turn(
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub), Resync)
     await manager.send(project_id, "orchestrator", "Slow response")
     await through_first_delta(sub)
 
@@ -90,7 +92,9 @@ async def test_close_during_turn_leaves_turn_and_message_interrupted(
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub), Resync)
     await manager.send(project_id, "orchestrator", "Turn 1 slow")
     m2 = await manager.send(project_id, "orchestrator", "Turn 2 queued")
     await through_first_delta(sub)

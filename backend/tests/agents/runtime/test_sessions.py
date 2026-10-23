@@ -128,7 +128,9 @@ async def test_mid_turn_subscriber_after_get(
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub1), Resync)
     await manager.send(project_id, "orchestrator", "Slow response please")
     prefix = await through_first_delta(sub1)
 

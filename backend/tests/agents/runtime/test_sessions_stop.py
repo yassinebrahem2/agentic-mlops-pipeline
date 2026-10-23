@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
+    Resync,
     StreamEvent,
     ToolStarted,
     TurnEnded,
@@ -44,7 +45,9 @@ async def test_stop_during_fake_slow(
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
     fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub), Resync)
 
     await manager.send(project_id, "orchestrator", "Slow turn 1")
     await manager.send(project_id, "orchestrator", "Quick turn 2")

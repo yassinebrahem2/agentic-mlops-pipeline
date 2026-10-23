@@ -12,6 +12,7 @@ from mlops_agents.agents.runtime.contract import (
     MessageCreated,
     MessageUpdated,
     MessageView,
+    Resync,
     TextPart,
     TurnEnded,
 )
@@ -177,7 +178,9 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
 
     # The gate stays held: both turns are acted on mid-turn and neither needs to finish.
     fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub), Resync)
 
     # 1. Start turn 1 and stop it
     await manager.send(project_id, "orchestrator", "Turn 1 slow")
