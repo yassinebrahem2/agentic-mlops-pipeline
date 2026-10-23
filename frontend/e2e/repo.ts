@@ -43,16 +43,21 @@ export function createTestRepo(): TestRepo {
     });
   };
 
-  git("init", "-b", "main");
-  writeFileSync(join(path, "README.md"), README);
-  writeFileSync(join(path, "count_words.py"), PYTHON_FILE);
-  git("add", "README.md", "count_words.py");
-  git("-c", "commit.gpgsign=false", "commit", "-m", "Add the word counter");
-
-  return {
-    path,
-    remove: () => {
-      rmSync(path, { recursive: true, force: true });
-    },
+  const remove = () => {
+    rmSync(path, { recursive: true, force: true });
   };
+
+  try {
+    git("init", "-b", "main");
+    writeFileSync(join(path, "README.md"), README);
+    writeFileSync(join(path, "count_words.py"), PYTHON_FILE);
+    git("add", "README.md", "count_words.py");
+    git("-c", "commit.gpgsign=false", "commit", "-m", "Add the word counter");
+  } catch (error) {
+    // A half-made repository is of no use: leave no folder behind and report the git failure.
+    remove();
+    throw error;
+  }
+
+  return { path, remove };
 }

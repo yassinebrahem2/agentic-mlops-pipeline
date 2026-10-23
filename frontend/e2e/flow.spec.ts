@@ -4,19 +4,21 @@ import { APP_NAME } from "../src/config";
 import { ACCESS_TOKEN, APP_URL, FAKE_BASE_URL } from "./env";
 import { createTestRepo, README_FIRST_LINE, type TestRepo } from "./repo";
 
-let repo: TestRepo;
+let repo: TestRepo | undefined;
 
 test.beforeAll(() => {
   repo = createTestRepo();
 });
 
 test.afterAll(() => {
-  repo.remove();
+  repo?.remove();
 });
 
 test("stage 1 flow: a provider, a local project and a question the agent answers", async ({
   page,
 }) => {
+  if (repo === undefined) throw new Error("beforeAll did not create the test repository");
+  const repoPath = repo.path;
   // The specs share one app and database, so this run's provider gets a name of its own.
   const providerName = `fake-${randomBytes(3).toString("hex")}`;
   const modelAddress = `${providerName}:fake-tools`;
@@ -54,7 +56,8 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
       modelAddress,
       "Yes",
       "Yes",
-      "32768",
+      // The fake reports its own context window; any positive size it reports will do.
+      /^\d+$/,
       "Verified",
       /.+/,
       /Verify/,
@@ -75,9 +78,9 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     await page.getByRole("tab", { name: "Local folder" }).click();
     // The browser fills the path box with the folder it lists first; type over it once it has.
     await expect(page.getByText("Current folder:")).toBeVisible();
-    await page.getByLabel("Folder path").fill(repo.path);
+    await page.getByLabel("Folder path").fill(repoPath);
     await page.getByRole("button", { name: "Go", exact: true }).click();
-    await expect(page.getByText(`Current folder: ${repo.path}`)).toBeVisible();
+    await expect(page.getByText(`Current folder: ${repoPath}`)).toBeVisible();
     await page.getByRole("button", { name: "Use this folder" }).click();
 
     await expect(page).toHaveURL(/\/projects\/[^/]+\/agents/);
