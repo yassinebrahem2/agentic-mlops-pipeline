@@ -62,12 +62,13 @@ Tasks 1 and 2 start now and each gets an early PR (its issue says so), because e
 
 ### Task 3: Agent-runtime session tests hold turns with the gate
 
-**Files:** every test file under `backend/tests/agents/runtime/` that runs a `fake-slow` turn (on `main` today: `test_sessions.py`, `test_sessions_stop.py`, `test_sessions_close.py`, `test_sessions_lifecycle.py`, and the files that build their setup with `session_env.py`), and `session_env.py`.
+**Files:** `backend/tests/agents/runtime/test_graph_checkpointer.py` and a new `test_checkpoint_durability.py` (see the last note), and every test file under `backend/tests/agents/runtime/` that runs a `fake-slow` turn (on `main` today: `test_sessions.py`, `test_sessions_stop.py`, `test_sessions_close.py`, `test_sessions_lifecycle.py`, and the files that build their setup with `session_env.py`), and `session_env.py`.
 
 **Interfaces:** Consumes the hold gate: `FakeState.hold_slow()` and `FakeState.release_slow()` on the `fake_openai` fixture's state. Produces none.
 
 **Implementation notes:**
 - Every test that acts while a `fake-slow` turn is running (Stop, close, close_project, recovery mid-turn) calls `hold_slow()` before sending, waits for the hold (the first `text.delta` on its session subscription; nothing else signals it), acts, and asserts on the result. None relies on how long `fake-slow` takes. Tests that need the turn to finish call `release_slow()`.
 - `session_env.py` sets `fake-slow`'s verification by hand (`record_verification(tool_calling=True, ...)`), which only #106 required. Set it up through `ProvidersService.verify_model` against the fake instead and remove the hand-written record. Verification sends one probe request to the fake, so a test that counts the fake's requests accounts for it.
+- `test_graph_checkpointer.py` grew past the ~400-line limit with task 1's guarantee test (PR #118). Move that test and its `GatedSaver` into `test_checkpoint_durability.py`; the helpers both files use (`RecordingSink`, `_make_agent`) move once into a shared test module, not copied. Assert the held write's checkpoint is step 0 (`== 0`), and await the cancelled event-wait tasks in both task 1 tests.
 
 **Tests (stop condition):** the runtime session tests pass 20 times in a loop (`--basetemp=$TMP/test-stability-a`) while `uv run pytest --basetemp=$TMP/test-stability-b` runs in a load loop; full suite, ruff, format, pyright; CI green on Linux and Windows.
