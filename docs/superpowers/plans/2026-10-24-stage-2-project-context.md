@@ -19,7 +19,7 @@
 
 ### Task 1: App pages keep the current project
 
-**Files:** new `frontend/src/lib/useCurrentProject.ts` and `frontend/src/lib/useProjects.ts` with tests, `frontend/src/app/shell/Sidebar.tsx`, `frontend/src/app/shell/ProjectSwitcher.tsx`, their tests.
+**Files:** new `frontend/src/lib/useCurrentProject.ts` and `frontend/src/lib/useProjects.ts` with tests, `frontend/src/app/shell/Sidebar.tsx`, `frontend/src/app/shell/ProjectSwitcher.tsx`, `frontend/src/pages/projects/ProjectsPage.tsx`, and the one `invalidateQueries` line in each of `lib/useOpenProject.ts`, `pages/add-project/LocalFolderTab.tsx`, `pages/add-project/GitHubTab.tsx`, `pages/project-settings/RemoveProjectDialog.tsx` and `pages/project-settings/RepositorySection.tsx`, with their tests.
 
 **Interfaces:** Consumes merged code (`GET /api/projects`, whose items carry `last_opened_at`; `useProject`). Produces none.
 
@@ -31,7 +31,7 @@
   - on an app route, the last project route visited in this page load (held in a small module store the hook updates when the URL has a project). Reloading or deep-linking into a project counts, although it does not call `/open`.
   - on a fresh load straight onto an app route, the project with the latest `last_opened_at`;
   - no project when none was ever opened.
-- `useProjects()` is the one projects query (key `["projects"]`). The switcher's inline `useQuery` moves into it.
+- `useProjects()` is the one projects query, and `projectsKey` (next to `projectKey` in `lib/useProject.ts`'s pattern) is the one source of its key. The switcher's and the Projects page's inline queries are replaced by `useProjects()`. Every `invalidateQueries({ queryKey: ["projects"] })` uses `projectsKey`. Afterwards, `git grep -n '"projects"\]' -- frontend/src` finds only `projectsKey`'s definition.
 - `Sidebar` and `ProjectSwitcher` use only this hook. On app pages the Project group stays, and its links go to that project's pages.
 - The home page (`/`) keeps today's behavior.
 - The module store has a reset function that the tests call between tests.

@@ -19,7 +19,7 @@
 
 ### Task 1: Read the context window from Gemini and vLLM
 
-**Files:** `backend/src/mlops_agents/providers/service.py` (the listing parser and `list_remote_models`), its tests.
+**Files:** a new `backend/src/mlops_agents/providers/listing.py` and its tests, `backend/src/mlops_agents/providers/service.py` (`list_remote_models` and `add_model` call the new module).
 
 **Interfaces:** Consumes merged code. Produces none (`RemoteModel.context_window` already exists).
 
@@ -30,6 +30,7 @@
 - Ollama: its native `/api/show` gives the model's trained maximum, not the context Ollama serves (its `num_ctx` is far smaller). Using it would make compaction start too late. Ollama keeps the user-entered value.
 
 **Implementation notes:**
+- `providers/listing.py` owns what a provider reports about its models: `_ListedModel`, `_ModelList`, the wire-id match and the Gemini native listing move there from `service.py`, which keeps its HTTP helper and passes it in. `service.py` is 457 lines today; it must not grow.
 - Add `max_model_len` to the fields `_ListedModel.context()` reads.
 - When a provider's base URL path ends with `/v1beta/openai`, `list_remote_models` also reads the native listing at the same host's `/v1beta/models`, following `nextPageToken`. It fills the window for each listed id, matching a native `name` with or without its `models/` prefix. `add_model`'s lookup of the wire id uses the same match (one function).
   - The key goes in the `x-goog-api-key` header, never in the URL.

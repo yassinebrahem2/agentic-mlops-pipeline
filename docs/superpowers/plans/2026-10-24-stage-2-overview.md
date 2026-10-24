@@ -34,8 +34,8 @@ Each file below is edited by one plan only:
 - `index.css`, the `components/ui/*` ring classes, `ProviderCard.tsx`, `AgentDefaults.tsx`, `AgentsSection.tsx`, `MessageView.tsx`: ui-polish.
 - `components/ui/combobox.tsx`, `GitHubTab.tsx`, `AddModelDialog.tsx`: pickers.
 - `AppShell.tsx`, `AgentsPage.tsx`, `MessageList.tsx`, `Composer.tsx`: chat-layout.
-- `Sidebar.tsx`, `ProjectSwitcher.tsx`, new `lib/useCurrentProject.ts` and `lib/useProjects.ts`: project-context.
-- `ModelsTable.tsx`, `ProvidersPage.tsx`, `providers/service.py`: models.
+- `Sidebar.tsx`, `ProjectSwitcher.tsx`, `ProjectsPage.tsx`, new `lib/useCurrentProject.ts` and `lib/useProjects.ts`: project-context. It also changes the one `invalidateQueries` line for the projects key in `useOpenProject.ts`, `LocalFolderTab.tsx`, `GitHubTab.tsx` (a pickers file), `RemoveProjectDialog.tsx` and `RepositorySection.tsx`.
+- `ModelsTable.tsx`, `ProvidersPage.tsx`, `providers/service.py`, new `providers/listing.py`: models.
 - `agents/runtime/graph.py`, `model_caller.py`, `providers/errors.py`, `agents/tools/base.py`, `agents/tools/grep.py`, `tests/fakes/fake_openai.py`: tool-errors.
 
 Two test files are shared, and each plan edits only its own steps in them:
