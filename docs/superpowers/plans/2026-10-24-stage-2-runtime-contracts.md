@@ -140,7 +140,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 ### Task 4: Turn graph hook points and per-call tool context
 
-**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `backend/src/mlops_agents/api/services.py` (passing the four defaults), tests.
+**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `sessions.py` (its constructor takes the four hooks and hands them to the builder and executor; pass-through only, Decision #234), `backend/src/mlops_agents/api/services.py` (passing the four defaults), tests.
 
 **Interfaces:** Consumes tasks 1 and 3, and the merged tool-errors plan (both edit `graph.py` and `model_caller.py`). Produces I12's hook points.
 
@@ -151,7 +151,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
   - `tools` runs the calls whose decision is `allow` or `approved`, and answers the others with the decision's tool error.
   - After the model ends a turn, the graph asks `TurnEndCheck.note(...)` once. When it returns a note, one more model step runs with it.
   - Before each model call, the graph appends `InboundSource.take(...)`.
-- The defaults keep stage 1's behavior. Each lives in its protocol's module, next to the protocol:
+- The defaults keep stage 1's behavior. All four live in `hooks.py`, so the contract modules stay pure (Decision #234):
   - `AllowAllGate`;
   - `NoInbound`;
   - `NoTurnEndCheck`;
