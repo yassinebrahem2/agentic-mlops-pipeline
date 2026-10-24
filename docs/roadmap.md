@@ -47,6 +47,22 @@ Agreed:
 - Approvals: a turn that needs approval pauses as `waiting` (survives restarts) and resumes after the user decides. Approval requests appear in the session and in the Inbox (diffs for code changes).
 - Audit log and event stream (shapes in this file) are stored from this stage on.
 - Talking to an agent directly: the agent acts; the Orchestrator learns of it through the status board; the policy applies either way.
+- A tool call that fails, whether our tool errors or the provider rejects the call, is input for the model, never the end of the turn.
+- UI changes from the lead's stage 1 walkthrough:
+  - Searchable pickers (repo, model, ...) use one input that both filters and holds the value.
+  - Every select uses the app's own styled component, never the browser default.
+  - Focus and hover rings follow each element's corner radius.
+  - Every clickable element shows the pointer cursor.
+  - Provider cards have no empty vertical space.
+  - The context window is read from the provider where it reports one.
+  - Model warnings sit above the models table, with a colored marker on the row; rows keep one height.
+  - Chat follows the usual chat-app layout:
+    - the input starts at one line, grows to a limit, then scrolls;
+    - one button, vertically centred, sends and becomes Stop during a turn;
+    - only the message list scrolls.
+  - Markdown tables in messages have borders.
+  - The project switcher in the sidebar header fits and reads well.
+  - App pages keep the current project selected.
 
 The spec must answer:
 - The policy table values (risk class x level).
