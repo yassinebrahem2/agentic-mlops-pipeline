@@ -60,6 +60,7 @@
 **Implementation notes:**
 - `take` runs under the session lock. It selects the session's queued messages with `from_agent` set, in `seq` order. It marks each `complete` with `read_by_turn` set to the current turn, deletes the queued turn that each one triggered, and publishes `message.updated`. It returns them as `HumanMessage`s with stage 1's "Message from <name>:" prefix, which the context builder already uses.
 - User messages (no `from_agent`) are never taken mid-turn.
+- A message taken by a turn that does not end `done` (failed, stopped, interrupted) is delivered again: it gets a new queued turn when that turn ends, so the agent answers it (review of #235). Test it with a model call that fails after the take.
 - Whatever is not taken keeps its queued turn, so the worker starts the next turn from the earliest waiting input by `seq`: queued user messages and undelivered agent messages alike.
 
 **Tests (stop condition):**

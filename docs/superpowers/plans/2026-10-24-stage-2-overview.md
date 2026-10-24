@@ -351,7 +351,7 @@ class GateDecision:
     preview: Preview | None      # set for an ask
 
 class Gate(Protocol):
-    async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]: ...   # never pauses
+    async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]: ...   # never pauses; one decision for every call
     async def wait(self, project_id: str, turn_id: str,
                    decisions: dict[str, GateDecision]) -> dict[str, GateDecision]: ...  # interrupt() while pending
 
@@ -360,6 +360,7 @@ class InboundSource(Protocol):
 
 class TurnEndCheck(Protocol):
     async def note(self, project_id: str, session_id: str, turn_id: str) -> str | None: ...
+    # The step a note causes is exempt from max_steps: at most one per turn.
 
 class TurnObserver(Protocol):
     async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None: ...
