@@ -1,10 +1,16 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import { hostedModelWarning } from "../../lib/models";
 import { renderPage } from "../../test/render";
 import { route } from "./route";
+
+beforeAll(() => {
+  window.HTMLElement.prototype.hasPointerCapture = () => false;
+  window.HTMLElement.prototype.setPointerCapture = () => {};
+  window.HTMLElement.prototype.releasePointerCapture = () => {};
+});
 
 type AgentInfo = components["schemas"]["AgentInfo"];
 type ModelEntry = components["schemas"]["ModelEntry"];
@@ -149,21 +155,22 @@ afterEach(() => {
 
 describe("AgentDefaults", () => {
   it("the select offers only usable models plus None", async () => {
+    const user = userEvent.setup();
     stubApi({
       "GET /api/agents": () => json([orchestrator]),
       "GET /api/models": () => json([groqLlama, ollamaMistral, brokenModel]),
     });
     renderPage("/providers", { routes: [route] });
 
-    const select = await screen.findByLabelText("Model for Orchestrator");
-    const options = within(select)
-      .getAllByRole("option")
-      .map((opt) => opt.textContent);
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    await user.click(trigger);
+    const options = screen.getAllByRole("option").map((opt) => opt.textContent);
     expect(options).toEqual(["None", "groq:llama-3.3-70b-versatile", "ollama:mistral"]);
     expect(options).not.toContain("groq:broken-model");
   });
 
   it("a current default that is no longer usable appears as '<address> (not usable)' and stays selected", async () => {
+    const user = userEvent.setup();
     const agentWithBrokenModel: AgentInfo = {
       ...orchestrator,
       settings: {
@@ -178,12 +185,11 @@ describe("AgentDefaults", () => {
     });
     renderPage("/providers", { routes: [route] });
 
-    const select = await screen.findByLabelText<HTMLSelectElement>("Model for Orchestrator");
-    const options = within(select)
-      .getAllByRole("option")
-      .map((opt) => opt.textContent);
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    expect(trigger).toHaveTextContent("groq:broken-model (not usable)");
+    await user.click(trigger);
+    const options = screen.getAllByRole("option").map((opt) => opt.textContent);
     expect(options).toContain("groq:broken-model (not usable)");
-    expect(select.value).toBe("groq:broken-model");
   });
 
   it("choosing sends the address and the row's problem disappears after refetch", async () => {
@@ -211,8 +217,9 @@ describe("AgentDefaults", () => {
       await screen.findByText("Choose a model for Orchestrator to run tasks."),
     ).toBeInTheDocument();
 
-    const select = await screen.findByLabelText("Model for Orchestrator");
-    await user.selectOptions(select, "groq:llama-3.3-70b-versatile");
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "groq:llama-3.3-70b-versatile" }));
 
     const putCalls = sent.filter((s) => s.method === "PUT");
     expect(putCalls).toHaveLength(1);
@@ -255,8 +262,9 @@ describe("AgentDefaults", () => {
 
     renderPage("/providers", { routes: [route] });
 
-    const select = await screen.findByLabelText("Model for Orchestrator");
-    await user.selectOptions(select, "");
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "None" }));
 
     const putCalls = sent.filter((s) => s.method === "PUT");
     expect(putCalls).toHaveLength(1);
@@ -311,8 +319,9 @@ describe("AgentDefaults", () => {
 
     renderPage("/providers", { routes: [route] });
 
-    const select = await screen.findByLabelText("Model for Orchestrator");
-    await user.selectOptions(select, "groq:llama-3.3-70b-versatile");
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "groq:llama-3.3-70b-versatile" }));
 
     expect(
       await screen.findByText("Model groq:llama-3.3-70b-versatile is not usable."),

@@ -1,10 +1,16 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { components } from "@/api/schema";
 import { renderPage } from "@/test/render";
 import { hostedModelWarning } from "@/lib/models";
 import { route } from "./route";
+
+beforeAll(() => {
+  window.HTMLElement.prototype.hasPointerCapture = () => false;
+  window.HTMLElement.prototype.setPointerCapture = () => {};
+  window.HTMLElement.prototype.releasePointerCapture = () => {};
+});
 
 type Project = components["schemas"]["Project"];
 type Agent = components["schemas"]["AgentInfo"];
@@ -208,7 +214,7 @@ it("relinks a local project through the folder browser", async () => {
 it.each(["cloud/bad", "missing/model"])(
   "keeps current unusable override %s selected while excluding other unusable choices",
   async (address) => {
-    setup({
+    const { user } = setup({
       agent: {
         ...agent,
         settings: {
@@ -219,23 +225,26 @@ it.each(["cloud/bad", "missing/model"])(
       },
     });
     const select = await screen.findByRole("combobox", { name: "Model" });
-    expect(select).toHaveValue(address);
-    expect(
-      within(select)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["Use the app default (cloud/good)", "cloud/good", `${address} (not usable)`]);
+    expect(select).toHaveTextContent(`${address} (not usable)`);
+    await user.click(select);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Use the app default (cloud/good)",
+      "cloud/good",
+      `${address} (not usable)`,
+    ]);
     expect(screen.getByText("Choose another model")).toBeInTheDocument();
   },
 );
 it("sends a model address and null when restoring the app default", async () => {
   const { user, requests } = setup();
   const select = await screen.findByRole("combobox", { name: "Model" });
-  await user.selectOptions(select, "cloud/good");
+  await user.click(select);
+  await user.click(await screen.findByRole("option", { name: "cloud/good" }));
   await waitFor(() => {
-    expect(select).toHaveValue("cloud/good");
+    expect(select).toHaveTextContent("cloud/good");
   });
-  await user.selectOptions(select, "");
+  await user.click(select);
+  await user.click(await screen.findByRole("option", { name: /^Use the app default/ }));
   await waitFor(() => {
     expect(requests.filter((r) => r.method === "PUT").map((r) => r.body)).toEqual([
       { address: "cloud/good" },
@@ -244,12 +253,15 @@ it("sends a model address and null when restoring the app default", async () => 
   });
 });
 it("shows none for an absent app default", async () => {
-  setup({
+  const { user } = setup({
     agent: {
       ...agent,
       settings: { ...agent.settings, default_model: null, effective_model: null },
     },
   });
+  const select = await screen.findByRole("combobox", { name: "Model" });
+  expect(select).toHaveTextContent("Use the app default (none)");
+  await user.click(select);
   expect(
     await screen.findByRole("option", { name: "Use the app default (none)" }),
   ).toBeInTheDocument();
@@ -338,13 +350,17 @@ it.each(["not_local", "local_projects_disabled"])(
 );
 it("shows a rejected model choice next to its row", async () => {
   const { user } = setup({ failure: "model_not_usable" });
-  await user.selectOptions(await screen.findByRole("combobox", { name: "Model" }), "cloud/good");
+  const select = await screen.findByRole("combobox", { name: "Model" });
+  await user.click(select);
+  await user.click(await screen.findByRole("option", { name: "cloud/good" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Action failed");
 });
 
 it("keeps the real default selected when there is no override", async () => {
-  setup();
-  expect(await screen.findByRole("combobox", { name: "Model" })).toHaveValue("");
+  const { user } = setup();
+  const select = await screen.findByRole("combobox", { name: "Model" });
+  expect(select).toHaveTextContent("Use the app default (cloud/good)");
+  await user.click(select);
   expect(screen.queryByRole("option", { name: "cloud/bad" })).not.toBeInTheDocument();
 });
 
