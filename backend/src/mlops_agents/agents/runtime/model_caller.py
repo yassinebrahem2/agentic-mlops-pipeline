@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 import httpx2
@@ -21,6 +21,7 @@ class ModelReply:
     message: AIMessage  # text and tool calls, tool-call ids as the provider sent them
     prompt_tokens: int | None
     completion_tokens: int | None
+    tool_call_indices: dict[str, int] = field(default_factory=dict[str, int])
 
 
 class TurnFailed(Exception):  # message is safe to show and is stored as the turn's error
@@ -84,7 +85,6 @@ class ModelCaller:
         text_sent = False
 
         while True:
-            attempts += 1
             total_chunk: AIMessageChunk | None = None
             last_chunk: AIMessageChunk | None = None
 
@@ -101,14 +101,13 @@ class ModelCaller:
                     total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
 
                     for delta in _extract_text_deltas(aim_chunk.content):
-                        if delta:
-                            text_sent = True
-                            try:
-                                res = on_text(delta)
-                                if inspect.isawaitable(res):
-                                    await res
-                            except Exception as cb_exc:
-                                raise _OnTextCallbackError() from cb_exc
+                        text_sent = True
+                        try:
+                            res = on_text(delta)
+                            if inspect.isawaitable(res):
+                                await res
+                        except Exception as cb_exc:
+                            raise _OnTextCallbackError() from cb_exc
 
                 prompt_tokens: int | None = None
                 completion_tokens: int | None = None
@@ -137,10 +136,19 @@ class ModelCaller:
                         id=total_chunk.id,
                     )
 
+                tool_call_indices: dict[str, int] = {}
+                if total_chunk is not None and total_chunk.tool_call_chunks:
+                    for tc_chunk in total_chunk.tool_call_chunks:
+                        cid = tc_chunk.get("id")
+                        idx = tc_chunk.get("index")
+                        if cid and idx is not None:
+                            tool_call_indices[str(cid)] = int(idx)
+
                 return ModelReply(
                     message=final_message,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    tool_call_indices=tool_call_indices,
                 )
 
             except _OnTextCallbackError as wrapper:
@@ -164,6 +172,8 @@ class ModelCaller:
                         call_messages.append(HumanMessage(content=corrective))
                         continue
                     raise TurnFailed(error.message) from exc
+
+                attempts += 1
 
                 if error.kind is ProviderErrorKind.RATE_LIMIT:
                     if attempts >= MAX_ATTEMPTS:

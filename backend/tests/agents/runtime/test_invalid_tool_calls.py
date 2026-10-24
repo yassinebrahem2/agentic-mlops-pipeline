@@ -197,8 +197,16 @@ async def test_mixed_valid_and_invalid_tool_calls_order(
     env = await _setup_executor_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    valid_call = {"name": "Read", "arguments": {"file_path": "README.md"}}
-    invalid_call = {"name": "Read", "arguments": "{pattern: foo}"}
+    valid_call = {
+        "id": "call_valid_alpha",
+        "name": "Read",
+        "arguments": {"file_path": "README.md"},
+    }
+    invalid_call = {
+        "id": "call_invalid_omega",
+        "name": "Read",
+        "arguments": "{pattern: foo}",
+    }
     fake_openai.state.scripted_tool_calls = (
         [valid_call, invalid_call] if first_valid else [invalid_call, valid_call]
     )

@@ -126,6 +126,46 @@ def test_schema_strips_title_and_unwraps_nullable_any_of() -> None:
     assert params["properties"]["count"]["default"] is None
 
 
+class ComplexSchemaArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(description="A property literally named title.")
+    req_null: str | None = Field(description="Required nullable field.")
+    def_five: int | None = Field(default=5, description="Nullable with non-null default.")
+    opt: str | None = Field(default=None, description="Nullable with null default.")
+
+
+class ComplexSchemaTool(AgentTool[ComplexSchemaArgs]):
+    name: ClassVar[str] = "Complex"
+    description: ClassVar[str] = "Complex schema tool."
+    risk: ClassVar[RiskClass] = RiskClass.READ
+    args_model: ClassVar[type[BaseModel]] = ComplexSchemaArgs
+
+    async def run(self, ctx: ToolContext, args: ComplexSchemaArgs) -> ToolOutput:
+        return ToolOutput("ok")
+
+
+def test_schema_preserves_title_property_and_only_collapses_null_defaults() -> None:
+    schema = ComplexSchemaTool().schema()
+    params = schema["function"]["parameters"]
+    assert "title" not in schema  # schema keyword title removed
+    assert "title" in params["properties"]  # property named title preserved
+    assert params["properties"]["title"]["type"] == "string"
+    assert "title" not in params["properties"]["title"]  # inner title keyword removed
+
+    # Required nullable keeps anyOf
+    assert "anyOf" in params["properties"]["req_null"]
+    assert set(params["required"]) == {"title", "req_null"}
+
+    # Non-null default keeps anyOf
+    assert "anyOf" in params["properties"]["def_five"]
+    assert params["properties"]["def_five"]["default"] == 5
+
+    # Null default collapses anyOf into single type
+    assert "anyOf" not in params["properties"]["opt"]
+    assert params["properties"]["opt"]["type"] == "string"
+    assert params["properties"]["opt"]["default"] is None
+
+
 def test_default_registry_tools_emit_schemas_validating_existing_test_arguments() -> None:
     from mlops_agents.agents.tools import default_registry
 
