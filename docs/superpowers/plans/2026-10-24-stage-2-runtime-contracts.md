@@ -149,7 +149,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
   - `decide` calls `Gate.decide` and stores its result in the state (`decisions: dict[str, GateDecision]`).
   - `wait` calls `Gate.wait` only when a decision is `ask`.
   - `tools` runs the calls whose decision is `allow` or `approved`, and answers the others with the decision's tool error.
-  - After the model ends a turn, the graph asks `TurnEndCheck.note(...)` once. When it returns a note, one more model step runs with it.
+  - After the model ends a turn, the graph asks `TurnEndCheck.note(...)` once. When it returns a note, one more model step runs with it. That step is exempt from `max_steps`, so a turn that ends exactly at the limit still gets it (review of #235).
   - Before each model call, the graph appends `InboundSource.take(...)`.
 - The defaults keep stage 1's behavior. All four live in `hooks.py`, so the contract modules stay pure (Decision #234):
   - `AllowAllGate`;
