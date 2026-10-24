@@ -9,8 +9,11 @@ from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
+from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools.base import TaskRef
+from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.integrations.github.auth import GitHubAuth
@@ -304,3 +307,26 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     agent = await builder.build(project.id, "customagent", session_id="ses_t", turn_id="trn_t")
     assert agent.definition.name == "customagent"
     assert tuple(t.name for t in agent.tools) == ("Read",)
+
+
+async def test_repository_only_workspaces_has_no_task_and_the_repository_files(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    workspace = _workspace_svc(paths, databases, keystore)
+    repo_dir = make_repo(tmp_path / "repo", {"README.md": "hi\n"}, git_env)
+    project = await workspace.add_local(str(repo_dir))
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
+
+    assert await workspaces.current(project.id, "ses_1") is None
+    files = await workspaces.files(project.id, None)
+
+    assert isinstance(files, RepoFiles)
+    assert files.root == workspace.repo_root(project)
+    assert await files.tracked() == ["README.md"]
+    task = TaskRef(id="tsk_1", title="t", branch="b", worktree=tmp_path, status="active")
+    with pytest.raises(ValueError, match="tsk_1"):
+        await workspaces.files(project.id, task)
