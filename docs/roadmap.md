@@ -40,7 +40,7 @@ Agreed:
 - Tools: Write and Edit (inside the task's worktree), Bash (only inside the sandbox), ListAgents, SendMessage, PR and issue tools.
 - Docker sandbox: Linux container per agent task. It mounts a filtered view of the worktree (git-tracked files minus the secret denylist). Network access is off by default. Read, Glob and Grep see the same view.
 - Git: one git worktree per agent task, under `projects/<id>/worktrees/`. Branch name `agent/<agent>/<task>`. The Orchestrator prevents two agents from changing the same files at once. Agents never edit the default branch.
-- PRs: opened automatically when an agent finishes work, through GitHub on the user's behalf. The PR body says which agent opened it and why. PR identity is the user's choice: their own token, or later a bot (GitHub App).
+- PRs: at the end of each turn the runtime reminds the agent when its work may need a PR; the agent decides and opens it through GitHub on the user's behalf. The PR body says which agent opened it and why. PR identity is the user's choice: their own token, or later a bot (GitHub App).
 - Issues: an agent opens an issue when a human must act and a PR when it has a fix. A PR that fixes an issue says `Fixes #n`. Before opening, the agent searches open issues and comments on a match instead. Only incidents above a configurable priority become issues. Labels: agent, category, priority.
 - Local repo without a remote: agent branch; the diff is reviewed in the Inbox; approving merges it.
 - Permission policy: risk class x level (`suggest`, `ask`, `autonomous`, `bypass`) -> allow / ask / deny, enforced by the runtime. Bypass skips approvals but keeps the sandbox and the audit log. It is off by default, set per project, and shown with a warning.

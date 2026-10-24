@@ -37,16 +37,18 @@ Anything not listed here is unknown.
 - [USER] One persistent session per agent per project; each agent talks mainly with the user.
 - [USER] Agents talk to each other: when agent A messages agent B, the message lands in B's session labeled "from A"; B's reply goes back into A's session labeled "from B".
 - [AGREED] Safeguards: hop limit and token budget per exchange; no permission escalation (B's actions still go through the policy); everything visible in Activity and on the status board.
+- [USER] A message from another agent reaches the recipient mid-turn; it does not wait for the turn to end.
+- [USER] A wake-up an agent schedules for itself continues its work in its own session.
 - [AGREED] Long sessions: the UI keeps the full history; the agent works from a compacted summary plus Knowledge and the status board.
 
 ### Permissions, code changes and execution
 - [USER] Three permission levels: suggest only, ask first, autonomous. Plus a "bypass all permissions" mode (like Claude Code's --dangerously-skip-permissions).
 - [AGREED] Permissions are enforced in code, not prompts: each tool has a risk class (read, write code, run, open issue/comment, deploy) and a policy maps risk class x level to allow / ask / deny. Bypass skips approvals but keeps the sandbox and the audit log; off by default, per project, with a warning.
-- [USER] Agents never edit the main branch. When they finish work they open a PR automatically, through GitHub on the user's behalf (like the gh CLI), for solo and group projects. PR identity (user token vs bot/GitHub App) is the user's choice.
+- [USER] Agents never edit the main branch. At the end of each turn the runtime reminds the agent when its work may need a PR, and the agent decides whether to open one (an agent can stop while still waiting on something). PRs go through GitHub on the user's behalf (like the gh CLI), for solo and group projects. PR identity (user token vs bot/GitHub App) is the user's choice.
 - [USER] Agents can open GitHub issues: issue when a human must act, PR when the agent has a fix (PR links "Fixes #n"). [AGREED] Search existing issues first and comment instead of duplicating; only incidents above a configurable priority become issues; labels for agent, category, priority.
 - [AGREED] Local repo without a remote: agent branch, diff reviewed in the Inbox, merge on approval.
 - [AGREED] Each agent task runs in its own git worktree; the Orchestrator prevents two agents from opening conflicting PRs on the same files.
-- [USER] Agent-run code executes in a Docker sandbox.
+- [USER] Agent-run code executes in a Docker sandbox. Its environment is built from the repo's own dependency files.
 - [AGREED] LLM out of the hot path: checks are deterministic code run by the scheduler; the LLM wakes only when something fires.
 
 ### Data access
@@ -108,10 +110,9 @@ Anything not listed here is unknown.
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open
-- Session concurrency: what happens when a message from another agent or a trigger arrives while an agent is mid-turn.
-- Where scheduled and triggered work appears (inside the agent's session vs separate run records linked from it).
-- What runs where: building a sandbox that matches the user's environment; whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
-- Deliverable format and the exact final date. (Team of 5. Deadline about 2026-10-29, not final as of 2026-10-21; it was ~2026-10-23 before. The user sets the pace of the work.)
+- Where routine (recurring) scheduled work appears: the lead wants a new session per run, which conflicts with one session per agent per project.
+- What runs where: whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
+- Deliverable format. (Team of 5. Deadline 2026-10-29, confirmed 2026-10-24.)
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
 - Fine-tuning: not planned; no decision recorded.
 
@@ -126,6 +127,7 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
+- PRs: were opened automatically when an agent finishes. Now the agent is reminded at the end of each turn and decides, because a stopped agent may still be waiting on something.
 - Frontend test runner: was Vitest 3 (pinned major). Now Vitest 5: vitest 3 depended on packages with critical advisories (tinypool, @vitest/mocker) that no 3.x release fixes.
 
 ## 6. Files
