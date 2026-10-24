@@ -126,6 +126,26 @@ async def test_a_turn_ending_at_the_step_limit_still_gets_its_note_step(
     assert texts == ["end", "end again"]
 
 
+async def test_a_turn_ending_at_the_step_limit_without_a_note_ends_as_before(
+    tmp_path: Path, paths: DataPaths, databases: Databases
+) -> None:
+    check = ScriptedTurnEnd(None)
+    run = await run_graph(
+        tmp_path,
+        paths.bin,
+        databases,
+        [text_reply("end")],
+        tools=(EchoTool(),),
+        turn_end=check,
+        max_steps=1,
+    )
+
+    assert check.asked == 1
+    assert len(run.caller.requests) == 1
+    assert run.state["stopped_reason"] is None
+    assert [p.text for p in run.parts if isinstance(p, TextPart)] == ["end"]
+
+
 async def test_only_the_note_step_is_exempt_from_the_step_limit(
     tmp_path: Path, paths: DataPaths, databases: Databases
 ) -> None:
