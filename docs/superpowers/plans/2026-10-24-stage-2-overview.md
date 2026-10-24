@@ -19,13 +19,13 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 
 | Plan | Branch | Covers | Consumes (besides merged code) | Starts | State |
 |---|---|---|---|---|---|
-| tool-errors | `plan/stage-2-tool-errors` | Bug #144 (invalid tool-call arguments dropped), a provider's rejection of a tool call goes back to the model, clearer tool schemas | none | now | Planned |
-| models | `plan/stage-2-models` | Context window read from Gemini and vLLM; model warnings above the models table, rows of one height | none | now | Planned |
-| ui-polish | `plan/stage-2-ui-polish` | Pointer cursor, one focus style, styled selects in settings, compact provider cards, bordered markdown tables | none | now | Planned |
-| pickers | `plan/stage-2-pickers` | One combobox component; the GitHub repo picker and the model picker use it | none | now | Planned |
-| chat-layout | `plan/stage-2-chat-layout` | Only the message list scrolls; a one-line composer that grows; one Send/Stop button; the styled agent switcher | none | now | Planned |
-| project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Planned |
-| fixes | `plan/stage-2-fixes` | Review bugs #216, #217 (composer Stop with whitespace, chat layout leftovers) and #226 (one GitHub https URL builder) | none | now | Planned |
+| tool-errors | `plan/stage-2-tool-errors` | Bug #144 (invalid tool-call arguments dropped), a provider's rejection of a tool call goes back to the model, clearer tool schemas | none | now | Merged |
+| models | `plan/stage-2-models` | Context window read from Gemini and vLLM; model warnings above the models table, rows of one height | none | now | Merged |
+| ui-polish | `plan/stage-2-ui-polish` | Pointer cursor, one focus style, styled selects in settings, compact provider cards, bordered markdown tables | none | now | Merged |
+| pickers | `plan/stage-2-pickers` | One combobox component; the GitHub repo picker and the model picker use it | none | now | Merged |
+| chat-layout | `plan/stage-2-chat-layout` | Only the message list scrolls; a one-line composer that grows; one Send/Stop button; the styled agent switcher | none | now | Merged |
+| project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Merged |
+| fixes | `plan/stage-2-fixes` | Review bugs #216, #217 (composer Stop with whitespace, chat layout leftovers) and #226 (one GitHub https URL builder) | none | now | Merged |
 | runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Planned |
 | events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer); task 3: runtime-contracts task 4 merged | Planned |
 | tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Planned |
@@ -368,7 +368,7 @@ class TurnObserver(Protocol):
                          final_text: str | None) -> None: ...
 ```
 
-Each default below keeps stage 1's behavior until the plan in brackets wires the real hook and deletes it:
+Each default below lives in `hooks.py` and keeps stage 1's behavior until the plan in brackets wires the real hook and deletes it (Decision #234):
 - `AllowAllGate` (approvals);
 - `NoInbound` (messaging);
 - `NoTurnEndCheck` (github-work);

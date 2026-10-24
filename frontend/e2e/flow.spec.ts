@@ -43,9 +43,11 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
 
     await page.getByRole("button", { name: "Add model" }).click();
     const modelDialog = page.getByRole("dialog", { name: "Add a model" });
-    await modelDialog.getByLabel("Provider").selectOption(providerName);
-    await modelDialog.getByRole("radio", { name: "fake-tools" }).check();
-    await expect(modelDialog.getByLabel("Model ID")).toHaveValue("fake-tools");
+    await modelDialog.getByRole("combobox", { name: "Provider" }).click();
+    await page.getByRole("option", { name: providerName }).click();
+    await modelDialog.getByRole("combobox", { name: "Model" }).click();
+    await page.getByRole("option", { name: /fake-tools/ }).click();
+    await expect(modelDialog.getByRole("combobox", { name: "Model" })).toHaveValue("fake-tools");
     await modelDialog.getByRole("button", { name: "Add model" }).click();
     await expect(modelDialog).toBeHidden();
 

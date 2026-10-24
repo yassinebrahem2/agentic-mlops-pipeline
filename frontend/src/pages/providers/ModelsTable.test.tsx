@@ -361,17 +361,13 @@ describe("models table", () => {
 
     await user.click(await screen.findByRole("button", { name: "Add model" }));
     const dialog = await screen.findByRole("dialog");
-    await user.selectOptions(within(dialog).getByLabelText("Provider"), "groq");
+    await user.click(within(dialog).getByRole("combobox", { name: "Provider" }));
+    await user.click(await screen.findByRole("option", { name: "groq" }));
 
-    expect(
-      await within(dialog).findByRole("radio", { name: /llama-3\.3-70b-versatile/ }),
-    ).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText("Filter models"), "gpt");
-    expect(
-      within(dialog).queryByRole("radio", { name: /llama-3\.3-70b-versatile/ }),
-    ).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("radio", { name: /openai\/gpt-oss-120b/ }));
-    expect(within(dialog).getByLabelText("Model ID")).toHaveValue("openai/gpt-oss-120b");
+    const modelInput = within(dialog).getByRole("combobox", { name: "Model" });
+    await user.type(modelInput, "gpt");
+    await user.click(await screen.findByRole("option", { name: /openai\/gpt-oss-120b/ }));
+    expect(modelInput).toHaveValue("openai/gpt-oss-120b");
     await user.click(within(dialog).getByRole("button", { name: "Add model" }));
 
     await waitFor(() => {
@@ -394,10 +390,11 @@ describe("models table", () => {
 
     await user.click(await screen.findByRole("button", { name: "Add model" }));
     const dialog = await screen.findByRole("dialog");
-    await user.selectOptions(within(dialog).getByLabelText("Provider"), "groq");
+    await user.click(within(dialog).getByRole("combobox", { name: "Provider" }));
+    await user.click(await screen.findByRole("option", { name: "groq" }));
 
     expect(await within(dialog).findByText("Add a key to groq first.")).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText("Model ID"), "openai/gpt-oss-120b");
+    await user.type(within(dialog).getByRole("combobox", { name: "Model" }), "openai/gpt-oss-120b");
     await user.type(within(dialog).getByLabelText("Context window (optional)"), "131072");
     await user.click(within(dialog).getByRole("button", { name: "Add model" }));
 
