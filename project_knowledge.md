@@ -46,7 +46,7 @@ Anything not listed here is unknown.
 - [AGREED] Permissions are enforced in code, not prompts: each tool has a risk class (read, write code, run, open issue/comment, deploy) and a policy maps risk class x level to allow / ask / deny. Bypass skips approvals but keeps the sandbox and the audit log; off by default, per project, with a warning.
 - [USER] Agents never edit the main branch. At the end of each turn the runtime reminds the agent when its work may need a PR, and the agent decides whether to open one (an agent can stop while still waiting on something). PRs go through GitHub on the user's behalf (like the gh CLI), for solo and group projects. PR identity (user token vs bot/GitHub App) is the user's choice.
 - [USER] Agents can open GitHub issues: issue when a human must act, PR when the agent has a fix (PR links "Fixes #n"). [AGREED] Search existing issues first and comment instead of duplicating; only incidents above a configurable priority become issues; labels for agent, category, priority.
-- [AGREED] Local repo without a remote: agent branch, diff reviewed in the Inbox, merge on approval.
+- [AGREED] Local repo without a remote: agent branch, diff reviewed in the Inbox, merge on approval. [USER] The merge is built in the data folder; the user's repository only sees a fast-forward that git refuses over uncommitted changes, with no hooks run.
 - [AGREED] Each agent task runs in its own git worktree; file claims enforced by the runtime keep two agents from changing the same files.
 - [AGREED] The policy values are in the roadmap (the lead delegated them); a project's level defaults to `ask`. Agent commits are the user's, run no git hooks, and never include a file matching the secret denylist.
 - [USER] Agent-run code executes in a Docker sandbox. Its environment is built from the repo's own dependency files.
@@ -127,6 +127,7 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
+- Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.
 - PRs: were opened automatically when an agent finishes. Now the agent is reminded at the end of each turn and decides, because a stopped agent may still be waiting on something.
 - Frontend test runner: was Vitest 3 (pinned major). Now Vitest 5: vitest 3 depended on packages with critical advisories (tinypool, @vitest/mocker) that no 3.x release fixes.
