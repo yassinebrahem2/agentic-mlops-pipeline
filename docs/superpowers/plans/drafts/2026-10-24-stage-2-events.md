@@ -14,7 +14,7 @@
 |---|---|---|
 | 1 | Event log, project event stream and audit log | runtime-contracts tasks 1 and 2 |
 | 2 | Turn events | task 1, runtime-contracts task 3 |
-| 3 | Status board | task 2 |
+| 3 | Status board | task 2, runtime-contracts task 4 merged (both edit `agent.py`) |
 
 Task 1 gets an early PR, from `plan/stage-2-events-task1`: tasks, sandbox, approvals, github-work and messaging all record events.
 
@@ -24,7 +24,7 @@ Task 1 gets an early PR, from `plan/stage-2-events-task1`: tasks, sandbox, appro
 
 **Files:** new `backend/src/mlops_agents/events/log.py`, `events/hub.py`, `events/audit.py`, `backend/src/mlops_agents/api/routers/events.py`, the services wiring line, tests, `frontend/openapi.json` and `frontend/src/api/schema.d.ts` regenerated.
 
-**Interfaces:** Consumes I11 and the `events` and `audit` tables. Produces `EventLog`, `AuditLog` and `GET /api/projects/{id}/events/stream`.
+**Interfaces:** Consumes I11 and the `events` and `audit` tables. Produces `EventLog` (`history` included), `AuditLog` and `GET /api/projects/{id}/events/stream`.
 
 **Implementation notes:**
 - `EventLog.record` stores the event, then publishes it to the project's hub. `seq` is the table's `seq`, so a client's position survives a restart.
@@ -34,6 +34,7 @@ Task 1 gets an early PR, from `plan/stage-2-events-task1`: tasks, sandbox, appro
 - Closing a project also closes its event hub: the projects router's `DELETE`, which already calls `sessions.close_project`, also calls `EventLog.close_project(project_id)`, one line. The session manager knows nothing of events. `EventLog` gets that method in addition to I11; it is not part of the protocol other plans use.
 
 **Tests (stop condition):**
+- `history` returns the newest events of the given types, up to the limit.
 - Record, then subscribe with `after_seq`: replay comes in order, then live events. A position older than the buffer replays from the table, and an unknown one yields `Resync`.
 - The SSE route resumes from `Last-Event-ID`.
 - An audit `detail` holding a known secret and a 10,000-character value is stored scrubbed and capped.
@@ -64,7 +65,7 @@ Task 1 gets an early PR, from `plan/stage-2-events-task1`: tasks, sandbox, appro
   - `inactive` for a definition with `chat: false`;
   - `running` while its session has a running turn;
   - `waiting_approval` while a turn waits;
-  - `waiting_reply` when its last `message.sent` belongs to an exchange that is still open: no reply has come back, and no limit was reached;
+  - `waiting_reply` when, from `message.sent` alone, the last exchange the agent sent into has no message back to it yet;
   - otherwise `idle`.
 - `last_finished` is the last `turn.ended` final text. `open_prs` come from `pr.opened` events whose task is still `in_review`.
 - `summary` is at most about 1,500 characters: one line per agent with its state, task and PRs.

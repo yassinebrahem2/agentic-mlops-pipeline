@@ -93,7 +93,7 @@
 - `GET /reviews` lists tasks `in_review` with kind `local`. Each comes with the files of the user's tree that change, and its diff, capped.
 - Approve calls `local_merge`, then `end(merged)`. A `CommitRefused` is a 409 with its message, and the review stays.
 - Reject calls `end(closed)` and posts a system-labeled message to the agent's session through `AgentSessions.post`, with author `Review` and from_agent the agent itself.
-- `GET /github/activity` comes from the `pr.*` and `issue.*` events, plus the PR state of open tasks.
+- `GET /github/activity` comes from `EventLog.history` (the `pr.*` and `issue.*` types), plus the PR state of open tasks.
 
 **Tests (stop condition):** approve a clean local review, which merges and ends the task; approve one with a conflict, which gets a 409 and stays; reject one, and the agent gets the message; the activity lists PRs and issues; full suite, checks; CI green.
 

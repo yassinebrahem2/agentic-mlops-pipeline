@@ -27,7 +27,7 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Planned |
 | runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Draft |
 | events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer) | Draft |
-| tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | task 1: after runtime-contracts tasks 1 and 2 and events task 1; task 2 on: runtime-contracts task 4 merged | Draft |
+| tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Draft |
 | sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Draft |
 | approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | tasks 1 and 2: after runtime-contracts tasks 1 and 2 and events task 1; task 3 on: runtime-contracts task 4 merged | Draft |
 | github-work | `plan/stage-2-github-work` | GitHub client for PRs, issues and labels, the fake GitHub server, OpenPullRequest, issue tools, local reviews, the PR reminder, PR state sync | I8 to I12; tasks task 4; events task 1 | client: after runtime-contracts task 1; tools: after runtime-contracts task 3 and the tasks plan's commit task; task 5: runtime-contracts task 4 merged | Draft |
@@ -92,6 +92,9 @@ class ToolContext:          # built for every tool call
     files: FileAccess        # the current task's worktree view, else the repository's
     task: TaskRef | None
 
+class FileAccess(Protocol):   # stage 1 members unchanged, plus:
+    def invalidate(self) -> None: ...   # drop the cached listing after a change
+
 class Preview(BaseModel):
     kind: Literal["diff", "command", "text"]
     title: str
@@ -145,9 +148,10 @@ class AgentSessions(Protocol):    # stage 1 members, plus:
                    text: str, exchange_id: str | None, hop: int | None) -> MessageView: ...
     # An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
     # from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send.
-    async def update_message_parts(self, project_id: str, session_id: str, message_id: str,
-                                   parts: list[Part]) -> MessageView: ...
-    # Stores new parts and publishes message.updated under the session lock (approval parts).
+    async def update_message(self, project_id: str, session_id: str, message_id: str,
+                             transform: Callable[[list[Part]], list[Part]]) -> MessageView: ...
+    # Reads the stored parts, applies transform, stores and publishes message.updated, all under
+    # the session lock, so two concurrent updates (two approvals decided at once) both land.
 ```
 
 ### I10: policy (`agents/policy/table.py`)
@@ -210,6 +214,8 @@ class EventLog(Protocol):
     async def record(self, project_id: str, *, source: str, type: EventType,
                      payload: dict[str, Any], subject_id: str | None = None) -> EventRecord: ...
     def subscribe(self, project_id: str, after_seq: int | None) -> AsyncGenerator[EventRecord | Resync, None]: ...
+    async def history(self, project_id: str, *, types: Sequence[EventType],
+                      limit: int = 200) -> list[EventRecord]: ...   # newest first
 
 class AuditLog(Protocol):
     async def record(self, project_id: str, *, actor: str, action: str, risk_class: RiskClass,

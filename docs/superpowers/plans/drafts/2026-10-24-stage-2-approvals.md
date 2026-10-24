@@ -84,7 +84,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 **Interfaces:** Consumes task 3. Produces `Approvals`, the approvals routes, and resuming.
 
 **Implementation notes:**
-- `decide` sets the status, note and time, updates the `ApprovalPart` through the session manager's `update_message_parts` (runtime-contracts task 3), writes the audit record (`approved` or `rejected`, actor `user`), and records `approval.decided`.
+- `decide` sets the status, note and time, updates the `ApprovalPart` through the session manager's `update_message` (runtime-contracts task 3), writes the audit record (`approved` or `rejected`, actor `user`), and records `approval.decided`.
 - When no approval of that turn is pending any more, the session manager resumes the turn in its worker:
   - the executor opens a new checkpointer connection;
   - it loads the waiting message's id and parts as the turn's current message and parts;
@@ -96,7 +96,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 **Tests (stop condition):**
 - Approve: the tool runs, the turn continues and ends `done`, and the message keeps its earlier parts.
 - Reject with a note: the model receives the rejection and note.
-- Two asks in one step: the turn resumes only after both are decided.
+- Two asks in one step: the turn resumes only after both are decided. Both decided at the same moment (two concurrent requests): both parts show their decision.
 - Approve after rebuilding the session manager: the turn resumes from the stored checkpoint, keeping its earlier parts.
 - Resuming creates no second approval or audit record.
 - Full suite, checks; CI green on Linux and Windows.
@@ -110,7 +110,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 **Interfaces:** Consumes task 4. Produces the `expired` and `cancelled` rules.
 
 **Implementation notes:**
-- At project recovery, a pending approval whose turn is not `waiting` becomes `expired`. Its part is updated through `update_message_parts` and it is audited `expired`.
+- At project recovery, a pending approval whose turn is not `waiting` becomes `expired`. Its part is updated through `update_message` and it is audited `expired`.
 - Stop on a waiting turn marks its pending approvals `cancelled` (audited `cancelled`), ends the turn `stopped`, deletes its checkpoint thread, and marks the message `stopped`. The next queued message then runs.
 
 **Tests (stop condition):** a turn left `running` with a pending approval becomes `interrupted` and its approval `expired`; Stop on a waiting turn cancels its approvals and the queue moves on; full suite, checks; CI green.

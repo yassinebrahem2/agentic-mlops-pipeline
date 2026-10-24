@@ -29,8 +29,8 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 ### Task 1: Shared types and protocols
 
 **Files:**
-- `backend/src/mlops_agents/agents/tools/base.py`: `TaskRef`, `ToolContext` v2, `Preview`, `AgentTool.parse` and `AgentTool.preview`. Only these; the tool-errors plan edits `schema()` in the same file. Bring `main` in first if it has merged.
-- `backend/src/mlops_agents/agents/runtime/contract.py`: the I1 additions, except `AgentSessions.post` and `update_message_parts`, which task 3 adds together with their implementation.
+- `backend/src/mlops_agents/agents/tools/base.py`: `TaskRef`, `ToolContext` v2, `FileAccess.invalidate`, `Preview`, `AgentTool.parse` and `AgentTool.preview`. `agents/tools/files.py`: `RepoFiles.invalidate` drops its listing cache. Only these; the tool-errors plan edits `schema()` in the same file. Bring `main` in first if it has merged.
+- `backend/src/mlops_agents/agents/runtime/contract.py`: the I1 additions, except `AgentSessions.post` and `update_message`, which task 3 adds together with their implementation.
 - `backend/src/mlops_agents/agents/runtime/agent.py`, `executor.py` and `sessions.py`, only so the code that builds stage 1 types keeps working: `ToolContext` v2 is built once per turn with `task=None` (task 4 moves it to once per call), the executor hands `session_id` and `turn_id` to the builder, and `get()` sets `current_task=None`. The runtime test helpers that build a `ToolContext` follow.
 - New `backend/src/mlops_agents/agents/policy/__init__.py` and `table.py`.
 - New `backend/src/mlops_agents/events/__init__.py` and `contract.py`.
@@ -82,7 +82,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 - `task_reads`: `task_id` (FK tasks, cascade), `path`, `sha256`, PK (`task_id`, `path`).
 - `file_claims`: `task_id` (FK tasks, cascade), `path`, PK (`task_id`, `path`); index on `path`.
 - `approvals`:
-  - `id`, `turn_id` (FK turns, cascade), `session_id`, `agent`, `tool_call_id` UNIQUE;
+  - `id`, `turn_id` (FK turns, cascade), `session_id`, `message_id`, `agent`, `tool_call_id` UNIQUE;
   - `tool`, `risk_class`, `preview` (JSON);
   - `status` CHECK in `pending`, `approved`, `rejected`, `cancelled`, `expired`;
   - `note`, `created_at`, `decided_at`.
@@ -110,9 +110,9 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 ### Task 3: The session side: file splits, busy, post, observers
 
-**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` and `store.py` (split first, see below), new `runtime/worker.py` and the `runtime/store/` package, `backend/src/mlops_agents/agents/runtime/contract.py` (`post` and `update_message_parts` on `AgentSessions`), `backend/src/mlops_agents/agents/tools/__init__.py` and `backend/src/mlops_agents/api/services.py` (the registry and the wiring), tests. tool-errors edits none of these files.
+**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` and `store.py` (split first, see below), new `runtime/worker.py` and the `runtime/store/` package, `backend/src/mlops_agents/agents/runtime/contract.py` (`post` and `update_message` on `AgentSessions`), `backend/src/mlops_agents/agents/tools/__init__.py` and `backend/src/mlops_agents/api/services.py` (the registry and the wiring), tests. tool-errors edits none of these files.
 
-**Interfaces:** Consumes tasks 1 and 2. Produces `AgentSessions.post` and `update_message_parts` (I9), the observer calls, the bus binding, the one "busy" rule, and `default_registry(...)` taking services, so tool plans can register tools without waiting for task 4.
+**Interfaces:** Consumes tasks 1 and 2. Produces `AgentSessions.post` and `update_message` (I9), the observer calls, the bus binding, the one "busy" rule, and `default_registry(...)` taking services, so tool plans can register tools without waiting for task 4.
 
 **Implementation notes:**
 - First, with no behavior change, split the two files at the size limit, so no later plan grows them past 400 lines:
@@ -125,14 +125,14 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 - It takes an optional `MessageBus` and calls `bind(self)` on it. It takes a sequence of `TurnObserver`s and calls them when a turn starts and ends. Approvals adds the call for waiting.
 - When a turn starts from a trigger message that has `from_agent`, the worker sets that message's `read_by_turn` to the turn. Messaging's exchange rule depends on it.
 - `default_registry(...)` takes the services tools need (none yet), and `services.py` builds it so. Each later plan adds its own service parameter and tool lines.
-- It gains `update_message_parts(project_id, session_id, message_id, parts)`. It stores a message's new parts and publishes `message.updated` under the session lock, so a concurrent `get()` never returns a part whose event it then receives again. Approvals uses it when an approval part changes outside a running turn.
+- It gains `update_message(project_id, session_id, message_id, transform)`. Under the session lock it reads the stored parts, applies `transform`, stores them and publishes `message.updated`, so a concurrent `get()` never returns a part whose event it then receives again, and two concurrent updates both land. Approvals uses it when an approval part changes outside a running turn.
 
 **Tests (stop condition):**
 - `sessions.py` and every module of the store package are under 400 lines, and every stage 1 test passes unchanged after the split.
 - `post` stores an inbound message (`author_kind` user, `from_agent` set, `exchange_id` and `hop` stored), starts a turn when idle, and queues one when busy, exactly like `send`.
 - A test observer sees `turn_started` and `turn_ended`, with the final text, for a turn.
 - A turn started by a message with `from_agent` sets that message's `read_by_turn`.
-- `update_message_parts` publishes one `message.updated`, and `get` during it sees either the old or the new parts, never the event twice.
+- `update_message` publishes one `message.updated`, and `get` during it sees either the old or the new parts, never the event twice. Two concurrent updates to different parts of one message both land.
 - Full backend suite, ruff, format, pyright; CI green on Linux and Windows.
 
 ---

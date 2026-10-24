@@ -77,7 +77,7 @@ Task 3 gets an early PR, from `plan/stage-2-sandbox-task3`: the tasks plan's tas
 - Containers are named `<app name>-<task id>`.
 - A dependency change, detected by the image tag changing at a `run`, recreates the container on the new image.
 - Changing `sandbox_network` recreates the project's running containers.
-- At startup, containers with the app's label and no open task are removed. `close` removes every running one.
+- At startup, every container with the app's label is removed: `close` removes them all at shutdown, so any found at startup is a leftover. The worktree survives, and the next Bash call recreates the container. The sandbox never reads tasks.
 
 **Tests (stop condition):** with a fake runner, the exact `docker run` arguments, including `--network none` and their absence with network on; on the `docker` job, a container sees the mounted worktree, has no network, and is gone after `remove_task`; orphans are removed at startup; full suite, checks; CI green.
 

@@ -21,10 +21,10 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | The task git function, worktrees and the current task | runtime-contracts tasks 1 and 2, events task 1 |
-| 2 | StartTask, ResumeTask and reading in a task | task 1, runtime-contracts task 4 merged |
+| 2 | StartTask, ResumeTask and reading in a task | task 1, runtime-contracts task 3 |
 | 3 | Write and Edit, with claims | task 2 |
 | 4 | Committing and pushing | task 3 |
-| 5 | Local merge, ending and discarding tasks | task 4, sandbox task 3 |
+| 5 | Local merge, ending, discarding, and wiring | task 4, sandbox task 3, runtime-contracts task 4 merged |
 
 Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPullRequest needs it.
 
@@ -63,7 +63,7 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 
 ### Task 2: StartTask, ResumeTask and reading in a task
 
-**Files:** new `backend/src/mlops_agents/agents/tools/tasks.py` (both tools), `agents/tools/read.py` (record the read hash), `agents/tools/__init__.py` (its lines), the services lines (the real `Tasks` replaces `RepositoryOnlyWorkspaces`, which is deleted), tests.
+**Files:** new `backend/src/mlops_agents/agents/tools/tasks.py` (both tools), `agents/tools/read.py` (record the read hash), `agents/tools/__init__.py` (its lines), tests. Tasks 2 to 4 are tested with a test `ToolContext` that carries a task. Their tools are registered, but no definition lists them until agent-definitions, and the session uses the repository until task 5 wires the real `Tasks`.
 
 **Interfaces:** Consumes task 1. Produces the tools StartTask and ResumeTask (`write_code`), and `Tasks.record_read` and `read_hash`.
 
@@ -130,11 +130,11 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 
 ---
 
-### Task 5: Local merge, ending and discarding tasks
+### Task 5: Local merge, ending, discarding, and wiring
 
 **Files:** new `backend/src/mlops_agents/agents/tasks/local_merge.py`, `agents/tasks/lifecycle.py`, `backend/src/mlops_agents/api/routers/tasks.py`, the session manager's `current_task` in `SessionView` (the one line that reads it), stage 1's project removal (`git worktree prune`, deleting `agent/*` branches in a local repository), tests.
 
-**Interfaces:** Consumes task 4 and `Sandbox.remove_task` (sandbox task 3). Produces `Tasks.local_merge_preview`, `local_merge`, `set_review` and `end`, `POST /tasks/{task_id}/discard`, and `SessionView.current_task`.
+**Interfaces:** Consumes task 4, `Sandbox.remove_task` (sandbox task 3), and runtime-contracts task 4's hook points. Produces `Tasks.local_merge_preview`, `local_merge`, `set_review` and `end`, `POST /tasks/{task_id}/discard`, `SessionView.current_task`, and the wiring: the real `Tasks` replaces `RepositoryOnlyWorkspaces` in `services.py`, which is deleted.
 
 **Implementation notes:**
 - `local_merge`, exactly spec §6:
@@ -158,4 +158,5 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 - A `post-merge` hook in the user's repository does not run.
 - `end` removes the worktree, branch and claims. Discard during a running turn returns 409.
 - Removing a project prunes its worktrees and branches.
+- Wired: a session turn that calls StartTask then Write (in two steps) writes into the task's worktree, and Read in a later turn sees it.
 - Full suite, checks; CI green on Linux and Windows.
