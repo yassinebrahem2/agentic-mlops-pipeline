@@ -164,7 +164,7 @@ class RecordingCaller(ModelCaller):
         self._replies = list(replies)
         self.requests: list[list[BaseMessage]] = []
 
-    async def call(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double
+    async def call(
         self,
         model: ResolvedModel,
         messages: list[BaseMessage],
