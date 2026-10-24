@@ -20,7 +20,7 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
-from tests.agents.runtime.graph_env import RecordingSink, make_agent
+from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent
 from tests.conftest import make_repo
 
 
@@ -117,10 +117,12 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
         store=store,
         sink=RecordingSink(),
         project_id="prj_durable",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=[],
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
         checkpointer=saver,
     )
     config: RunnableConfig = {"configurable": {"thread_id": turn_id}}

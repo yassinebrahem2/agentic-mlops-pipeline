@@ -17,6 +17,7 @@ from mlops_agents.agents.runtime.graph import (
     create_turn_graph,
     format_invalid_tool_call_error,
 )
+from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -30,7 +31,7 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.graph_env import RecordingSink, make_agent
+from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent, stage1_hooks
 from tests.agents.runtime.test_graph_tools import MockModelCaller, ModelReply
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
@@ -69,15 +70,21 @@ async def _setup_executor_env(
     workspace = WorkspaceService(
         settings, paths, databases, GitRunner(paths.bin, github.token), github, httpx2.AsyncClient()
     )
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=agent_settings,
         workspace=workspace,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
     store = SessionStore(databases)
-    executor = TurnExecutor(store=store, caller=ModelCaller(providers, model_http), builder=builder)
+    executor = TurnExecutor(
+        store=store,
+        caller=ModelCaller(providers, model_http),
+        builder=builder,
+        hooks=stage1_hooks(workspaces),
+    )
 
     prov = await providers.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
@@ -321,10 +328,12 @@ async def test_graph_invalid_tool_call_with_mock_caller(
         store=store,
         sink=sink,
         project_id="prj_1",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
     )
 
     initial_state: TurnState = {
