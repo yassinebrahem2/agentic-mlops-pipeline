@@ -327,6 +327,8 @@ class MessageLimitReached(Exception): ...   # its message is written for the mod
 class MessageBus(Protocol):
     async def send(self, project_id: str, *, sender: str, sender_turn_id: str, to: str, text: str) -> None: ...
     # SendMessage's whole behavior: can_message, exchange and hop, limits, post, event.
+    def bind(self, sessions: AgentSessions) -> None: ...
+    # The session manager binds itself once, in its constructor; a second call raises RuntimeError.
 ```
 
 `agents/runtime/hooks.py` (new; the graph and the session manager call these):
