@@ -368,7 +368,7 @@ class TurnObserver(Protocol):
                          final_text: str | None) -> None: ...
 ```
 
-Each default below keeps stage 1's behavior until the plan in brackets wires the real hook and deletes it:
+Each default below lives in `hooks.py` and keeps stage 1's behavior until the plan in brackets wires the real hook and deletes it (Decision #234):
 - `AllowAllGate` (approvals);
 - `NoInbound` (messaging);
 - `NoTurnEndCheck` (github-work);
