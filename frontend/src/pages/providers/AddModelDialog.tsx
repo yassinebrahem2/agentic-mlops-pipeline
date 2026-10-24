@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
+import { useRemoteModels } from "@/lib/useRemoteModels";
 
 type Provider = components["schemas"]["Provider"];
 type ModelCreate = components["schemas"]["ModelCreate"];
@@ -30,16 +31,7 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
   const [modelId, setModelId] = useState("");
   const [contextWindow, setContextWindow] = useState("");
 
-  const remote = useQuery({
-    queryKey: ["remote-models", provider],
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/api/providers/{name}/remote-models", {
-          params: { path: { name: provider } },
-        }),
-      ),
-    enabled: open && provider !== "",
-  });
+  const remote = useRemoteModels(provider, { enabled: open });
   const add = useMutation({
     mutationFn: async (body: ModelCreate) => unwrap(await api.POST("/api/models", { body })),
     onSuccess: async () => {
