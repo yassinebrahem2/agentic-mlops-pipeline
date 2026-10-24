@@ -18,10 +18,8 @@ from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     MessageView,
     TextPart,
-    ToolCallPart,
-    ToolResultPart,
 )
-from mlops_agents.agents.runtime.executor import TurnExecutor, TurnSink
+from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
@@ -37,6 +35,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.graph_env import RecordingSink
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
@@ -60,26 +59,6 @@ class SlowDummyTool(AgentTool[SlowDummyArgs]):
         self.started.set()
         await asyncio.Event().wait()
         raise AssertionError("unreachable: the turn is cancelled")
-
-
-class RecordingSink(TurnSink):
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.tools_started: list[ToolCallPart] = []
-        self.tools_finished: list[ToolResultPart] = []
-        self.messages: list[tuple[MessageView, bool]] = []
-
-    async def text(self, message_id: str, text: str) -> None:
-        self.texts.append(text)
-
-    async def tool_started(self, message_id: str, call: ToolCallPart) -> None:
-        self.tools_started.append(call)
-
-    async def tool_finished(self, message_id: str, result: ToolResultPart) -> None:
-        self.tools_finished.append(result)
-
-    async def message(self, message: MessageView, *, created: bool) -> None:
-        self.messages.append((message, created))
 
 
 class EndStateSink(RecordingSink):
@@ -201,6 +180,8 @@ async def test_executor_cancellation_during_slow_tool(
     # Racing the run makes a turn that ends before its tool runs fail here instead of hanging.
     done, _ = await asyncio.wait({tool_started, task}, return_when=asyncio.FIRST_COMPLETED)
     tool_started.cancel()
+    # Waits for the cancel to land, so no waiter task outlives the test.
+    await asyncio.wait({tool_started})
     assert done == {tool_started}
     assert len(sink.tools_started) == 1
 

@@ -12,11 +12,13 @@ from mlops_agents.agents.runtime.contract import (
     MessageCreated,
     MessageUpdated,
     MessageView,
-    TextDelta,
+    Resync,
+    SessionView,
     TextPart,
     TurnEnded,
 )
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -24,6 +26,7 @@ from mlops_agents.storage.tables import messages, turns
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.stream_helpers import through_first_delta
 
 
 async def test_recovery(
@@ -115,25 +118,62 @@ async def test_executor_final_write_and_publish_are_one_step_under_the_session_l
     orig_update_message = SessionStore.update_message
     written = asyncio.Event()
     release = asyncio.Event()
+    executor_tasks: list[asyncio.Task[Any] | None] = []
 
     async def update_then_wait(self: SessionStore, *args: Any, **kwargs: Any) -> MessageView:
         result = await orig_update_message(self, *args, **kwargs)
         if "parts" in kwargs and kwargs.get("status") == "complete":
+            executor_tasks.append(asyncio.current_task())
             written.set()
             await release.wait()
         return result
 
     monkeypatch.setattr(SessionStore, "update_message", update_then_wait)
 
-    stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    # Who holds each lock, so the test sees get() wait on a held lock instead of timing it.
+    orig_acquire = AsyncRLock.acquire
+    orig_release = AsyncRLock.release
+    holders: dict[AsyncRLock, asyncio.Task[Any] | None] = {}
+    depths: dict[AsyncRLock, int] = {}
+    get_task: asyncio.Task[SessionView] | None = None
+    get_blocked_on: list[AsyncRLock] = []
+    get_blocked = asyncio.Event()
+
+    async def tracking_acquire(self: AsyncRLock) -> None:
+        current = asyncio.current_task()
+        if current is get_task and self in holders and holders[self] is not current:
+            get_blocked_on.append(self)
+            get_blocked.set()
+        await orig_acquire(self)
+        holders[self] = current
+        depths[self] = depths.get(self, 0) + 1
+
+    async def tracking_release(self: AsyncRLock) -> None:
+        depths[self] -= 1
+        if depths[self] == 0:
+            del holders[self]
+        await orig_release(self)
+
+    monkeypatch.setattr(AsyncRLock, "acquire", tracking_acquire)
+    monkeypatch.setattr(AsyncRLock, "release", tracking_release)
+
+    # Subscribing after the snapshot's last_seq replays anything published before the first read.
+    view_start = await manager.get(project_id, "orchestrator")
+    stream = manager.subscribe(project_id, "orchestrator", after_seq=view_start.last_seq)
     collector = asyncio.create_task(collect_until_turn_ended(stream))
     await manager.send(project_id, "orchestrator", "Do turn")
     await written.wait()
 
     # The executor has stored the final message and not yet published it: get() must wait.
     get_task = asyncio.create_task(manager.get(project_id, "orchestrator"))
-    done, _ = await asyncio.wait({get_task}, timeout=0.3)
-    assert not done
+    blocked = asyncio.create_task(get_blocked.wait())
+    # Racing get() makes one that does not wait on the lock fail here instead of hanging.
+    done, _ = await asyncio.wait({blocked, get_task}, return_when=asyncio.FIRST_COMPLETED)
+    blocked.cancel()
+    await asyncio.wait({blocked})
+    assert done == {blocked}
+    assert holders[get_blocked_on[0]] is executor_tasks[0]
+    assert not get_task.done()
 
     release.set()
     view = await get_task
@@ -172,21 +212,19 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
+    # The gate stays held: both turns are acted on mid-turn and neither needs to finish.
+    fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    assert isinstance(await anext(sub), Resync)
 
     # 1. Start turn 1 and stop it
     await manager.send(project_id, "orchestrator", "Turn 1 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
     await manager.stop(project_id, "orchestrator")
 
-    ended_turn_1: TurnEnded | None = None
-    async for ev in sub:
-        if isinstance(ev, TurnEnded):
-            ended_turn_1 = ev
-            break
-    assert ended_turn_1 is not None
+    ended_turn_1 = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(ended_turn_1, TurnEnded)
     assert ended_turn_1.data.status == "stopped"
 
     # Confirm turn 1's agent message is stopped in DB
@@ -203,9 +241,7 @@ async def test_stopped_turn_message_not_modified_when_later_turn_interrupted(
 
     # 2. Start turn 2 and interrupt it via close()
     await manager.send(project_id, "orchestrator", "Turn 2 slow")
-    async for ev in sub:
-        if isinstance(ev, TextDelta):
-            break
+    await through_first_delta(sub)
 
     await manager.close()
 
@@ -256,7 +292,9 @@ async def test_error_escaping_the_executor_fails_the_turn_and_the_worker_goes_on
 
     monkeypatch.setattr(TurnExecutor, "run", run_failing_once)
 
-    stream = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    # Subscribing after the snapshot's last_seq replays anything published before the first read.
+    view = await manager.get(project_id, "orchestrator")
+    stream = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
     await manager.send(project_id, "orchestrator", "Turn 1")
     await manager.send(project_id, "orchestrator", "Turn 2")
     first_events = await collect_until_turn_ended(stream)

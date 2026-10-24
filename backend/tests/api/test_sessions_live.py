@@ -31,6 +31,7 @@ from mlops_agents.paths import DataPaths
 from tests.api.conftest import add_local_project, live_server, signed_in
 from tests.api.fake_sessions import parse_sse_events
 from tests.fakes.fake_openai import SLOW_TEXT, RunningFake
+from tests.stream_helpers import through_first_delta
 
 EVENT = TypeAdapter(StreamEvent)
 README = "# Test"
@@ -197,17 +198,6 @@ async def test_no_assigned_model_streams_failure_and_actionable_system_message(
     assert view.last_seq == ended.seq
 
 
-async def _through_delta(events: AsyncIterator[StreamEvent]) -> list[StreamEvent]:
-    received: list[StreamEvent] = []
-    async with asyncio.timeout(10):
-        while True:
-            event = await anext(events)
-            received.append(event)
-            assert not isinstance(event, TurnEnded), received
-            if isinstance(event, TextDelta) and event.data.text:
-                return received
-
-
 def _deltas(events: list[StreamEvent]) -> str:
     return "".join(event.data.text for event in events if isinstance(event, TextDelta))
 
@@ -222,7 +212,7 @@ async def test_two_tabs_and_mid_turn_snapshot_converge_without_missing_or_double
         _stream(live_client, session_url) as second,
     ):
         await _send(live_client, session_url, "Reply slowly")
-        prefix = await _through_delta(first)
+        prefix = await through_first_delta(first)
         assert _deltas(prefix) == "word0"
         snapshot = await _view(live_client, session_url)
         assert snapshot.busy
@@ -257,7 +247,7 @@ async def test_reconnect_with_last_event_id_continues_text_exactly_once(
     await _assign_model(live_client, fake_openai, "fake-slow")
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
-        prefix = await _through_delta(stream)
+        prefix = await through_first_delta(stream)
         assert _deltas(prefix) == "word0"
     assert (await _view(live_client, session_url)).busy
     async with _stream(live_client, session_url, after=prefix[-1].seq, header=True) as stream:
@@ -286,7 +276,7 @@ async def test_stop_preserves_partial_output_and_next_message_completes(
     await _assign_model(live_client, fake_openai, "fake-slow")
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
-        prefix = await _through_delta(stream)
+        prefix = await through_first_delta(stream)
         assert _deltas(prefix) == "word0"
         response = await live_client.post(session_url + "/stop")
         assert response.status_code == 204
@@ -327,7 +317,7 @@ async def test_delete_project_during_turn_closes_stream_and_removes_project_fold
     project_dir = paths.project_dir(project_id)
     async with _stream(live_client, session_url) as stream:
         await _send(live_client, session_url, "Reply slowly")
-        prefix = await _through_delta(stream)
+        prefix = await through_first_delta(stream)
         assert _deltas(prefix) == "word0"
         assert (await _view(live_client, session_url)).busy
         assert project_dir.is_dir()
@@ -358,7 +348,7 @@ async def test_held_turn_stopped_without_releasing_gate_shuts_down_cleanly(
         ):
             await _assign_model(http, fake_openai, "fake-slow")
             await _send(http, url, "Reply slowly")
-            prefix = await _through_delta(stream)
+            prefix = await through_first_delta(stream)
             assert _deltas(prefix) == "word0"
             stop_resp = await http.post(url + "/stop")
             assert stop_resp.status_code == 204

@@ -12,7 +12,6 @@ from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
     MessageView,
     Resync,
-    SessionView,
     StreamEvent,
     TextDelta,
     TextPart,
@@ -24,6 +23,7 @@ from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.stream_helpers import through_first_delta
 
 
 async def test_ask_orchestrator_fake_tools(
@@ -41,16 +41,17 @@ async def test_ask_orchestrator_fake_tools(
     manager = env.manager
     project_id = env.project_id
 
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    # Subscribing after the snapshot's last_seq replays anything published before the first read.
+    view = await manager.get(project_id, "orchestrator")
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
     user_msg = await manager.send(project_id, "orchestrator", "Check readme")
     assert user_msg.status == "complete"
     assert user_msg.author_kind == "user"
 
-    events = await collect_until_turn_ended(sub)
+    live_events = await collect_until_turn_ended(sub)
 
-    # First event is Resync because after_seq was None
-    assert isinstance(events[0], Resync)
-    live_events = events[1:]
+    # A fresh session's hub is at view.last_seq, so the stream starts with the turn, not a Resync.
+    assert not any(isinstance(e, Resync) for e in live_events)
 
     types = [e.type for e in live_events]
     assert "message.created" in types
@@ -87,8 +88,9 @@ async def test_two_subscribers_receive_identical_events(
     manager = env.manager
     project_id = env.project_id
 
-    sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    sub2 = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    view = await manager.get(project_id, "orchestrator")
+    sub1 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
+    sub2 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
 
     task1 = asyncio.create_task(collect_until_turn_ended(sub1))
     task2 = asyncio.create_task(collect_until_turn_ended(sub2))
@@ -124,36 +126,30 @@ async def test_mid_turn_subscriber_after_get(
     settings_svc = env.settings
     await settings_svc.set_default_model("orchestrator", f"{prov_name}:fake-slow")
 
-    # Subscriber 1 from the beginning
+    fake_openai.state.hold_slow()
+    # Reading the snapshot starts the subscription now, so the held first delta reaches it.
     sub1 = manager.subscribe(project_id, "orchestrator", after_seq=None)
-    task1 = asyncio.create_task(collect_until_turn_ended(sub1, timeout=15.0))
-
+    assert isinstance(await anext(sub1), Resync)
     await manager.send(project_id, "orchestrator", "Slow response please")
+    prefix = await through_first_delta(sub1)
 
-    # Wait until turn is running and streaming deltas
-    view: SessionView | None = None
-    for _ in range(50):
-        await asyncio.sleep(0.05)
-        v = await manager.get(project_id, "orchestrator")
-        if v.busy and len(v.messages) >= 2:
-            agent_msg = v.messages[-1]
-            if agent_msg.parts and isinstance(agent_msg.parts[-1], TextPart):
-                view = v
-                break
-
-    assert view is not None
+    # The turn is held after its first word, so the view is taken mid-turn.
+    view = await manager.get(project_id, "orchestrator")
     assert view.busy is True
     initial_text = "".join(p.text for p in view.messages[-1].parts if isinstance(p, TextPart))
+    assert initial_text == "word0"
 
     # Now subscriber 2 joins mid-turn with view.last_seq
     sub2 = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
-    events2 = await collect_until_turn_ended(sub2, timeout=15.0)
+    fake_openai.state.release_slow()
+    tail1, events2 = await asyncio.gather(
+        collect_until_turn_ended(sub1, timeout=15.0), collect_until_turn_ended(sub2, timeout=15.0)
+    )
 
     delta_text = "".join(e.data.text for e in events2 if isinstance(e, TextDelta))
     combined_text = initial_text + delta_text
 
-    events1 = await task1
-    final_updated = [e for e in events1 if isinstance(e, MessageUpdated)]
+    final_updated = [e for e in prefix + tail1 if isinstance(e, MessageUpdated)]
     assert final_updated
     final_text = "".join(
         p.text for p in final_updated[-1].data.message.parts if isinstance(p, TextPart)
@@ -177,8 +173,12 @@ async def test_three_messages_sent_at_once_queue_order(
     )
     manager = env.manager
     project_id = env.project_id
+    # Turn 1 runs on the held slow model, so it is still running when the queue is checked.
+    await env.settings.set_default_model("orchestrator", f"{env.provider}:fake-slow")
+    fake_openai.state.hold_slow()
 
-    sub = manager.subscribe(project_id, "orchestrator", after_seq=None)
+    view_start = await manager.get(project_id, "orchestrator")
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=view_start.last_seq)
 
     m1 = await manager.send(project_id, "orchestrator", "Msg 1")
     m2 = await manager.send(project_id, "orchestrator", "Msg 2")
@@ -190,6 +190,10 @@ async def test_three_messages_sent_at_once_queue_order(
 
     view = await manager.get(project_id, "orchestrator")
     assert view.busy is True
+
+    # Turns 2 and 3 build their agent after turn 1 ends, so they run on the fast model.
+    await env.settings.set_default_model("orchestrator", f"{env.provider}:fake-tools")
+    fake_openai.state.release_slow()
 
     # Collect events until 3 turn.ended events have arrived
     all_events: list[StreamEvent] = []

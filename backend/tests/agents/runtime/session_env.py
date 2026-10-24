@@ -86,9 +86,7 @@ async def build_session_env(
     await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
     await providers_svc.verify_model(f"{prov.name}:fake-tools")
     await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-slow"))
-    await providers_svc.record_verification(
-        f"{prov.name}:fake-slow", tool_calling=True, streaming=True, detail=None
-    )
+    await providers_svc.verify_model(f"{prov.name}:fake-slow")
 
     project = await workspace_svc.add_local(str(repo_dir))
     await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")

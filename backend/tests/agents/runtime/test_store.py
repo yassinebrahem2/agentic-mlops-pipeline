@@ -276,9 +276,11 @@ async def test_cancel_waits_for_the_write_in_flight(
     write.cancel()
 
     # The cancel is held back until the write has finished, so the caller (which holds the
-    # session lock) never lets go while a write is still in flight.
-    done, _ = await asyncio.wait({write}, timeout=0.2)
-    assert not done
+    # session lock) never lets go while a write is still in flight. The write is held on
+    # `release`, so it cannot finish yet; a cancel that was not held back would end the task on
+    # the next loop step, which this one yield lets run.
+    await asyncio.sleep(0)
+    assert not write.done()
 
     release.set()
     with pytest.raises(asyncio.CancelledError):

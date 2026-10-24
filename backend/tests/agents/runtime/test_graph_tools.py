@@ -6,87 +6,16 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.runtime.agent import Agent
-from mlops_agents.agents.runtime.contract import MessageView, TextPart, ToolCallPart, ToolResultPart
+from mlops_agents.agents.runtime.contract import TextPart
 from mlops_agents.agents.runtime.graph import TurnState, create_turn_graph
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.tools import default_registry
-from mlops_agents.agents.tools.base import ToolContext
-from mlops_agents.agents.tools.files import RepoFiles
-from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.storage.databases import Databases
-from mlops_agents.workspace.models import Project
+from tests.agents.runtime.graph_env import RecordingSink, make_agent
 from tests.conftest import make_repo
-
-
-class RecordingSink:
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.tools_started: list[ToolCallPart] = []
-        self.tools_finished: list[ToolResultPart] = []
-        self.messages: list[tuple[MessageView, bool]] = []
-
-    async def text(self, message_id: str, text: str) -> None:
-        self.texts.append(text)
-
-    async def tool_started(self, message_id: str, call: ToolCallPart) -> None:
-        self.tools_started.append(call)
-
-    async def tool_finished(self, message_id: str, result: ToolResultPart) -> None:
-        self.tools_finished.append(result)
-
-    async def message(self, message: MessageView, *, created: bool) -> None:
-        self.messages.append((message, created))
-
-
-def _make_agent(repo_dir: Path, bin_dir: Path, tool_names: tuple[str, ...] | None = None) -> Agent:
-    tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
-    definition = catalog.get("orchestrator")
-    project = Project(
-        id="prj_1",
-        name="test",
-        source="local",
-        local_path=str(repo_dir),
-        github_full_name=None,
-        default_branch="main",
-        status="ok",
-        status_detail=None,
-        created_at="2026-10-21T00:00:00Z",
-        last_opened_at=None,
-    )
-    model = ResolvedModel(
-        address="fake:fake-tools",
-        provider_id="fake",
-        provider_name="fake",
-        base_url="http://fake",
-        wire_model_id="fake-tools",
-        context_window=32768,
-        keys=(),
-    )
-    repo_files = RepoFiles(repo_dir, GitRunner(bin_dir))
-    tool_ctx = ToolContext(files=repo_files)
-    agent_tools: list[Any] = []
-    allowed_names = tool_names if tool_names is not None else tuple(definition.tools)
-    for name in allowed_names:
-        t = tools.get(name)
-        if t is not None:
-            agent_tools.append(t)
-
-    return Agent(
-        definition=definition,
-        project=project,
-        layout="README.md",
-        model=model,
-        max_steps=25,
-        tools=tuple(agent_tools),
-        tool_context=tool_ctx,
-    )
 
 
 class MockModelCaller(ModelCaller):
@@ -118,7 +47,7 @@ async def test_graph_tool_not_in_definition_returns_error(
 ) -> None:
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "Line 1\n"}, git_env)
     # Agent only has tool "Write", NOT "Read"
-    agent = _make_agent(repo_dir, paths.bin, tool_names=("Write",))
+    agent = make_agent(repo_dir, paths.bin, project_id="prj_1", tool_names=("Write",))
     store = SessionStore(databases)
     sink = RecordingSink()
 
@@ -200,7 +129,7 @@ async def test_graph_parallel_tools_order(
     git_env: dict[str, str],
 ) -> None:
     repo_dir = make_repo(tmp_path / "repo", {"a.txt": "A\n", "b.txt": "B\n"}, git_env)
-    agent = _make_agent(repo_dir, paths.bin, tool_names=("Read",))
+    agent = make_agent(repo_dir, paths.bin, project_id="prj_1", tool_names=("Read",))
     store = SessionStore(databases)
     sink = RecordingSink()
 
