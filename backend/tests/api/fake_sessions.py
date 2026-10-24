@@ -104,6 +104,7 @@ class FakeSessions(AgentSessions):
         self.stopped: list[tuple[str, str]] = []
         self.closed_projects: list[str] = []
         self.sent_messages: list[tuple[str, str, str]] = []
+        self.posted_messages: list[tuple[str, str, str, str]] = []
         self.subscriptions: list[FakeSubscription] = []
         self.subscribe_calls: list[tuple[str, str, int | None]] = []
         self.live_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
@@ -136,12 +137,34 @@ class FakeSessions(AgentSessions):
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
         self._check_agent(agent)
         self.sent_messages.append((project_id, agent, text))
+        return await self._append(project_id, agent, text, author_name="User", from_agent=None)
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        self._check_agent(agent)
+        self.posted_messages.append((project_id, agent, from_agent, text))
+        return await self._append(
+            project_id, agent, text, author_name=author_name, from_agent=from_agent
+        )
+
+    async def _append(
+        self, project_id: str, agent: str, text: str, *, author_name: str, from_agent: str | None
+    ) -> MessageView:
         msg = MessageView(
             id=new_id("msg"),
             turn_id=new_id("trn"),
             author_kind="user",
-            author_name="User",
-            from_agent=None,
+            author_name=author_name,
+            from_agent=from_agent,
             parts=[TextPart(type="text", text=text)],
             status="complete",
             created_at=now_iso(),

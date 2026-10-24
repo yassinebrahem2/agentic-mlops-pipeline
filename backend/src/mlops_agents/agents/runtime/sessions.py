@@ -126,12 +126,11 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
 
         session_id = await self._get_session_id(project_id, agent)
-        key = (project_id, session_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
 
         async with lock:
-            is_busy = self._workers.running(key)
+            is_busy = await self._busy(project_id, session_id)
             if not is_busy:
                 queued = await self._store.next_queued_turn(project_id, session_id)
                 if queued is not None:
@@ -156,7 +155,56 @@ class SessionManager(AgentSessions):
             current_task=None,
         )
 
+    async def _busy(self, project_id: str, session_id: str) -> bool:
+        """The one busy rule: a live worker, or a turn waiting for approval. Under the lock."""
+        return self._workers.running(
+            (project_id, session_id)
+        ) or await self._store.has_waiting_turn(project_id, session_id)
+
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
+        return await self._enqueue(
+            project_id,
+            agent,
+            text,
+            author_name="user",
+            from_agent=None,
+            exchange_id=None,
+            hop=None,
+        )
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        return await self._enqueue(
+            project_id,
+            agent,
+            text,
+            author_name=author_name,
+            from_agent=from_agent,
+            exchange_id=exchange_id,
+            hop=hop,
+        )
+
+    async def _enqueue(
+        self,
+        project_id: str,
+        agent: str,
+        text: str,
+        *,
+        author_name: str,
+        from_agent: str | None,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        """Store an input message and its queued turn; start the worker when the session is idle."""
         await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
@@ -165,29 +213,31 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
 
         session_id = await self._get_session_id(project_id, agent)
-        key = (project_id, session_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
 
         async with lock:
-            is_busy = self._workers.running(key)
+            is_busy = await self._busy(project_id, session_id)
             status: MessageStatus = "queued" if is_busy else "complete"
 
-            user_msg = await self._store.add_message(
+            message = await self._store.add_message(
                 project_id,
                 session_id,
                 author_kind="user",
-                author_name="user",
+                author_name=author_name,
                 parts=[TextPart(type="text", text=text)],
                 status=status,
+                from_agent=from_agent,
+                exchange_id=exchange_id,
+                hop=hop,
             )
-            await self._store.add_turn(project_id, session_id, user_msg.id, "queued")
-            await hub.message(user_msg, created=True)
+            await self._store.add_turn(project_id, session_id, message.id, "queued")
+            await hub.message(message, created=True)
 
             if not is_busy:
                 self._workers.start(project_id, session_id, agent, hub, lock)
 
-        return user_msg
+        return message
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)

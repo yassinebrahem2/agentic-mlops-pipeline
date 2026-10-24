@@ -92,15 +92,22 @@ class TurnWorkers:
                 turn_id, trigger_msg_id = next_turn
                 await self._store.set_turn(project_id, turn_id, "running")
 
-                # If trigger message was queued, update it to complete
+                # A queued trigger becomes complete; one from an agent records this turn read it.
                 async with lock:
                     history = await self._store.messages(project_id, session_id)
-                    triggers = [m for m in history if m.id == trigger_msg_id]
-                    if triggers and triggers[0].status == "queued":
+                    trigger = next((m for m in history if m.id == trigger_msg_id), None)
+                    read_by = (
+                        turn_id if trigger is not None and trigger.from_agent is not None else None
+                    )
+                    if trigger is not None and trigger.status == "queued":
                         updated_msg = await self._store.update_message(
-                            project_id, trigger_msg_id, status="complete"
+                            project_id, trigger_msg_id, status="complete", read_by_turn=read_by
                         )
                         await hub.message(updated_msg, created=False)
+                    elif read_by is not None:
+                        await self._store.update_message(
+                            project_id, trigger_msg_id, read_by_turn=read_by
+                        )
 
                 child_task = asyncio.create_task(
                     self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)

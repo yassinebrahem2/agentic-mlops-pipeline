@@ -80,3 +80,15 @@ class TurnsStore(StoreBase):
         if row is None:
             return None
         return (str(row[0]), str(row[1]))
+
+    async def has_waiting_turn(self, project_id: str, session_id: str) -> bool:
+        """Whether a turn of session_id is paused, waiting for an approval."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(turns.c.id)
+            .where(turns.c.session_id == session_id, turns.c.status == "waiting")
+            .limit(1)
+        )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        return row is not None

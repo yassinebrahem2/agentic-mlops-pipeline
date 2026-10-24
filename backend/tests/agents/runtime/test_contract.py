@@ -254,6 +254,28 @@ class DummySessions:
             created_at="2026-10-21T18:00:00Z",
         )
 
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        return MessageView(
+            id="msg_dummy",
+            turn_id=None,
+            author_kind="user",
+            author_name=author_name,
+            from_agent=from_agent,
+            parts=[TextPart(type="text", text=text)],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+
     async def stop(self, project_id: str, agent: str) -> None:
         pass
 

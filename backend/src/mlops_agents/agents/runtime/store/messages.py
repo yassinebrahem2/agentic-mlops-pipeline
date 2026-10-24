@@ -82,14 +82,17 @@ class MessagesStore(StoreBase):
         *,
         parts: Sequence[Part] | None = None,
         status: MessageStatus | None = None,
+        read_by_turn: str | None = None,
     ) -> MessageView:
-        """Update parts and/or status of an existing message."""
+        """Update parts, status and/or the turn that read it, of an existing message."""
         engine = await self._databases.project(project_id)
         values: dict[str, Any] = {}
         if parts is not None:
             values["parts"] = _PARTS_ADAPTER.dump_json(list(parts)).decode("utf-8")
         if status is not None:
             values["status"] = status
+        if read_by_turn is not None:
+            values["read_by_turn"] = read_by_turn
 
         async with engine.begin() as conn:
             if values:

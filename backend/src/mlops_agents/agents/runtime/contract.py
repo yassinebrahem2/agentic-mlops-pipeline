@@ -202,6 +202,21 @@ class AgentSessions(Protocol):
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView: ...
 
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        """An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
+        from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send."""
+        ...
+
     async def stop(self, project_id: str, agent: str) -> None: ...
 
     def subscribe(
