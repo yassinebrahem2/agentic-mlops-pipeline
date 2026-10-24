@@ -92,7 +92,14 @@ function KeyList({ provider }: { provider: Provider }) {
       provider.kind === "hosted"
         ? "No keys yet."
         : "No key. A self-hosted server may not need one.";
-    return <AddKeyForm provider={provider} emptyMessage={emptyMessage} />;
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-muted-foreground">{emptyMessage}</p>
+          <AddKeyForm provider={provider} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -116,12 +123,14 @@ function KeyList({ provider }: { provider: Provider }) {
         ))}
       </ul>
       {removeKey.isError && <p className="text-destructive">{errorText(removeKey.error)}</p>}
-      <AddKeyForm provider={provider} />
+      <div className="flex justify-end">
+        <AddKeyForm provider={provider} />
+      </div>
     </div>
   );
 }
 
-function AddKeyForm({ provider, emptyMessage }: { provider: Provider; emptyMessage?: string }) {
+function AddKeyForm({ provider }: { provider: Provider }) {
   const queryClient = useQueryClient();
   const inputId = useId();
   const [open, setOpen] = useState(false);
@@ -147,69 +156,48 @@ function AddKeyForm({ provider, emptyMessage }: { provider: Provider; emptyMessa
   }
 
   if (!open) {
-    if (emptyMessage) {
-      return (
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-muted-foreground">{emptyMessage}</p>
-          <Button
-            variant="outline"
-            onClick={() => {
-              addKey.reset();
-              setOpen(true);
-            }}
-          >
-            Add key
-          </Button>
-        </div>
-      );
-    }
     return (
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          onClick={() => {
-            addKey.reset();
-            setOpen(true);
-          }}
-        >
-          Add key
-        </Button>
-      </div>
+      <Button
+        variant="outline"
+        onClick={() => {
+          addKey.reset();
+          setOpen(true);
+        }}
+      >
+        Add key
+      </Button>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {emptyMessage && <p className="text-muted-foreground">{emptyMessage}</p>}
-      <form onSubmit={submit} className="flex flex-col gap-2">
-        <Label htmlFor={inputId}>New key for {provider.name}</Label>
-        <Input
-          id={inputId}
-          type="password"
-          autoComplete="off"
-          value={key}
-          onChange={(event) => {
-            setKey(event.target.value);
+    <form onSubmit={submit} className="flex flex-col gap-2">
+      <Label htmlFor={inputId}>New key for {provider.name}</Label>
+      <Input
+        id={inputId}
+        type="password"
+        autoComplete="off"
+        value={key}
+        onChange={(event) => {
+          setKey(event.target.value);
+        }}
+      />
+      {addKey.isError && <p className="text-destructive">{errorText(addKey.error)}</p>}
+      <div className="flex gap-2">
+        <Button type="submit" disabled={addKey.isPending || key.trim() === ""}>
+          {addKey.isPending ? "Checking key…" : "Save key"}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setKey("");
+            setOpen(false);
           }}
-        />
-        {addKey.isError && <p className="text-destructive">{errorText(addKey.error)}</p>}
-        <div className="flex gap-2">
-          <Button type="submit" disabled={addKey.isPending || key.trim() === ""}>
-            {addKey.isPending ? "Checking key…" : "Save key"}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setKey("");
-              setOpen(false);
-            }}
-          >
-            Cancel
-          </Button>
-        </div>
-      </form>
-    </div>
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -252,7 +240,7 @@ function RemoveProviderDialog({ name }: { name: string }) {
             models need another model.
           </DialogDescription>
         </DialogHeader>
-        {remove.error && <p className="text-destructive">{errorText(remove.error)}</p>}
+        {remove.isError && <p className="text-destructive">{errorText(remove.error)}</p>}
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>

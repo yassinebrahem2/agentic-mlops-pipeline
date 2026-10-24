@@ -18,26 +18,38 @@ export interface MessageViewProps {
   className?: string;
 }
 
+function dropNode<T extends object>(props: T): Omit<T, "node"> {
+  const rest: Record<string, unknown> = { ...props };
+  delete rest.node;
+  return rest as Omit<T, "node">;
+}
+
 const markdownComponents: Components = {
   table: ({ className, ...props }) => (
-    <Table className={cn("my-2 border border-border", className)} {...props} />
+    <Table className={cn("my-2 border border-border", className)} {...dropNode(props)} />
   ),
-  thead: ({ className, ...props }) => <TableHeader className={className} {...props} />,
-  tbody: ({ className, ...props }) => <TableBody className={className} {...props} />,
+  thead: ({ className, ...props }) => <TableHeader className={className} {...dropNode(props)} />,
+  tbody: ({ className, ...props }) => <TableBody className={className} {...dropNode(props)} />,
   tr: ({ className, ...props }) => (
-    <TableRow className={cn("border-b border-border", className)} {...props} />
+    <TableRow className={cn("border-b border-border", className)} {...dropNode(props)} />
   ),
   th: ({ className, ...props }) => (
-    <TableHead className={cn("border border-border font-semibold", className)} {...props} />
+    <TableHead
+      className={cn("border border-border font-semibold", className)}
+      {...dropNode(props)}
+    />
   ),
   td: ({ className, ...props }) => (
-    <TableCell className={cn("border border-border", className)} {...props} />
+    <TableCell className={cn("border border-border", className)} {...dropNode(props)} />
   ),
   a: ({ className, ...props }) => (
-    <a className={cn("text-primary underline", className)} {...props} />
+    <a className={cn("text-primary underline", className)} {...dropNode(props)} />
   ),
   pre: ({ className, ...props }) => (
-    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props} />
+    <pre
+      className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)}
+      {...dropNode(props)}
+    />
   ),
 };
 

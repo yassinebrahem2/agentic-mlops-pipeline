@@ -226,17 +226,20 @@ describe("MessageView", () => {
     const table = container.querySelector("table");
     expect(table).toBeInTheDocument();
     expect(table).toHaveClass("border", "border-border");
+    expect(table).not.toHaveAttribute("node");
 
     const th = screen.getByRole("columnheader", { name: "Col 1" });
     expect(th).toBeInTheDocument();
     expect(th).toHaveClass("border", "border-border", "font-semibold");
+    expect(th).not.toHaveAttribute("node");
 
     const td = screen.getByRole("cell", { name: "Val 1" });
     expect(td).toBeInTheDocument();
     expect(td).toHaveClass("border", "border-border");
+    expect(td).not.toHaveAttribute("node");
   });
 
-  it("renders links and pre blocks with proper styling classes", () => {
+  it("renders links and pre blocks with proper styling classes and no node attribute", () => {
     const textMsg: MessageViewType = {
       id: "a-fmt",
       turn_id: "trn_1",
@@ -256,9 +259,11 @@ describe("MessageView", () => {
     const { container } = render(<MessageView message={textMsg} />);
     const link = screen.getByRole("link", { name: "site" });
     expect(link).toHaveClass("text-primary", "underline");
+    expect(link).not.toHaveAttribute("node");
 
     const pre = container.querySelector("pre");
     expect(pre).toBeInTheDocument();
     expect(pre).toHaveClass("overflow-x-auto", "rounded", "bg-muted/50", "p-2");
+    expect(pre).not.toHaveAttribute("node");
   });
 });
