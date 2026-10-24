@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
 import { useRemoteModels } from "@/lib/useRemoteModels";
 
@@ -22,12 +30,10 @@ type ModelCreate = components["schemas"]["ModelCreate"];
 export function AddModelDialog({ providers }: { providers: Provider[] }) {
   const queryClient = useQueryClient();
   const providerId = useId();
-  const filterId = useId();
   const modelIdId = useId();
   const contextId = useId();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState("");
-  const [filter, setFilter] = useState("");
   const [modelId, setModelId] = useState("");
   const [contextWindow, setContextWindow] = useState("");
 
@@ -43,7 +49,6 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
 
   function reset() {
     setProvider("");
-    setFilter("");
     setModelId("");
     setContextWindow("");
     add.reset();
@@ -56,8 +61,11 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
     add.mutate(body);
   }
 
-  const needle = filter.trim().toLowerCase();
-  const shown = (remote.data ?? []).filter((m) => m.id.toLowerCase().includes(needle));
+  const options = (remote.data ?? []).map((m) => ({
+    value: m.id,
+    label: m.id,
+    detail: m.context_window !== null ? `${String(m.context_window)} tokens` : undefined,
+  }));
   const errors = fieldErrors(add.error);
   const hasFieldErrors = Object.keys(errors).length > 0;
 
@@ -82,81 +90,42 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
         <form onSubmit={submit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor={providerId}>Provider</Label>
-            <select
-              id={providerId}
+            <Select
               value={provider}
-              className="h-9 rounded-md border border-input bg-transparent px-2.5 text-sm"
-              onChange={(event) => {
-                setProvider(event.target.value);
-                setFilter("");
+              onValueChange={(value) => {
+                setProvider(value);
               }}
             >
-              <option value="">Choose a provider</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger id={providerId} className="w-full">
+                <SelectValue placeholder="Choose a provider" />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((p) => (
+                  <SelectItem key={p.id} value={p.name}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          {provider !== "" && (
-            <>
-              {remote.isPending && (
-                <p className="text-muted-foreground">Loading the provider&apos;s models…</p>
-              )}
-              {remote.isError && (
-                <div className="text-destructive">
-                  <p>{errorText(remote.error)}</p>
-                  <p>You can still type a model ID below.</p>
-                </div>
-              )}
-              {remote.data && (
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={filterId}>Filter models</Label>
-                  <Input
-                    id={filterId}
-                    value={filter}
-                    onChange={(event) => {
-                      setFilter(event.target.value);
-                    }}
-                  />
-                  <fieldset className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-md border p-2">
-                    <legend className="sr-only">Models of {provider}</legend>
-                    {shown.length === 0 && (
-                      <p className="text-muted-foreground">No model matches.</p>
-                    )}
-                    {shown.map((m) => (
-                      <label key={m.id} className="flex items-center gap-2 font-mono text-sm">
-                        <input
-                          type="radio"
-                          name="remote-model"
-                          value={m.id}
-                          checked={modelId === m.id}
-                          onChange={() => {
-                            setModelId(m.id);
-                          }}
-                        />
-                        {m.id}
-                        {m.context_window !== null && (
-                          <span className="text-muted-foreground">({m.context_window} tokens)</span>
-                        )}
-                      </label>
-                    ))}
-                  </fieldset>
-                </div>
-              )}
-            </>
+          {provider !== "" && remote.isError && (
+            <div className="text-destructive">
+              <p>{errorText(remote.error)}</p>
+              <p>You can still type a model ID below.</p>
+            </div>
           )}
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor={modelIdId}>Model ID</Label>
-            <Input
+            <Label htmlFor={modelIdId}>Model</Label>
+            <Combobox
               id={modelIdId}
+              label="Model"
               value={modelId}
-              onChange={(event) => {
-                setModelId(event.target.value);
-              }}
+              onValueChange={setModelId}
+              options={options}
+              loading={remote.isPending && provider !== ""}
+              placeholder="Choose or type a model ID"
             />
             {errors.wire_model_id && <p className="text-destructive">{errors.wire_model_id}</p>}
           </div>
