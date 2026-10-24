@@ -42,7 +42,7 @@ describe("AgentsPage", () => {
     const page = log.parentElement;
     expect(page).toHaveClass("flex", "h-full", "flex-col", "overflow-hidden");
     expect(log).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
-    expect(page?.querySelectorAll(".overflow-y-auto")).toHaveLength(1);
+    expect(page?.querySelectorAll(":scope > .overflow-y-auto")).toHaveLength(1);
     expect(log.previousElementSibling).toBeInTheDocument();
     expect(log.nextElementSibling).toContainElement(input);
   });
