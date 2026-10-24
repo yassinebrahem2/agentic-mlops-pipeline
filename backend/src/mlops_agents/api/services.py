@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.messaging.bus import SqliteMessageBus
+from mlops_agents.agents.messaging.settings import MessagingSettings
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -40,6 +42,7 @@ class Services:
     tools: ToolRegistry
     agent_settings: AgentSettingsService
     sessions: AgentSessions
+    messaging_settings: MessagingSettings
     events: SqliteEventLog
     audit: SqliteAuditLog
 
@@ -93,8 +96,12 @@ async def build_services(
     git = GitRunner(paths.bin, token_provider=github.token)
     workspace = WorkspaceService(settings, paths, databases, git, github, http)
     providers = ProvidersService(databases, keystore, http)
-    tools = default_registry()
+    events = SqliteEventLog(databases)
+    messaging_settings = MessagingSettings(databases)
+    bus = SqliteMessageBus(databases, events, messaging_settings)
+    tools = default_registry(bus=bus)
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    bus.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     sessions = SessionManager(
         databases=databases,
@@ -105,13 +112,13 @@ async def build_services(
         providers=providers,
         http=http,
         git=git,
+        bus=bus,
     )
     stack.push_async_callback(sessions.close)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
 
-    events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
 
     return Services(
@@ -126,6 +133,7 @@ async def build_services(
         tools=tools,
         agent_settings=agent_settings,
         sessions=sessions,
+        messaging_settings=messaging_settings,
         events=events,
         audit=audit,
     )
