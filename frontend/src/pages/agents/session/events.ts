@@ -15,6 +15,7 @@ export type TextDelta = Schemas["TextDelta"];
 export type ToolStarted = Schemas["ToolStarted"];
 export type ToolFinished = Schemas["ToolFinished"];
 export type TurnEnded = Schemas["TurnEnded"];
+export type TurnWaiting = Schemas["TurnWaiting"];
 export type Resync = Schemas["Resync"];
 
 export type MessageData = Schemas["MessageData"];
@@ -22,6 +23,7 @@ export type TextDeltaData = Schemas["TextDeltaData"];
 export type ToolStartedData = Schemas["ToolStartedData"];
 export type ToolFinishedData = Schemas["ToolFinishedData"];
 export type TurnEndedData = Schemas["TurnEndedData"];
+export type TurnWaitingData = Schemas["TurnWaitingData"];
 
 export const eventNames = [
   "message.created",
@@ -30,6 +32,7 @@ export const eventNames = [
   "tool.finished",
   "message.updated",
   "turn.ended",
+  "turn.waiting",
   "resync",
 ] as const;
 
@@ -42,6 +45,7 @@ export type StreamEventData =
   | ({ type: "tool.finished" } & ToolFinishedData)
   | ({ type: "message.updated" } & MessageData)
   | ({ type: "turn.ended" } & TurnEndedData)
+  | ({ type: "turn.waiting" } & TurnWaitingData)
   | { type: "resync" };
 
 export function parseEvent(type: string, data: string): StreamEventData | null {
@@ -69,6 +73,8 @@ export function parseEvent(type: string, data: string): StreamEventData | null {
       return { type, ...(parsed as ToolFinishedData) };
     case "turn.ended":
       return { type, ...(parsed as TurnEndedData) };
+    case "turn.waiting":
+      return { type, ...(parsed as TurnWaitingData) };
     case "resync":
       return { type };
     default:

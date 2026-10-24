@@ -77,6 +77,10 @@ describe("parseEvent", () => {
       status: "done",
       error: null,
     });
+    expect(parseEvent("turn.waiting", JSON.stringify({ turn_id: "turn_1" }))).toEqual({
+      type: "turn.waiting",
+      turn_id: "turn_1",
+    });
     expect(parseEvent("resync", "{}")).toEqual({ type: "resync" });
   });
 
@@ -224,5 +228,24 @@ describe("applyEvent", () => {
       error: null,
     });
     expect(state.busy).toBe(false);
+  });
+
+  it("turn.waiting marks messages in the turn as waiting", () => {
+    let state: SessionState = { messages: [], busy: true, lastSeq: 0 };
+    const agentMsg = createMessage("a1", "agent", [], "streaming");
+    state = applyEvent(state, {
+      seq: 1,
+      type: "message.created",
+      message: agentMsg,
+    });
+    expect(state.messages[0]?.status).toBe("streaming");
+
+    state = applyEvent(state, {
+      seq: 2,
+      type: "turn.waiting",
+      turn_id: "turn_1",
+    });
+
+    expect(state.messages[0]?.status).toBe("waiting");
   });
 });
