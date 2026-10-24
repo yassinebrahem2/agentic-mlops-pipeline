@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -83,3 +83,82 @@ def test_registry() -> None:
     assert [s["function"]["name"] for s in registry.schemas(["Echo"])] == ["Echo"]
     with pytest.raises(ValueError, match="registered twice"):
         registry.register(EchoTool())
+
+
+class DummyOptionalArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    pattern: str = Field(description="Search pattern.")
+    path: str | None = Field(default=None, description="Optional path.")
+    count: int | None = Field(default=None, ge=0, le=10, description="Optional count.")
+
+
+class DummyOptionalTool(AgentTool[DummyOptionalArgs]):
+    name: ClassVar[str] = "Dummy"
+    description: ClassVar[str] = "Dummy tool."
+    risk: ClassVar[RiskClass] = RiskClass.READ
+    args_model: ClassVar[type[BaseModel]] = DummyOptionalArgs
+
+    async def run(self, ctx: ToolContext, args: DummyOptionalArgs) -> ToolOutput:
+        return ToolOutput("ok")
+
+
+def _has_key(obj: object, target: str) -> bool:
+    if isinstance(obj, dict):
+        d = cast(dict[object, object], obj)
+        return target in d or any(_has_key(v, target) for v in d.values())
+    if isinstance(obj, list):
+        lst = cast(list[object], obj)
+        return any(_has_key(item, target) for item in lst)
+    return False
+
+
+def test_schema_strips_title_and_unwraps_nullable_any_of() -> None:
+    schema = DummyOptionalTool().schema()
+    assert not _has_key(schema, "title")
+    assert not _has_key(schema, "anyOf")
+    params = schema["function"]["parameters"]
+    assert params["required"] == ["pattern"]
+    assert params["properties"]["path"]["type"] == "string"
+    assert params["properties"]["path"]["default"] is None
+    assert params["properties"]["count"]["type"] == "integer"
+    assert params["properties"]["count"]["minimum"] == 0
+    assert params["properties"]["count"]["maximum"] == 10
+    assert params["properties"]["count"]["default"] is None
+
+
+def test_default_registry_tools_emit_schemas_validating_existing_test_arguments() -> None:
+    from mlops_agents.agents.tools import default_registry
+
+    test_cases: dict[str, list[dict[str, object]]] = {
+        "Read": [
+            {"file_path": "src/app.py"},
+            {"file_path": "src/app.py", "offset": 1, "limit": 100},
+        ],
+        "Glob": [
+            {"pattern": "**/*.py"},
+            {"pattern": "*.md", "path": "docs"},
+        ],
+        "Grep": [
+            {"pattern": "def train"},
+            {"pattern": "def train", "output_mode": "content", "-A": 1},
+            {"pattern": "TRAIN", "-i": True, "output_mode": "count", "type": "py"},
+            {"pattern": "train", "glob": "*.md"},
+            {"pattern": "line", "output_mode": "content", "head_limit": 5, "path": "big.txt"},
+        ],
+    }
+
+    registry = default_registry()
+    for name, payloads in test_cases.items():
+        tool = registry.get(name)
+        assert tool is not None
+        schema = tool.schema()
+        assert not _has_key(schema, "title")
+        assert not _has_key(schema, "anyOf")
+        params = schema["function"]["parameters"]
+        req = set(params.get("required", []))
+        props = params.get("properties", {})
+        for payload in payloads:
+            assert req.issubset(payload.keys())
+            for key in payload:
+                assert key in props
+            tool.args_model.model_validate(payload)

@@ -56,6 +56,30 @@ def _summary(exc: ValidationError) -> str:
     )
 
 
+def _clean_schema(value: object) -> object:
+    if isinstance(value, list):
+        return [_clean_schema(item) for item in cast(list[object], value)]
+    if not isinstance(value, dict):
+        return value
+    cleaned: dict[str, object] = {str(k): v for k, v in cast(dict[object, object], value).items()}
+    cleaned.pop("title", None)
+    any_of = cleaned.get("anyOf")
+    if isinstance(any_of, list) and len(cast(list[object], any_of)) == 2:
+        first = cast(list[object], any_of)[0]
+        second = cast(list[object], any_of)[1]
+        unwrapped: dict[str, object] | None = None
+        if first == {"type": "null"} and isinstance(second, dict):
+            unwrapped = {str(k): v for k, v in cast(dict[object, object], second).items()}
+        elif second == {"type": "null"} and isinstance(first, dict):
+            unwrapped = {str(k): v for k, v in cast(dict[object, object], first).items()}
+        if unwrapped is not None:
+            del cleaned["anyOf"]
+            for k, v in unwrapped.items():
+                if k != "title" and k not in cleaned:
+                    cleaned[k] = v
+    return {k: _clean_schema(v) for k, v in cleaned.items()}
+
+
 class AgentTool[A: BaseModel](ABC):
     name: ClassVar[str]
     description: ClassVar[str]
@@ -71,7 +95,9 @@ class AgentTool[A: BaseModel](ABC):
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.args_model.model_json_schema(by_alias=True),
+                "parameters": cast(
+                    dict[str, Any], _clean_schema(self.args_model.model_json_schema(by_alias=True))
+                ),
             },
         }
 
