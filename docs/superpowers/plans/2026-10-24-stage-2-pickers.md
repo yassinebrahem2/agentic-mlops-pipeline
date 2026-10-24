@@ -33,6 +33,8 @@ export function Combobox(props: {
   loading?: boolean;             // options still loading: the field stays usable
   placeholder?: string;
   emptyText?: string;            // shown when no option matches
+  disabled?: boolean;            // added in review of #233: the GitHub tab disables it while adding
+  onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void; // added in review of #233: Enter adds the typed repository
 }): JSX.Element;
 ```
 
