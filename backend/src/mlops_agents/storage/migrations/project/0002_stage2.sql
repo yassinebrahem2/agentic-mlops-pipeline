@@ -106,16 +106,20 @@ CREATE TABLE events (
   payload TEXT NOT NULL
 );
 
+CREATE INDEX events_type ON events (type);
+
+-- Every column is NOT NULL, as I11's AuditRecord requires. SQLite lets a non-integer PRIMARY
+-- KEY hold NULL unless it says NOT NULL, so id says it too.
 CREATE TABLE audit (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   ts TEXT NOT NULL,
   actor TEXT NOT NULL,
   action TEXT NOT NULL,
-  risk_class TEXT,
-  permission_level TEXT,
-  decision TEXT,
-  target TEXT,
-  detail TEXT
+  risk_class TEXT NOT NULL,
+  permission_level TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  target TEXT NOT NULL,
+  detail TEXT NOT NULL
 );
 
 CREATE TABLE wakeups (

@@ -213,11 +213,11 @@ audit = Table(
     Column("ts", Text, nullable=False),
     Column("actor", Text, nullable=False),
     Column("action", Text, nullable=False),
-    Column("risk_class", Text),
-    Column("permission_level", Text),
-    Column("decision", Text),
-    Column("target", Text),
-    Column("detail", Text),
+    Column("risk_class", Text, nullable=False),
+    Column("permission_level", Text, nullable=False),
+    Column("decision", Text, nullable=False),
+    Column("target", Text, nullable=False),
+    Column("detail", Text, nullable=False),
 )
 
 exchanges = Table(

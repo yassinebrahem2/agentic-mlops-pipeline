@@ -88,8 +88,8 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
   - `status` CHECK in `pending`, `approved`, `rejected`, `cancelled`, `expired`;
   - `note`, `created_at`, `decided_at`.
   - Index on `status`.
-- `events`: `seq` INTEGER PK AUTOINCREMENT, `id` UNIQUE, `ts`, `source`, `type`, `subject_id`, `payload` (JSON).
-- `audit`: `id` PK, `ts`, `actor`, `action`, `risk_class`, `permission_level`, `decision`, `target`, `detail` (JSON).
+- `events`: `seq` INTEGER PK AUTOINCREMENT, `id` UNIQUE, `ts`, `source`, `type`, `subject_id`, `payload` (JSON); index on `type` (`EventLog.history` filters by it).
+- `audit`: `id` PK, `ts`, `actor`, `action`, `risk_class`, `permission_level`, `decision`, `target`, `detail` (JSON), every column NOT NULL, as I11's `AuditRecord` requires.
 - `exchanges`: `id` PK, `created_at`.
 - `wakeups`:
   - `id`, `session_id` (FK sessions, cascade), `agent`, `note`, `due_at`;
