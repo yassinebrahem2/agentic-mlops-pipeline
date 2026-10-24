@@ -312,7 +312,8 @@ class TurnWorkers:
 
 async def _observed(call: Awaitable[None]) -> None:
     """Await one observer call, bounded. A failing or hanging observer is logged and never
-    stops the queue; a hanging one holds a shutdown at most OBSERVER_TIMEOUT_S."""
+    stops the queue. The end report runs the observers one after another through a cancel,
+    so hanging ones hold a shutdown up to OBSERVER_TIMEOUT_S each."""
     try:
         async with asyncio.timeout(OBSERVER_TIMEOUT_S):
             await call
