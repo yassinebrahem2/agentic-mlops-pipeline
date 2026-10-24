@@ -133,7 +133,9 @@ class TurnExecutor:
 
         try:
             try:
-                built_agent = await self._builder.build(project_id, agent)
+                built_agent = await self._builder.build(
+                    project_id, agent, session_id=session_id, turn_id=turn_id
+                )
             except TurnRefused as exc:
                 text_part: list[Part] = [TextPart(type="text", text=exc.text)]
                 if exc.end == "done":

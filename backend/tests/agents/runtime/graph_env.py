@@ -9,11 +9,11 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.tools import default_registry
-from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
+from tests.agents.ctx import tool_context
 
 
 class RecordingSink:
@@ -69,7 +69,7 @@ def make_agent(
         keys=(),
     )
     repo_files = RepoFiles(repo_dir, GitRunner(bin_dir))
-    tool_ctx = ToolContext(files=repo_files)
+    tool_ctx = tool_context(repo_files)
     agent_tools: list[Any] = []
     for name in tool_names if tool_names is not None else definition.tools:
         t = tools.get(name)

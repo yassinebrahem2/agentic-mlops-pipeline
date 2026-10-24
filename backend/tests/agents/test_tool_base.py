@@ -6,12 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.agents.tools.base import (
     AgentTool,
+    Preview,
     RiskClass,
     ToolContext,
     ToolFailure,
     ToolOutput,
     ToolRegistry,
 )
+from tests.agents.ctx import tool_context
 
 
 class EchoArgs(BaseModel):
@@ -49,8 +51,11 @@ class NoFiles:
     async def resolve_dir(self, user_path: str | None) -> str:
         return ""
 
+    def invalidate(self) -> None:
+        return None
 
-CTX = ToolContext(NoFiles())
+
+CTX = tool_context(NoFiles())
 
 
 async def test_invoke_parses_aliases() -> None:
@@ -83,3 +88,28 @@ def test_registry() -> None:
     assert [s["function"]["name"] for s in registry.schemas(["Echo"])] == ["Echo"]
     with pytest.raises(ValueError, match="registered twice"):
         registry.register(EchoTool())
+
+
+def test_parse_returns_the_arguments_model() -> None:
+    parsed = EchoTool().parse({"text": "hi", "-l": True})
+    assert isinstance(parsed, EchoArgs)
+    assert (parsed.text, parsed.loud) == ("hi", True)
+
+
+def test_parse_returns_the_stage_1_error_for_invalid_arguments() -> None:
+    parsed = EchoTool().parse({"txt": "hi"})
+    assert isinstance(parsed, ToolOutput)
+    assert parsed.is_error
+    assert parsed.content == (
+        "Invalid arguments for Echo: text: Field required; txt: Extra inputs are not permitted"
+    )
+
+
+async def test_default_preview_is_text_with_indented_json_arguments() -> None:
+    args = EchoArgs.model_validate({"text": "hi", "-l": True})
+    preview = await EchoTool().preview(CTX, args)
+    assert preview == Preview(
+        kind="text",
+        title="Echo",
+        body='{\n  "text": "hi",\n  "-l": true\n}',
+    )

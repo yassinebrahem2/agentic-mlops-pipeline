@@ -1,8 +1,10 @@
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from mlops_agents.errors import DomainError
+from mlops_agents.workspace.models import Project
 
 _OWNER = r"(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))"
 _REPO = r"(?P<repo>[A-Za-z0-9._-]+?)"
@@ -28,3 +30,32 @@ def parse_github_ref(text: str) -> str:
     raise DomainError(
         "invalid_github_repo", "Enter a GitHub repository as owner/name or its URL.", status=422
     )
+
+
+@dataclass(frozen=True)
+class RepoRef:
+    owner: str
+    repo: str
+
+
+def https_url(ref: RepoRef) -> str:
+    return f"https://github.com/{ref.owner}/{ref.repo}.git"
+
+
+def github_remote(project: Project, origin_url: str | None) -> RepoRef | None:
+    """The GitHub repository a project's work is pushed to, or None when it has none.
+
+    A GitHub project is known by its full name. A local project is known by its `origin` URL, which
+    only counts when it is a github.com URL: the owner/name shorthand is not a remote, and would
+    match a relative path such as `foo/bar`.
+    """
+    if project.github_full_name:
+        owner, _, repo = project.github_full_name.partition("/")
+        return RepoRef(owner=owner, repo=repo)
+    if not origin_url:
+        return None
+    for pattern in _PATTERNS[:2]:
+        match = pattern.match(origin_url.strip())
+        if match:
+            return RepoRef(owner=match.group("owner"), repo=match.group("repo"))
+    return None

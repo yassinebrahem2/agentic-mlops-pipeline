@@ -6,6 +6,7 @@ import pytest
 from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
+from tests.agents.ctx import tool_context
 from tests.conftest import make_repo
 
 APP_PY = "\n".join(
@@ -49,4 +50,4 @@ def repo(tmp_path: Path, git_env: dict[str, str]) -> Path:
 
 @pytest.fixture
 def ctx(repo: Path, tmp_path: Path) -> ToolContext:
-    return ToolContext(RepoFiles(repo, GitRunner(tmp_path / "bin")))
+    return tool_context(RepoFiles(repo, GitRunner(tmp_path / "bin")))

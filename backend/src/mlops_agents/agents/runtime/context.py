@@ -16,6 +16,7 @@ from mlops_agents.agents.runtime.contract import (
     MessageView,
     TextPart,
     ToolCallPart,
+    ToolResultPart,
 )
 from mlops_agents.agents.tools.base import FileAccess
 from mlops_agents.workspace.models import Project
@@ -121,7 +122,7 @@ def build_messages(
                     current_tool_calls.append(
                         {"id": part.id, "name": part.name, "args": part.input}
                     )
-                else:
+                elif isinstance(part, ToolResultPart):
                     flush_ai()
                     if part.tool_call_id in unresolved_calls:
                         unresolved_calls.remove(part.tool_call_id)

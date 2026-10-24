@@ -12,11 +12,15 @@ from langchain_core.messages import (
 from mlops_agents.agents.catalog import AgentDefinition, Limits
 from mlops_agents.agents.runtime.context import build_messages, top_level_layout
 from mlops_agents.agents.runtime.contract import (
+    ApprovalPart,
+    MessageStatus,
     MessageView,
+    Part,
     TextPart,
     ToolCallPart,
     ToolResultPart,
 )
+from mlops_agents.agents.tools.base import Preview
 from mlops_agents.workspace.models import Project
 
 
@@ -39,6 +43,9 @@ class FakeFiles:
 
     async def resolve_dir(self, user_path: str | None) -> str:
         return user_path or ""
+
+    def invalidate(self) -> None:
+        return None
 
 
 async def test_top_level_layout_grouping_and_sorting() -> None:
@@ -334,3 +341,46 @@ def test_build_messages_from_agent_prefix() -> None:
     assert len(messages) == 2
     assert isinstance(messages[1], HumanMessage)
     assert messages[1].content == "Message from coder:\nPlease inspect tests"
+
+
+def _agent_message(parts: list[Part], status: MessageStatus) -> MessageView:
+    return MessageView(
+        id="msg_a",
+        turn_id="trn_1",
+        author_kind="agent",
+        author_name="orchestrator",
+        from_agent=None,
+        parts=parts,
+        status=status,
+        created_at="2026-10-24T09:00:00Z",
+    )
+
+
+def test_build_messages_skips_approval_parts() -> None:
+    call = ToolCallPart(type="tool_call", id="c1", name="Write", input={"path": "a.py"})
+    result = ToolResultPart(type="tool_result", tool_call_id="c1", content="done", is_error=False)
+    approval = ApprovalPart(
+        type="approval",
+        approval_id="apr_1",
+        tool_call_id="c1",
+        preview=Preview(kind="diff", title="Write a.py", body="+x"),
+        status="approved",
+        note=None,
+    )
+    text = TextPart(type="text", text="Writing.")
+    with_approval = build_messages(
+        _make_definition(),
+        _make_project(),
+        "",
+        None,
+        [_agent_message([text, call, approval, result], "complete")],
+    )
+    without = build_messages(
+        _make_definition(),
+        _make_project(),
+        "",
+        None,
+        [_agent_message([text, call, result], "complete")],
+    )
+    assert with_approval == without
+    assert [type(m) for m in with_approval[1:]] == [AIMessage, ToolMessage]

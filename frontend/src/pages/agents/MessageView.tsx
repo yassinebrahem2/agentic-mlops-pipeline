@@ -62,6 +62,7 @@ export function MessageView({ message, className }: MessageViewProps) {
           if (part.type === "tool_result") {
             return null;
           }
+          if (part.type === "approval") return null;
           return (
             <div
               key={idx}
