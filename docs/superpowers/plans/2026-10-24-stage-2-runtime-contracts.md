@@ -157,6 +157,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
   - `RepositoryOnlyWorkspaces`: no task; the repository's `RepoFiles`.
 
   The plan that owns a protocol deletes its default when it wires the real one.
+- The graph fills each `GateCall`'s `message_id` with the turn's agent message.
 - The tools step builds a `ToolContext` for each call, from `TaskWorkspaces.current` and `TaskWorkspaces.files`. `Agent.tool_context` (stage 1, one per turn) is removed.
 - Tool arguments are parsed (`AgentTool.parse`) before `decide`. A call that fails to parse is answered with its error and never reaches the gate.
 - `decide` judges every call of the step with the context as it stands before any of them runs. A call whose `preview` raises `ToolFailure` (an Edit of a missing file, a Write before any task) is answered with that error and gets no approval. The model sees it and can retry next step.
