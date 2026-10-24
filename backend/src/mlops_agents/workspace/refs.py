@@ -38,6 +38,11 @@ class RepoRef:
     repo: str
 
 
+def repo_ref(full_name: str) -> RepoRef:
+    owner, _, repo = full_name.partition("/")
+    return RepoRef(owner=owner, repo=repo)
+
+
 def https_url(ref: RepoRef) -> str:
     return f"https://github.com/{ref.owner}/{ref.repo}.git"
 
@@ -50,8 +55,7 @@ def github_remote(project: Project, origin_url: str | None) -> RepoRef | None:
     match a relative path such as `foo/bar`.
     """
     if project.github_full_name:
-        owner, _, repo = project.github_full_name.partition("/")
-        return RepoRef(owner=owner, repo=repo)
+        return repo_ref(project.github_full_name)
     if not origin_url:
         return None
     for pattern in _PATTERNS[:2]:
