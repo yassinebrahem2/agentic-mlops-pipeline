@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import (
@@ -12,7 +12,7 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import llm_calls, messages, turns
+from mlops_agents.storage.tables import exchanges, llm_calls, messages, turns
 
 
 async def test_session_id_is_stable_per_agent(databases: Databases) -> None:
@@ -294,6 +294,9 @@ async def test_cancel_waits_for_the_write_in_flight(
 async def test_add_message_stores_exchange_id_and_hop(databases: Databases) -> None:
     store = SessionStore(databases)
     session_id = await store.session_id("prj_test", "orchestrator")
+    engine = await databases.project("prj_test")
+    async with engine.begin() as conn:  # messages.exchange_id references exchanges
+        await conn.execute(insert(exchanges).values(id="xch_1", created_at="2026-10-24T00:00:00Z"))
     plain = await store.add_message(
         "prj_test",
         session_id,
@@ -314,7 +317,6 @@ async def test_add_message_stores_exchange_id_and_hop(databases: Databases) -> N
         hop=2,
     )
 
-    engine = await databases.project("prj_test")
     async with engine.connect() as conn:
         rows = (
             await conn.execute(

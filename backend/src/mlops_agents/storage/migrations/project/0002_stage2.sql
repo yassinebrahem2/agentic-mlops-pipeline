@@ -1,6 +1,12 @@
 -- messages gains 'waiting' in its status CHECK (SQLite cannot alter a CHECK) and the
 -- exchange columns, so it is rebuilt. No table references messages, so the DROP is safe with
--- foreign keys on. Index names are global: the index is recreated after the rename.
+-- foreign keys on. Index names are global: the indexes are recreated after the rename.
+-- exchanges comes first so the rebuilt messages.exchange_id can reference it.
+CREATE TABLE exchanges (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE messages_new (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL UNIQUE,
@@ -13,7 +19,7 @@ CREATE TABLE messages_new (
   status TEXT NOT NULL
     CHECK (status IN ('complete', 'streaming', 'queued', 'stopped', 'interrupted', 'waiting')),
   created_at TEXT NOT NULL,
-  exchange_id TEXT,
+  exchange_id TEXT REFERENCES exchanges (id) ON DELETE SET NULL,
   hop INTEGER,
   read_by_turn TEXT REFERENCES turns (id) ON DELETE SET NULL
 );
@@ -33,6 +39,8 @@ SELECT 'messages_new', seq FROM sqlite_sequence WHERE name = 'messages';
 DROP TABLE messages;
 ALTER TABLE messages_new RENAME TO messages;
 CREATE INDEX messages_session_seq ON messages (session_id, seq);
+CREATE INDEX messages_exchange ON messages (exchange_id);
+CREATE INDEX messages_read_by_turn ON messages (read_by_turn);
 
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
@@ -108,11 +116,6 @@ CREATE TABLE audit (
   decision TEXT,
   target TEXT,
   detail TEXT
-);
-
-CREATE TABLE exchanges (
-  id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL
 );
 
 CREATE TABLE wakeups (

@@ -140,6 +140,8 @@ def test_indexes_exist(tmp_path: Path) -> None:
             "approvals_status",
             "wakeups_status_due",
             "messages_session_seq",
+            "messages_exchange",
+            "messages_read_by_turn",
         } <= _names(conn, "index")
     finally:
         conn.close()
@@ -343,3 +345,39 @@ def test_deleting_a_session_removes_its_messages(conn: sqlite3.Connection) -> No
     _insert_message(conn, "msg_in")
     conn.execute("DELETE FROM sessions WHERE id = 'ses_1'")
     assert conn.execute("SELECT COUNT(*) FROM messages").fetchone() == (0,)
+
+
+def _index_columns(conn: sqlite3.Connection, table: str, name: str) -> list[str]:
+    assert any(row[1] == name for row in conn.execute(f"PRAGMA index_list({table})"))
+    return [str(row[2]) for row in conn.execute(f"PRAGMA index_info({name})")]
+
+
+def test_messages_exchange_columns_are_indexed(conn: sqlite3.Connection) -> None:
+    assert _index_columns(conn, "messages", "messages_exchange") == ["exchange_id"]
+    assert _index_columns(conn, "messages", "messages_read_by_turn") == ["read_by_turn"]
+
+
+def test_messages_exchange_id_references_exchanges_set_null(conn: sqlite3.Connection) -> None:
+    foreign_keys = {
+        str(row[3]): (str(row[2]), str(row[4]), str(row[6]))
+        for row in conn.execute("PRAGMA foreign_key_list(messages)")
+    }
+    assert foreign_keys["exchange_id"] == ("exchanges", "id", "SET NULL")
+
+
+def test_deleting_an_exchange_keeps_its_messages_with_a_null_exchange(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute("INSERT INTO exchanges (id, created_at) VALUES ('xch_1', ?)", (_TS,))
+    seq = _insert_message(conn, "msg_in")
+    conn.execute("UPDATE messages SET exchange_id = 'xch_1', hop = 1 WHERE seq = ?", (seq,))
+    conn.execute("DELETE FROM exchanges WHERE id = 'xch_1'")
+    assert conn.execute("SELECT id, exchange_id, hop FROM messages").fetchall() == [
+        ("msg_in", None, 1)
+    ]
+
+
+def test_messages_exchange_id_must_name_an_exchange(conn: sqlite3.Connection) -> None:
+    seq = _insert_message(conn, "msg_in")
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        conn.execute("UPDATE messages SET exchange_id = 'xch_missing' WHERE seq = ?", (seq,))
