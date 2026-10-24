@@ -11,6 +11,7 @@ from mlops_agents.workspace.refs import (
     https_url,
     parse_github_ref,
     path_key,
+    repo_ref,
 )
 
 
@@ -87,3 +88,9 @@ def test_github_remote_is_none_without_a_github_origin(origin: str | None) -> No
 
 def test_https_url() -> None:
     assert https_url(RepoRef(owner="octo", repo="demo")) == "https://github.com/octo/demo.git"
+
+
+def test_repo_ref() -> None:
+    ref = repo_ref("octo/demo")
+    assert ref == RepoRef(owner="octo", repo="demo")
+    assert https_url(ref) == "https://github.com/octo/demo.git"

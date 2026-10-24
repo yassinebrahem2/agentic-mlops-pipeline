@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance } from "vitest";
 import { renderPage } from "@/test/render";
@@ -34,16 +34,27 @@ describe("AgentsPage", () => {
   };
 
   it("keeps the message scroller between the header and composer", async () => {
-    setupDefaultMocks();
+    setupDefaultMocks({
+      agents: [
+        { name: "orchestrator", display_name: "Orchestrator", chat: true, settings: {} },
+        { name: "analyst", display_name: "Analyst", chat: true, settings: {} },
+      ],
+    });
     renderPage("/projects/prj_1/agents", { routes: testRoutes });
 
-    const input = await screen.findByRole("textbox", { name: "Message Orchestrator" });
+    const switcher = await screen.findByRole("combobox", { name: "Select agent" });
+    const input = screen.getByRole("textbox", { name: "Message Orchestrator" });
     const log = screen.getByRole("log", { name: "Messages" });
     const page = log.parentElement;
     expect(page).toHaveClass("flex", "h-full", "flex-col", "overflow-hidden");
     expect(log).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
     expect(page?.querySelectorAll(":scope > .overflow-y-auto")).toHaveLength(1);
-    expect(log.previousElementSibling).toBeInTheDocument();
+    expect(log.previousElementSibling).toContainElement(switcher);
+    expect(
+      within(log.previousElementSibling as HTMLElement).getByRole("combobox", {
+        name: "Select agent",
+      }),
+    ).toBe(switcher);
     expect(log.nextElementSibling).toContainElement(input);
   });
 
