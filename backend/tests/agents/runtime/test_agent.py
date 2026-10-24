@@ -72,12 +72,13 @@ async def _setup_services(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
 
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git)
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=git,
+        workspaces=workspaces,
     )
 
     prov = await providers_svc.create_provider(
@@ -109,7 +110,7 @@ async def test_agent_builder_missing_project_refusal(
     await _set_project_status(databases, project_id, status="missing", detail="Folder deleted")
 
     with pytest.raises(TurnRefused) as exc_info:
-        await builder.build(project_id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+        await builder.build(project_id, "orchestrator")
 
     assert exc_info.value.end == "failed"
     assert exc_info.value.text == "Folder deleted"
@@ -135,7 +136,7 @@ async def test_agent_builder_clone_failed_project_refusal(
     )
 
     with pytest.raises(TurnRefused) as exc_info:
-        await builder.build(project_id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+        await builder.build(project_id, "orchestrator")
 
     assert exc_info.value.end == "failed"
     assert exc_info.value.text == "Network error cloning repository"
@@ -156,7 +157,7 @@ async def test_agent_builder_empty_project_refusal(
     await _set_project_status(databases, project_id, status="empty", detail=None)
 
     with pytest.raises(TurnRefused) as exc_info:
-        await builder.build(project_id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+        await builder.build(project_id, "orchestrator")
 
     assert exc_info.value.end == "done"
     assert (
@@ -181,7 +182,7 @@ async def test_agent_builder_no_model_assigned_refusal(
     await settings_svc.set_default_model("orchestrator", None)
 
     with pytest.raises(TurnRefused) as exc_info:
-        await builder.build(project_id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+        await builder.build(project_id, "orchestrator")
 
     assert exc_info.value.end == "failed"
     assert "Choose a model" in exc_info.value.text
@@ -204,12 +205,13 @@ async def test_agent_builder_keystore_error_refusal(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
 
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git)
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=git,
+        workspaces=workspaces,
     )
 
     prov = await providers_svc.create_provider(
@@ -231,7 +233,7 @@ async def test_agent_builder_keystore_error_refusal(
     monkeypatch.setattr(keystore, "get", raise_keystore)
 
     with pytest.raises(TurnRefused) as exc_info:
-        await builder.build(project.id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+        await builder.build(project.id, "orchestrator")
 
     assert exc_info.value.end == "failed"
     assert "Keyring is locked" in exc_info.value.text
@@ -250,7 +252,7 @@ async def test_agent_builder_success(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
 
-    agent = await builder.build(project_id, "orchestrator", session_id="ses_t", turn_id="trn_t")
+    agent = await builder.build(project_id, "orchestrator")
 
     assert isinstance(agent, Agent)
     assert agent.definition.name == "orchestrator"
@@ -258,10 +260,7 @@ async def test_agent_builder_success(
     assert tuple(t.name for t in agent.tools) == agent.definition.tools
     assert agent.project.id == project_id
     assert "README.md" in agent.layout
-    assert agent.tool_context.files.root == workspace_svc.repo_root(agent.project)
-    context = agent.tool_context
-    assert (context.project_id, context.agent) == (project_id, "orchestrator")
-    assert (context.session_id, context.turn_id, context.task) == ("ses_t", "trn_t", None)
+    assert agent.files.root == workspace_svc.repo_root(agent.project)
     assert agent.model.wire_model_id == "fake-tools"
 
 
@@ -286,12 +285,13 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
 
     prov = await providers_svc.create_provider(
@@ -304,7 +304,7 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     project = await workspace_svc.add_local(str(repo_dir))
     await settings_svc.set_default_model("customagent", f"{prov.name}:fake-tools")
 
-    agent = await builder.build(project.id, "customagent", session_id="ses_t", turn_id="trn_t")
+    agent = await builder.build(project.id, "customagent")
     assert agent.definition.name == "customagent"
     assert tuple(t.name for t in agent.tools) == ("Read",)
 

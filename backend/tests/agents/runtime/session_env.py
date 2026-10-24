@@ -13,7 +13,14 @@ import httpx2
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import TurnEnded
-from mlops_agents.agents.runtime.hooks import TurnObserver
+from mlops_agents.agents.runtime.hooks import (
+    AllowAllGate,
+    Gate,
+    NoInbound,
+    NoTurnEndCheck,
+    RepositoryOnlyWorkspaces,
+    TurnObserver,
+)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -60,6 +67,7 @@ async def build_session_env(
     tools: ToolRegistry | None = None,
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
+    gate: Gate | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -82,7 +90,10 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        git=GitRunner(paths.bin),
+        gate=gate if gate is not None else AllowAllGate(),
+        inbound=NoInbound(),
+        turn_end=NoTurnEndCheck(),
+        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
     )

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import AbstractAsyncContextManager
-from typing import Annotated, Any, Protocol, TypedDict
+from dataclasses import dataclass
+from typing import Annotated, Any, NotRequired, Protocol, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+import aiosqlite
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.graph.message import add_messages  # pyright: ignore[reportMissingTypeStubs]
@@ -19,8 +22,12 @@ from mlops_agents.agents.runtime.contract import (
     ToolCallPart,
     ToolResultPart,
 )
+from mlops_agents.agents.runtime.hooks import Gate, GateDecision, InboundSource, TurnEndCheck
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.tool_step import ToolStep, needs_wait
+from mlops_agents.agents.tasks.contract import TaskWorkspaces
+from mlops_agents.agents.tools.base import Preview
 
 
 class TurnSink(Protocol):
@@ -34,6 +41,24 @@ class TurnState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     step_count: int
     stopped_reason: str | None
+    decisions: NotRequired[dict[str, GateDecision]]  # the gate's, for the step's tool calls
+    call_errors: NotRequired[dict[str, str]]  # the step's calls answered before the gate
+    turn_end_checked: NotRequired[bool]
+    end_note: NotRequired[str | None]  # for the next model request only, never a message
+
+
+@dataclass(frozen=True)
+class TurnHooks:
+    gate: Gate
+    inbound: InboundSource
+    turn_end: TurnEndCheck
+    workspaces: TaskWorkspaces
+
+
+def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
+    """A checkpointer that reads back LangChain's messages and the gate's types in the state."""
+    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview)]
+    return AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
 
 
 def format_invalid_tool_call_error(name: str, raw_args: str | None) -> str:
@@ -50,10 +75,12 @@ def create_turn_graph(
     store: SessionStore,
     sink: TurnSink,
     project_id: str,
+    session_id: str,
     turn_id: str,
     message_id: str,
     current_parts: list[Part],
     lock: AbstractAsyncContextManager[Any],
+    hooks: TurnHooks,
     checkpointer: AsyncSqliteSaver | None = None,
 ) -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
     """Build and compile the StateGraph for a single turn."""
@@ -80,6 +107,11 @@ def create_turn_graph(
                 "stopped_reason": "max_steps",
             }
 
+        inbound = await hooks.inbound.take(project_id, session_id, turn_id)
+        request = [*state["messages"], *inbound]
+        end_note = state.get("end_note")
+        if end_note:
+            request.append(HumanMessage(content=end_note))
         tool_schemas = [t.schema() for t in agent.tools]
 
         streamed_chunks: list[str] = []
@@ -91,7 +123,7 @@ def create_turn_graph(
 
         t0 = time.monotonic()
         try:
-            reply = await caller.call(agent.model, state["messages"], tool_schemas, on_text)
+            reply = await caller.call(agent.model, request, tool_schemas, on_text)
         except (Exception, asyncio.CancelledError):
             if streamed_chunks:
                 partial_text = "".join(streamed_chunks)
@@ -183,77 +215,59 @@ def create_turn_graph(
         await _update_parts()
 
         return {
-            "messages": [new_message],
+            "messages": [*inbound, new_message],
             "step_count": step_count + 1,
+            "end_note": None,
         }
 
-    async def tools_node(state: TurnState) -> dict[str, Any]:
-        last_msg = state["messages"][-1]
-        if not isinstance(last_msg, AIMessage):
-            return {}
+    step = ToolStep(
+        agent=agent,
+        gate=hooks.gate,
+        workspaces=hooks.workspaces,
+        sink=sink,
+        project_id=project_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        message_id=message_id,
+        current_parts=current_parts,
+        lock=lock,
+        update_parts=_update_parts,
+    )
 
-        all_calls = list(last_msg.tool_calls)
-        if not all_calls:
-            return {}
-
-        tool_errors = dict(last_msg.additional_kwargs.get("tool_errors") or {})
-        tool_messages: list[BaseMessage] = []
-        for tc in all_calls:
-            call_id = str(tc["id"])
-            name = str(tc["name"])
-            args = dict(tc["args"])
-
-            if call_id in tool_errors:
-                result_part = ToolResultPart(
-                    type="tool_result",
-                    tool_call_id=call_id,
-                    content=tool_errors[call_id],
-                    is_error=True,
-                )
-            else:
-                # Look up tool only in agent.tools, never in the registry
-                tool = next((t for t in agent.tools if t.name == name), None)
-                if tool is not None:
-                    output = await tool.invoke(agent.tool_context, args)
-                    result_part = ToolResultPart(
-                        type="tool_result",
-                        tool_call_id=call_id,
-                        content=output.content,
-                        is_error=output.is_error,
-                    )
-                else:
-                    result_part = ToolResultPart(
-                        type="tool_result",
-                        tool_call_id=call_id,
-                        content=f"There is no tool named {name}.",
-                        is_error=True,
-                    )
-
-            async with lock:
-                await sink.tool_finished(message_id, result_part)
-            current_parts.append(result_part)
-            tool_messages.append(ToolMessage(tool_call_id=call_id, content=result_part.content))
-
-        await _update_parts()
-
-        return {
-            "messages": tool_messages,
-        }
+    async def turn_end_node(state: TurnState) -> dict[str, Any]:
+        note = await hooks.turn_end.note(project_id, session_id, turn_id)
+        return {"turn_end_checked": True, "end_note": note}
 
     def route_model(state: TurnState) -> str:
         if state.get("stopped_reason"):
             return END
         last_msg = state["messages"][-1]
         if isinstance(last_msg, AIMessage) and bool(last_msg.tool_calls):
-            return "tools"
+            return "decide"
+        if not state.get("turn_end_checked"):
+            return "turn_end"
         return END
+
+    def route_decide(state: TurnState) -> str:
+        return "wait" if needs_wait(state) else "tools"
+
+    def route_turn_end(state: TurnState) -> str:
+        return "model" if state.get("end_note") else END
 
     graph_builder = StateGraph(TurnState)
     graph_builder.add_node("model", model_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
-    graph_builder.add_node("tools", tools_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("decide", step.decide)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("wait", step.wait)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("tools", step.run)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("turn_end", turn_end_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_edge(START, "model")
-    graph_builder.add_conditional_edges("model", route_model, {"tools": "tools", END: END})
+    graph_builder.add_conditional_edges(
+        "model", route_model, {"decide": "decide", "turn_end": "turn_end", END: END}
+    )
+    graph_builder.add_conditional_edges("decide", route_decide, {"wait": "wait", "tools": "tools"})
+    graph_builder.add_edge("wait", "tools")
     graph_builder.add_edge("tools", "model")
+    graph_builder.add_conditional_edges("turn_end", route_turn_end, {"model": "model", END: END})
 
     if checkpointer is not None:
         return graph_builder.compile(checkpointer=checkpointer)  # pyright: ignore[reportUnknownMemberType]  # LangGraph compile parameters are partially untyped
