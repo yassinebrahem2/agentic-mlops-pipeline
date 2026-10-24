@@ -157,26 +157,47 @@ class TurnWorkers:
         hub: SessionHub,
         lock: AsyncRLock,
     ) -> None:
-        await self._store.set_turn(project_id, turn_id, "running")
         try:
+            await self._store.set_turn(project_id, turn_id, "running")
             await self._turn_started(project_id, agent, turn_id)
             await self._settle_trigger(
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=True
             )
             ended = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
         except asyncio.CancelledError:
-            # The turn started, so it is reported ended, also when the cancel came first.
-            await self._store.set_turn(project_id, turn_id, "interrupted")
-            await self._store.mark_interrupted(project_id, turn_id)
-            # A cancel before the trigger was read would leave it queued for good.
-            await self._settle_trigger(
-                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
+            # The turn was taken, so it is reported ended, also when the cancel came first.
+            await self._end_interrupted(
+                project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock
             )
-            await self._turn_ended(project_id, session_id, agent, turn_id, "interrupted")
             raise
         # The observers hear of the end after the turn's own handling, so a cancel that
         # lands in an observer never rewrites how the turn ended, nor reports it twice.
         await self._turn_ended(project_id, session_id, agent, turn_id, ended)
+
+    @shielded
+    async def _end_interrupted(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        trigger_msg_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> None:
+        """Leave an interrupted turn's end state and report it, whole: a further cancel of the
+        worker (close racing close_project) waits for it instead of cutting it short.
+
+        It runs in its own task, so the session lock it takes must be free of the worker: every
+        `async with lock` of the worker has exited by the time a cancel reaches `_take_turn`.
+        """
+        await self._store.set_turn(project_id, turn_id, "interrupted")
+        await self._store.mark_interrupted(project_id, turn_id)
+        # A cancel before the trigger was read would leave it queued for good.
+        await self._settle_trigger(
+            project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
+        )
+        await self._turn_ended(project_id, session_id, agent, turn_id, "interrupted")
 
     async def _settle_trigger(
         self,
