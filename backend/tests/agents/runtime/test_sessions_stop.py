@@ -15,6 +15,7 @@ from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolOutput
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.observer_fakes import HeldObserver
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
@@ -152,5 +153,51 @@ async def test_stop_during_slow_tool(
     evs = await collect_until_turn_ended(sub)
     assert isinstance(evs[-1], TurnEnded)
     assert evs[-1].data.status == "done"
+
+    await manager.close()
+
+
+async def test_stop_while_a_turn_started_observer_runs_stops_the_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    held = HeldObserver()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[held],
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    await asyncio.wait_for(held.entered.wait(), timeout=5)
+    requests_before = len(fake_openai.state.requests)
+    # The turn has started but its observers have not returned yet.
+    await manager.stop(env.project_id, "orchestrator")
+    held.release.set()
+
+    stopped = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(stopped, TurnEnded)
+    assert stopped.data.status == "stopped"
+    assert await asyncio.wait_for(held.ended.get(), timeout=5) == "stopped"
+    assert len(fake_openai.state.requests) == requests_before
+
+    # The session goes on: the next turn runs to its end.
+    await manager.send(env.project_id, "orchestrator", "Check readme again")
+    after = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(after, TurnEnded)
+    assert after.data.status == "done"
 
     await manager.close()
