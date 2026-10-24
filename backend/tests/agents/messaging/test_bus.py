@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import func, insert, select
 
 from mlops_agents.agents.messaging.contract import MessageLimitReached
 from mlops_agents.agents.messaging.settings import MessagingLimits
 from mlops_agents.errors import DomainError
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import llm_calls
+from mlops_agents.storage.tables import exchanges, llm_calls
 from tests.agents.messaging.bus_env import BusEnv
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.agents.runtime.session_rows import message_row
@@ -146,3 +146,19 @@ async def test_sending_records_a_message_sent_event(bus_env: BusEnv) -> None:
     assert record.payload["recipient"] == "beta"
     assert record.payload["hop"] == 1
     assert str(record.payload["exchange_id"]).startswith("xch_")
+
+
+async def test_a_refused_post_leaves_no_exchange_behind(
+    bus_env: BusEnv, databases: Databases
+) -> None:
+    project_id = bus_env.session.project_id
+
+    with pytest.raises(DomainError) as refused:
+        await bus_env.bus.send(
+            project_id, sender="alpha", sender_turn_id=NO_TURN, to="beta", text="   "
+        )
+
+    assert refused.value.code == "message_empty"
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        assert (await conn.scalar(select(func.count()).select_from(exchanges))) == 0

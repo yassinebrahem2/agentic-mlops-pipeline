@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import httpx2
 from fastapi import FastAPI
 
+from mlops_agents.agents.tools.base import FileAccess, ToolContext
 from tests.api.conftest import add_local_project
 
 
@@ -45,3 +47,22 @@ async def test_messaging_settings_of_an_unknown_project_are_not_found(
     res = await client.get("/api/projects/prj_missing/settings/messaging")
 
     assert res.status_code == 404
+
+
+async def test_the_app_wires_send_message_to_a_bound_bus_with_the_catalog(app: FastAPI) -> None:
+    tool = app.state.services.tools.get("SendMessage")
+    assert tool is not None
+    ctx = ToolContext(
+        project_id="prj_any",
+        agent="orchestrator",
+        session_id="ses_any",
+        turn_id="trn_any",
+        files=cast(FileAccess, object()),
+        task=None,
+    )
+
+    out = await tool.invoke(ctx, {"to": "orchestrator", "message": "x"})
+
+    # An unbound bus or one without the catalog raises; a wired one refuses by can_message.
+    assert out.is_error
+    assert "may not message" in out.content

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mlops_agents.agents.catalog import AgentCatalog
@@ -93,20 +93,29 @@ class SqliteMessageBus(MessageBus):
                         "report to the user instead."
                     )
 
+        created = exchange_id is None
         if exchange_id is None:
             exchange_id = new_id("xch")
             async with engine.begin() as conn:
                 await conn.execute(insert(exchanges).values(id=exchange_id, created_at=now_iso()))
 
-        posted = await sessions.post(
-            project_id,
-            to,
-            author_name=sender_definition.display_name,
-            from_agent=sender,
-            text=text,
-            exchange_id=exchange_id,
-            hop=hop,
-        )
+        try:
+            posted = await sessions.post(
+                project_id,
+                to,
+                author_name=sender_definition.display_name,
+                from_agent=sender,
+                text=text,
+                exchange_id=exchange_id,
+                hop=hop,
+            )
+        except DomainError:
+            # post refuses an empty text or a recipient that cannot chat: no message holds the
+            # new exchange, so it is not left behind.
+            if created:
+                async with engine.begin() as conn:
+                    await conn.execute(delete(exchanges).where(exchanges.c.id == exchange_id))
+            raise
         await self._events.record(
             project_id,
             source=sender,
