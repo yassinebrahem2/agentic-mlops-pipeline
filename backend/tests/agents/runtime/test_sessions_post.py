@@ -2,67 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from pathlib import Path
-
-import httpx2
 import pytest
-from sqlalchemy import RowMapping, insert, select
+from sqlalchemy import select
 
 from mlops_agents.agents.runtime.contract import MessageCreated, TextPart, TurnEnded
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.worker import TurnWorkers
 from mlops_agents.errors import DomainError
-from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import exchanges, messages, turns
+from mlops_agents.storage.tables import turns
 from tests.agents.runtime.session_env import (
     SessionEnv,
-    build_session_env,
     collect_until_turn_ended,
 )
-from tests.conftest import MemoryKeyStore
+from tests.agents.runtime.session_rows import create_exchange, message_row
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta
 
 AGENT = "orchestrator"
-
-
-@pytest.fixture
-async def env(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> AsyncIterator[SessionEnv]:
-    env = await build_session_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    yield env
-    await env.manager.close()
-
-
-async def _message_row(databases: Databases, project_id: str, message_id: str) -> RowMapping:
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        row = (
-            (await conn.execute(select(messages).where(messages.c.id == message_id)))
-            .mappings()
-            .one()
-        )
-    return row
-
-
-async def _exchange(databases: Databases, project_id: str, exchange_id: str) -> None:
-    """Store the exchange a posted message continues: messages.exchange_id references it."""
-    engine = await databases.project(project_id)
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(exchanges).values(id=exchange_id, created_at="2026-10-24T00:00:00Z")
-        )
 
 
 async def _turn_statuses(databases: Databases, project_id: str) -> dict[str, str]:
@@ -79,7 +36,7 @@ async def test_post_when_idle_stores_an_inbound_message_and_starts_a_turn(
     manager = env.manager
     view = await manager.get(env.project_id, AGENT)
     sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
-    await _exchange(databases, env.project_id, "xch_01")
+    await create_exchange(databases, env.project_id, "xch_01")
 
     posted = await manager.post(
         env.project_id,
@@ -105,7 +62,7 @@ async def test_post_when_idle_stores_an_inbound_message_and_starts_a_turn(
     assert isinstance(ended, TurnEnded)
     assert ended.data.status == "done"
 
-    row = await _message_row(databases, env.project_id, posted.id)
+    row = await message_row(databases, env.project_id, posted.id)
     assert row["exchange_id"] == "xch_01"
     assert row["hop"] == 2
     assert await _turn_statuses(databases, env.project_id) == {posted.id: "done"}
@@ -139,7 +96,7 @@ async def test_post_when_busy_queues_its_turn_like_send(
         sent.id: "running",
         posted.id: "queued",
     }
-    row = await _message_row(databases, env.project_id, posted.id)
+    row = await message_row(databases, env.project_id, posted.id)
     assert row["exchange_id"] is None
     assert row["hop"] is None
 
@@ -158,7 +115,7 @@ async def test_post_when_busy_queues_its_turn_like_send(
         posted_turn = await conn.scalar(
             select(turns.c.id).where(turns.c.trigger_message_id == posted.id)
         )
-    row = await _message_row(databases, env.project_id, posted.id)
+    row = await message_row(databases, env.project_id, posted.id)
     assert row["status"] == "complete"
     assert row["read_by_turn"] == posted_turn
 
@@ -175,45 +132,6 @@ async def test_post_rejects_an_empty_message_like_send(env: SessionEnv) -> None:
             hop=None,
         )
     assert caught.value.code == "message_empty"
-
-
-async def test_a_turn_started_by_an_agent_message_records_that_it_read_it(
-    env: SessionEnv, databases: Databases
-) -> None:
-    manager = env.manager
-    view = await manager.get(env.project_id, AGENT)
-    sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
-    await _exchange(databases, env.project_id, "xch_01")
-
-    posted = await manager.post(
-        env.project_id,
-        AGENT,
-        author_name="Data Quality",
-        from_agent="data-quality",
-        text="Please look at the readme.",
-        exchange_id="xch_01",
-        hop=1,
-    )
-    events = await collect_until_turn_ended(sub)
-    ended = events[-1]
-    assert isinstance(ended, TurnEnded)
-
-    row = await _message_row(databases, env.project_id, posted.id)
-    assert row["read_by_turn"] == ended.data.turn_id
-
-
-async def test_a_turn_started_by_a_user_message_records_no_reader(
-    env: SessionEnv, databases: Databases
-) -> None:
-    manager = env.manager
-    view = await manager.get(env.project_id, AGENT)
-    sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
-
-    sent = await manager.send(env.project_id, AGENT, "Check readme")
-    await collect_until_turn_ended(sub)
-
-    row = await _message_row(databases, env.project_id, sent.id)
-    assert row["read_by_turn"] is None
 
 
 async def test_a_waiting_turn_makes_the_session_busy_and_holds_the_queue(

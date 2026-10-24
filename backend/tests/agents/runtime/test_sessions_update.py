@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
-from pathlib import Path
+from collections.abc import Callable, Sequence
 
-import httpx2
 import pytest
 
 from mlops_agents.agents.runtime.contract import (
@@ -20,30 +18,9 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools.base import Preview
-from mlops_agents.paths import DataPaths
-from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import SessionEnv, build_session_env
-from tests.conftest import MemoryKeyStore
-from tests.fakes.fake_openai import RunningFake
+from tests.agents.runtime.session_env import SessionEnv
 
 AGENT = "orchestrator"
-
-
-@pytest.fixture
-async def env(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> AsyncIterator[SessionEnv]:
-    env = await build_session_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    yield env
-    await env.manager.close()
 
 
 def _approval(approval_id: str, status: ApprovalStatus = "pending") -> ApprovalPart:
