@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
 import { useModels } from "@/lib/useModels";
+import { useRemoteModels } from "@/lib/useRemoteModels";
 
 type ModelEntry = components["schemas"]["ModelEntry"];
 
@@ -126,7 +127,7 @@ function ModelRow({ model }: { model: ModelEntry }) {
 
   return (
     <TableRow>
-      <TableCell aria-label={model.address} className="font-mono">
+      <TableCell className="font-mono">
         <div className="flex items-center gap-2">
           {model.problem && (
             <span
@@ -196,27 +197,11 @@ function SetContextWindowDialog({ model }: { model: ModelEntry }) {
   const [value, setValue] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  const remote = useQuery({
-    queryKey: ["remote-models", model.provider_name],
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/api/providers/{name}/remote-models", {
-          params: { path: { name: model.provider_name } },
-        }),
-      ),
-    enabled: open && Boolean(model.provider_name),
-  });
+  const remote = useRemoteModels(model.provider_name, { enabled: open });
 
   useEffect(() => {
-    if (!open) {
-      setDirty(false);
-      setValue("");
-      return;
-    }
-    const matchId = (id: string) => id.replace(/^models\//, "");
-    const listed = remote.data?.find(
-      (m) => m.id === model.wire_model_id || matchId(m.id) === matchId(model.wire_model_id),
-    )?.context_window;
+    if (!open) return;
+    const listed = remote.data?.find((m) => m.id === model.wire_model_id)?.context_window;
     if (!dirty && listed !== null && listed !== undefined) {
       setValue(String(listed));
     }

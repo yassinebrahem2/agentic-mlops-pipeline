@@ -129,9 +129,9 @@ async def test_gemini_shaped_provider_reads_native_listing(make_service: MakeSer
 
     remote = await svc.list_remote_models("gemini")
     assert [(m.id, m.context_window) for m in remote] == [
+        ("gemini-1.5-flash", 1048576),
         ("gemini-1.5-pro", 2097152),
         ("gemini-unknown", None),
-        ("models/gemini-1.5-flash", 1048576),
     ]
 
     # Check requests made: key never in URL

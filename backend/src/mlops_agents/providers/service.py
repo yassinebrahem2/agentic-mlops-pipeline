@@ -16,7 +16,6 @@ from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.providers import listing
 from mlops_agents.providers.errors import ProviderCallError
-from mlops_agents.providers.listing import match_model_id
 from mlops_agents.providers.models import (
     DetectedKey,
     KeyHint,
@@ -274,7 +273,9 @@ class ProvidersService:
                 remote = await self.list_remote_models(provider.name)
             except DomainError:
                 remote = []  # the listing is only a convenience; the user can enter it later
-            context = next((m.context_window for m in remote if match_model_id(m.id, wire)), None)
+            context = next(
+                (m.context_window for m in remote if listing.match_model_id(m.id, wire)), None
+            )
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(

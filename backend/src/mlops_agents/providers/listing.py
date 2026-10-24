@@ -45,9 +45,6 @@ class ListedModel(BaseModel):
         return None
 
 
-_ListedModel = ListedModel
-
-
 class _ModelList(BaseModel):
     data: list[object]
 
@@ -173,12 +170,20 @@ async def list_remote_models(
         ) from None
 
     found: list[RemoteModel] = []
+    seen_ids: set[str] = set()
     for item in listing.data:
         try:
-            listed = _ListedModel.model_validate(item)
+            listed = ListedModel.model_validate(item)
         except ValidationError:
             continue
-        found.append(RemoteModel(id=listed.id, context_window=listed.context()))
+        norm_id = normalize_model_id(listed.id)
+        if norm_id in seen_ids:
+            existing = next(m for m in found if m.id == norm_id)
+            if existing.context_window is None and listed.context() is not None:
+                existing.context_window = listed.context()
+            continue
+        seen_ids.add(norm_id)
+        found.append(RemoteModel(id=norm_id, context_window=listed.context()))
 
     if is_gemini_shaped(provider.base_url):
         native_windows = await fetch_gemini_native_windows(

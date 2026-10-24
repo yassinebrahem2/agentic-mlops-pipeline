@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 async function findRow(address: string): Promise<HTMLElement> {
-  const cell = await screen.findByRole("cell", { name: address });
+  const cell = await screen.findByRole("cell", { name: (n) => n.includes(address) });
   const row = cell.closest("tr");
   if (!row) throw new Error(`No row for ${address}`);
   return row;
@@ -335,7 +335,9 @@ describe("models table", () => {
     await user.click(within(row).getByRole("button", { name: "Remove groq:openai/gpt-oss-120b" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("cell", { name: "groq:openai/gpt-oss-120b" })).toBeNull();
+      expect(
+        screen.queryByRole("cell", { name: (n) => n.includes("groq:openai/gpt-oss-120b") }),
+      ).toBeNull();
     });
     const removal = writes(sent);
     expect(removal).toHaveLength(1);
