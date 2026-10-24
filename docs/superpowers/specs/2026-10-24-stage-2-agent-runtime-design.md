@@ -84,11 +84,11 @@ A **task** is one piece of code work by one agent. ID prefix `tsk`. It has:
 **Current task.** A session has at most one current task. Write, Edit and Bash act on it. Read, Glob and Grep read the current task's worktree, or the repository when there is none.
 - `StartTask(title)` creates a task and makes it current. It is refused while the current task has changes in no PR or review; the agent must open one first, or ask the user to discard the task.
 - Both have risk class `write_code`: they create branches and worktrees.
-- `ResumeTask(task_id)` makes an earlier `active` or `in_review` task of the same agent current again, for example to answer review comments.
+- `ResumeTask(task_id)` makes an earlier `active` or `in_review` task of the same agent current again, for example to answer review comments. An unknown id, or a task of another agent, is a tool error; nothing is substituted.
 - Write, Edit or Bash with no current task returns a tool error: "Start a task first with StartTask."
 
 **Creating the worktree:**
-- The base is `origin/<default branch>` for GitHub projects (the managed clone is fetched first). For local projects it is the local default branch's commit.
+- The base is `origin/<default branch>`, fetched first, for every project that has a GitHub link (§6): a GitHub project's managed clone, or a local project whose `origin` is on github.com. A PR then holds only the task's changes, never the user's unpushed commits. A local project without a GitHub remote bases on its local default branch's commit.
 - The steps:
   1. `git worktree add -b <branch> <path> <base>`;
   2. `git update-index --skip-worktree` on every tracked file matching the secret denylist;
@@ -117,7 +117,7 @@ One function in `agents/tasks/` builds these arguments; no other code runs git o
 **Ending a task:**
 - At the start of every turn and when the Inbox opens, the runtime reads the state of the open tasks' PRs from GitHub.
 - A merged or closed PR ends the task. Its container and worktree are removed (`git worktree remove`), and its local branch is deleted once merged.
-- The user can discard a task from the task bar. That removes the worktree, container, branch and claims after a confirmation; an open PR is left alone.
+- The user can discard a task from the task bar. That removes the worktree, container, branch and claims after a confirmation; an open PR is left alone. Discard is refused while that agent's turn is running or waiting; the user stops it first.
 
 ## 3. File tools
 
@@ -130,7 +130,8 @@ Both have risk class `write_code`.
 - Paths resolve inside the current task's worktree, with the stage 1 rules (no `..`, no symlink escapes). A denylisted name is refused.
 - Edit, and Write over an existing file, need the file's content to match a hash recorded when the agent last Read it in this task. That also catches changes Bash or another tool made since. Otherwise the tool error is "Read <path> first" or "<path> changed since you read it". An approved Write or Edit checks again when it runs, so a file that changed while waiting for approval fails rather than being overwritten.
 - Edit fails when `old_string` is missing, or appears more than once without `replace_all`, saying which.
-- Line endings and encoding are kept: UTF-8, and a file's existing CRLF or LF.
+- Line endings and encoding are kept: UTF-8, and a file's existing CRLF or LF. Files are written as bytes, so the platform never translates line endings.
+- The final open does not follow symlinks (Bash can create them), and the resolved path is checked again at open time.
 - Both tools compute their change as a unified diff first. That diff is the approval preview (§5) and the tool's success output, capped like Bash output.
 
 ## 4. Sandbox and Bash
@@ -168,7 +169,7 @@ Both have risk class `write_code`.
 - `Bash(command, timeout?, description?)`, risk class `run`.
 - It runs `bash -lc <command>` in the task's container.
 - The timeout defaults to 120 s, at most 600 s. A timeout restarts the container, which ends every process; the worktree is kept.
-- The output is stdout and stderr combined, plus the exit code. Above 30,000 characters the middle is cut, with a note saying so.
+- The output is stdout and stderr combined, plus the exit code. A non-zero exit is a normal result, not a tool error. Capture is bounded while the command runs (the first and last 15,000 characters are kept), so a runaway command cannot exhaust memory, and the cut is noted.
 - Git does not work inside the sandbox: the worktree's `.git` file points to a host path. The definitions tell agents to use the task tools for git work.
 
 ## 5. Permissions and approvals
@@ -193,6 +194,8 @@ Both have risk class `write_code`.
 **The gate.** The turn graph becomes:
 - model → gate → tools → model, and the end of a turn goes through the PR reminder (§6).
 - The gate is its own node, because LangGraph re-runs a resumed node from its start. A node with side effects before its pause would repeat them.
+- Arguments are validated against the tool's pydantic model before the gate, so a malformed call gets its tool error and never becomes an approval request. The same model produces the tool's schema.
+- Tool calls of a step run one after another, never in parallel.
 - For each tool call of the step, the gate decides allow, deny or ask, and writes one audit record per decision, keyed by the tool-call id so a re-run adds none.
 - For the asks, it creates approval requests: ID `apr`, keyed by the tool-call id, so a re-run finds them instead of duplicating them. Each carries the tool's preview:
   - the diff for Write and Edit;
@@ -220,7 +223,8 @@ Both have risk class `write_code`.
 ## 6. Pull requests, issues and the end-of-turn reminder
 
 **GitHub link:**
-- A project can use GitHub when it is a GitHub project, or a local project whose `origin` is a github.com repository, and the GitHub integration is set.
+- A project can use GitHub when it is a GitHub project, or a local project whose `origin` is a github.com repository, and the GitHub integration is set. Without a link, OpenIssue, CommentOnIssue and SearchIssues return a tool error saying so, and OpenPullRequest opens a local review.
+- Pushing, PRs, labels and issues need the token to have contents, pull-requests and issues write access. A GitHub refusal for lack of permission becomes a tool error naming the missing permission, and the Integrations page lists the permissions needed.
 - Tokens reach git only through stage 1's `GIT_ASKPASS` runner.
 
 **Committing** (one function, used by OpenPullRequest and local review):
@@ -278,7 +282,7 @@ Both have risk class `write_code`.
 - Policy still applies to the recipient's own actions: a message never raises anyone's permissions.
 
 **ScheduleWakeup(delay_seconds, note)**, risk class `message`, for agents whose definition has `schedules: true`:
-- It stores a wake-up (ID `wak`, at most 5 pending per agent, delay from 60 s to 7 days).
+- It stores a wake-up (ID `wak`, at most 5 pending per agent, delay from 60 s to 7 days). At most 24 wake-ups fire per agent per day; past that, ScheduleWakeup returns a tool error, so an agent cannot keep itself running alone.
 - When it is due, a system-labeled message "Scheduled wake-up: <note>" is delivered to the agent's own session, by the delivery rules above.
 - One in-process timer waits for the next due wake-up. Wake-ups due during downtime fire at startup.
 - The lead's decision: scheduled work runs in the agent's one session, labeled with its source.
@@ -300,7 +304,7 @@ Both have risk class `write_code`.
 
 **Audit:**
 - Records follow the roadmap's audit record (ID `aud`): every gate decision, every user decision on an approval, and every action of a `write_code`, `run` or `github` tool that ran.
-- One owner, `AuditLog.record(...)`. Stage 6's Activity page reads them; stage 2 writes them.
+- One owner, `AuditLog.record(...)`. Stored arguments are scrubbed of secrets and capped (4,000 characters per value). Stage 6's Activity page reads them; stage 2 writes them.
 
 **Status board:**
 - One function derives each agent's state from the events and the live sessions:
@@ -377,7 +381,7 @@ Made in `docs/roadmap.md` before any plan is issued:
 
 - Every tool failure is a tool result the model reads, never the end of a turn. That covers Docker missing, a failed build, GitHub not linked, a claim conflict, a denylisted path, a denial and a rejection.
 - Secrets never reach a container, an image, a commit, a log or an error. Git output and GitHub errors are scrubbed as in stage 1.
-- A worktree or container found broken at turn start (deleted by hand, Docker restarted) is recreated from the task's branch. The agent is told in a system note.
+- A worktree found broken at turn start (deleted by hand) is recreated from the task's branch, losing uncommitted changes. A container found gone (Docker restarted) is recreated on the same worktree, which keeps the files but not running processes. The agent is told in a system note either way.
 
 ## 13. Testing
 
@@ -414,6 +418,13 @@ Made in `docs/roadmap.md` before any plan is issued:
 - Two agents can message each other, mid-turn, within the limits, and the Orchestrator's status board shows what each is doing.
 - A turn waiting for approval survives an app restart and resumes when approved.
 - On a machine without Docker, everything except Bash works and Bash explains why.
+
+## Build order
+
+Everything in this spec ships in stage 2. Plans are ordered so the core lands first and the others build on it in parallel:
+1. Contracts: `ToolContext` v2, the I1 additions, the event and audit records, the policy table, and the migration numbers.
+2. In parallel: tasks and worktrees with Write and Edit; the sandbox with Bash; the gate and approvals; events, audit and the status board; GitHub PRs and issues; messaging and wake-ups.
+3. Then: the seven definitions, the agents page, the Inbox and the settings sections.
 
 ## Open questions for the lead
 
