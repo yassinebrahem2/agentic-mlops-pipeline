@@ -8,7 +8,8 @@ from fastapi import FastAPI
 
 from mlops_agents.integrations.github.auth import GITHUB_KEYSTORE_REF, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
-from mlops_agents.workspace.service import WorkspaceService, github_https_url
+from mlops_agents.workspace.refs import https_url, repo_ref
+from mlops_agents.workspace.service import WorkspaceService
 from tests.api.conftest import NoGh
 from tests.conftest import make_repo
 
@@ -58,7 +59,7 @@ def _setup_mock_github(app: FastAPI, ctx: MockGitHubContext) -> None:
     def remote_url(full_name: str) -> str:
         if bare is not None:
             return bare.as_uri()
-        return github_https_url(full_name)
+        return https_url(repo_ref(full_name))
 
     workspace = WorkspaceService(
         services.settings,

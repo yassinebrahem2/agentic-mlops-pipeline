@@ -60,6 +60,29 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
 
+  it("shows Stop when busy even if composer holds only whitespace", async () => {
+    const user = userEvent.setup();
+    const { props } = renderComposer({ busy: true });
+    const textbox = screen.getByRole("textbox");
+
+    await user.type(textbox, "   ");
+    let stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).toBeEnabled();
+    expect(stop.querySelector("svg")).toHaveClass("lucide-square");
+    await user.click(stop);
+    expect(props.onStop).toHaveBeenCalledOnce();
+
+    await user.type(textbox, "{Shift>}{Enter}{/Shift}");
+    stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).toBeEnabled();
+    expect(stop.querySelector("svg")).toHaveClass("lucide-square");
+
+    await user.type(textbox, "a");
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toBeEnabled();
+    expect(send.querySelector("svg")).toHaveClass("lucide-send");
+  });
+
   it("keeps Shift+Enter as a newline and Enter as send", async () => {
     const user = userEvent.setup();
     const { props } = renderComposer();

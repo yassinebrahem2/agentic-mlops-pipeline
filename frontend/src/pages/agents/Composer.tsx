@@ -20,8 +20,9 @@ export function Composer({ agentDisplayName, busy, onSend, onStop, className }: 
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  const canSend = text.trim().length > 0 && !sending;
-  const showStop = busy && text.length === 0;
+  const trimmed = text.trim();
+  const canSend = trimmed.length > 0 && !sending;
+  const showStop = busy && trimmed.length === 0;
 
   const handleSend = async () => {
     if (!canSend) return;
