@@ -4,40 +4,9 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { components } from "@/api/schema";
+import { project, stubProjects } from "../test/projects";
 import { useProjects } from "./useProjects";
 import { resetCurrentProjectStore, useCurrentProject } from "./useCurrentProject";
-
-type Project = components["schemas"]["Project"];
-
-function project(id: string, lastOpenedAt: string | null): Project {
-  return {
-    id,
-    name: `Name ${id}`,
-    source: "local",
-    status: "ok",
-    status_detail: null,
-    created_at: "2026-10-01T10:00:00Z",
-    last_opened_at: lastOpenedAt,
-    local_path: `/w/${id}`,
-    github_full_name: null,
-    default_branch: "main",
-  };
-}
-
-function stubProjects(projects: Project[]) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(JSON.stringify(projects), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ),
-  );
-}
 
 let navigateTo: (path: string) => void = () => undefined;
 
@@ -66,8 +35,8 @@ function wrapperAt(path: string) {
   };
 }
 
-const A = project("prj_a", "2026-10-10T10:00:00Z");
-const B = project("prj_b", "2026-10-20T10:00:00Z");
+const A = project("prj_a", "Alpha", "2026-10-10T10:00:00Z");
+const B = project("prj_b", "Beta", "2026-10-20T10:00:00Z");
 
 describe("useCurrentProject", () => {
   beforeEach(() => {
@@ -113,7 +82,7 @@ describe("useCurrentProject", () => {
   });
 
   it("is undefined when no project was ever opened", async () => {
-    stubProjects([project("prj_c", null)]);
+    stubProjects([project("prj_c", "Gamma", null)]);
     const { result } = renderHook(() => ({ current: useCurrentProject(), list: useProjects() }), {
       wrapper: wrapperAt("/providers"),
     });

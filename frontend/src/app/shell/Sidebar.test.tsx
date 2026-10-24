@@ -1,27 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { components } from "@/api/schema";
 import type { PageRoute } from "@/app/routes";
 import { resetCurrentProjectStore } from "@/lib/useCurrentProject";
+import { project, stubProjects } from "@/test/projects";
 import { renderPage } from "@/test/render";
-
-type Project = components["schemas"]["Project"];
-
-function project(id: string, name: string, lastOpenedAt: string | null): Project {
-  return {
-    id,
-    name,
-    source: "local",
-    status: "ok",
-    status_detail: null,
-    created_at: "2026-10-01T10:00:00Z",
-    last_opened_at: lastOpenedAt,
-    local_path: `/w/${id}`,
-    github_full_name: null,
-    default_branch: "main",
-  };
-}
 
 const routes: PageRoute[] = [
   { path: "/", element: <div>Home</div>, nav: { area: "app", label: "Projects", order: 0 } },
@@ -36,20 +19,6 @@ const routes: PageRoute[] = [
     nav: { area: "project", label: "Agents", order: 1 },
   },
 ];
-
-function stubProjects(projects: Project[]) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(JSON.stringify(projects), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ),
-  );
-}
 
 // The shell renders the sidebar twice (narrow dialog and wide column); the wide one is always mounted.
 function sidebar() {
@@ -117,10 +86,21 @@ describe("Sidebar current project", () => {
     const trigger = await sidebar().findByRole("button", { name: longName });
     expect(trigger.className).not.toContain("max-w-[130px]");
     expect(trigger).toHaveClass("w-full", "h-9");
+    expect(sidebar().getByRole("heading", { level: 1 }).parentElement).toHaveClass("flex-col");
     const heading = sidebar().getByRole("heading", { level: 1 });
     expect(heading.parentElement).toBe(trigger.parentElement);
     expect(
       heading.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("makes the dropdown as wide as the trigger", async () => {
+    const user = userEvent.setup();
+    stubProjects([project("prj_a", "Alpha", "2026-10-10T10:00:00Z")]);
+    renderPage("/providers", { routes });
+
+    await user.click(await sidebar().findByRole("button", { name: "Alpha" }));
+
+    expect(await screen.findByRole("menu")).toHaveClass("w-(--radix-dropdown-menu-trigger-width)");
   });
 });

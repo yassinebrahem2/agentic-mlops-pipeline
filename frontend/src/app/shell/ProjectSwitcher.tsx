@@ -51,9 +51,8 @@ export function ProjectSwitcher({
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
-          size="sm"
           aria-label={label}
-          className={cn("h-9 w-full justify-between px-3 text-sm font-normal", className)}
+          className={cn("w-full justify-between font-normal", className)}
         >
           <span className="truncate">{label}</span>
           <ChevronsUpDown className="ml-1 size-4 shrink-0 opacity-50" />

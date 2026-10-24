@@ -1,17 +1,26 @@
 import { useEffect } from "react";
 import { useLocation, useParams } from "react-router";
+import type { components } from "@/api/schema";
+import { PROJECTS_PATH } from "@/pages/projects/paths";
 import { useProjects } from "@/lib/useProjects";
 
 // App routes carry no :projectId, so the project last seen in a project route is kept here for
 // the rest of the page load. Module state, not React state: the sidebar and the switcher both
 // read it and it must outlive the project routes unmounting.
+type Project = components["schemas"]["Project"];
+
 let lastProjectId: string | undefined;
 
 export function resetCurrentProjectStore(): void {
   lastProjectId = undefined;
 }
 
-export function useCurrentProject() {
+export interface CurrentProject {
+  projectId: string | undefined;
+  project: Project | undefined;
+}
+
+export function useCurrentProject(): CurrentProject {
   const { projectId: urlProjectId } = useParams<{ projectId?: string }>();
   const { pathname } = useLocation();
   const { data: projects } = useProjects();
@@ -21,7 +30,7 @@ export function useCurrentProject() {
   }, [urlProjectId]);
 
   // The home page lists projects itself, so no project is current there.
-  const isHome = pathname === "/";
+  const isHome = pathname === PROJECTS_PATH;
   if (urlProjectId) {
     return {
       projectId: urlProjectId,
