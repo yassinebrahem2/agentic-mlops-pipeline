@@ -1,6 +1,6 @@
 """Session contract and types (I1).
 
-SessionManager's constructor and lifecycle (implemented in task 5):
+SessionManager's constructor and lifecycle:
 
     SessionManager(
         *,
@@ -12,6 +12,8 @@ SessionManager's constructor and lifecycle (implemented in task 5):
         providers: ProvidersService,
         http: httpx2.AsyncClient,
         git: GitRunner,
+        observers: Sequence[TurnObserver] = (),  # told when each turn starts and ends
+        bus: MessageBus | None = None,  # the manager binds itself to it once
     )
     async def close(self) -> None  # cancels running turns and marks them interrupted
 
