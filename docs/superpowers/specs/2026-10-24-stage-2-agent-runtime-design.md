@@ -68,6 +68,8 @@ class ToolContext:
     task: TaskRef | None   # the session's current task (id, branch, worktree path), if any
 ```
 
+It is built for every tool call, not once per turn, so a call after `StartTask` in the same turn sees the new worktree.
+
 A tool that needs a service gets it at construction. `default_registry(...)` takes the task, sandbox, GitHub, messaging and event services. Tools never look services up at run time, and there is no service bag. This is the opposite of a mutable context holding every service.
 
 ## 2. Tasks and worktrees
@@ -81,19 +83,26 @@ A **task** is one piece of code work by one agent. ID prefix `tsk`. It has:
 
 **Current task.** A session has at most one current task. Write, Edit and Bash act on it. Read, Glob and Grep read the current task's worktree, or the repository when there is none.
 - `StartTask(title)` creates a task and makes it current. It is refused while the current task has changes in no PR or review; the agent must open one first, or ask the user to discard the task.
+- Both have risk class `write_code`: they create branches and worktrees.
 - `ResumeTask(task_id)` makes an earlier `active` or `in_review` task of the same agent current again, for example to answer review comments.
 - Write, Edit or Bash with no current task returns a tool error: "Start a task first with StartTask."
 
 **Creating the worktree:**
 - The base is `origin/<default branch>` for GitHub projects (the managed clone is fetched first). For local projects it is the local default branch's commit.
 - The steps:
-  1. `git worktree add --no-checkout -b <branch> <path> <base>`;
-  2. sparse-checkout in non-cone mode that includes everything except the secret denylist;
-  3. checkout.
+  1. `git worktree add -b <branch> <path> <base>`;
+  2. `git update-index --skip-worktree` on every tracked file matching the secret denylist;
+  3. delete those files from the worktree, before any tool or container can see it.
 
-  Tracked secret files are then absent from the worktree and marked skip-worktree, so a commit never records them as deleted. A test proves both on a real repository.
+  Tracked secret files are then absent from the worktree, and a commit never records them as deleted. Sparse-checkout is not used: in a worktree it turns on `extensions.worktreeConfig` in the user's shared repository config. A test proves all of this on a real repository, including that the user's `.git/config` is unchanged.
 - The denylist is the one in `agents/tools/files.py` (stage 1); every user of it imports it.
 - For local projects this adds a branch and worktree metadata to the user's repository's git data, as the stage 1 spec announced. Their working files and checked-out branch are untouched.
+
+**Host git on a worktree.** The sandbox can write anything in the worktree, its `.git` entry included. A planted `.git` with `core.fsmonitor` or hooks would make the next host git command run code on the host. So:
+- every host git call on a task passes `GIT_DIR` and `GIT_WORK_TREE` from the task record, never trusting the worktree's `.git` entry;
+- it also passes `-c core.hooksPath=<an empty folder in the data folder>` and `-c core.fsmonitor=false`. Agent commits run no hooks, the user's included.
+
+One function in `agents/tasks/` builds these arguments; no other code runs git on a task. A test rewrites `.git` from the sandbox, then commits, and proves the commit lands in the right repository and nothing ran.
 
 **The file view in a worktree:**
 - `git ls-files --cached --others --exclude-standard` minus the denylist, never outside the root.
@@ -119,10 +128,10 @@ Claude Code's names and argument shapes:
 Both have risk class `write_code`.
 
 - Paths resolve inside the current task's worktree, with the stage 1 rules (no `..`, no symlink escapes). A denylisted name is refused.
-- Edit, and Write over an existing file, need that file to have been Read in the same task since its last change. Otherwise the tool error is "Read <path> first." This keeps an agent from overwriting what it never saw.
+- Edit, and Write over an existing file, need the file's content to match a hash recorded when the agent last Read it in this task. That also catches changes Bash or another tool made since. Otherwise the tool error is "Read <path> first" or "<path> changed since you read it". An approved Write or Edit checks again when it runs, so a file that changed while waiting for approval fails rather than being overwritten.
 - Edit fails when `old_string` is missing, or appears more than once without `replace_all`, saying which.
 - Line endings and encoding are kept: UTF-8, and a file's existing CRLF or LF.
-- Both tools compute their change as a unified diff first. That diff is the approval preview (§7) and the tool's success output.
+- Both tools compute their change as a unified diff first. That diff is the approval preview (§5) and the tool's success output, capped like Bash output.
 
 ## 4. Sandbox and Bash
 
@@ -131,7 +140,7 @@ Both have risk class `write_code`.
 - Without Docker, Bash returns a tool error saying Docker is needed and how to get it, and every other tool works.
 
 **The environment image, built from the repo's own files:**
-- The runtime picks a template from the task's base commit, in this order:
+- The runtime picks a template from the worktree's current dependency files, checked at every Bash call, in this order:
   1. `environment.yml` or `environment.yaml`: micromamba;
   2. `uv.lock` with `pyproject.toml`: `uv sync --frozen --no-install-project`;
   3. `pyproject.toml`: its `[project].dependencies` installed with pip;
@@ -140,7 +149,8 @@ Both have risk class `write_code`.
 - The Python version comes from `.python-version`, else the lower bound of `requires-python`, else 3.12.
 - The build context holds only the template and the dependency files, never the repository, so no secret can enter an image.
 - The build runs with network access, a 15-minute timeout and its own status (`sandbox.build.*` events, shown in the tool step and in project settings).
-- The tag is `mlops-agents-env:<project id>-<12 hex of sha256(template + dependency files)>`. An unchanged environment is never rebuilt. When a new tag builds, the project's older tags are removed.
+- The tag is `<app name>-env:<project id>-<12 hex of sha256(template + dependency files)>`, with the app name from its one constant. An unchanged environment is never rebuilt. When an agent changes a dependency file, the next Bash call builds the new image (with network) and recreates the task's container on it. When a new tag builds, the project's older tags no running container uses are removed.
+- Installed environments live outside `/workspace` (for uv, `UV_PROJECT_ENVIRONMENT=/opt/venv`), so the mount never hides them.
 - A failed build is a tool error carrying the last 50 lines of the build log. The Bash call that triggered it ends there; the next Bash call tries again.
 
 **A container per task:**
@@ -183,12 +193,15 @@ Both have risk class `write_code`.
 **The gate.** The turn graph becomes:
 - model → gate → tools → model, and the end of a turn goes through the PR reminder (§6).
 - The gate is its own node, because LangGraph re-runs a resumed node from its start. A node with side effects before its pause would repeat them.
-- For each tool call of the step, the gate decides allow, deny or ask, and writes one audit record per decision.
+- For each tool call of the step, the gate decides allow, deny or ask, and writes one audit record per decision, keyed by the tool-call id so a re-run adds none.
 - For the asks, it creates approval requests: ID `apr`, keyed by the tool-call id, so a re-run finds them instead of duplicating them. Each carries the tool's preview:
   - the diff for Write and Edit;
   - the command for Bash;
-  - the title, body and target for GitHub tools.
+  - the title, body and target for GitHub tools, and for OpenPullRequest also the staged diff that will be pushed, so changes made by Bash are shown before they leave the machine.
 - Then it calls `interrupt()` once with every pending approval.
+
+**In the session.** An approval is a message part, so the chat shows it on reload and live with no new mechanism:
+`{"type": "approval", "approval_id", "tool_call_id", "preview", "status": "pending" | "approved" | "rejected", "note"}`, placed after its tool call in the agent's message and updated through the existing `message.updated` event. `SessionView` gains `current_task` (id, title, branch, PR number and URL, or null) for the task bar. These two changes, and the message status `waiting`, are additions to I1; the frontend types are regenerated from them.
 
 **Waiting:**
 - When the graph pauses, the executor marks the turn `waiting`, and the agent message `waiting` (a new message status). It publishes `approval.requested`, and keeps the turn's checkpoint thread (stage 1 deleted it at every turn end).
@@ -197,7 +210,7 @@ Both have risk class `write_code`.
 
 **Deciding and resuming:**
 - The user approves or rejects each request, with an optional note, from the chat card or the Inbox. Each decision writes an audit record.
-- When the last request of the step is decided, the session resumes the turn with `Command(resume={approval id: decision})`, on a new checkpointer connection, so this also works after a restart.
+- When the last request of the step is decided, the session resumes the turn with `Command(resume=[decision, ...])`: a list, so LangGraph never reads it as a mapping of interrupt ids. It uses a new checkpointer connection, so this also works after a restart.
 - The tools step runs the approved calls. It answers each rejected call with the tool error "The user rejected this action" plus the note.
 
 **Stop on a waiting turn:**
@@ -253,6 +266,7 @@ Both have risk class `write_code`.
 - Recipient idle: the message starts a turn, like a user message.
 - Recipient running: the message is delivered at the recipient's next model step, after the current step's tool results and never between a tool call and its result. The model node appends every undelivered inbound message before calling the model. A delivered message records the turn that read it.
 - Recipient waiting: delivered at the first model step after it resumes.
+- "Waiting for a reply" on the status board means the agent sent the last message of an exchange that is still open (no limit reached, no reply yet).
 - After every turn, an inbound message still undelivered starts the next turn. Nothing is lost when a message arrives just after the last model step.
 - User messages keep stage 1's queue: one turn at a time, in order.
 
@@ -344,10 +358,20 @@ The project event stream keeps statuses and badges live.
 
 ## 11. Storage
 
-- One project migration (`0002`) adds the tables `tasks`, `file_claims`, `approvals`, `events`, `audit`, `exchanges` and `wakeups`.
+- Project migrations add the tables `tasks`, `file_claims`, `approvals`, `events`, `audit`, `exchanges` and `wakeups`.
 - It adds `exchange_id`, `hop` and `read_by_turn` to `messages`, and the message status `waiting` (SQLite's CHECK constraint means rebuilding the `messages` table in the migration).
 - Project settings gain `permission_level`, `sandbox_network`, `issue_min_priority`, `message_max_hops` and `message_max_tokens`.
-- The roadmap's ID table gains `tsk` (task), `xch` (exchange) and `wak` (wake-up), all in stage 2.
+- Each plan adds its own numbered migration; the stage 2 overview assigns the numbers, so plans never edit the same file.
+- Removing a project also runs `git worktree prune` and deletes the `agent/*` branches in a local project's repository, after removing its containers.
+
+## Changes to the roadmap
+
+Made in `docs/roadmap.md` before any plan is issued:
+- IDs: `tsk` (task), `xch` (exchange), `wak` (wake-up), stage 2.
+- Risk classes: StartTask and ResumeTask are `write_code`; SearchIssues is `read`; ScheduleWakeup is `message`.
+- The agent definition format gains `status_board: false`.
+- The policy table's values (§5).
+- The PR rule ("reminded at the end of each turn") and file claims enforced in code are already in the roadmap's Stage 2 text or replace it as this spec says.
 
 ## 12. Error handling
 
