@@ -194,9 +194,11 @@ describe("models table", () => {
     renderPage("/providers");
 
     const row = await findRow("groq:openai/gpt-oss-120b");
-    const input = within(row).getByLabelText(/^Context window/);
+    await user.click(within(row).getByRole("button", { name: "Set" }));
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText(/^Context window/);
     await user.type(input, "1.5");
-    await user.click(within(row).getByRole("button", { name: /^Save/ }));
+    await user.click(within(dialog).getByRole("button", { name: /^Save/ }));
 
     await waitFor(() => {
       expect(input).toHaveAccessibleDescription(sentence);
@@ -208,24 +210,110 @@ describe("models table", () => {
   });
 
   it("asks for an unknown context window and sends the address with the value", async () => {
+    let saved = false;
     const sent = stubApi({
-      "GET /api/models": () => json([slashed]),
-      "PUT /api/models/context-window": () => json({ ...slashed, context_window: 131072 }),
+      "GET /api/models": () =>
+        json(saved ? [{ ...slashed, context_window: 131072, problem: null }] : [slashed]),
+      "PUT /api/models/context-window": () => {
+        saved = true;
+        return json({ ...slashed, context_window: 131072, problem: null });
+      },
     });
     const user = userEvent.setup();
     renderPage("/providers");
 
     const row = await findRow("groq:openai/gpt-oss-120b");
     expect(
-      within(row).getByText(
+      within(row).queryByText(
         "This model cannot be assigned to an agent until its context window is set.",
       ),
-    ).toBeInTheDocument();
-    await user.type(within(row).getByLabelText(/^Context window/), "131072");
-    await user.click(within(row).getByRole("button", { name: /^Save/ }));
+    ).not.toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: "Set" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/^Context window/), "131072");
+    await user.click(within(dialog).getByRole("button", { name: /^Save/ }));
 
     expect(await within(row).findByText("131072")).toBeInTheDocument();
-    expect(within(row).queryByLabelText(/^Context window/)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+    expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
+      ["PUT", "/api/models/context-window", { address: "groq:openai/gpt-oss-120b", value: 131072 }],
+    ]);
+  });
+
+  it("warns above the table about models with problems and marks only their rows", async () => {
+    stubApi({ "GET /api/models": () => json([verified, slashed]) });
+    renderPage("/providers");
+
+    const problem = slashed.problem ?? "";
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(problem);
+
+    const slashedRow = await findRow(slashed.address);
+    expect(within(slashedRow).getByRole("img", { name: problem })).toBeInTheDocument();
+    expect(within(slashedRow).getByLabelText(problem)).toBeInTheDocument();
+
+    const verifiedRow = await findRow(verified.address);
+    expect(within(verifiedRow).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(verifiedRow).queryByLabelText(problem)).not.toBeInTheDocument();
+  });
+
+  it("does not render a warning alert when no models have problems", async () => {
+    stubApi({ "GET /api/models": () => json([verified]) });
+    renderPage("/providers");
+
+    await findRow(verified.address);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("pre-fills the provider's listed context window and hides warning after save", async () => {
+    const unconfigured: ModelEntry = {
+      ...verified,
+      address: "groq:openai/gpt-oss-120b",
+      wire_model_id: "openai/gpt-oss-120b",
+      provider_name: "groq",
+      context_window: null,
+      problem:
+        "The context window of groq:openai/gpt-oss-120b is unknown. Enter it in AI providers.",
+    };
+    let saved = false;
+    const sent = stubApi({
+      "GET /api/models": () =>
+        json(
+          saved
+            ? [verified, { ...unconfigured, context_window: 131072, problem: null }]
+            : [verified, unconfigured],
+        ),
+      "GET /api/providers/groq/remote-models": () =>
+        json([{ id: "openai/gpt-oss-120b", context_window: 131072 }]),
+      "PUT /api/models/context-window": () => {
+        saved = true;
+        return json({ ...unconfigured, context_window: 131072, problem: null });
+      },
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const problem = unconfigured.problem ?? "";
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(problem);
+
+    const row = await findRow("groq:openai/gpt-oss-120b");
+    expect(within(row).getByLabelText(problem)).toBeInTheDocument();
+
+    await user.click(within(row).getByRole("button", { name: "Set" }));
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText(/^Context window/);
+    await waitFor(() => {
+      expect(input).toHaveValue(131072);
+    });
+
+    await user.click(within(dialog).getByRole("button", { name: /^Save/ }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(await within(row).findByText("131072")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
       ["PUT", "/api/models/context-window", { address: "groq:openai/gpt-oss-120b", value: 131072 }],
     ]);

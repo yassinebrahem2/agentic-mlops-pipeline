@@ -1,7 +1,17 @@
-import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useId, useState, type SubmitEvent } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -41,25 +51,41 @@ export function ModelsTable() {
       </p>
     );
   }
+
+  const problems = models.data.map((m) => m.problem).filter((p): p is string => Boolean(p));
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Address</TableHead>
-          <TableHead>Tool calling</TableHead>
-          <TableHead>Streaming</TableHead>
-          <TableHead>Context window</TableHead>
-          <TableHead>Availability</TableHead>
-          <TableHead>Last verified</TableHead>
-          <TableHead>Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {models.data.map((model) => (
-          <ModelRow key={model.address} model={model} />
-        ))}
-      </TableBody>
-    </Table>
+    <>
+      {problems.length > 0 && (
+        <Alert variant="warning">
+          <AlertDescription>
+            <ul className="list-inside list-disc">
+              {problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Address</TableHead>
+            <TableHead>Tool calling</TableHead>
+            <TableHead>Streaming</TableHead>
+            <TableHead>Context window</TableHead>
+            <TableHead>Availability</TableHead>
+            <TableHead>Last verified</TableHead>
+            <TableHead>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {models.data.map((model) => (
+            <ModelRow key={model.address} model={model} />
+          ))}
+        </TableBody>
+      </Table>
+    </>
   );
 }
 
@@ -99,13 +125,24 @@ function ModelRow({ model }: { model: ModelEntry }) {
   });
 
   return (
-    <TableRow className="align-top">
-      <TableCell className="font-mono">{model.address}</TableCell>
+    <TableRow>
+      <TableCell aria-label={model.address} className="font-mono">
+        <div className="flex items-center gap-2">
+          {model.problem && (
+            <span
+              role="img"
+              aria-label={model.problem}
+              className="size-2 shrink-0 rounded-full bg-amber-500"
+            />
+          )}
+          <span>{model.address}</span>
+        </div>
+      </TableCell>
       <TableCell>{trait(model, model.tool_calling)}</TableCell>
       <TableCell>{trait(model, model.streaming)}</TableCell>
       <TableCell>
         {model.context_window === null ? (
-          <ContextWindowForm address={model.address} />
+          <SetContextWindowDialog model={model} />
         ) : (
           model.context_window
         )}
@@ -151,17 +188,51 @@ function ModelRow({ model }: { model: ModelEntry }) {
   );
 }
 
-function ContextWindowForm({ address }: { address: string }) {
+function SetContextWindowDialog({ model }: { model: ModelEntry }) {
   const queryClient = useQueryClient();
   const inputId = useId();
   const errorId = useId();
+  const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  const remote = useQuery({
+    queryKey: ["remote-models", model.provider_name],
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/api/providers/{name}/remote-models", {
+          params: { path: { name: model.provider_name } },
+        }),
+      ),
+    enabled: open && Boolean(model.provider_name),
+  });
+
+  useEffect(() => {
+    if (!open) {
+      setDirty(false);
+      setValue("");
+      return;
+    }
+    const listed = remote.data?.find((m) => m.id === model.wire_model_id)?.context_window;
+    if (!dirty && listed !== null && listed !== undefined) {
+      setValue(String(listed));
+    }
+  }, [open, remote.data, model.wire_model_id, dirty]);
+
   const save = useMutation({
     mutationFn: async (tokens: number) =>
-      unwrap(await api.PUT("/api/models/context-window", { body: { address, value: tokens } })),
+      unwrap(
+        await api.PUT("/api/models/context-window", {
+          body: { address: model.address, value: tokens },
+        }),
+      ),
     onSuccess: async (updated) => {
       storeModel(queryClient, updated);
-      await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["models"] }),
+        queryClient.invalidateQueries({ queryKey: ["agents"] }),
+      ]);
+      setOpen(false);
     },
   });
 
@@ -173,42 +244,61 @@ function ContextWindowForm({ address }: { address: string }) {
   const valueError = fieldErrors(save.error).value;
 
   return (
-    // The server is the one judge of the value; its sentence shows under the input.
-    <form noValidate onSubmit={submit} className="flex max-w-56 flex-col gap-2 whitespace-normal">
-      <Label htmlFor={inputId}>Context window</Label>
-      <div className="flex gap-2">
-        <Input
-          id={inputId}
-          aria-invalid={valueError !== undefined ? true : undefined}
-          aria-describedby={valueError !== undefined ? errorId : undefined}
-          type="number"
-          min={1}
-          step={1}
-          inputMode="numeric"
-          value={value}
-          onChange={(event) => {
-            setValue(event.target.value);
-          }}
-        />
-        <Button
-          type="submit"
-          size="sm"
-          disabled={save.isPending || value === ""}
-          aria-label={`Save context window of ${address}`}
-        >
-          Save
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          setDirty(false);
+          setValue("");
+          save.reset();
+        }
+        setOpen(next);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          Set
         </Button>
-      </div>
-      <p className="text-muted-foreground">
-        This model cannot be assigned to an agent until its context window is set.
-      </p>
-      {valueError !== undefined ? (
-        <p id={errorId} className="text-destructive">
-          {valueError}
-        </p>
-      ) : (
-        save.isError && <p className="text-destructive">{errorText(save.error)}</p>
-      )}
-    </form>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Set context window</DialogTitle>
+          <DialogDescription>
+            Enter the context window in tokens for {model.address}.
+          </DialogDescription>
+        </DialogHeader>
+        <form noValidate onSubmit={submit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={inputId}>Context window</Label>
+            <Input
+              id={inputId}
+              aria-invalid={valueError !== undefined ? true : undefined}
+              aria-describedby={valueError !== undefined ? errorId : undefined}
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={value}
+              onChange={(event) => {
+                setDirty(true);
+                setValue(event.target.value);
+              }}
+            />
+            {valueError !== undefined ? (
+              <p id={errorId} className="text-destructive">
+                {valueError}
+              </p>
+            ) : (
+              save.isError && <p className="text-destructive">{errorText(save.error)}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={save.isPending || value === ""}>
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
