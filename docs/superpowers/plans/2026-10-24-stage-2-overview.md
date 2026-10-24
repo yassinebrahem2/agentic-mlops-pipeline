@@ -39,7 +39,7 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 ## Files shared by these plans
 
 Each file below is edited by one plan only:
-- `index.css`, the `components/ui/*` ring classes, `ProviderCard.tsx`, `AgentDefaults.tsx`, `AgentsSection.tsx`, `MessageView.tsx`: ui-polish.
+- `index.css`, the `components/ui/*` ring classes, `ProviderCard.tsx`, `AgentDefaults.tsx`, `AgentsSection.tsx`, `MessageView.tsx`: ui-polish. runtime-contracts task 1 adds one line to `MessageView.tsx` (Decision #218).
 - `components/ui/combobox.tsx`, `GitHubTab.tsx`, `AddModelDialog.tsx`: pickers.
 - `AppShell.tsx`, `AgentsPage.tsx`, `MessageList.tsx`, `Composer.tsx`: chat-layout.
 - `Sidebar.tsx`, `ProjectSwitcher.tsx`, `ProjectsPage.tsx`, new `lib/useCurrentProject.ts` and `lib/useProjects.ts`: project-context. It also changes the one `invalidateQueries` line for the projects key in `useOpenProject.ts`, `LocalFolderTab.tsx`, `GitHubTab.tsx` (a pickers file), `RemoveProjectDialog.tsx` and `RepositorySection.tsx`.
