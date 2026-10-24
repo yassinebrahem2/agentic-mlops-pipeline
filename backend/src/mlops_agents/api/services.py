@@ -18,8 +18,10 @@ from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.events.observer import EventTurnObserver
+from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -43,6 +45,7 @@ class Services:
     sessions: AgentSessions
     events: SqliteEventLog
     audit: SqliteAuditLog
+    status_board: StatusBoard
 
 
 async def _app_secrets(
@@ -103,6 +106,7 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    status_board = SqliteStatusBoard(catalog, events, databases=databases)
     turn_observer = EventTurnObserver(events)
 
     sessions = SessionManager(
@@ -132,4 +136,5 @@ async def build_services(
         sessions=sessions,
         events=events,
         audit=audit,
+        status_board=status_board,
     )

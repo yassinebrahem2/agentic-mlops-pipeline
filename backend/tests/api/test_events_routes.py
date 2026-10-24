@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
@@ -295,3 +296,54 @@ async def test_services_audit_fails_closed_on_keystore_error(
             target="test",
             detail={"data": "test"},
         )
+
+
+@pytest.mark.asyncio
+async def test_get_agents_status_nonexistent_project(
+    live_client: httpx2.AsyncClient,
+) -> None:
+    response = await live_client.get("/api/projects/prj_missing/agents/status")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_agents_status_reflects_events(
+    live_app: FastAPI,
+    live_client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(live_app, tmp_path, git_env)
+    events_service = live_app.state.services.events
+
+    # Initially, idle
+    res = await live_client.get(f"/api/projects/{project_id}/agents/status")
+    assert res.status_code == 200
+    data: list[dict[str, Any]] = res.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    # Orchestrator is in the catalog and first
+    orch = data[0]
+    assert orch["agent"] == "orchestrator"
+    assert orch["state"] == "idle"
+    assert orch["last_finished"] is None
+
+    # Record turn.started
+    await events_service.record(project_id, source="orchestrator", type="turn.started", payload={})
+    res = await live_client.get(f"/api/projects/{project_id}/agents/status")
+    assert res.status_code == 200
+    data_running: list[dict[str, Any]] = res.json()
+    assert data_running[0]["state"] == "running"
+
+    # Record turn.ended
+    await events_service.record(
+        project_id,
+        source="orchestrator",
+        type="turn.ended",
+        payload={"status": "done", "final_text": "Completed successfully."},
+    )
+    res = await live_client.get(f"/api/projects/{project_id}/agents/status")
+    assert res.status_code == 200
+    data_ended: list[dict[str, Any]] = res.json()
+    assert data_ended[0]["state"] == "idle"
+    assert data_ended[0]["last_finished"] == "Completed successfully."

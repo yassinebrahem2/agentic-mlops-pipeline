@@ -199,6 +199,67 @@
         "title": "AgentSettingsView",
         "type": "object"
       },
+      "AgentStatus": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "last_finished": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished"
+          },
+          "open_prs": {
+            "items": {
+              "$ref": "#/components/schemas/PrRef"
+            },
+            "title": "Open Prs",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_approval",
+              "waiting_reply",
+              "inactive"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "display_name",
+          "state",
+          "task",
+          "open_prs",
+          "last_finished"
+        ],
+        "title": "AgentStatus",
+        "type": "object"
+      },
       "AppInfo": {
         "properties": {
           "data_dir": {
@@ -850,6 +911,29 @@
           "password"
         ],
         "title": "PasswordSignIn",
+        "type": "object"
+      },
+      "PrRef": {
+        "properties": {
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "url",
+          "title"
+        ],
+        "title": "PrRef",
         "type": "object"
       },
       "Preview": {
@@ -2617,6 +2701,52 @@
         "summary": "List Project Agents",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/status": {
+      "get": {
+        "operationId": "get_agents_status_api_projects__project_id__agents_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentStatus"
+                  },
+                  "title": "Response Get Agents Status Api Projects  Project Id  Agents Status Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agents Status",
+        "tags": [
+          "events"
         ]
       }
     },
