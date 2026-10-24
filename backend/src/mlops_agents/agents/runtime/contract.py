@@ -18,7 +18,7 @@ SessionManager's constructor and lifecycle (implemented in task 5):
 api-sessions builds it in the lifespan's AsyncExitStack and registers close.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -215,6 +215,18 @@ class AgentSessions(Protocol):
     ) -> MessageView:
         """An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
         from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send."""
+        ...
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        """Reads the stored parts, applies transform, stores and publishes message.updated, all
+        under the session lock, so two concurrent updates (two approvals decided at once) both
+        land."""
         ...
 
     async def stop(self, project_id: str, agent: str) -> None: ...

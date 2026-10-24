@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass
 
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageView,
+    Part,
     SessionView,
     StreamEvent,
     TextPart,
@@ -179,6 +180,24 @@ class FakeSessions(AgentSessions):
             current_task=view.current_task,
         )
         return msg
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        for (view_project, agent), view in self.views.items():
+            if view_project != project_id or view.id != session_id:
+                continue
+            for i, message in enumerate(view.messages):
+                if message.id == message_id:
+                    updated = message.model_copy(update={"parts": transform(list(message.parts))})
+                    messages = [*view.messages[:i], updated, *view.messages[i + 1 :]]
+                    self.views[(project_id, agent)] = view.model_copy(update={"messages": messages})
+                    return updated
+        raise ValueError(f"Message {message_id} not found in session {session_id}")
 
     async def stop(self, project_id: str, agent: str) -> None:
         self._check_agent(agent)

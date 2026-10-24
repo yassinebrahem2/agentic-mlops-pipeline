@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import RowMapping, and_, insert, select, update
 
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
@@ -19,6 +19,19 @@ from mlops_agents.ids import new_id
 from mlops_agents.storage.tables import messages
 
 _PARTS_ADAPTER: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
+
+
+def _view(row: RowMapping) -> MessageView:
+    return MessageView(
+        id=str(row["id"]),
+        turn_id=cast(str | None, row["turn_id"]),
+        author_kind=cast(AuthorKind, row["author_kind"]),
+        author_name=cast(str, row["author_name"]),
+        from_agent=cast(str | None, row["from_agent"]),
+        parts=_PARTS_ADAPTER.validate_json(cast(str, row["parts"])),
+        status=cast(MessageStatus, row["status"]),
+        created_at=cast(str, row["created_at"]),
+    )
 
 
 class MessagesStore(StoreBase):
@@ -107,18 +120,19 @@ class MessagesStore(StoreBase):
 
         if row is None:
             raise ValueError(f"Message {message_id} not found in project {project_id}")
+        return _view(row)
 
-        deserialized_parts = _PARTS_ADAPTER.validate_json(cast(str, row["parts"]))
-        return MessageView(
-            id=str(row["id"]),
-            turn_id=cast(str | None, row["turn_id"]),
-            author_kind=cast(AuthorKind, row["author_kind"]),
-            author_name=cast(str, row["author_name"]),
-            from_agent=cast(str | None, row["from_agent"]),
-            parts=deserialized_parts,
-            status=cast(MessageStatus, row["status"]),
-            created_at=cast(str, row["created_at"]),
+    async def message(self, project_id: str, session_id: str, message_id: str) -> MessageView:
+        """Return one message of session_id; a message of another session is not found."""
+        engine = await self._databases.project(project_id)
+        query = select(messages).where(
+            messages.c.id == message_id, messages.c.session_id == session_id
         )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).mappings().first()
+        if row is None:
+            raise ValueError(f"Message {message_id} not found in session {session_id}")
+        return _view(row)
 
     async def messages(
         self, project_id: str, session_id: str, *, after: str | None = None
@@ -143,19 +157,7 @@ class MessagesStore(StoreBase):
 
             rows = (await conn.execute(query)).mappings().all()
 
-        return [
-            MessageView(
-                id=str(row["id"]),
-                turn_id=cast(str | None, row["turn_id"]),
-                author_kind=cast(AuthorKind, row["author_kind"]),
-                author_name=cast(str, row["author_name"]),
-                from_agent=cast(str | None, row["from_agent"]),
-                parts=_PARTS_ADAPTER.validate_json(cast(str, row["parts"])),
-                status=cast(MessageStatus, row["status"]),
-                created_at=cast(str, row["created_at"]),
-            )
-            for row in rows
-        ]
+        return [_view(row) for row in rows]
 
     @shielded
     async def mark_interrupted(self, project_id: str, turn_id: str) -> None:

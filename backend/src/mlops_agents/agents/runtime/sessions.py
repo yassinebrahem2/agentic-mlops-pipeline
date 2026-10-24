@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 
 import httpx2
@@ -14,6 +14,7 @@ from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageStatus,
     MessageView,
+    Part,
     SessionView,
     StreamEvent,
     TextPart,
@@ -246,6 +247,26 @@ class SessionManager(AgentSessions):
                 self._workers.start(project_id, session_id, agent, hub, lock)
 
         return message
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        await self._workspace.get(project_id)
+        lock = self._get_lock(project_id, session_id)
+        hub = self._get_hub(project_id, session_id)
+        # Read, write and publish are one step under the session lock: a concurrent get() never
+        # returns parts whose event it then receives again, and concurrent updates all land.
+        async with lock:
+            current = await self._store.message(project_id, session_id, message_id)
+            updated = await self._store.update_message(
+                project_id, message_id, parts=transform(list(current.parts))
+            )
+            await hub.message(updated, created=False)
+        return updated
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
