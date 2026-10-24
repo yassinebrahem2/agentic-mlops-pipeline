@@ -4,6 +4,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { components } from "@/api/schema";
 import type { PageRoute } from "@/app/routes";
+import { resetCurrentProjectStore } from "@/lib/useCurrentProject";
 import { renderPage } from "@/test/render";
 import { route as projectHomeRoute } from "../../pages/project-home/route";
 import { route as projectSettingsRoute } from "../../pages/project-settings/route";
@@ -77,6 +78,7 @@ function getUrlAndMethod(
 
 describe("ProjectSwitcher", () => {
   beforeEach(() => {
+    resetCurrentProjectStore();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -162,13 +164,13 @@ describe("ProjectSwitcher", () => {
     expect(screen.getByRole("menuitem", { name: "All projects" })).toBeInTheDocument();
   });
 
-  it("shows 'Projects' at /projects/new and never treats 'new' as a project", async () => {
+  it("never treats 'new' as a project at /projects/new", async () => {
     setupFetch();
 
     renderPage("/projects/new", { routes: testRoutes });
 
-    // Should show "Projects", not "new"
-    expect(await screen.findByRole("button", { name: "Projects" })).toBeInTheDocument();
+    // No project in the URL: the latest opened one is current, and "new" is not a project.
+    expect(await screen.findByRole("button", { name: "Alpha Project" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "new" })).not.toBeInTheDocument();
   });
 
