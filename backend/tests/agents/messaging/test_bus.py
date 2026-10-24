@@ -7,6 +7,7 @@ import json
 import pytest
 from sqlalchemy import func, insert, select
 
+from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageLimitReached
 from mlops_agents.agents.messaging.settings import MessagingLimits
 from mlops_agents.errors import DomainError
@@ -124,7 +125,11 @@ async def test_a_reply_within_the_token_budget_goes_through(bus_env: BusEnv) -> 
 
 
 async def test_a_recipient_the_sender_may_not_message_is_refused(bus_env: BusEnv) -> None:
-    for to in ("gamma", "nobody", "alpha"):
+    for to, code in (
+        ("gamma", "message_not_allowed"),
+        ("alpha", "message_not_allowed"),
+        ("nobody", "agent_not_found"),
+    ):
         with pytest.raises(DomainError) as refused:
             await bus_env.bus.send(
                 bus_env.session.project_id,
@@ -133,7 +138,7 @@ async def test_a_recipient_the_sender_may_not_message_is_refused(bus_env: BusEnv
                 to=to,
                 text="Hi",
             )
-        assert refused.value.code in ("message_not_allowed", "agent_not_found")
+        assert refused.value.code == code
 
 
 async def test_sending_records_a_message_sent_event(bus_env: BusEnv) -> None:
@@ -162,3 +167,10 @@ async def test_a_refused_post_leaves_no_exchange_behind(
     engine = await databases.project(project_id)
     async with engine.connect() as conn:
         assert (await conn.scalar(select(func.count()).select_from(exchanges))) == 0
+
+
+async def test_the_bus_binds_and_takes_its_catalog_once(bus_env: BusEnv) -> None:
+    with pytest.raises(RuntimeError, match="already bound"):
+        bus_env.bus.bind(bus_env.session.manager)
+    with pytest.raises(RuntimeError, match="already has its catalog"):
+        bus_env.bus.use_catalog(AgentCatalog([], frozenset()))
