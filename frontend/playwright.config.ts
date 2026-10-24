@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
+import { DATA_DIR_PREFIX } from "./e2e/global-teardown";
 
 // Playwright loads this file in the runner and again in every worker; workers inherit the
 // runner's environment, so the token and the data folder are made once and then reused.
 process.env.E2E_ACCESS_TOKEN ??= randomBytes(32).toString("hex");
-process.env.E2E_DATA_DIR ??= mkdtempSync(join(tmpdir(), "mlops-agents-e2e-"));
+process.env.E2E_DATA_DIR ??= mkdtempSync(join(tmpdir(), DATA_DIR_PREFIX));
 
 // Imported after the two variables above are set, because env.ts reads them when it loads.
 const { ACCESS_TOKEN, APP_PORT, APP_URL, DATA_DIR, FAKE_BASE_URL, FAKE_PORT } =
@@ -20,6 +21,7 @@ const startupTimeout = 60_000;
 
 export default defineConfig({
   testDir: "./e2e",
+  globalTeardown: "./e2e/global-teardown.ts",
   // The specs share one app and one database, and the flow builds up state step by step.
   workers: 1,
   fullyParallel: false,

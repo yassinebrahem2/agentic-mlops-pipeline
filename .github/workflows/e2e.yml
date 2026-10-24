@@ -31,6 +31,16 @@ jobs:
       - run: uv sync --locked
         working-directory: backend
       - run: npm run e2e
+      - name: Check the e2e data folder was removed
+        run: |
+          temp_dir="$(node -p "require('os').tmpdir()")"
+          echo "OS temp folder: $temp_dir"
+          left="$(find "$temp_dir" -mindepth 1 -maxdepth 1 -name 'mlops-agents-e2e-*')"
+          if [ -n "$left" ]; then
+            echo "e2e data folders left behind:"
+            echo "$left"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
