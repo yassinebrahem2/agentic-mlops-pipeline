@@ -65,3 +65,53 @@ def test_message_hides_secrets() -> None:
 def test_dropped_stream_is_unreachable() -> None:
     err = httpx2.RemoteProtocolError("peer closed connection without sending complete message body")
     assert classify(err).kind is ProviderErrorKind.UNREACHABLE
+
+
+def test_bad_generation_tool_use_failed_top_level() -> None:
+    err = openai.BadRequestError(
+        "Tool call validation failed",
+        response=_response(400),
+        body={"code": "tool_use_failed"},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.BAD_GENERATION
+
+
+def test_bad_generation_tool_use_failed_nested() -> None:
+    err = openai.BadRequestError(
+        "Tool call validation failed",
+        response=_response(400),
+        body={"error": {"message": "failed", "code": "tool_use_failed"}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.BAD_GENERATION
+
+
+def test_bad_generation_json_validate_failed() -> None:
+    err = openai.BadRequestError(
+        "JSON validation failed",
+        response=_response(400),
+        body={"error": {"code": "json_validate_failed"}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.BAD_GENERATION
+
+
+def test_bad_generation_sse_api_error() -> None:
+    err = openai.APIError(
+        "Tool call validation failed during stream",
+        request=REQUEST,
+        body={"code": "tool_use_failed"},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.BAD_GENERATION
+
+
+def test_bad_request_other_code_is_bad_request() -> None:
+    err = openai.BadRequestError(
+        "Invalid model parameter",
+        response=_response(400),
+        body={"error": {"code": "invalid_parameter"}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.BAD_REQUEST

@@ -4,8 +4,16 @@ import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { api, errorText, unwrap } from "@/lib/api";
 import { hostedModelWarning } from "@/lib/models";
+import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { useModels } from "@/lib/useModels";
 import { projectAgentsKey, useProjectAgents } from "@/lib/useProjectAgents";
 import { useProviders } from "@/lib/useProviders";
@@ -100,27 +108,32 @@ function AgentRow({
       </h3>
       <div className="space-y-2">
         <Label htmlFor={`${agent.name}-model`}>Model</Label>
-        <select
-          id={`${agent.name}-model`}
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-          value={settings.project_model ?? ""}
+        <Select
+          value={toSelectValue(settings.project_model)}
           disabled={model.isPending}
-          onChange={(event) => {
-            model.mutate(event.target.value || null);
+          onValueChange={(val) => {
+            model.mutate(fromSelectValue(val));
           }}
         >
-          <option value="">Use the app default ({settings.default_model ?? "none"})</option>
-          {usable.map((entry) => (
-            <option key={entry.address} value={entry.address}>
-              {entry.address}
-            </option>
-          ))}
-          {unusableOverride && (
-            <option value={settings.project_model ?? ""}>
-              {settings.project_model} (not usable)
-            </option>
-          )}
-        </select>
+          <SelectTrigger id={`${agent.name}-model`} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={SELECT_NONE}>
+              Use the app default ({settings.default_model ?? "none"})
+            </SelectItem>
+            {usable.map((entry) => (
+              <SelectItem key={entry.address} value={entry.address}>
+                {entry.address}
+              </SelectItem>
+            ))}
+            {unusableOverride && settings.project_model !== null && (
+              <SelectItem key={settings.project_model} value={settings.project_model}>
+                {settings.project_model} (not usable)
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
         {model.error && (
           <p role="alert" className="text-sm text-destructive">
             {errorText(model.error)}

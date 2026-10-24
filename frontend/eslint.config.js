@@ -33,6 +33,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ["src/pages/agents/MessageView.tsx"],
+    rules: {
+      // ReactMarkdown's AST node must be removed before spreading props onto the DOM.
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_node$" }],
+    },
+  },
+  {
     files: ["src/**/testing.tsx"],
     rules: {
       "react-refresh/only-export-components": "off",

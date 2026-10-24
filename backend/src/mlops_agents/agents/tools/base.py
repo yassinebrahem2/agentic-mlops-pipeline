@@ -85,6 +85,47 @@ def _summary(exc: ValidationError) -> str:
     )
 
 
+def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    schema.pop("title", None)
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for prop_val in cast(dict[str, Any], props).values():
+            if isinstance(prop_val, dict):
+                prop_dict = cast(dict[str, Any], prop_val)
+                prop_dict.pop("title", None)
+                if "default" in prop_dict and prop_dict["default"] is None:
+                    any_of = cast(list[object] | None, prop_dict.get("anyOf"))
+                    if isinstance(any_of, list) and len(any_of) == 2:
+                        first = (
+                            cast(dict[str, Any], any_of[0]) if isinstance(any_of[0], dict) else None
+                        )
+                        second = (
+                            cast(dict[str, Any], any_of[1]) if isinstance(any_of[1], dict) else None
+                        )
+                        unwrapped: dict[str, Any] | None = None
+                        if first == {"type": "null"} and second is not None:
+                            unwrapped = dict(second)
+                        elif second == {"type": "null"} and first is not None:
+                            unwrapped = dict(first)
+                        if unwrapped is not None:
+                            del prop_dict["anyOf"]
+                            unwrapped.pop("title", None)
+                            for k, v in unwrapped.items():
+                                if k not in prop_dict:
+                                    prop_dict[k] = v
+                _clean_schema(prop_dict)
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        for d in cast(dict[str, Any], defs).values():
+            if isinstance(d, dict):
+                _clean_schema(cast(dict[str, Any], d))
+    items = schema.get("items")
+    if isinstance(items, dict):
+        cast(dict[str, Any], items).pop("title", None)
+        _clean_schema(cast(dict[str, Any], items))
+    return schema
+
+
 class AgentTool[A: BaseModel](ABC):
     name: ClassVar[str]
     description: ClassVar[str]
@@ -100,7 +141,7 @@ class AgentTool[A: BaseModel](ABC):
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.args_model.model_json_schema(by_alias=True),
+                "parameters": _clean_schema(self.args_model.model_json_schema(by_alias=True)),
             },
         }
 

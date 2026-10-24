@@ -1,5 +1,6 @@
-import { Link, NavLink, useParams } from "react-router";
+import { Link, NavLink } from "react-router";
 import { APP_NAME } from "@/config";
+import { useCurrentProject } from "@/lib/useCurrentProject";
 import { cn } from "@/lib/utils";
 import type { PageRoute } from "../routes";
 import { GearMenu } from "./GearMenu";
@@ -14,7 +15,7 @@ export function Sidebar({
   onNavigate?: () => void;
   className?: string;
 }) {
-  const { projectId } = useParams<{ projectId?: string }>();
+  const { projectId } = useCurrentProject();
   const projectRoutes = routes.filter((r) => r.nav?.area === "project");
   const appRoutes = routes.filter((r) => r.nav?.area === "app");
 
@@ -25,8 +26,8 @@ export function Sidebar({
         className,
       )}
     >
-      <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
-        <h1 className="text-lg font-semibold tracking-tight shrink-0">
+      <div className="flex flex-col gap-3 border-b p-3">
+        <h1 className="px-3 text-lg font-semibold tracking-tight">
           <Link to="/" onClick={onNavigate} className="transition-opacity hover:opacity-80">
             {APP_NAME}
           </Link>

@@ -2,8 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId } from "react";
 import type { components } from "@/api/schema";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { api, errorText, unwrap } from "@/lib/api";
 import { hostedModelWarning } from "@/lib/models";
+import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { useModels } from "@/lib/useModels";
 import { useProviders } from "@/lib/useProviders";
 
@@ -59,27 +67,30 @@ function AgentRow({
             <Label htmlFor={selectId} className="text-sm font-medium">
               Model for {agent.display_name}
             </Label>
-            <select
-              id={selectId}
-              value={currentModel ?? ""}
+            <Select
+              value={toSelectValue(currentModel)}
               disabled={updateModel.isPending}
-              className="h-9 rounded-md border border-input bg-transparent px-2.5 text-sm"
-              onChange={(e) => {
-                updateModel.mutate(e.target.value || null);
+              onValueChange={(val) => {
+                updateModel.mutate(fromSelectValue(val));
               }}
             >
-              <option value="">None</option>
-              {usableModels.map((m) => (
-                <option key={m.address} value={m.address}>
-                  {m.address}
-                </option>
-              ))}
-              {showNotUsable && (
-                <option key={currentModel} value={currentModel}>
-                  {currentModel} (not usable)
-                </option>
-              )}
-            </select>
+              <SelectTrigger id={selectId}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SELECT_NONE}>None</SelectItem>
+                {usableModels.map((m) => (
+                  <SelectItem key={m.address} value={m.address}>
+                    {m.address}
+                  </SelectItem>
+                ))}
+                {showNotUsable && (
+                  <SelectItem key={currentModel} value={currentModel}>
+                    {currentModel} (not usable)
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>

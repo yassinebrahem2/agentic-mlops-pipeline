@@ -1,6 +1,6 @@
 """Session contract and types (I1).
 
-SessionManager's constructor and lifecycle (implemented in task 5):
+SessionManager's constructor and lifecycle:
 
     SessionManager(
         *,
@@ -12,13 +12,15 @@ SessionManager's constructor and lifecycle (implemented in task 5):
         providers: ProvidersService,
         http: httpx2.AsyncClient,
         git: GitRunner,
+        observers: Sequence[TurnObserver] = (),  # told when each turn starts and ends
+        bus: MessageBus | None = None,  # the manager binds itself to it once
     )
     async def close(self) -> None  # cancels running turns and marks them interrupted
 
 api-sessions builds it in the lifespan's AsyncExitStack and registers close.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -201,6 +203,33 @@ class AgentSessions(Protocol):
     async def get(self, project_id: str, agent: str) -> SessionView: ...
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView: ...
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        """An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
+        from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send."""
+        ...
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        """Reads the stored parts, applies transform, stores and publishes message.updated, all
+        under the session lock, so two concurrent updates (two approvals decided at once) both
+        land."""
+        ...
 
     async def stop(self, project_id: str, agent: str) -> None: ...
 
