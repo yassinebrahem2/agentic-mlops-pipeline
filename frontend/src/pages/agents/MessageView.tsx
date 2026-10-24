@@ -1,6 +1,14 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { MessageView as MessageViewType, ToolResultPart } from "./session/events";
 import { ToolStep } from "./ToolStep";
@@ -9,6 +17,29 @@ export interface MessageViewProps {
   message: MessageViewType;
   className?: string;
 }
+
+const markdownComponents: Components = {
+  table: ({ className, ...props }) => (
+    <Table className={cn("my-2 border border-border", className)} {...props} />
+  ),
+  thead: ({ className, ...props }) => <TableHeader className={className} {...props} />,
+  tbody: ({ className, ...props }) => <TableBody className={className} {...props} />,
+  tr: ({ className, ...props }) => (
+    <TableRow className={cn("border-b border-border", className)} {...props} />
+  ),
+  th: ({ className, ...props }) => (
+    <TableHead className={cn("border border-border font-semibold", className)} {...props} />
+  ),
+  td: ({ className, ...props }) => (
+    <TableCell className={cn("border border-border", className)} {...props} />
+  ),
+  a: ({ className, ...props }) => (
+    <a className={cn("text-primary underline", className)} {...props} />
+  ),
+  pre: ({ className, ...props }) => (
+    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props} />
+  ),
+};
 
 export function MessageView({ message, className }: MessageViewProps) {
   if (message.author_kind === "system") {
@@ -63,11 +94,10 @@ export function MessageView({ message, className }: MessageViewProps) {
             return null;
           }
           return (
-            <div
-              key={idx}
-              className="text-sm leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/50 [&_pre]:p-2"
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
+            <div key={idx} className="text-sm leading-relaxed text-foreground">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {part.text}
+              </ReactMarkdown>
             </div>
           );
         })}

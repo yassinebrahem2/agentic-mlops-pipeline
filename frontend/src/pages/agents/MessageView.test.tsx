@@ -204,4 +204,61 @@ describe("MessageView", () => {
     render(<MessageView message={streamingMsg} />);
     expect(screen.getByLabelText("Typing...")).toBeInTheDocument();
   });
+
+  it("renders GFM tables with header, body cells, and border classes", () => {
+    const tableMsg: MessageViewType = {
+      id: "a-tbl",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "text",
+          text: "| Col 1 | Col 2 |\n| --- | --- |\n| Val 1 | Val 2 |",
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:08Z",
+    };
+
+    const { container } = render(<MessageView message={tableMsg} />);
+    const table = container.querySelector("table");
+    expect(table).toBeInTheDocument();
+    expect(table).toHaveClass("border", "border-border");
+
+    const th = screen.getByRole("columnheader", { name: "Col 1" });
+    expect(th).toBeInTheDocument();
+    expect(th).toHaveClass("border", "border-border", "font-semibold");
+
+    const td = screen.getByRole("cell", { name: "Val 1" });
+    expect(td).toBeInTheDocument();
+    expect(td).toHaveClass("border", "border-border");
+  });
+
+  it("renders links and pre blocks with proper styling classes", () => {
+    const textMsg: MessageViewType = {
+      id: "a-fmt",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "text",
+          text: "Visit [site](https://example.com) and run:\n\n```\necho hi\n```",
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:09Z",
+    };
+
+    const { container } = render(<MessageView message={textMsg} />);
+    const link = screen.getByRole("link", { name: "site" });
+    expect(link).toHaveClass("text-primary", "underline");
+
+    const pre = container.querySelector("pre");
+    expect(pre).toBeInTheDocument();
+    expect(pre).toHaveClass("overflow-x-auto", "rounded", "bg-muted/50", "p-2");
+  });
 });
