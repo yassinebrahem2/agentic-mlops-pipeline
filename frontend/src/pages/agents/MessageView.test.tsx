@@ -295,4 +295,43 @@ describe("MessageView", () => {
     // One rendered block: the text part. The approval part adds no wrapper.
     expect(container.querySelector(".space-y-2")?.children).toHaveLength(1);
   });
+
+  it("renders the approval card next to its matching tool call", () => {
+    const agentMsg: MessageViewType = {
+      id: "a9",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "tool_call",
+          id: "call_1",
+          name: "Write",
+          input: { file_path: "NOTES.md", content: "Test" },
+        },
+        {
+          type: "approval",
+          approval_id: "apr_99",
+          tool_call_id: "call_1",
+          preview: { kind: "text", title: "Write NOTES.md", body: "File content preview" },
+          status: "pending",
+          note: null,
+        },
+      ],
+      status: "waiting",
+      created_at: "2026-10-21T18:00:10Z",
+    };
+
+    render(<MessageView message={agentMsg} />);
+
+    // Tool step and approval card render together
+    expect(screen.getByRole("button", { name: /Write.*NOTES\.md/i })).toBeInTheDocument();
+    expect(screen.getByText("File content preview")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+
+    // Waiting line in place of typing indicator
+    expect(screen.getByText("Waiting for your approval")).toBeInTheDocument();
+  });
 });

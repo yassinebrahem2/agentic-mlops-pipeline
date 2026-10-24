@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { MessageView as MessageViewType, ToolResultPart } from "./session/events";
+import type { ApprovalPart } from "./ApprovalCard";
+import { ApprovalCard } from "./ApprovalCard";
 import { ToolStep } from "./ToolStep";
 
 export interface MessageViewProps {
@@ -88,7 +90,15 @@ export function MessageView({ message, className }: MessageViewProps) {
             const result = message.parts.find(
               (p): p is ToolResultPart => p.type === "tool_result" && p.tool_call_id === part.id,
             );
-            return <ToolStep key={part.id} call={part} result={result} />;
+            const approval = message.parts.find(
+              (p): p is ApprovalPart => p.type === "approval" && p.tool_call_id === part.id,
+            );
+            return (
+              <div key={part.id} className="space-y-2">
+                <ToolStep call={part} result={result} />
+                {approval && <ApprovalCard toolName={part.name} approval={approval} />}
+              </div>
+            );
           }
           if (part.type === "tool_result") {
             return null;
@@ -112,6 +122,11 @@ export function MessageView({ message, className }: MessageViewProps) {
             <span className="size-1.5 animate-pulse rounded-full bg-current [animation-delay:200ms]" />
             <span className="size-1.5 animate-pulse rounded-full bg-current [animation-delay:400ms]" />
           </span>
+        )}
+        {message.status === "waiting" && (
+          <div role="status" className="text-xs text-muted-foreground">
+            Waiting for your approval
+          </div>
         )}
         {message.status === "stopped" && (
           <div>
