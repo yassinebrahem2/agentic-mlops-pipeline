@@ -22,7 +22,7 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import sessions
+from mlops_agents.storage.tables import sessions, tasks
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.integrations.test_github_auth import FakeGh
@@ -209,6 +209,16 @@ async def test_current_and_resume_task(
     )
     assert resumed.id == task1.id
     assert (await service.current(project_id, "ses_coder")) == resumed
+
+    # If task1's session_id was changed in DB, ses_coder's current() ignores the cache
+    from sqlalchemy import update
+
+    async with (await databases.project(project_id)).begin() as conn:
+        await conn.execute(
+            update(tasks).where(tasks.c.id == task1.id).values(session_id="ses_reviewer")
+        )
+    current_coder = await service.current(project_id, "ses_coder")
+    assert current_coder is None or current_coder.id != task1.id
 
     # Resume fails for unknown task id
     with pytest.raises(DomainError, match="not found"):

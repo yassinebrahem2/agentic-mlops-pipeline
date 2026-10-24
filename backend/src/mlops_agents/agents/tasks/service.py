@@ -142,6 +142,8 @@ class TasksService(Tasks):
             )
 
         if row["session_id"] != session_id:
+            old_session_id = str(row["session_id"])
+            self._current_tasks.pop((project_id, old_session_id), None)
             async with engine.begin() as conn:
                 await conn.execute(
                     update(tasks).where(tasks.c.id == task_id).values(session_id=session_id)
@@ -167,7 +169,11 @@ class TasksService(Tasks):
                     .mappings()
                     .first()
                 )
-            if row is not None and row["status"] in ("active", "in_review"):
+            if (
+                row is not None
+                and row["status"] in ("active", "in_review")
+                and row["session_id"] == session_id
+            ):
                 return TaskRef(
                     id=row["id"],
                     title=row["title"],

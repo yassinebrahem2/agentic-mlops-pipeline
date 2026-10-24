@@ -98,14 +98,16 @@ async def task_git(
             "git is not installed or not on PATH. Install git and restart the app.", code=-1
         ) from None
     except subprocess.TimeoutExpired:
+        cmd_name = args[0] if args else "command"
         raise GitError(
-            f"git {args[0]} took longer than {int(timeout)} seconds and was stopped.", code=-1
+            f"git {cmd_name} took longer than {int(timeout)} seconds and was stopped.", code=-1
         ) from None
 
     hidden = [token] if token else []
     stdout = scrub_values(completed.stdout.decode("utf-8", "replace"), hidden)
     stderr = scrub_values(scrub_url_secrets(completed.stderr.decode("utf-8", "replace")), hidden)
     if check and completed.returncode != 0:
+        cmd_name = args[0] if args else "command"
         reason = stderr.strip() or stdout.strip() or "no output"
-        raise GitError(f"git {args[0]} failed: {reason}", code=completed.returncode)
+        raise GitError(f"git {cmd_name} failed: {reason}", code=completed.returncode)
     return GitResult(completed.returncode, stdout, stderr)
