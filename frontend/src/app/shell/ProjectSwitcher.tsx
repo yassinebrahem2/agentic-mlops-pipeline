@@ -1,7 +1,6 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronsUpDown, FolderKanban, Loader2 } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,8 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { useCurrentProject } from "@/lib/useCurrentProject";
 import { useOpenProject } from "@/lib/useOpenProject";
+import { useProjects } from "@/lib/useProjects";
 import { cn } from "@/lib/utils";
 
 export function ProjectSwitcher({
@@ -23,7 +24,7 @@ export function ProjectSwitcher({
   className?: string;
 }) {
   const [open, setOpen] = React.useState(false);
-  const { projectId } = useParams<{ projectId?: string }>();
+  const { projectId, project: currentProject } = useCurrentProject();
   const {
     openProject,
     openingId,
@@ -41,16 +42,8 @@ export function ProjectSwitcher({
     }
   }, [openError]);
 
-  const { data: projects, error: projectsError } = useQuery({
-    queryKey: ["projects"],
-    queryFn: async () => {
-      const res = await api.GET("/api/projects");
-      return unwrap(res);
-    },
-  });
+  const { data: projects, error: projectsError } = useProjects();
 
-  const currentProject =
-    projectId && projects ? projects.find((p) => p.id === projectId) : undefined;
   const label = currentProject ? currentProject.name : "Projects";
 
   return (

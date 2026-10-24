@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { api, errorText, unwrap } from "@/lib/api";
 import { projectKey } from "@/lib/useProject";
+import { projectsKey } from "@/lib/useProjects";
 
 export function RemoveProjectDialog({ project }: { project: components["schemas"]["Project"] }) {
   const [open, setOpen] = useState(false);
@@ -28,7 +29,7 @@ export function RemoveProjectDialog({ project }: { project: components["schemas"
     },
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: projectKey(project.id) });
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: projectsKey });
       void navigate("/");
     },
   });

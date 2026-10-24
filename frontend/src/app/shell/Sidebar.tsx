@@ -1,5 +1,6 @@
-import { Link, NavLink, useParams } from "react-router";
+import { Link, NavLink } from "react-router";
 import { APP_NAME } from "@/config";
+import { useCurrentProject } from "@/lib/useCurrentProject";
 import { cn } from "@/lib/utils";
 import type { PageRoute } from "../routes";
 import { GearMenu } from "./GearMenu";
@@ -14,7 +15,7 @@ export function Sidebar({
   onNavigate?: () => void;
   className?: string;
 }) {
-  const { projectId } = useParams<{ projectId?: string }>();
+  const { projectId } = useCurrentProject();
   const projectRoutes = routes.filter((r) => r.nav?.area === "project");
   const appRoutes = routes.filter((r) => r.nav?.area === "app");
 

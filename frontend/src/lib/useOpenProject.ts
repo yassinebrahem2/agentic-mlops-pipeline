@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { api, errorText, unwrap } from "@/lib/api";
+import { projectsKey } from "@/lib/useProjects";
 
 export interface UseOpenProjectOptions {
   onNavigate?: () => void;
@@ -18,7 +19,7 @@ export function useOpenProject(options?: UseOpenProjectOptions) {
       return unwrap(res);
     },
     onSuccess: (_data, targetId) => {
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: projectsKey });
       options?.onNavigate?.();
       void navigate(`/projects/${targetId}`);
     },
