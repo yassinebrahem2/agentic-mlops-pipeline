@@ -282,13 +282,10 @@ class TurnWorkers:
 
     async def _final_text(self, project_id: str, session_id: str, turn_id: str) -> str | None:
         """The last text the agent wrote in the turn, or None when it wrote none."""
-        texts = [
-            part.text
-            for message in await self._store.messages(project_id, session_id)
-            if message.turn_id == turn_id and message.author_kind == "agent"
-            for part in message.parts
-            if isinstance(part, TextPart) and part.text
-        ]
+        message = await self._store.turn_agent_message(project_id, session_id, turn_id)
+        if message is None:
+            return None
+        texts = [part.text for part in message.parts if isinstance(part, TextPart) and part.text]
         return texts[-1] if texts else None
 
 
