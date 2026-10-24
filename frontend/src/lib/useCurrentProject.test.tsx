@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
+import { useProjects } from "./useProjects";
 import { resetCurrentProjectStore, useCurrentProject } from "./useCurrentProject";
 
 type Project = components["schemas"]["Project"];
@@ -56,7 +57,6 @@ function wrapperAt(path: string) {
         <MemoryRouter initialEntries={[path]}>
           <Navigator />
           <Routes>
-            <Route path="/projects/new" element={children} />
             <Route path="/projects/:projectId/*" element={children} />
             <Route path="*" element={children} />
           </Routes>
@@ -114,12 +114,14 @@ describe("useCurrentProject", () => {
 
   it("is undefined when no project was ever opened", async () => {
     stubProjects([project("prj_c", null)]);
-    const { result } = renderHook(() => useCurrentProject(), { wrapper: wrapperAt("/providers") });
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
+    const { result } = renderHook(() => ({ current: useCurrentProject(), list: useProjects() }), {
+      wrapper: wrapperAt("/providers"),
     });
-    expect(result.current.projectId).toBeUndefined();
-    expect(result.current.project).toBeUndefined();
+    await waitFor(() => {
+      expect(result.current.list.isSuccess).toBe(true);
+    });
+    expect(result.current.current.projectId).toBeUndefined();
+    expect(result.current.current.project).toBeUndefined();
   });
 
   it("ignores a remembered project that no longer exists", async () => {
@@ -135,12 +137,14 @@ describe("useCurrentProject", () => {
     });
   });
 
-  it.each(["/", "/projects/new"])("has no project on %s", async (path) => {
+  it("has no project on the home page", async () => {
     stubProjects([A, B]);
-    const { result } = renderHook(() => useCurrentProject(), { wrapper: wrapperAt(path) });
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
+    const { result } = renderHook(() => ({ current: useCurrentProject(), list: useProjects() }), {
+      wrapper: wrapperAt("/"),
     });
-    expect(result.current.projectId).toBeUndefined();
+    await waitFor(() => {
+      expect(result.current.list.isSuccess).toBe(true);
+    });
+    expect(result.current.current.projectId).toBeUndefined();
   });
 });

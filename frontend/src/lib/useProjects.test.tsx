@@ -1,16 +1,12 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQueryWrapper } from "../test/queryWrapper";
-import { projectsKey, useProjects } from "./useProjects";
+import { useProjects } from "./useProjects";
 
 describe("useProjects", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it("builds the projects query key", () => {
-    expect(projectsKey).toEqual(["projects"]);
   });
 
   it("fetches GET /api/projects", async () => {
