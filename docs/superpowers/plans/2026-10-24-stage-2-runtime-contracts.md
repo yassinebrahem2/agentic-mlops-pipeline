@@ -42,6 +42,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 - `backend/src/mlops_agents/workspace/refs.py`: `github_remote`.
 - `backend/src/mlops_agents/agents/catalog.py`: the `status_board` field.
 - `frontend/openapi.json` and `frontend/src/api/schema.d.ts`, regenerated.
+- `frontend/src/pages/agents/MessageView.tsx`: one line, `if (part.type === "approval") return null;` beside the `tool_result` check, so the build passes with the new part (Decision #218). ui-polish owns the rest of that file.
 - The tests of each.
 
 **Interfaces:** Consumes merged code. Produces I8 to I12 exactly as the overview writes them. The overview is the one source of their names and types; this task writes them into code without changing them. A needed change takes a Decision issue.
@@ -66,7 +67,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 ### Task 2: The stage 2 schema
 
-**Files:** new `backend/src/mlops_agents/storage/migrations/project/0002_stage2.sql`, `backend/src/mlops_agents/storage/tables.py` (the new tables and columns), `backend/src/mlops_agents/agents/runtime/store.py` (the `messages` columns it reads and writes), tests.
+**Files:** new `backend/src/mlops_agents/storage/migrations/project/0002_stage2.sql`, `backend/src/mlops_agents/storage/tables.py` (the new tables and columns), `backend/src/mlops_agents/ids.py` and its test (the prefixes `tsk`, `apr`, `evt`, `aud`, `xch`, `wak`, Decision #219), `backend/src/mlops_agents/agents/runtime/store.py` (the `messages` columns it reads and writes), tests.
 
 **Interfaces:** Consumes task 1. Produces the schema below. It is the only stage 2 migration: later plans add none without a Decision issue.
 
@@ -97,7 +98,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
   - Index on (`status`, `due_at`).
 - `messages`, rebuilt (SQLite cannot alter a CHECK):
   - its `status` CHECK gains `waiting`;
-  - new columns `exchange_id` (nullable), `hop` (nullable integer), `read_by_turn` (nullable, FK turns, SET NULL).
+  - new columns `exchange_id` (nullable, FK exchanges, SET NULL), `hop` (nullable integer), `read_by_turn` (nullable, FK turns, SET NULL), each foreign key column indexed (Decision #220).
   - The rebuild keeps every row, `seq` values and indexes, inside the migration's transaction. Foreign keys are checked after it (`PRAGMA foreign_key_check` returns nothing).
 
 **Tests (stop condition):**
