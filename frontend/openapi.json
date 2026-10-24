@@ -351,6 +351,75 @@
         "title": "DetectedKey",
         "type": "object"
       },
+      "EventRecord": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "turn.started",
+              "turn.waiting",
+              "turn.ended",
+              "task.started",
+              "task.ended",
+              "pr.opened",
+              "pr.updated",
+              "issue.opened",
+              "issue.commented",
+              "approval.requested",
+              "approval.decided",
+              "message.sent",
+              "wakeup.scheduled",
+              "sandbox.build.started",
+              "sandbox.build.finished",
+              "sandbox.build.failed"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "ts",
+          "source",
+          "type",
+          "subject_id",
+          "payload"
+        ],
+        "title": "EventRecord",
+        "type": "object"
+      },
       "FolderEntry": {
         "properties": {
           "is_git_repo": {
@@ -2949,6 +3018,89 @@
         "summary": "Stream Session",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/events/stream": {
+      "get": {
+        "operationId": "stream_events_api_projects__project_id__events_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/EventRecord"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Resync"
+                    }
+                  ],
+                  "title": "Response 200 Stream Events Api Projects  Project Id  Events Stream Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Project event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Events",
+        "tags": [
+          "events"
         ]
       }
     },
