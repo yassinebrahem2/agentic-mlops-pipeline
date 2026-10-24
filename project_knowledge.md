@@ -38,7 +38,7 @@ Anything not listed here is unknown.
 - [USER] Agents talk to each other: when agent A messages agent B, the message lands in B's session labeled "from A"; B's reply goes back into A's session labeled "from B".
 - [AGREED] Safeguards: hop limit and token budget per exchange; no permission escalation (B's actions still go through the policy); everything visible in Activity and on the status board.
 - [USER] A message from another agent reaches the recipient mid-turn; it does not wait for the turn to end.
-- [USER] A wake-up an agent schedules for itself continues its work in its own session.
+- [USER] Scheduled work, whether an agent's own wake-up or a recurring routine, runs in that agent's one session, labeled with its source.
 - [AGREED] Long sessions: the UI keeps the full history; the agent works from a compacted summary plus Knowledge and the status board.
 
 ### Permissions, code changes and execution
@@ -110,7 +110,6 @@ Anything not listed here is unknown.
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open
-- Where routine (recurring) scheduled work appears: the lead wants a new session per run, which conflicts with one session per agent per project.
 - What runs where: whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
 - Deliverable format. (Team of 5. Deadline 2026-10-29, confirmed 2026-10-24.)
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
