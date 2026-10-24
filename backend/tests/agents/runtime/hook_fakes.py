@@ -8,8 +8,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.messages.tool import ToolCall
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
@@ -264,12 +265,12 @@ async def run_graph(
         checkpointer=checkpointer,
     )
     initial: TurnState = {
-        "messages": [HumanMessage(content="Go")],
+        "messages": [SystemMessage(content="You are a test agent."), HumanMessage(content="Go")],
         "step_count": 0,
         "stopped_reason": None,
     }
-    config = {"configurable": {"thread_id": turn_id}}
-    state = await asyncio.wait_for(graph.ainvoke(initial, config=config), timeout=10)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # LangGraph ainvoke is partially untyped
+    config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+    state = await asyncio.wait_for(graph.ainvoke(initial, config=config), timeout=10)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke is partially untyped
     return GraphRun(
         agent=agent,
         caller=caller,

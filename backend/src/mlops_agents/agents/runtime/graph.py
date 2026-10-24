@@ -56,7 +56,11 @@ class TurnHooks:
 
 
 def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
-    """A checkpointer that reads back LangChain's messages and the gate's types in the state."""
+    """A checkpointer that reads back LangChain's messages and the gate's types in the state.
+
+    Only these and LangGraph's safe types are read back as themselves; any other type would come
+    back a plain dict. A type added to `TurnState` beyond LangChain's messages is added here.
+    """
     allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview)]
     return AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
 

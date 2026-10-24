@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages.tool import ToolCall
+from langchain_core.runnables import RunnableConfig
 
+from mlops_agents.agents.runtime.contract import Part, ToolResultPart
 from mlops_agents.agents.runtime.graph import turn_checkpointer
 from mlops_agents.agents.runtime.hooks import GateDecision
 from mlops_agents.agents.tools.base import TaskRef
@@ -32,12 +34,8 @@ from tests.agents.runtime.hook_fakes import (
 )
 
 
-def _results(run_parts: list[object]) -> dict[str, tuple[str, bool]]:
-    return {
-        p.tool_call_id: (p.content, p.is_error)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # filtered on type below
-        for p in run_parts
-        if getattr(p, "type", None) == "tool_result"
-    }
+def _results(parts: list[Part]) -> dict[str, tuple[str, bool]]:
+    return {p.tool_call_id: (p.content, p.is_error) for p in parts if isinstance(p, ToolResultPart)}
 
 
 async def test_a_denied_call_gets_the_denial_and_the_others_run(
@@ -55,7 +53,7 @@ async def test_a_denied_call_gets_the_denial_and_the_others_run(
     )
 
     assert tool.ran == ["a", "c"]
-    assert _results(list(run.parts)) == {
+    assert _results(run.parts) == {
         "c1": ("echo a", False),
         "c2": ("Denied at level suggest: write_code.", True),
         "c3": ("echo c", False),
@@ -107,7 +105,7 @@ async def test_a_rejected_call_gets_its_message_or_a_fixed_text(
     )
 
     assert tool.ran == []
-    assert _results(list(run.parts)) == {
+    assert _results(run.parts) == {
         "c1": ("The user rejected this action.", True),
         "c2": ("The user rejected this action: not now.", True),
     }
@@ -129,7 +127,7 @@ async def test_invalid_arguments_and_unknown_tools_never_reach_the_gate(
     )
 
     assert gate.decided == []
-    results = _results(list(run.parts))
+    results = _results(run.parts)
     assert results["c1"][1] is True
     assert results["c1"][0].startswith("Invalid arguments for Echo: text:")
     assert results["c2"] == ("There is no tool named Missing.", True)
@@ -150,7 +148,7 @@ async def test_a_failing_preview_is_answered_without_a_gate_call(
     )
 
     assert [[c.tool_call_id for c in step] for step in gate.decided] == [["c2"]]
-    assert _results(list(run.parts)) == {
+    assert _results(run.parts) == {
         "c1": ("There is no file a.py.", True),
         "c2": ("echo b", False),
     }
@@ -205,6 +203,9 @@ async def test_each_call_gets_its_own_context_and_sees_a_task_change(
     # decide judged every call with the context from before any of them ran.
     assert [c.ctx.task for c in gate.decided[0]] == [None, None, None]
     assert [c.task for c in tool.contexts] == [None, task, task]
+    last = tool.contexts[-1]
+    assert (last.project_id, last.agent) == ("prj_1", "orchestrator")
+    assert (last.session_id, last.turn_id) == (run.session_id, run.turn_id)
     # One view per task for the turn: the repository's is the one the builder listed for the
     # layout, and the task's is fetched once, when the task first appears.
     assert [c.files for c in tool.contexts] == [run.agent.files, task_files, task_files]
@@ -231,8 +232,8 @@ async def test_the_decisions_are_checkpointed_as_gate_decisions(
             checkpointer=checkpointer,
         )
         turn_id = run.turn_id
-        config = {"configurable": {"thread_id": turn_id}}
-        saved = await checkpointer.aget_tuple(config)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # LangGraph aget_tuple is partially untyped
+        config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+        saved = await checkpointer.aget_tuple(config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph aget_tuple is partially untyped
         assert saved is not None
         assert saved.checkpoint["channel_values"]["decisions"] == {"c1": approved}
         # Read back as the gate's own types, with nothing blocked or merely tolerated.
