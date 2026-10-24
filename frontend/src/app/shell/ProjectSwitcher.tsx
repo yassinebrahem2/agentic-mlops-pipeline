@@ -53,13 +53,13 @@ export function ProjectSwitcher({
           variant="outline"
           size="sm"
           aria-label={label}
-          className={cn("h-8 max-w-[130px] justify-between text-xs font-normal", className)}
+          className={cn("h-9 w-full justify-between px-3 text-sm font-normal", className)}
         >
           <span className="truncate">{label}</span>
-          <ChevronsUpDown className="ml-1 size-3 shrink-0 opacity-50" />
+          <ChevronsUpDown className="ml-1 size-4 shrink-0 opacity-50" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
+      <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
           Projects
         </DropdownMenuLabel>

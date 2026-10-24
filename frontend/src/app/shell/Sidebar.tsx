@@ -26,8 +26,8 @@ export function Sidebar({
         className,
       )}
     >
-      <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
-        <h1 className="text-lg font-semibold tracking-tight shrink-0">
+      <div className="flex flex-col gap-3 border-b p-3">
+        <h1 className="px-3 text-lg font-semibold tracking-tight">
           <Link to="/" onClick={onNavigate} className="transition-opacity hover:opacity-80">
             {APP_NAME}
           </Link>

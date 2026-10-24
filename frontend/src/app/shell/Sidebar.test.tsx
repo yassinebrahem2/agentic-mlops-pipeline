@@ -108,4 +108,19 @@ describe("Sidebar current project", () => {
       "/projects/prj_a/agents",
     );
   });
+
+  it("puts a full-width switcher below the app name, as tall as the nav items", async () => {
+    const longName = "A very long project name that is shown in full";
+    stubProjects([project("prj_a", longName, "2026-10-10T10:00:00Z")]);
+    renderPage("/providers", { routes });
+
+    const trigger = await sidebar().findByRole("button", { name: longName });
+    expect(trigger.className).not.toContain("max-w-[130px]");
+    expect(trigger).toHaveClass("w-full", "h-9");
+    const heading = sidebar().getByRole("heading", { level: 1 });
+    expect(heading.parentElement).toBe(trigger.parentElement);
+    expect(
+      heading.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });
