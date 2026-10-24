@@ -91,6 +91,9 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
   - it marks both `streaming` and `running` again;
   - it runs `graph.ainvoke(Command(resume=True), config)`.
 - A decision on an approval that is not pending gets a 409.
+- The executor's checkpointer reads checkpoints in strict mode with a list of allowed graph-state types (runtime-contracts task 4): add every new state type there.
+- The rejection text is `tool_step.REJECTED_TEXT`; use it, never a copy.
+- An approved call runs only against the task that was current when it was decided: the approval stores the task id, and if the current task differs at run time, the call is answered with an error instead.
 - With the real gate wired, every existing test runs at the default level `ask`. Test tools of risk `read` are unaffected; any test turn that calls a non-`read` tool sets its project to `autonomous` in its setup. Every stage 1 test passes.
 
 **Tests (stop condition):**

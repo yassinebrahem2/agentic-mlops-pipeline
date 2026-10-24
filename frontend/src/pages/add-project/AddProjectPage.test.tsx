@@ -152,88 +152,8 @@ describe("AddProjectPage", () => {
     expect(link.parentElement).toHaveTextContent("Connect GitHub in Integrations first.");
 
     // Nothing else on the GitHub tab
-    expect(screen.queryByRole("textbox", { name: "Repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
-  });
-
-  it("the repository list filters and fills the input", async () => {
-    const fakeFetch = vi
-      .fn()
-      .mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const { url } = await getUrlAndMethod(input, init);
-        if (url.includes("/api/app")) {
-          return new Response(
-            JSON.stringify({
-              mode: "local",
-              name: "mlops_agents",
-              version: "0.1.0",
-              data_dir: "/data",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (url.includes("/api/folders")) {
-          return new Response(
-            JSON.stringify({
-              path: "/workspace",
-              parent: null,
-              roots: ["/"],
-              entries: [],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (url.endsWith("/api/github")) {
-          return new Response(
-            JSON.stringify({
-              mode: "gh",
-              gh_available: true,
-              login: "octocat",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (url.includes("/api/github/repos")) {
-          return new Response(
-            JSON.stringify([
-              {
-                full_name: "octocat/hello-world",
-                default_branch: "main",
-                description: "Sample repo",
-                private: false,
-              },
-              {
-                full_name: "octocat/second-project",
-                default_branch: "main",
-                description: null,
-                private: false,
-              },
-            ]),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return new Response(null, { status: 404 });
-      });
-    vi.stubGlobal("fetch", fakeFetch);
-
-    const user = userEvent.setup();
-    renderPage("/projects/new", { routes: testRoutes });
-
-    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
-
-    expect(await screen.findByText("octocat/hello-world")).toBeInTheDocument();
-    expect(screen.getByText("octocat/second-project")).toBeInTheDocument();
-
-    const filterInput = screen.getByRole("textbox", { name: "Filter repositories" });
-    await user.type(filterInput, "hello");
-
-    expect(screen.getByText("octocat/hello-world")).toBeInTheDocument();
-    expect(screen.queryByText("octocat/second-project")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /octocat\/hello-world/i }));
-
-    const repoInput = screen.getByRole("textbox", { name: "Repository" });
-    expect(repoInput).toHaveValue("octocat/hello-world");
   });
 
   it("adding GitHub project sends {source: 'github', repo} and shows progress text until response, then navigates", async () => {
@@ -301,7 +221,7 @@ describe("AddProjectPage", () => {
 
     await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
-    const repoInput = await screen.findByRole("textbox", { name: "Repository" });
+    const repoInput = await screen.findByRole("combobox", { name: "Repository" });
     await user.type(repoInput, "octocat/hello-world");
 
     const addBtn = screen.getByRole("button", { name: "Add" });

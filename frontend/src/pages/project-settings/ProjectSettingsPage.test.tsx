@@ -1,16 +1,10 @@
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { components } from "@/api/schema";
 import { renderPage } from "@/test/render";
 import { hostedModelWarning } from "@/lib/models";
 import { route } from "./route";
-
-beforeAll(() => {
-  window.HTMLElement.prototype.hasPointerCapture = () => false;
-  window.HTMLElement.prototype.setPointerCapture = () => {};
-  window.HTMLElement.prototype.releasePointerCapture = () => {};
-});
 
 type Project = components["schemas"]["Project"];
 type Agent = components["schemas"]["AgentInfo"];
