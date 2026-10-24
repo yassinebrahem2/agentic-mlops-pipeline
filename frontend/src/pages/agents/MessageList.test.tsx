@@ -29,6 +29,29 @@ describe("MessageList stick-to-bottom", () => {
     expect(scrollIntoView).toHaveBeenCalled();
   });
 
+  it("resumes following streamed text after the user returns to the bottom", () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { getByRole, rerender } = render(
+      <MessageList messages={[createMessage("m1", "First")]} />,
+    );
+    const log = getByRole("log", { name: "Messages" });
+    Object.defineProperties(log, {
+      scrollHeight: { value: 1000, configurable: true },
+      clientHeight: { value: 500, configurable: true },
+    });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    scrollIntoView.mockClear();
+    rerender(<MessageList messages={[createMessage("m1", "First streamed chunk")]} />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    log.scrollTop = 500;
+    fireEvent.scroll(log);
+    rerender(<MessageList messages={[createMessage("m1", "First streamed chunk and more")]} />);
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
+    scrollIntoView.mockRestore();
+  });
+
   it("does not scroll when the user has scrolled up", () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;

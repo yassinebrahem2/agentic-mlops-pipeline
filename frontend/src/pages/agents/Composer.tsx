@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
+import { Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +21,7 @@ export function Composer({ agentDisplayName, busy, onSend, onStop, className }: 
   const [sending, setSending] = useState(false);
 
   const canSend = text.trim().length > 0 && !sending;
+  const showStop = busy && text.length === 0;
 
   const handleSend = async () => {
     if (!canSend) return;
@@ -58,7 +60,7 @@ export function Composer({ agentDisplayName, busy, onSend, onStop, className }: 
       <Label htmlFor="composer-textarea" className="sr-only">
         {labelText}
       </Label>
-      <div className="flex items-end gap-2">
+      <div className="flex items-center gap-2">
         <Textarea
           id="composer-textarea"
           aria-label={labelText}
@@ -69,19 +71,19 @@ export function Composer({ agentDisplayName, busy, onSend, onStop, className }: 
             if (error) setError(null);
           }}
           onKeyDown={handleKeyDown}
-          rows={2}
-          className="resize-none"
+          rows={1}
+          className="min-h-0 h-48 max-h-48 resize-none overflow-y-auto supports-[field-sizing:content]:h-auto"
         />
-        <div className="flex shrink-0 gap-2">
-          {busy && (
-            <Button type="button" variant="outline" onClick={() => void handleStop()}>
-              Stop
-            </Button>
-          )}
-          <Button type="button" disabled={!canSend} onClick={() => void handleSend()}>
-            Send
-          </Button>
-        </div>
+        <Button
+          type="button"
+          size="icon"
+          variant={showStop ? "outline" : "default"}
+          aria-label={showStop ? "Stop" : "Send"}
+          disabled={!showStop && !canSend}
+          onClick={() => void (showStop ? handleStop() : handleSend())}
+        >
+          {showStop ? <Square aria-hidden="true" /> : <Send aria-hidden="true" />}
+        </Button>
       </div>
       {error && (
         <p role="alert" className="text-xs text-destructive">

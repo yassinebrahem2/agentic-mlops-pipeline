@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance } from "vitest";
 import { renderPage } from "@/test/render";
@@ -32,6 +32,49 @@ describe("AgentsPage", () => {
     getSpy = mocks.getSpy;
     postSpy = mocks.postSpy;
   };
+
+  it("keeps the message scroller between the header and composer", async () => {
+    setupDefaultMocks();
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const input = await screen.findByRole("textbox", { name: "Message Orchestrator" });
+    const log = screen.getByRole("log", { name: "Messages" });
+    const page = log.parentElement;
+    expect(page).toHaveClass("flex", "h-full", "flex-col", "overflow-hidden");
+    expect(log).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+    expect(page?.querySelectorAll(":scope > .overflow-y-auto")).toHaveLength(1);
+    expect(log.previousElementSibling).toBeInTheDocument();
+    expect(log.nextElementSibling).toContainElement(input);
+  });
+
+  it("switches agents with the labeled styled combobox", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks({
+      agents: [
+        { name: "orchestrator", display_name: "Orchestrator", chat: true, settings: {} },
+        { name: "analyst", display_name: "Analyst", chat: true, settings: {} },
+        { name: "worker", display_name: "Worker", chat: false, settings: {} },
+      ],
+    });
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const switcher = await screen.findByRole("combobox", { name: "Select agent" });
+    expect(switcher).toHaveAttribute("data-slot", "select-trigger");
+    expect(screen.getByLabelText("Agent:")).toBe(switcher);
+    switcher.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(await screen.findByRole("option", { name: "Analyst" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Worker" })).not.toBeInTheDocument();
+    await user.keyboard("{End}{Enter}");
+
+    await screen.findByRole("textbox", { name: "Message Analyst" });
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalledWith(
+        "/api/projects/{project_id}/agents/{agent}/session",
+        expect.objectContaining({ params: { path: { project_id: "prj_1", agent: "analyst" } } }),
+      );
+    });
+  });
 
   it("renders a recorded turn with user message, closed tool step with file path, and markdown answer", async () => {
     const user = userEvent.setup();
