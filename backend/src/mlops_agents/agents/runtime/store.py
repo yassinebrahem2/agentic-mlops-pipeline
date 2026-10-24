@@ -65,6 +65,8 @@ class SessionStore:
         status: MessageStatus,
         turn_id: str | None = None,
         from_agent: str | None = None,
+        exchange_id: str | None = None,
+        hop: int | None = None,
     ) -> MessageView:
         """Insert a new message row and return its view."""
         engine = await self._databases.project(project_id)
@@ -85,6 +87,8 @@ class SessionStore:
                     parts=parts_json,
                     status=status,
                     created_at=created_at,
+                    exchange_id=exchange_id,
+                    hop=hop,
                 )
             )
 

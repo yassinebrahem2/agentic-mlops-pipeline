@@ -266,4 +266,33 @@ describe("MessageView", () => {
     expect(pre).toHaveClass("overflow-x-auto", "rounded", "bg-muted/50", "p-2");
     expect(pre).not.toHaveAttribute("node");
   });
+  it("renders text and nothing for an approval part in an agent message", () => {
+    const agentMsg: MessageViewType = {
+      id: "a8",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        { type: "text", text: "I need your approval to run this." },
+        {
+          type: "approval",
+          approval_id: "apr_1",
+          tool_call_id: "c8",
+          preview: { kind: "command", title: "Run command", body: "rm -rf build" },
+          status: "pending",
+          note: null,
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:08Z",
+    };
+
+    const { container } = render(<MessageView message={agentMsg} />);
+    expect(screen.getByText("I need your approval to run this.")).toBeInTheDocument();
+    expect(screen.queryByText(/rm -rf build/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Run command")).not.toBeInTheDocument();
+    // One rendered block: the text part. The approval part adds no wrapper.
+    expect(container.querySelector(".space-y-2")?.children).toHaveLength(1);
+  });
 });

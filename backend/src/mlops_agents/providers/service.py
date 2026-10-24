@@ -7,7 +7,6 @@ import secrets
 from collections.abc import Mapping
 
 import httpx2
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import RowMapping, delete, func, insert, select, update
 
 from mlops_agents.clock import now_iso
@@ -15,6 +14,7 @@ from mlops_agents.credentials import KeyStore
 from mlops_agents.credentials.scrub import error_text, mask_key, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
+from mlops_agents.providers import listing
 from mlops_agents.providers.errors import ProviderCallError
 from mlops_agents.providers.models import (
     DetectedKey,
@@ -37,25 +37,6 @@ KNOWN_ENV_KEYS: dict[str, tuple[str, str]] = {
     "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
 }
 _ENV_VAR = re.compile(r"^(?P<base>[A-Z0-9_]+?)(?:_\d+)?$")
-
-
-class _ListedModel(BaseModel):
-    """One entry of a provider's /models answer. Providers name the context window differently."""
-
-    id: str
-    context_window: object = None
-    context_length: object = None
-    max_context_length: object = None
-
-    def context(self) -> int | None:
-        for value in (self.context_window, self.context_length, self.max_context_length):
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                return value
-        return None
-
-
-class _ModelList(BaseModel):
-    data: list[object]
 
 
 class ProvidersService:
@@ -251,21 +232,12 @@ class ProvidersService:
         keys = await self.keys_for(provider.id)
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {name} first.", status=409)
-        payload = await self._get(provider, "/models", keys[0] if keys else None)
-        try:
-            listing = _ModelList.model_validate(payload)
-        except ValidationError:
-            raise DomainError(
-                "provider_error", f"{provider.name} did not answer with a model list.", status=502
-            ) from None
-        found: list[RemoteModel] = []
-        for item in listing.data:
-            try:
-                listed = _ListedModel.model_validate(item)
-            except ValidationError:
-                continue  # an entry without a string id cannot be added; the others still can
-            found.append(RemoteModel(id=listed.id, context_window=listed.context()))
-        return sorted(found, key=lambda m: m.id)
+        return await listing.list_remote_models(
+            provider,
+            keys[0] if keys else None,
+            get=self._get,
+            http=self._http,
+        )
 
     # Models
 
@@ -301,7 +273,9 @@ class ProvidersService:
                 remote = await self.list_remote_models(provider.name)
             except DomainError:
                 remote = []  # the listing is only a convenience; the user can enter it later
-            context = next((m.context_window for m in remote if m.id == wire), None)
+            context = next(
+                (m.context_window for m in remote if listing.match_model_id(m.id, wire)), None
+            )
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(

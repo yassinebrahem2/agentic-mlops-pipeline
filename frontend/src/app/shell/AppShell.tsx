@@ -50,7 +50,7 @@ export function AppShell({ routes }: { routes: PageRoute[] }) {
         </DialogContent>
       </Dialog>
 
-      <div className="sticky top-0 hidden h-full shrink-0 md:flex">
+      <div className="hidden h-full shrink-0 md:flex">
         <Sidebar routes={routes} />
       </div>
 

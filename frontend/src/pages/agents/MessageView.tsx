@@ -105,6 +105,7 @@ export function MessageView({ message, className }: MessageViewProps) {
           if (part.type === "tool_result") {
             return null;
           }
+          if (part.type === "approval") return null;
           return (
             <div key={idx} className="text-sm leading-relaxed text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
