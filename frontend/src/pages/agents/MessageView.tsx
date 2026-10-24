@@ -18,38 +18,26 @@ export interface MessageViewProps {
   className?: string;
 }
 
-function dropNode<T extends object>(props: T): Omit<T, "node"> {
-  const rest: Record<string, unknown> = { ...(props as Record<string, unknown>) };
-  delete rest.node;
-  return rest as Omit<T, "node">;
-}
-
 const markdownComponents: Components = {
-  table: ({ className, ...props }) => (
-    <Table className={cn("my-2 border border-border", className)} {...dropNode(props)} />
+  table: ({ node: _node, className, ...props }) => (
+    <Table className={cn("my-2 border border-border", className)} {...props} />
   ),
-  thead: ({ className, ...props }) => <TableHeader className={className} {...dropNode(props)} />,
-  tbody: ({ className, ...props }) => <TableBody className={className} {...dropNode(props)} />,
-  tr: ({ className, ...props }) => (
-    <TableRow className={cn("border-b border-border", className)} {...dropNode(props)} />
+  thead: ({ node: _node, className, ...props }) => <TableHeader className={className} {...props} />,
+  tbody: ({ node: _node, className, ...props }) => <TableBody className={className} {...props} />,
+  tr: ({ node: _node, className, ...props }) => (
+    <TableRow className={cn("border-b border-border", className)} {...props} />
   ),
-  th: ({ className, ...props }) => (
-    <TableHead
-      className={cn("border border-border font-semibold", className)}
-      {...dropNode(props)}
-    />
+  th: ({ node: _node, className, ...props }) => (
+    <TableHead className={cn("border border-border font-semibold", className)} {...props} />
   ),
-  td: ({ className, ...props }) => (
-    <TableCell className={cn("border border-border", className)} {...dropNode(props)} />
+  td: ({ node: _node, className, ...props }) => (
+    <TableCell className={cn("border border-border", className)} {...props} />
   ),
-  a: ({ className, ...props }) => (
-    <a className={cn("text-primary underline", className)} {...dropNode(props)} />
+  a: ({ node: _node, className, ...props }) => (
+    <a className={cn("text-primary underline", className)} {...props} />
   ),
-  pre: ({ className, ...props }) => (
-    <pre
-      className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)}
-      {...dropNode(props)}
-    />
+  pre: ({ node: _node, className, ...props }) => (
+    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props} />
   ),
 };
 
