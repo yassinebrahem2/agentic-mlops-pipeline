@@ -19,7 +19,7 @@ export interface MessageViewProps {
 }
 
 function dropNode<T extends object>(props: T): Omit<T, "node"> {
-  const rest: Record<string, unknown> = { ...props };
+  const rest: Record<string, unknown> = { ...(props as Record<string, unknown>) };
   delete rest.node;
   return rest as Omit<T, "node">;
 }
