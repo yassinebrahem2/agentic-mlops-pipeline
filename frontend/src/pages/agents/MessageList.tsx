@@ -31,7 +31,7 @@ export function MessageList({ messages, className }: MessageListProps) {
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className={cn("flex-1 overflow-y-auto p-4 space-y-4", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto p-4 space-y-4", className)}
       role="log"
       aria-label="Messages"
     >

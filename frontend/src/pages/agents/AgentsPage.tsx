@@ -3,6 +3,13 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { errorText } from "@/lib/api";
 import { useProject } from "@/lib/useProject";
 import { useProjectAgents } from "@/lib/useProjectAgents";
@@ -126,25 +133,27 @@ export function AgentsPage() {
           <label htmlFor="agent-select" className="font-medium">
             Agent:
           </label>
-          <select
-            id="agent-select"
-            aria-label="Select agent"
+          <Select
             value={selectedAgentName}
-            onChange={(e) => {
+            onValueChange={(value) => {
               setSearchParams((prev) => {
                 const next = new URLSearchParams(prev);
-                next.set("agent", e.target.value);
+                next.set("agent", value);
                 return next;
               });
             }}
-            className="rounded border bg-background px-2 py-1 text-sm"
           >
-            {chatAgents.map((agent) => (
-              <option key={agent.name} value={agent.name}>
-                {agent.display_name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="agent-select" aria-label="Select agent" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {chatAgents.map((agent) => (
+                <SelectItem key={agent.name} value={agent.name}>
+                  {agent.display_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
 

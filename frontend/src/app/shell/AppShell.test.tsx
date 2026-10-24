@@ -43,6 +43,16 @@ function renderWithRouter(routes: PageRoute[], initialEntries: string[]) {
 }
 
 describe("AppShell and Router", () => {
+  it("bounds the shell to the viewport and lets routed pages scroll inside main", () => {
+    renderWithRouter(testRoutes, ["/settings"]);
+
+    const main = screen.getByRole("main");
+    expect(main.parentElement).toHaveClass("h-dvh");
+    expect(main.parentElement).not.toHaveClass("min-h-screen");
+    expect(main).toHaveClass("min-h-0", "flex-1", "overflow-auto");
+    expect(screen.getByText("App Settings Page")).toBeInTheDocument();
+  });
+
   it("renders the app entry in the sidebar at / and shows 'No pages yet.'", () => {
     renderWithRouter(testRoutes, ["/"]);
 
