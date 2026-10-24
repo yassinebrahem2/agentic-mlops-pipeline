@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 
 from mlops_agents.agents.runtime.contract import Part, ToolResultPart
 from mlops_agents.agents.runtime.graph import turn_checkpointer
-from mlops_agents.agents.runtime.hooks import GateDecision
+from mlops_agents.agents.runtime.hooks import GateCall, GateDecision
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
@@ -242,3 +243,34 @@ async def test_the_decisions_are_checkpointed_as_gate_decisions(
         if turn_id is not None:
             await checkpointer.adelete_thread(turn_id)
         await conn.close()
+
+
+class ForgetfulGate(ScriptedGate):
+    """Breaks the gate's contract: decides nothing about one call."""
+
+    def __init__(self, forgets: str) -> None:
+        super().__init__()
+        self._forgets = forgets
+
+    async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]:
+        decisions = await super().decide(calls)
+        del decisions[self._forgets]
+        return decisions
+
+
+async def test_a_gate_that_decides_nothing_about_a_call_is_a_clear_error(
+    tmp_path: Path, paths: DataPaths, databases: Databases
+) -> None:
+    tool = EchoTool()
+    with pytest.raises(RuntimeError, match=r"Echo call c2") as raised:
+        await run_graph(
+            tmp_path,
+            paths.bin,
+            databases,
+            [tool_reply(echo("c1", "a"), echo("c2", "b")), text_reply("ok")],
+            tools=(tool,),
+            gate=ForgetfulGate("c2"),
+        )
+
+    assert "returned no decision" in str(raised.value)
+    assert tool.ran == []

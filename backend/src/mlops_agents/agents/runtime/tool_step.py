@@ -118,6 +118,12 @@ class ToolStep:
                 )
             )
         decisions = await self._gate.decide(gate_calls) if gate_calls else {}
+        for gate_call in gate_calls:
+            if gate_call.tool_call_id not in decisions:
+                raise RuntimeError(
+                    f"The gate returned no decision for the {gate_call.tool.name} call "
+                    f"{gate_call.tool_call_id}; Gate.decide decides every call."
+                )
         return {"decisions": decisions, "call_errors": errors}
 
     async def wait(self, state: TurnState) -> dict[str, Any]:
