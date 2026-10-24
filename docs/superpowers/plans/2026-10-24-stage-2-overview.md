@@ -34,7 +34,7 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 | Planned |
 | agent-definitions | `plan/stage-2-agent-definitions` | The seven definition files and their prompts | every stage 2 tool on `main` | after tasks, sandbox, github-work and messaging | Planned |
 | frontend-agents | `plan/stage-2-frontend-agents` | Agents list with status, approval cards, the task bar, the bypass warning, "From <agent>" labels | I9, I11, the approvals, tasks and events routes | coding: after runtime-contracts task 1 and chat-layout merged; merging: after the routes it uses | Planned |
-| frontend-inbox | `plan/stage-2-frontend-inbox` | The Inbox page and its badge, project settings for permissions, sandbox, issues and messaging | I9, I11, the routes it uses | coding: after runtime-contracts task 1 and project-context merged; merging: after the routes it uses | Planned |
+| frontend-inbox | `plan/stage-2-frontend-inbox` | The Inbox page and its badge, project settings for permissions, sandbox, issues and messaging | I9, I11, the routes it uses; frontend-agents tasks 1 and 2 (`useProjectEvents`, `ApprovalCard`) | coding: after runtime-contracts task 1, project-context merged and frontend-agents tasks 1 and 2; merging: after the routes it uses | Planned |
 
 ## Files shared by these plans
 
