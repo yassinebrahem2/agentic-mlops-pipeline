@@ -152,7 +152,7 @@ describe("AddProjectPage", () => {
     expect(link.parentElement).toHaveTextContent("Connect GitHub in Integrations first.");
 
     // Nothing else on the GitHub tab
-    expect(screen.queryByRole("textbox", { name: "Repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
   });
 
@@ -221,18 +221,19 @@ describe("AddProjectPage", () => {
 
     await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
+    const repoInput = await screen.findByRole("combobox", { name: "Repository" });
+    await user.click(repoInput);
+
     expect(await screen.findByText("octocat/hello-world")).toBeInTheDocument();
     expect(screen.getByText("octocat/second-project")).toBeInTheDocument();
 
-    const filterInput = screen.getByRole("textbox", { name: "Filter repositories" });
-    await user.type(filterInput, "hello");
+    await user.type(repoInput, "hello");
 
     expect(screen.getByText("octocat/hello-world")).toBeInTheDocument();
     expect(screen.queryByText("octocat/second-project")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /octocat\/hello-world/i }));
+    await user.click(screen.getByRole("option", { name: /octocat\/hello-world/i }));
 
-    const repoInput = screen.getByRole("textbox", { name: "Repository" });
     expect(repoInput).toHaveValue("octocat/hello-world");
   });
 
@@ -301,7 +302,7 @@ describe("AddProjectPage", () => {
 
     await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
-    const repoInput = await screen.findByRole("textbox", { name: "Repository" });
+    const repoInput = await screen.findByRole("combobox", { name: "Repository" });
     await user.type(repoInput, "octocat/hello-world");
 
     const addBtn = screen.getByRole("button", { name: "Add" });

@@ -81,7 +81,7 @@ it("shows a failed GitHub status lookup without claiming GitHub needs connecting
     "The server answered with an error (HTTP 503).",
   );
   expect(screen.queryByRole("link", { name: "Integrations" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("textbox", { name: "Repository" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
 });
 
 it("shows a failed repositories lookup and still accepts a manually entered repository", async () => {
@@ -90,7 +90,7 @@ it("shows a failed repositories lookup and still accepts a manually entered repo
     "The server answered with an error (HTTP 503).",
   );
   expect(screen.queryByText("No repositories found")).not.toBeInTheDocument();
-  await user.type(screen.getByRole("textbox", { name: "Repository" }), "owner/repo");
+  await user.type(screen.getByRole("combobox", { name: "Repository" }), "owner/repo");
   await user.click(screen.getByRole("button", { name: "Add" }));
   expect(await screen.findByRole("heading", { name: "New project opened" })).toBeInTheDocument();
   expect(added).toEqual([{ source: "github", repo: "owner/repo" }]);
