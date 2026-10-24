@@ -40,8 +40,11 @@ class TurnWorkers:
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.
         self._current_turns: dict[SessionKey, str] = {}
         self._stopped_turns: set[str] = set()
-        # A Stop that came while a worker ran but had not taken its turn yet: it is for the
-        # turn that worker takes next, and dropped if the worker finds none.
+        # The workers that have not looked for their first turn yet, and the Stops that came
+        # in that time (right after the Send that started the worker): such a Stop is for the
+        # first turn, and dropped if the worker finds none. A Stop between two turns has no
+        # turn to stop and is dropped, as in stage 1.
+        self._first_look: set[SessionKey] = set()
         self._stop_next: set[SessionKey] = set()
 
     def running(self, key: SessionKey) -> bool:
@@ -52,19 +55,22 @@ class TurnWorkers:
         self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
     ) -> None:
         """Start the session's worker. The caller holds the session lock and saw none running."""
-        self._workers[(project_id, session_id)] = asyncio.create_task(
+        key = (project_id, session_id)
+        self._first_look.add(key)
+        self._workers[key] = asyncio.create_task(
             self._loop(project_id, session_id, agent, hub, lock)
         )
 
     def stop(self, key: SessionKey) -> None:
-        """Stop the turn of a running worker: the one it is on, or the one it is about to take.
-        A turn stopped before its task exists ends stopped without running. With no worker
-        running there is nothing to stop, and nothing is kept for a later turn."""
+        """Stop the turn of a running worker: the one it is on, or, before its first look, the
+        one it is about to take. A turn stopped before its task exists ends stopped without
+        running. With no worker running, or between two turns, there is nothing to stop."""
         if not self.running(key):
             return
         turn_id = self._current_turns.get(key)
         if turn_id is None:
-            self._stop_next.add(key)
+            if key in self._first_look:
+                self._stop_next.add(key)
             return
         self._stopped_turns.add(turn_id)
         child = self._child_tasks.get(key)
@@ -100,6 +106,7 @@ class TurnWorkers:
         for key in list(self._current_turns.keys()):
             if project_id in (None, key[0]):
                 self._current_turns.pop(key, None)
+        self._first_look = {k for k in self._first_look if project_id not in (None, k[0])}
         self._stop_next = {k for k in self._stop_next if project_id not in (None, k[0])}
         if project_id is None:
             self._stopped_turns.clear()
@@ -115,6 +122,7 @@ class TurnWorkers:
                     next_turn = await self._store.next_queued_turn(project_id, session_id)
                     # Taking the turn and claiming an early Stop happen with no await between
                     # them, so a Stop lands either here or on the turn itself.
+                    self._first_look.discard(key)
                     if next_turn is None:
                         self._stop_next.discard(key)
                         self._workers.pop(key, None)
@@ -134,6 +142,7 @@ class TurnWorkers:
                     self._stopped_turns.discard(turn_id)
 
         finally:
+            self._first_look.discard(key)
             self._stop_next.discard(key)
             self._workers.pop(key, None)
 

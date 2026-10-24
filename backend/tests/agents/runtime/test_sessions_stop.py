@@ -201,6 +201,11 @@ async def test_stop_while_a_turn_started_observer_runs_stops_the_turn(
     after = (await collect_until_turn_ended(sub))[-1]
     assert isinstance(after, TurnEnded)
     assert after.data.status == "done"
+    # The observer heard each turn end exactly once.
+    assert await asyncio.wait_for(held.ended.get(), timeout=5) == "done"
+    assert held.ended.qsize() == 0
+    assert [call[0] for call in held.calls] == ["started", "ended", "started", "ended"]
+    assert sorted(await turn_statuses(databases, env.project_id)) == ["done", "stopped"]
 
     await manager.close()
 
@@ -231,35 +236,6 @@ def _hold_next_queued_turn(
     return entered, release, returned
 
 
-async def test_stop_right_after_send_stops_that_turn(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-) -> None:
-    env = await build_session_env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
-    )
-    manager = env.manager
-    view = await manager.get(env.project_id, "orchestrator")
-    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
-    requests_before = len(fake_openai.state.requests)
-
-    await manager.send(env.project_id, "orchestrator", "Check readme")
-    await manager.stop(env.project_id, "orchestrator")
-
-    ended = (await collect_until_turn_ended(sub))[-1]
-    assert isinstance(ended, TurnEnded)
-    assert ended.data.status == "stopped"
-    assert len(fake_openai.state.requests) == requests_before
-    assert await turn_statuses(databases, env.project_id) == ["stopped"]
-
-    await manager.close()
-
-
 async def test_stop_before_the_worker_takes_the_queued_turn_stops_it(
     tmp_path: Path,
     paths: DataPaths,
@@ -280,7 +256,8 @@ async def test_stop_before_the_worker_takes_the_queued_turn_stops_it(
 
     await manager.send(env.project_id, "orchestrator", "Check readme")
     await asyncio.wait_for(entered.wait(), timeout=5)
-    # The session is busy and its turn queued, but the worker has not taken it yet.
+    # Right after the Send: the session is busy and its turn queued, but the worker has not
+    # taken it yet (its first look is held).
     await manager.stop(env.project_id, "orchestrator")
     release.set()
 
@@ -355,5 +332,41 @@ async def test_stop_as_the_worker_finds_no_more_turns_does_not_stop_the_next_tur
     second = (await collect_until_turn_ended(sub))[-1]
     assert isinstance(first, TurnEnded) and first.data.status == "done"
     assert isinstance(second, TurnEnded) and second.data.status == "done"
+
+    await manager.close()
+
+
+async def test_stop_between_two_queued_turns_stops_neither(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+    # The second look comes after the first turn ended, and finds the second turn queued.
+    entered, release, _ = _hold_next_queued_turn(monkeypatch, call=2)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    queued = await manager.send(env.project_id, "orchestrator", "Check readme again")
+    first = (await collect_until_turn_ended(sub))[-1]
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    # As in stage 1, a Stop between two turns has no turn to stop and is dropped.
+    await manager.stop(env.project_id, "orchestrator")
+    release.set()
+    second = (await collect_until_turn_ended(sub))[-1]
+
+    assert queued.status == "queued"
+    assert isinstance(first, TurnEnded) and first.data.status == "done"
+    assert isinstance(second, TurnEnded) and second.data.status == "done"
+    assert await turn_statuses(databases, env.project_id) == ["done", "done"]
 
     await manager.close()
