@@ -85,9 +85,11 @@ describe("Sidebar current project", () => {
 
     const trigger = await sidebar().findByRole("button", { name: longName });
     expect(trigger.className).not.toContain("max-w-[130px]");
-    expect(trigger).toHaveClass("w-full", "h-9");
-    expect(sidebar().getByRole("heading", { level: 1 }).parentElement).toHaveClass("flex-col");
+    // The default Button size is as tall as the nav items; a size override would break that.
+    expect(trigger).toHaveAttribute("data-size", "default");
+    expect(trigger).toHaveClass("w-full");
     const heading = sidebar().getByRole("heading", { level: 1 });
+    expect(heading.parentElement).toHaveClass("flex-col");
     expect(heading.parentElement).toBe(trigger.parentElement);
     expect(
       heading.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING,

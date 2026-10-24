@@ -4,11 +4,11 @@ import type { components } from "@/api/schema";
 import { PROJECTS_PATH } from "@/pages/projects/paths";
 import { useProjects } from "@/lib/useProjects";
 
+type Project = components["schemas"]["Project"];
+
 // App routes carry no :projectId, so the project last seen in a project route is kept here for
 // the rest of the page load. Module state, not React state: the sidebar and the switcher both
 // read it and it must outlive the project routes unmounting.
-type Project = components["schemas"]["Project"];
-
 let lastProjectId: string | undefined;
 
 export function resetCurrentProjectStore(): void {

@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { project, stubProjects } from "../test/projects";
+import { project, stubProjects } from "@/test/projects";
 import { useProjects } from "./useProjects";
 import { resetCurrentProjectStore, useCurrentProject } from "./useCurrentProject";
 
