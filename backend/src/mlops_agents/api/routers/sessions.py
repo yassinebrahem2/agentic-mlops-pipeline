@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sse_starlette import EventSourceResponse, ServerSentEvent
+from sse_starlette import ServerSentEvent
 
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -15,19 +15,9 @@ from mlops_agents.agents.runtime.contract import (
     StreamEvent,
 )
 from mlops_agents.api.deps import ProjectDep, ServicesDep
+from mlops_agents.api.sse import PING_SECONDS, SSE_HEADERS, SseResponse, parse_after_seq
 
 router = APIRouter(tags=["sessions"])
-
-# A comment line this often keeps proxies from closing an idle stream.
-PING_SECONDS: float = 15.0
-
-
-def _parse_after_seq(last_event_id: str | None, after: str | None) -> int | None:
-    raw = last_event_id if last_event_id is not None else after
-    # int() would also accept "+5", "1_0" and non-ASCII digits, which are not seqs.
-    if raw is None or not (raw.isascii() and raw.isdigit()):
-        return None
-    return int(raw)
 
 
 class SendMessage(BaseModel):
@@ -77,13 +67,9 @@ async def stop_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-class _EventSourceResponse(EventSourceResponse):
-    media_type = "text/event-stream"
-
-
 @router.get(
     "/projects/{project_id}/agents/{agent}/session/stream",
-    response_class=_EventSourceResponse,
+    response_class=SseResponse,
     responses={
         200: {
             "model": StreamEvent,
@@ -99,13 +85,13 @@ async def stream_session(
     _project: ProjectDep,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     after: Annotated[str | None, Query()] = None,
-) -> _EventSourceResponse:
+) -> SseResponse:
     sessions = services.sessions
     # Errors cannot be sent once the stream's headers are out, and subscribe only raises on
     # its first event, so an unknown or chat-less agent must fail here as a JSON error.
     await sessions.get(project_id, agent)
 
-    after_seq = _parse_after_seq(last_event_id, after)
+    after_seq = parse_after_seq(last_event_id, after)
 
     async def event_generator() -> AsyncIterator[ServerSentEvent]:
         subscription = sessions.subscribe(project_id, agent, after_seq=after_seq)
@@ -119,8 +105,8 @@ async def stream_session(
         finally:
             await subscription.aclose()
 
-    return _EventSourceResponse(
+    return SseResponse(
         event_generator(),
         ping=PING_SECONDS,
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=dict(SSE_HEADERS),
     )
