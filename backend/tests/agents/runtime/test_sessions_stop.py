@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx2
@@ -10,8 +9,6 @@ from pydantic import BaseModel
 from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
     Resync,
-    StreamEvent,
-    ToolStarted,
     TurnEnded,
 )
 from mlops_agents.agents.tools import default_registry
@@ -21,7 +18,7 @@ from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.stream_helpers import through_first_delta
+from tests.stream_helpers import through_first_delta, through_tool_started
 
 
 async def test_stop_during_fake_slow(
@@ -98,14 +95,6 @@ class HeldTool(AgentTool[HeldArgs]):
         return ToolOutput(content="released")
 
 
-async def _through_tool_started(sub: AsyncIterator[StreamEvent]) -> ToolStarted:
-    async for ev in sub:
-        assert not isinstance(ev, TurnEnded), ev
-        if isinstance(ev, ToolStarted):
-            return ev
-    raise AssertionError("the stream closed before any tool started")
-
-
 async def test_stop_during_slow_tool(
     tmp_path: Path,
     paths: DataPaths,
@@ -145,7 +134,7 @@ async def test_stop_during_slow_tool(
     sub = manager.subscribe(project_id, "heldagent", after_seq=view.last_seq)
     await manager.send(project_id, "heldagent", "Call the held tool")
 
-    started = await _through_tool_started(sub)
+    started = await through_tool_started(sub)
     assert started.data.name == "HeldTool"
 
     await manager.stop(project_id, "heldagent")
