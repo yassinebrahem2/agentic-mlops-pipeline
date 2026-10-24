@@ -79,6 +79,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         messages: session.messages,
         busy: session.busy,
         lastSeq: session.last_seq,
+        current_task: session.current_task,
       };
     };
 

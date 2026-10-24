@@ -334,4 +334,57 @@ describe("MessageView", () => {
     // Waiting line in place of typing indicator
     expect(screen.getByText("Waiting for your approval")).toBeInTheDocument();
   });
+
+  it("renders 'From <author_name>' when user message has from_agent from another agent", () => {
+    const userMsg: MessageViewType = {
+      id: "u_from_agent",
+      turn_id: null,
+      author_kind: "user",
+      author_name: "Reviewer",
+      from_agent: "reviewer",
+      parts: [{ type: "text", text: "Please address the PR comments." }],
+      status: "complete",
+      created_at: "2026-10-21T18:00:00Z",
+    };
+
+    render(<MessageView message={userMsg} sessionAgent="orchestrator" />);
+    expect(screen.getByText("From Reviewer")).toBeInTheDocument();
+    expect(screen.getByText("Please address the PR comments.")).toBeInTheDocument();
+  });
+
+  it("renders author_name alone when user message has from_agent matching sessionAgent", () => {
+    const userMsg: MessageViewType = {
+      id: "u_wakeup",
+      turn_id: null,
+      author_kind: "user",
+      author_name: "Orchestrator",
+      from_agent: "orchestrator",
+      parts: [{ type: "text", text: "Wake up: check task status." }],
+      status: "complete",
+      created_at: "2026-10-21T18:00:00Z",
+    };
+
+    render(<MessageView message={userMsg} sessionAgent="orchestrator" />);
+    expect(screen.getByText("Orchestrator")).toBeInTheDocument();
+    expect(screen.queryByText("From Orchestrator")).not.toBeInTheDocument();
+    expect(screen.getByText("Wake up: check task status.")).toBeInTheDocument();
+  });
+
+  it("renders no label when user message has no from_agent", () => {
+    const userMsg: MessageViewType = {
+      id: "u_human",
+      turn_id: null,
+      author_kind: "user",
+      author_name: "user",
+      from_agent: null,
+      parts: [{ type: "text", text: "Hello from human user!" }],
+      status: "complete",
+      created_at: "2026-10-21T18:00:00Z",
+    };
+
+    render(<MessageView message={userMsg} sessionAgent="orchestrator" />);
+    expect(screen.queryByText("user")).not.toBeInTheDocument();
+    expect(screen.queryByText("From user")).not.toBeInTheDocument();
+    expect(screen.getByText("Hello from human user!")).toBeInTheDocument();
+  });
 });

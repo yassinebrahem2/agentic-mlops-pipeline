@@ -17,6 +17,7 @@ import { ToolStep } from "./ToolStep";
 
 export interface MessageViewProps {
   message: MessageViewType;
+  sessionAgent?: string;
   className?: string;
 }
 
@@ -43,7 +44,7 @@ const markdownComponents: Components = {
   ),
 };
 
-export function MessageView({ message, className }: MessageViewProps) {
+export function MessageView({ message, sessionAgent, className }: MessageViewProps) {
   if (message.author_kind === "system") {
     return (
       <div
@@ -61,9 +62,19 @@ export function MessageView({ message, className }: MessageViewProps) {
   }
 
   if (message.author_kind === "user") {
+    const isFromAgent = Boolean(message.from_agent);
+    const label = isFromAgent
+      ? message.from_agent === sessionAgent
+        ? message.author_name
+        : `From ${message.author_name}`
+      : null;
+
     return (
       <div className={cn("flex justify-end", className)}>
         <div className="max-w-[80%] space-y-1">
+          {label && (
+            <div className="text-right text-xs font-medium text-muted-foreground">{label}</div>
+          )}
           <div className="rounded-lg bg-primary px-4 py-2 text-primary-foreground">
             {message.parts.map((part, idx) =>
               part.type === "text" ? (

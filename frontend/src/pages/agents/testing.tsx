@@ -32,6 +32,8 @@ export interface DefaultMockOverrides {
   messages?: unknown[];
   agents?: unknown[];
   agentsStatus?: unknown[];
+  permissionLevel?: "ask" | "bypass";
+  currentTask?: unknown;
 }
 
 export function setupAgentsOpenStreamMock(fakeStream: FakeStream): MockInstance {
@@ -106,6 +108,14 @@ export function setupDefaultMocks(overrides?: DefaultMockOverrides): {
         response: new Response(null, { status: 200 }),
       });
     }
+    if (path === "/api/projects/{project_id}/settings/permissions") {
+      return Promise.resolve({
+        data: {
+          level: overrides?.permissionLevel ?? "ask",
+        },
+        response: new Response(null, { status: 200 }),
+      });
+    }
     if (path === "/api/projects/{project_id}/agents/{agent}/session") {
       return Promise.resolve({
         data: {
@@ -114,6 +124,7 @@ export function setupDefaultMocks(overrides?: DefaultMockOverrides): {
           busy: overrides?.busy ?? false,
           messages: overrides?.messages ?? [],
           last_seq: 10,
+          current_task: overrides?.currentTask ?? null,
         },
         response: new Response(null, { status: 200 }),
       });
