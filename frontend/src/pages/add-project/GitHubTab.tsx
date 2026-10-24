@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, api, errorText, unwrap } from "@/lib/api";
+import { projectsKey } from "@/lib/useProjects";
 
 export function GitHubTab() {
   const navigate = useNavigate();
@@ -58,7 +59,7 @@ export function GitHubTab() {
     },
     onSuccess: (project) => {
       setAddingRepo(null);
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: projectsKey });
       void navigate(`/projects/${project.id}`);
     },
     onError: (err) => {
