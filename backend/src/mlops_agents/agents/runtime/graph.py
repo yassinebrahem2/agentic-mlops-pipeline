@@ -95,9 +95,10 @@ def create_turn_graph(
 
     async def model_node(state: TurnState) -> dict[str, Any]:
         step_count = state.get("step_count", 0)
-
-        # Before each model step: check if max_steps limit is reached
-        if agent.max_steps is not None and step_count >= agent.max_steps:
+        end_note = state.get("end_note")
+        # The step a turn-end note causes (at most one per turn) neither checks nor spends the
+        # step budget, so a turn that ends exactly at the limit still gets it.
+        if not end_note and agent.max_steps is not None and step_count >= agent.max_steps:
             stop_text = (
                 f"Stopped after {agent.max_steps} steps (this agent's step limit). "
                 "Send a message to continue."
@@ -113,7 +114,6 @@ def create_turn_graph(
 
         inbound = await hooks.inbound.take(project_id, session_id, turn_id)
         request = [*state["messages"], *inbound]
-        end_note = state.get("end_note")
         if end_note:
             request.append(HumanMessage(content=end_note))
         tool_schemas = [t.schema() for t in agent.tools]
@@ -220,7 +220,7 @@ def create_turn_graph(
 
         return {
             "messages": [*inbound, new_message],
-            "step_count": step_count + 1,
+            "step_count": step_count if end_note else step_count + 1,
             "end_note": None,
         }
 

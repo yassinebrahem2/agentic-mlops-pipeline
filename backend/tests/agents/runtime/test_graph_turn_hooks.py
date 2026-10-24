@@ -104,6 +104,50 @@ async def test_a_note_step_that_calls_tools_is_not_noted_again(
     assert len(run.caller.requests) == 3
 
 
+async def test_a_turn_ending_at_the_step_limit_still_gets_its_note_step(
+    tmp_path: Path, paths: DataPaths, databases: Databases
+) -> None:
+    check = ScriptedTurnEnd("Open a pull request.")
+    run = await run_graph(
+        tmp_path,
+        paths.bin,
+        databases,
+        [text_reply("end"), text_reply("end again")],
+        tools=(EchoTool(),),
+        turn_end=check,
+        max_steps=1,
+    )
+
+    assert check.asked == 1
+    assert len(run.caller.requests) == 2
+    assert run.state["stopped_reason"] is None
+    assert run.state["step_count"] == 1  # the note step spends no budget
+    texts = [p.text for p in run.parts if isinstance(p, TextPart)]
+    assert texts == ["end", "end again"]
+
+
+async def test_only_the_note_step_is_exempt_from_the_step_limit(
+    tmp_path: Path, paths: DataPaths, databases: Databases
+) -> None:
+    check = ScriptedTurnEnd("Open a pull request.")
+    tool = EchoTool()
+    run = await run_graph(
+        tmp_path,
+        paths.bin,
+        databases,
+        [text_reply("end"), tool_reply(echo("c1", "a")), text_reply("never asked")],
+        tools=(tool,),
+        turn_end=check,
+        max_steps=1,
+    )
+
+    assert check.asked == 1
+    assert tool.ran == ["a"]
+    # The step after the note step's tools is a normal step, over the limit.
+    assert len(run.caller.requests) == 2
+    assert run.state["stopped_reason"] == "max_steps"
+
+
 async def test_many_tool_rounds_fit_and_max_steps_still_counts_model_steps(
     tmp_path: Path, paths: DataPaths, databases: Databases
 ) -> None:
