@@ -47,8 +47,12 @@ describe("AppShell and Router", () => {
     renderWithRouter(testRoutes, ["/settings"]);
 
     const main = screen.getByRole("main");
+    const sidebarContainer = main.previousElementSibling;
     expect(main.parentElement).toHaveClass("h-dvh");
     expect(main.parentElement).not.toHaveClass("min-h-screen");
+    expect(sidebarContainer).toHaveClass("hidden", "h-full", "shrink-0", "md:flex");
+    expect(sidebarContainer).not.toHaveClass("sticky");
+    expect(sidebarContainer).not.toHaveClass("top-0");
     expect(main).toHaveClass("min-h-0", "flex-1", "overflow-auto");
     expect(screen.getByText("App Settings Page")).toBeInTheDocument();
   });
