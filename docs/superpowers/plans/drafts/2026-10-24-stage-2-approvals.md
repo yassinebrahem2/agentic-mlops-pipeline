@@ -16,8 +16,8 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | The permission level | runtime-contracts tasks 1 and 2 |
-| 2 | The gate | task 1, runtime-contracts task 4 merged, events task 1 |
-| 3 | Waiting turns | task 2 |
+| 2 | The gate | task 1, events task 1 (tested in a one-node test graph with a checkpointer; `interrupt()` needs only a graph context) |
+| 3 | Waiting turns | task 2, runtime-contracts tasks 3 and 4 merged |
 | 4 | Deciding and resuming | task 3 |
 | 5 | Expiry and Stop | task 4 |
 

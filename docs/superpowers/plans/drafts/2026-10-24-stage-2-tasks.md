@@ -20,8 +20,8 @@
 
 | Task | Title | Consumes |
 |---|---|---|
-| 1 | The task git function, worktrees and the current task | runtime-contracts tasks 1 to 3, events task 1; runtime-contracts task 4 merged |
-| 2 | StartTask, ResumeTask and reading in a task | task 1 |
+| 1 | The task git function, worktrees and the current task | runtime-contracts tasks 1 and 2, events task 1 |
+| 2 | StartTask, ResumeTask and reading in a task | task 1, runtime-contracts task 4 merged |
 | 3 | Write and Edit, with claims | task 2 |
 | 4 | Committing and pushing | task 3 |
 | 5 | Local merge, ending and discarding tasks | task 4, sandbox task 3 |
@@ -32,7 +32,7 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 
 ### Task 1: The task git function, worktrees and the current task
 
-**Files:** new `backend/src/mlops_agents/agents/tasks/git.py`, `agents/tasks/worktrees.py`, `agents/tasks/service.py`, the services lines (it replaces `RepositoryOnlyWorkspaces`, which it deletes), tests.
+**Files:** new `backend/src/mlops_agents/agents/tasks/git.py`, `agents/tasks/worktrees.py`, `agents/tasks/service.py`, tests. Not wired yet: task 2 wires it.
 
 **Interfaces:** Consumes I8, I12, the `tasks` table, `github_remote`/`https_url`, stage 1's `GitRunner` and `RepoFiles`, `EventLog`. Produces `Tasks.start`, `resume`, `current`, `files`, `view` and `open_tasks`.
 
@@ -63,7 +63,7 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 
 ### Task 2: StartTask, ResumeTask and reading in a task
 
-**Files:** new `backend/src/mlops_agents/agents/tools/tasks.py` (both tools), `agents/tools/read.py` (record the read hash), `agents/tools/__init__.py` (its lines), tests.
+**Files:** new `backend/src/mlops_agents/agents/tools/tasks.py` (both tools), `agents/tools/read.py` (record the read hash), `agents/tools/__init__.py` (its lines), the services lines (the real `Tasks` replaces `RepositoryOnlyWorkspaces`, which is deleted), tests.
 
 **Interfaces:** Consumes task 1. Produces the tools StartTask and ResumeTask (`write_code`), and `Tasks.record_read` and `read_hash`.
 

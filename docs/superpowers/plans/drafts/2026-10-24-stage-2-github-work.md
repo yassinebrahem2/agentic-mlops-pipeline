@@ -17,10 +17,10 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | GitHub client and the fake GitHub server | runtime-contracts task 1 |
-| 2 | OpenPullRequest | task 1, tasks task 4, events task 1 |
+| 2 | OpenPullRequest | task 1, tasks task 4, events task 1, runtime-contracts task 3 |
 | 3 | Issue tools | task 1 |
 | 4 | Local reviews and GitHub activity | task 2, tasks task 5 |
-| 5 | The PR reminder and PR state sync | task 4, runtime-contracts task 3 |
+| 5 | The PR reminder and PR state sync | task 4, runtime-contracts task 4 merged |
 
 ---
 

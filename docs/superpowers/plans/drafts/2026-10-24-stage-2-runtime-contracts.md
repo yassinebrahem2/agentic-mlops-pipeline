@@ -30,7 +30,8 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 **Files:**
 - `backend/src/mlops_agents/agents/tools/base.py`: `TaskRef`, `ToolContext` v2, `Preview`, `AgentTool.parse` and `AgentTool.preview`. Only these; the tool-errors plan edits `schema()` in the same file. Bring `main` in first if it has merged.
-- `backend/src/mlops_agents/agents/runtime/contract.py`: the I1 additions.
+- `backend/src/mlops_agents/agents/runtime/contract.py`: the I1 additions, except `AgentSessions.post` and `update_message_parts`, which task 3 adds together with their implementation.
+- `backend/src/mlops_agents/agents/runtime/agent.py`, `executor.py` and `sessions.py`, only so the code that builds stage 1 types keeps working: `ToolContext` v2 is built once per turn with `task=None` (task 4 moves it to once per call), the executor hands `session_id` and `turn_id` to the builder, and `get()` sets `current_task=None`. The runtime test helpers that build a `ToolContext` follow.
 - New `backend/src/mlops_agents/agents/policy/__init__.py` and `table.py`.
 - New `backend/src/mlops_agents/events/__init__.py` and `contract.py`.
 - New `backend/src/mlops_agents/agents/tasks/__init__.py` and `contract.py`.
@@ -109,9 +110,9 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 ### Task 3: The session side: file splits, busy, post, observers
 
-**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` and `store.py` (split first, see below), new `runtime/worker.py` and the `runtime/store/` package, `backend/src/mlops_agents/api/services.py` (the observers and bus parameters), tests. tool-errors edits none of these files.
+**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` and `store.py` (split first, see below), new `runtime/worker.py` and the `runtime/store/` package, `backend/src/mlops_agents/agents/runtime/contract.py` (`post` and `update_message_parts` on `AgentSessions`), `backend/src/mlops_agents/agents/tools/__init__.py` and `backend/src/mlops_agents/api/services.py` (the registry and the wiring), tests. tool-errors edits none of these files.
 
-**Interfaces:** Consumes tasks 1 and 2. Produces `AgentSessions.post` (I9), the observer calls, the bus binding, and the one "busy" rule.
+**Interfaces:** Consumes tasks 1 and 2. Produces `AgentSessions.post` and `update_message_parts` (I9), the observer calls, the bus binding, the one "busy" rule, and `default_registry(...)` taking services, so tool plans can register tools without waiting for task 4.
 
 **Implementation notes:**
 - First, with no behavior change, split the two files at the size limit, so no later plan grows them past 400 lines:
@@ -123,6 +124,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 - `SessionManager` gains `post` (I9). `send` becomes a call to the same internal path, so both store a message and a queued turn one way.
 - It takes an optional `MessageBus` and calls `bind(self)` on it. It takes a sequence of `TurnObserver`s and calls them when a turn starts and ends. Approvals adds the call for waiting.
 - When a turn starts from a trigger message that has `from_agent`, the worker sets that message's `read_by_turn` to the turn. Messaging's exchange rule depends on it.
+- `default_registry(...)` takes the services tools need (none yet), and `services.py` builds it so. Each later plan adds its own service parameter and tool lines.
 - It gains `update_message_parts(project_id, session_id, message_id, parts)`. It stores a message's new parts and publishes `message.updated` under the session lock, so a concurrent `get()` never returns a part whose event it then receives again. Approvals uses it when an approval part changes outside a running turn.
 
 **Tests (stop condition):**
@@ -137,7 +139,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 
 ### Task 4: Turn graph hook points and per-call tool context
 
-**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `backend/src/mlops_agents/api/services.py` (wiring the defaults), tests.
+**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `backend/src/mlops_agents/api/services.py` (passing the four defaults), tests.
 
 **Interfaces:** Consumes tasks 1 and 3, and the merged tool-errors plan (both edit `graph.py` and `model_caller.py`). Produces I12's hook points.
 
@@ -158,7 +160,7 @@ Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their
 - The tools step builds a `ToolContext` for each call, from `TaskWorkspaces.current` and `TaskWorkspaces.files`. `Agent.tool_context` (stage 1, one per turn) is removed.
 - Tool arguments are parsed (`AgentTool.parse`) before `decide`. A call that fails to parse is answered with its error and never reaches the gate.
 - `decide` judges every call of the step with the context as it stands before any of them runs. A call whose `preview` raises `ToolFailure` (an Edit of a missing file, a Write before any task) is answered with that error and gets no approval. The model sees it and can retry next step.
-- `services.py` builds the registry with `default_registry(...)`, taking the services tools need (none yet), and passes the four defaults to the session manager. Later plans each change their one line there.
+- `services.py` passes the four defaults to the session manager. Each later plan changes its one line there.
 
 **Tests (stop condition):**
 - With the defaults, every stage 1 runtime test passes unchanged.
