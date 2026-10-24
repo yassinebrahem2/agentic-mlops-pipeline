@@ -11,7 +11,7 @@
 
 **Read first:** spec §4 and §12.
 
-**Docker in tests:** real Docker tests carry the pytest marker `docker`. They run in a new Linux CI job (`.github/workflows/backend.yml`, one job added by task 1; the Windows job runs without the marker). Every platform tests command building, template choice and the build context's contents with Docker replaced by a fake runner.
+**Docker in tests:** real Docker tests carry the pytest marker `docker`, deselected by default the way `live` is (`addopts` in `pyproject.toml`), so local and Windows runs skip them. They run in a new Linux CI job (`.github/workflows/backend.yml`, one job added by task 1, running `-m docker`). Every platform tests command building, template choice and the build context's contents with Docker replaced by a fake runner.
 
 ## Tasks
 
@@ -22,7 +22,7 @@
 | 3 | Task containers | task 2 |
 | 4 | Bash | task 3, runtime-contracts task 3 |
 
-Task 3 gets an early PR: the tasks plan's task 5 calls `remove_task`.
+Task 3 gets an early PR, from `plan/stage-2-sandbox-task3`: the tasks plan's task 5 calls `remove_task`.
 
 ---
 

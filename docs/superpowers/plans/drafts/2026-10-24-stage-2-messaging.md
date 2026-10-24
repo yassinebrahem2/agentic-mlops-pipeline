@@ -53,7 +53,7 @@
 
 ### Task 2: Mid-turn delivery
 
-**Files:** new `agents/messaging/inbound.py`, `agents/runtime/store.py` (the queries it needs), the services line (`NoInbound` replaced and deleted), tests.
+**Files:** new `agents/messaging/inbound.py`, a new `agents/runtime/store/inbound.py` (the queries it needs, composed into `SessionStore`), the services line (`NoInbound` replaced and deleted), tests.
 
 **Interfaces:** Consumes task 1 and the `InboundSource` hook. Produces the real `InboundSource`.
 

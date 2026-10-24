@@ -16,7 +16,7 @@
 | 2 | Turn events | task 1, runtime-contracts task 3 |
 | 3 | Status board | task 2 |
 
-Task 1 gets an early PR: tasks, sandbox, approvals, github-work and messaging all record events.
+Task 1 gets an early PR, from `plan/stage-2-events-task1`: tasks, sandbox, approvals, github-work and messaging all record events.
 
 ---
 
@@ -31,7 +31,7 @@ Task 1 gets an early PR: tasks, sandbox, approvals, github-work and messaging al
 - The hub keeps the last 1,000 events per project in memory. `subscribe(after_seq)` replays from the table when `after_seq` is older than the buffer. It yields `Resync` when `after_seq` is unknown, using stage 1's `Resync` type.
 - The route follows the session stream's rules (`api/routers/sessions.py`): `Last-Event-ID` or `?after=`, the 15 s ping, closing on disconnect. Share its helpers by moving them to one module both routers import, never by copying them.
 - `AuditLog.record` scrubs `detail` with stage 1's `credentials/scrub.py` and caps each value at 4,000 characters.
-- `close_project` (stage 1) also closes the project's event hub. Add the hub to what it closes.
+- Closing a project also closes its event hub: the session manager's `close_project` calls `EventLog.close_project(project_id)`, one line. `EventLog` gets that method in addition to I11, and it is not part of the protocol other plans use.
 
 **Tests (stop condition):**
 - Record, then subscribe with `after_seq`: replay comes in order, then live events. A position older than the buffer replays from the table, and an unknown one yields `Resync`.

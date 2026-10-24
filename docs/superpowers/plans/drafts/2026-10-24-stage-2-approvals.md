@@ -48,7 +48,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
   - writes one audit record (`allowed`, `denied` or `asked`).
 - A deny's message names the level and the risk class. For `suggest` with `write_code`, it tells the agent to propose the change as a diff in its answer.
 - An ask creates an approval record (with `tool.preview(ctx, args)`) and records `approval.requested`. Its `GateDecision` carries the approval id and preview, so the graph adds the `ApprovalPart`.
-- `wait` reads the step's approvals from the store. If any is pending, it calls LangGraph's `interrupt()`. Once none is pending, it returns `approved`, or `rejected` with the message "The user rejected this action" plus the note. Approvals `cancelled` or `expired` come back as `rejected`, with their own message.
+- `wait` reads the step's approvals from the store. If any is pending, it calls LangGraph's `interrupt()`. Once none is pending, it returns `approved`, or `rejected` with the message "The user rejected this action" plus the note.
 - `wait` has no side effects, because LangGraph re-runs it on resume.
 
 **Tests (stop condition):**
@@ -60,16 +60,17 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 
 ### Task 3: Waiting turns
 
-**Files:** `backend/src/mlops_agents/agents/runtime/executor.py`, `agents/runtime/sessions.py`, `agents/runtime/store.py`, tests.
+**Files:** new `backend/src/mlops_agents/agents/runtime/waiting.py`, `agents/runtime/executor.py`, `agents/runtime/worker.py`, the store package's turns module, tests.
 
 **Interfaces:** Consumes task 2 and I9 (`waiting`, `TurnWaiting`). Produces the waiting turn.
 
 **Implementation notes:**
-- When `ainvoke` returns with an interrupt, the executor:
+- When `ainvoke` returns with an interrupt, the executor (through `waiting.py`):
   - marks the agent message `waiting` and the turn `waiting`;
   - publishes `TurnWaiting` and calls the observers' `turn_waiting`;
   - keeps the turn's checkpoint thread, and still closes its connection.
-- The session's queue holds behind a waiting turn, and `busy` stays true.
+- The executor returns a distinct waiting outcome, separate from `TurnEnd`. The worker then publishes no `turn.ended`, sets the turn `waiting`, and exits. The waiting turn has no live worker.
+- The one "busy" function (runtime-contracts task 3) counts a `waiting` turn, so `send`, `post` and `get` queue behind it and never start another turn. Only a resume continues that session; after it ends, the worker picks up the queue as usual.
 - Recovery at startup leaves waiting turns and their `waiting` messages untouched. Stage 1 already leaves waiting turns; check the message side.
 
 **Tests (stop condition):** a test gate that asks: the turn ends up `waiting`, the message `waiting`, the thread kept and the connection closed; a second message queues; after rebuilding the session manager (a restart) the turn is still `waiting`; full suite, checks; CI green on Linux and Windows.
@@ -78,7 +79,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 
 ### Task 4: Deciding and resuming
 
-**Files:** new `agents/approvals/service.py` (`Approvals`), `api/routers/approvals.py` (`GET /approvals`, `POST .../decision`), `agents/runtime/executor.py` and `sessions.py` (resume), the services lines (the real gate replaces `AllowAllGate`, which is deleted), tests.
+**Files:** new `agents/approvals/service.py` (`Approvals`), `api/routers/approvals.py` (`GET /approvals`, `POST .../decision`), `agents/runtime/waiting.py`, `executor.py` and `worker.py` (resume), the services lines (the real gate replaces `AllowAllGate`, which is deleted), tests.
 
 **Interfaces:** Consumes task 3. Produces `Approvals`, the approvals routes, and resuming.
 
@@ -103,7 +104,7 @@ The real gate replaces `AllowAllGate` in task 4, once a held turn can resume. No
 
 ### Task 5: Expiry and Stop
 
-**Files:** `agents/approvals/service.py`, `agents/runtime/sessions.py` (Stop on a waiting turn), `agents/runtime/store.py` (recovery), tests.
+**Files:** `agents/approvals/service.py`, `agents/runtime/waiting.py` (Stop on a waiting turn, called by the session manager's `stop`), the store package's recovery, tests.
 
 **Interfaces:** Consumes task 4. Produces the `expired` and `cancelled` rules.
 

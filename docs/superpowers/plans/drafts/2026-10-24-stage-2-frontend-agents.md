@@ -22,7 +22,7 @@
 | 3 | Task bar, bypass warning and agent labels | task 2; merging: tasks task 5, approvals task 1 |
 | 4 | The approval in the end-to-end flow | task 3, agent-definitions merged |
 
-Tasks 1 and 2 get early PRs: frontend-inbox uses `lib/useProjectEvents.ts` and `ApprovalCard`.
+Tasks 1 and 2 get early PRs, from `plan/stage-2-frontend-agents-task1` and `-task2`: frontend-inbox uses `lib/useProjectEvents.ts` and `ApprovalCard`.
 
 ---
 
@@ -70,7 +70,7 @@ Tasks 1 and 2 get early PRs: frontend-inbox uses `lib/useProjectEvents.ts` and `
 
 ### Task 4: The approval in the end-to-end flow
 
-**Files:** `frontend/e2e/flow.spec.ts` (a new step after the stage 1 flow), `backend/tests/fakes/fake_openai.py` (a model `fake-write` that calls StartTask, then Write on `NOTES.md`, then answers), tests.
+**Files:** `frontend/e2e/flow.spec.ts` (a new step after the stage 1 flow), `backend/tests/fakes/fake_openai.py` (a model `fake-write` that calls StartTask in one step, then Write on `NOTES.md` in the next, then answers, and answers the PR reminder's extra request too: the e2e project is local with no remote), tests.
 
 **Implementation notes:** the new e2e step:
 1. Set the project's level to `ask` (it is the default).

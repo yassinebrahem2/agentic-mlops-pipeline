@@ -26,7 +26,7 @@
 | 4 | Committing and pushing | task 3 |
 | 5 | Local merge, ending and discarding tasks | task 4, sandbox task 3 |
 
-Task 4 gets an early PR: github-work's OpenPullRequest needs it.
+Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPullRequest needs it.
 
 ---
 
@@ -54,7 +54,7 @@ Task 4 gets an early PR: github-work's OpenPullRequest needs it.
 
 **Tests (stop condition), on real temporary repositories:**
 - A local repository with a tracked `.env` and `config.pem`: the worktree lacks both, `git status` there is clean, and the user's `.git/config` is byte-for-byte unchanged.
-- With a fake remote (a bare repository behind a local path, standing in for the https URL through an override the test passes), the base ref is fetched into the namespaced ref and `origin/*` is untouched.
+- With a fake remote: the test sets `GIT_CONFIG_GLOBAL` to a temporary config with `url."<file URL of a bare repository>".insteadOf "https://github.com/<owner>/<repo>.git"`. Production code has no test-only path. The base ref is fetched into the namespaced ref, and `origin/*` is untouched.
 - The worktree's `.git` file rewritten to point at a planted repository whose config sets `core.fsmonitor` to a script: a task git call still uses the task's repository, and the script never runs.
 - `files` sees a new untracked file, never a denylisted or ignored one.
 - Full backend suite, ruff, format, pyright; CI green on Linux and Windows (long paths included).

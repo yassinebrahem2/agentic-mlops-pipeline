@@ -107,9 +107,9 @@
 
 **Implementation notes:**
 - The reminder's note is the spec's §6 text, returned when the session's current task `has_unpublished_changes`. The graph already limits it to once per turn.
-- `turn_started` reads the PR state of the project's open `github` tasks. A merged PR calls `end(merged)`; a closed one calls `end(closed)`. GitHub errors are logged and never fail the turn.
+- `turn_started` starts a background check of the PR state of the project's open `github` tasks, at most once a minute per project, so the turn never waits on GitHub. A merged PR calls `end(merged)`; a closed one calls `end(closed)`. GitHub errors are logged and never fail the turn.
 
 **Tests (stop condition):**
 - A turn that changes a file and ends: one reminder step, and none when there is no change.
-- A PR merged on the fake: at the next turn start, the task is `merged` and its worktree removed.
+- A PR merged on the fake: after the next turn start's check finishes, the task is `merged` and its worktree removed. A second turn within the minute makes no new check.
 - Full suite, checks; CI green.
