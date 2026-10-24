@@ -4,11 +4,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
-from mlops_agents.agents.tasks.git import git_dir_for_task
+from mlops_agents.agents.tasks.git import git_dir_for_task, task_git
 from mlops_agents.agents.tasks.worktrees import TaskFiles, create_worktree
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
@@ -19,7 +19,7 @@ from mlops_agents.ids import new_id
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import tasks
+from mlops_agents.storage.tables import task_reads, tasks
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -275,16 +275,50 @@ class TasksService(Tasks):
 
     # Future task methods (produced by tasks 2 to 5)
     async def record_read(self, project_id: str, task: TaskRef, path: str, sha256: str) -> None:
-        raise NotImplementedError
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                delete(task_reads).where(
+                    task_reads.c.task_id == task.id,
+                    task_reads.c.path == path,
+                )
+            )
+            await conn.execute(
+                insert(task_reads).values(
+                    task_id=task.id,
+                    path=path,
+                    sha256=sha256,
+                )
+            )
 
     async def read_hash(self, project_id: str, task: TaskRef, path: str) -> str | None:
-        raise NotImplementedError
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(task_reads.c.sha256).where(
+                    task_reads.c.task_id == task.id,
+                    task_reads.c.path == path,
+                )
+            )
+            return res.scalar_one_or_none()
 
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None:
         raise NotImplementedError
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
-        raise NotImplementedError
+        if not task.worktree.exists():
+            return False
+        project = await self._workspace.get(project_id)
+        repo_root = self._workspace.repo_root(project)
+        git_dir = git_dir_for_task(repo_root, task.id)
+        res = await task_git(
+            self._git,
+            git_dir=git_dir,
+            worktree=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            args=["status", "--porcelain"],
+        )
+        return bool(res.stdout.strip())
 
     async def staged_diff(self, project_id: str, task: TaskRef) -> str:
         raise NotImplementedError
