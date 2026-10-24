@@ -159,21 +159,25 @@ class TurnWorkers:
         await self._store.set_turn(project_id, turn_id, "running")
         try:
             await self._turn_started(project_id, agent, turn_id)
-            await self._mark_trigger_read(
-                project_id, session_id, turn_id, trigger_msg_id, hub, lock
+            await self._settle_trigger(
+                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=True
             )
             ended = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
         except asyncio.CancelledError:
             # The turn started, so it is reported ended, also when the cancel came first.
             await self._store.set_turn(project_id, turn_id, "interrupted")
             await self._store.mark_interrupted(project_id, turn_id)
+            # A cancel before the trigger was read would leave it queued for good.
+            await self._settle_trigger(
+                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
+            )
             await self._turn_ended(project_id, session_id, agent, turn_id, "interrupted")
             raise
         # The observers hear of the end after the turn's own handling, so a cancel that
         # lands in an observer never rewrites how the turn ended, nor reports it twice.
         await self._turn_ended(project_id, session_id, agent, turn_id, ended)
 
-    async def _mark_trigger_read(
+    async def _settle_trigger(
         self,
         project_id: str,
         session_id: str,
@@ -181,11 +185,15 @@ class TurnWorkers:
         trigger_msg_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
+        *,
+        read: bool,
     ) -> None:
-        """A queued trigger becomes complete; one from an agent records this turn read it."""
+        """A queued trigger becomes complete. When the turn `read` it and it is from an agent,
+        it records this turn read it; a turn interrupted before reading it records nothing."""
         async with lock:
             trigger = await self._store.message(project_id, session_id, trigger_msg_id)
-            read_by = turn_id if trigger is not None and trigger.from_agent is not None else None
+            from_agent = trigger is not None and trigger.from_agent is not None
+            read_by = turn_id if read and from_agent else None
             if trigger is not None and trigger.status == "queued":
                 updated_msg = await self._store.update_message(
                     project_id, trigger_msg_id, status="complete", read_by_turn=read_by

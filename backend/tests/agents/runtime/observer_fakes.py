@@ -40,14 +40,21 @@ class RecordingObserver:
 
 
 class HangingObserver(RecordingObserver):
-    """Hangs in turn_started or turn_ended until the test lets it go (which it never does)."""
+    """Hangs in turn_started or turn_ended until the test lets it go (which it never does).
 
-    def __init__(self, *, hang_in: str) -> None:
+    The first `passes` calls of that hook return; the next one hangs.
+    """
+
+    def __init__(self, *, hang_in: str, passes: int = 0) -> None:
         super().__init__()
         self.hanging = asyncio.Event()
         self._hang_in = hang_in
+        self._passes = passes
 
     async def _hang(self) -> None:
+        if self._passes > 0:
+            self._passes -= 1
+            return
         self.hanging.set()
         await asyncio.Event().wait()
 
