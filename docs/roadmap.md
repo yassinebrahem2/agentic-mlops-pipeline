@@ -39,7 +39,7 @@ Agreed:
 - Status board: every agent publishes what it is doing, what it finished, PRs it opened and what it waits on (from the event stream). A summary is injected into each Orchestrator turn; details on request.
 - Tools: Write and Edit (inside the task's worktree), Bash (only inside the sandbox), ListAgents, SendMessage, PR and issue tools.
 - Docker sandbox: Linux container per agent task. It mounts a filtered view of the worktree (git-tracked files minus the secret denylist). Network access is off by default. Read, Glob and Grep see the same view.
-- Git: one git worktree per agent task, under `projects/<id>/worktrees/`. Branch name `agent/<agent>/<task>`. The Orchestrator prevents two agents from changing the same files at once. Agents never edit the default branch.
+- Git: one git worktree per agent task, under `projects/<id>/worktrees/`. Branch name `agent/<agent>/<task>`. File claims, enforced by the runtime, keep two agents from changing the same files at once. Agents never edit the default branch.
 - PRs: at the end of each turn the runtime reminds the agent when its work may need a PR; the agent decides and opens it through GitHub on the user's behalf. The PR body says which agent opened it and why. PR identity is the user's choice: their own token, or later a bot (GitHub App).
 - Issues: an agent opens an issue when a human must act and a PR when it has a fix. A PR that fixes an issue says `Fixes #n`. Before opening, the agent searches open issues and comments on a match instead. Only incidents above a configurable priority become issues. Labels: agent, category, priority.
 - Local repo without a remote: agent branch; the diff is reviewed in the Inbox; approving merges it.
@@ -64,12 +64,7 @@ Agreed:
   - The project switcher in the sidebar header fits and reads well.
   - App pages keep the current project selected.
 
-The spec must answer:
-- The policy table values (risk class x level).
-- What happens when a message from another agent arrives while the recipient is mid-turn (queue order, priority).
-- Where scheduled and triggered work appears: inside the agent's session, or as separate run records linked from it.
-- How the sandbox gets the user's environment (built from requirements / pyproject / conda files), and how it is cached.
-- Inbox page scope in this stage (approvals only, or also PRs and issues).
+Answered in the stage 2 spec (`docs/superpowers/specs/2026-10-24-stage-2-agent-runtime-design.md`): the policy values, mid-turn delivery, scheduled work in the agent's one session, the sandbox environment and its cache, and the Inbox scope (approvals, local reviews, agents' PRs and issues).
 
 ### Stage 3: Onboarding and data access
 
@@ -208,6 +203,9 @@ Every stored entity has an ID of the form `<prefix>_<ULID>` (ULID: 26 characters
 | `evt` | event | 2 |
 | `aud` | audit record | 2 |
 | `apr` | approval request | 2 |
+| `tsk` | agent task (worktree and branch) | 2 |
+| `xch` | agent-to-agent exchange | 2 |
+| `wak` | scheduled wake-up | 2 |
 | `inc` | incident | 4 |
 
 Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`.
@@ -248,6 +246,7 @@ tools: [Read, Glob, Grep]     # names from the tool registry
 chat: true                    # false = background only (Alert Prioritization)
 schedules: false
 can_message: []               # agent names this agent may SendMessage to (stage 2)
+status_board: false           # true = a status board summary in every turn's context (stage 2)
 context_hooks: []             # hook names run at session/turn start
 limits: { max_steps: 25 }     # optional; null = unlimited
 ---
@@ -265,14 +264,21 @@ Role prompt.
 
 | Class | Examples |
 |---|---|
-| `read` | Read, Glob, Grep, ListAgents, data commands |
-| `write_code` | Write, Edit (in a worktree) |
+| `read` | Read, Glob, Grep, ListAgents, SearchIssues, data commands |
+| `write_code` | Write, Edit (in a worktree), StartTask, ResumeTask |
 | `run` | Bash in the sandbox |
-| `message` | SendMessage |
-| `github` | open PR, open issue, comment |
+| `message` | SendMessage, ScheduleWakeup |
+| `github` | OpenPullRequest, OpenIssue, CommentOnIssue |
 | `deploy` | train / deploy / rollback hooks |
 
-Policy: risk class x permission level (`suggest`, `ask`, `autonomous`, `bypass`) -> `allow` / `ask` / `deny`. The table of values is defined in the stage 2 spec.
+Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec §5):
+
+| Level | read | write_code | run | message | github | deploy |
+|---|---|---|---|---|---|---|
+| suggest | allow | deny | deny | allow | ask | deny |
+| ask | allow | ask | ask | allow | ask | ask |
+| autonomous | allow | allow | allow | allow | allow | ask |
+| bypass | allow | allow | allow | allow | allow | allow |
 
 ## Event and audit records (stage 2)
 
