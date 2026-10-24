@@ -20,6 +20,8 @@ from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.contract import Sandbox
+from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -37,6 +39,7 @@ class Services:
     tools: ToolRegistry
     agent_settings: AgentSettingsService
     sessions: AgentSessions
+    sandbox: Sandbox
 
 
 async def build_services(
@@ -77,6 +80,9 @@ async def build_services(
     )
     stack.push_async_callback(sessions.close)
 
+    sandbox = SandboxService()
+    stack.push_async_callback(sandbox.close)
+
     return Services(
         settings=settings,
         paths=paths,
@@ -89,4 +95,5 @@ async def build_services(
         tools=tools,
         agent_settings=agent_settings,
         sessions=sessions,
+        sandbox=sandbox,
     )

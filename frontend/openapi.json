@@ -351,6 +351,86 @@
         "title": "DetectedKey",
         "type": "object"
       },
+      "DockerStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "available",
+          "version",
+          "detail"
+        ],
+        "title": "DockerStatus",
+        "type": "object"
+      },
+      "EnvironmentStatus": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "enum": [
+              "none",
+              "building",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "state",
+          "tag",
+          "detail"
+        ],
+        "title": "EnvironmentStatus",
+        "type": "object"
+      },
       "FolderEntry": {
         "properties": {
           "is_git_repo": {
@@ -1106,6 +1186,27 @@
         "additionalProperties": false,
         "properties": {},
         "title": "ResyncData",
+        "type": "object"
+      },
+      "SandboxView": {
+        "properties": {
+          "docker": {
+            "$ref": "#/components/schemas/DockerStatus"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          },
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "docker",
+          "environment",
+          "network"
+        ],
+        "title": "SandboxView",
         "type": "object"
       },
       "SendMessage": {
@@ -3088,6 +3189,48 @@
         ]
       }
     },
+    "/api/projects/{project_id}/sandbox": {
+      "get": {
+        "operationId": "get_project_sandbox_api_projects__project_id__sandbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
     "/api/providers": {
       "get": {
         "operationId": "list_providers_api_providers_get",
@@ -3333,6 +3476,27 @@
         "summary": "List Remote Models",
         "tags": [
           "providers"
+        ]
+      }
+    },
+    "/api/sandbox": {
+      "get": {
+        "operationId": "get_sandbox_api_sandbox_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Sandbox",
+        "tags": [
+          "sandbox"
         ]
       }
     }
