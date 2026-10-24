@@ -31,6 +31,7 @@ export interface DefaultMockOverrides {
   busy?: boolean;
   messages?: unknown[];
   agents?: unknown[];
+  agentsStatus?: unknown[];
 }
 
 export function setupAgentsOpenStreamMock(fakeStream: FakeStream): MockInstance {
@@ -74,6 +75,34 @@ export function setupDefaultMocks(overrides?: DefaultMockOverrides): {
             },
           },
         ],
+        response: new Response(null, { status: 200 }),
+      });
+    }
+    if (path === "/api/projects/{project_id}/agents/status") {
+      const defaultAgents = overrides?.agents ?? [
+        {
+          name: "orchestrator",
+          display_name: "Orchestrator",
+          chat: true,
+          settings: {
+            model_problem: overrides?.modelProblem ?? null,
+          },
+        },
+      ];
+      const statusData =
+        overrides?.agentsStatus ??
+        (defaultAgents as Array<{ name: string; display_name: string; chat?: boolean }>).map(
+          (a) => ({
+            agent: a.name,
+            display_name: a.display_name,
+            state: a.chat === false ? "inactive" : "idle",
+            task: null,
+            open_prs: [],
+            last_finished: null,
+          }),
+        );
+      return Promise.resolve({
+        data: statusData,
         response: new Response(null, { status: 200 }),
       });
     }

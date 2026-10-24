@@ -287,4 +287,74 @@ describe("AgentsPage", () => {
       }),
     );
   });
+
+  it("renders the agent list with live status and updates session when an agent is selected", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks({
+      agents: [
+        { name: "orchestrator", display_name: "Orchestrator", chat: true, settings: {} },
+        { name: "coder", display_name: "Coder", chat: true, settings: {} },
+        {
+          name: "alert_prioritization",
+          display_name: "Alert Prioritization",
+          chat: false,
+          settings: {},
+        },
+      ],
+      agentsStatus: [
+        {
+          agent: "orchestrator",
+          display_name: "Orchestrator",
+          state: "idle",
+          task: null,
+          open_prs: [],
+          last_finished: null,
+        },
+        {
+          agent: "coder",
+          display_name: "Coder",
+          state: "waiting_approval",
+          task: null,
+          open_prs: [],
+          last_finished: null,
+        },
+        {
+          agent: "alert_prioritization",
+          display_name: "Alert Prioritization",
+          state: "inactive",
+          task: null,
+          open_prs: [],
+          last_finished: "starts in a later stage",
+        },
+      ],
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const agentsList = await screen.findByRole("complementary", { name: "Agents" });
+
+    // Verify all agents and statuses appear in the list
+    expect(within(agentsList).getByText("Orchestrator")).toBeInTheDocument();
+    expect(within(agentsList).getByText("idle")).toBeInTheDocument();
+
+    expect(within(agentsList).getByText("Coder")).toBeInTheDocument();
+    expect(within(agentsList).getByText("waiting for approval")).toBeInTheDocument();
+    expect(within(agentsList).getByText("Approval")).toBeInTheDocument();
+
+    expect(within(agentsList).getByText("Alert Prioritization")).toBeInTheDocument();
+    expect(within(agentsList).getByText("inactive")).toBeInTheDocument();
+    expect(within(agentsList).getByText("(starts in a later stage)")).toBeInTheDocument();
+
+    // Clicking Coder switches session
+    const coderBtn = within(agentsList).getByRole("button", { name: /Coder/ });
+    await user.click(coderBtn);
+
+    await screen.findByRole("textbox", { name: "Message Coder" });
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalledWith(
+        "/api/projects/{project_id}/agents/{agent}/session",
+        expect.objectContaining({ params: { path: { project_id: "prj_1", agent: "coder" } } }),
+      );
+    });
+  });
 });

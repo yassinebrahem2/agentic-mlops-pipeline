@@ -20,6 +20,7 @@ export class FakeStream implements StreamLike {
   readyState = STREAM_OPEN;
   onerror: ((event: Event) => void) | null = null;
   listeners = new Map<string, (event: Event) => void>();
+  allListeners = new Map<string, Set<(event: Event) => void>>();
 
   constructor(url: string = "") {
     this.url = url;
@@ -28,6 +29,21 @@ export class FakeStream implements StreamLike {
   addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
     if (typeof listener === "function") {
       this.listeners.set(type, listener);
+      let set = this.allListeners.get(type);
+      if (!set) {
+        set = new Set();
+        this.allListeners.set(type, set);
+      }
+      set.add(listener);
+    }
+  }
+
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    if (typeof listener === "function") {
+      if (this.listeners.get(type) === listener) {
+        this.listeners.delete(type);
+      }
+      this.allListeners.get(type)?.delete(listener);
     }
   }
 
@@ -36,15 +52,30 @@ export class FakeStream implements StreamLike {
   });
 
   emitOpen(): void {
-    this.listeners.get("open")?.(new Event("open"));
+    const set = this.allListeners.get("open");
+    if (set && set.size > 0) {
+      set.forEach((fn) => {
+        fn(new Event("open"));
+      });
+    } else {
+      this.listeners.get("open")?.(new Event("open"));
+    }
   }
 
   emit(type: string, data: unknown, seq: number): void {
-    this.listeners.get(type)?.({
+    const event = {
       type,
       data: JSON.stringify(data),
       lastEventId: String(seq),
-    } as MessageEvent);
+    } as MessageEvent;
+    const set = this.allListeners.get(type);
+    if (set && set.size > 0) {
+      set.forEach((fn) => {
+        fn(event);
+      });
+    } else {
+      this.listeners.get(type)?.(event);
+    }
   }
 }
 
