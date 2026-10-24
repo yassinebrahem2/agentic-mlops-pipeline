@@ -21,7 +21,6 @@ export interface ComboboxProps {
   placeholder?: string;
   emptyText?: string; // shown when no option matches
   disabled?: boolean;
-  className?: string;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
 }
 
@@ -35,7 +34,6 @@ export function Combobox({
   placeholder,
   emptyText = "No options found",
   disabled = false,
-  className,
   onKeyDown,
 }: ComboboxProps): React.JSX.Element {
   const generatedId = useId();
@@ -56,11 +54,7 @@ export function Combobox({
   }, [options, query]);
 
   const effectiveHighlightedIndex =
-    highlightedIndex >= filteredOptions.length
-      ? filteredOptions.length > 0
-        ? 0
-        : -1
-      : highlightedIndex;
+    highlightedIndex >= filteredOptions.length ? -1 : highlightedIndex;
 
   const handleSelect = (option: ComboboxOption) => {
     onValueChange(option.value);
@@ -128,11 +122,10 @@ export function Combobox({
           value={value}
           placeholder={placeholder}
           disabled={disabled}
-          className={className}
           onChange={(e) => {
             onValueChange(e.target.value);
             setOpen(true);
-            setHighlightedIndex(0);
+            setHighlightedIndex(-1);
           }}
           onFocus={() => {
             setOpen(true);
@@ -182,9 +175,6 @@ export function Combobox({
                     }}
                     onClick={() => {
                       handleSelect(opt);
-                    }}
-                    onMouseEnter={() => {
-                      setHighlightedIndex(index);
                     }}
                   >
                     <span className="truncate">{opt.label ?? opt.value}</span>

@@ -37,6 +37,28 @@ function ComboboxHarness(props: {
 }
 
 describe("Combobox", () => {
+  it("keeps matching typed text on Enter until an arrow key highlights an option", async () => {
+    const user = userEvent.setup();
+    render(<ComboboxHarness />);
+    const input = screen.getByRole("combobox");
+
+    await user.type(input, "app");
+    await user.keyboard("{Enter}");
+    expect(input).toHaveValue("app");
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    expect(screen.getByRole("option")).toHaveAttribute("aria-selected", "false");
+
+    await user.keyboard("{ArrowDown}");
+    expect(input).toHaveAttribute("aria-activedescendant");
+    await user.keyboard("l");
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    await user.hover(screen.getByRole("option"));
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    await user.keyboard("{Enter}");
+    expect(input).toHaveValue("appl");
+    expect(input).toHaveFocus();
+  });
+
   it("has the required ARIA attributes", async () => {
     const user = userEvent.setup();
     render(<ComboboxHarness label="Fruit picker" />);

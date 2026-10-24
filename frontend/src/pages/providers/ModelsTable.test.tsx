@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import { renderPage } from "../../test/render";
 
@@ -93,12 +93,6 @@ const slashed: ModelEntry = {
   verified_at: "2026-10-20T08:30:00+00:00",
   problem: "The model groq:openai/gpt-oss-120b failed: the stream ended without a tool call.",
 };
-
-beforeAll(() => {
-  window.HTMLElement.prototype.hasPointerCapture = () => false;
-  window.HTMLElement.prototype.setPointerCapture = () => {};
-  window.HTMLElement.prototype.releasePointerCapture = () => {};
-});
 
 afterEach(() => {
   vi.unstubAllGlobals();

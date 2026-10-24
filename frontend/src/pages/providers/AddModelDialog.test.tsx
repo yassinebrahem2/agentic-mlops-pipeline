@@ -1,17 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import { AddModelDialog } from "./AddModelDialog";
 
 type Provider = components["schemas"]["Provider"];
-
-beforeAll(() => {
-  window.HTMLElement.prototype.hasPointerCapture = () => false;
-  window.HTMLElement.prototype.setPointerCapture = () => {};
-  window.HTMLElement.prototype.releasePointerCapture = () => {};
-});
 
 const groq: Provider = {
   id: "prv_1",
@@ -69,7 +63,7 @@ describe("AddModelDialog", () => {
     expect(modelInput).toHaveValue("custom-early-model");
   });
 
-  it("after listing resolves, typing filters listed models and Enter picks one", async () => {
+  it("after listing resolves, typing filters listed models and arrow selection with Enter picks one", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
@@ -104,7 +98,7 @@ describe("AddModelDialog", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /openai\/gpt-oss-120b/ })).not.toBeInTheDocument();
 
-    await user.keyboard("{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
     expect(modelInput).toHaveValue("llama-3.3-70b-versatile");
   });
 

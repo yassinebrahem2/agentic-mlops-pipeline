@@ -112,7 +112,7 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
           {provider !== "" && remote.isError && (
             <div className="text-destructive">
               <p>{errorText(remote.error)}</p>
-              <p>You can still type a model ID below.</p>
+              <p>You can still type a model ID in the Model field.</p>
             </div>
           )}
 

@@ -63,7 +63,7 @@ describe("GitHubTab", () => {
     expect(screen.queryByPlaceholderText(/Filter repositories/i)).not.toBeInTheDocument();
   });
 
-  it("typing part of a repo name and pressing Enter fills the full name, and Add sends it", async () => {
+  it("typing part of a repo name, highlighting and pressing Enter fills the full name, and Add sends it", async () => {
     const postRequests: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -128,9 +128,13 @@ describe("GitHubTab", () => {
 
     // Type part of a repo name
     await user.type(repoInput, "hello");
+    expect(await screen.findByRole("option", { name: /octocat\/hello-world/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /octocat\/second-project/ }),
+    ).not.toBeInTheDocument();
 
-    // Press Enter to fill the full name
-    await user.keyboard("{Enter}");
+    // Highlight the matching repository, then pick it.
+    await user.keyboard("{ArrowDown}{Enter}");
     expect(repoInput).toHaveValue("octocat/hello-world");
 
     // Click Add
@@ -142,6 +146,85 @@ describe("GitHubTab", () => {
         {
           source: "github",
           repo: "octocat/hello-world",
+        },
+      ]);
+    });
+  });
+
+  it("Enter immediately adds typed owner/name even when a longer repository matches", async () => {
+    const postRequests: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+        if (url.includes("/api/github/repos")) {
+          return new Response(
+            JSON.stringify([
+              {
+                full_name: "a/bc",
+                description: "Sample repo",
+                private: false,
+              },
+              {
+                full_name: "a/b",
+                description: null,
+                private: false,
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/api/github")) {
+          return new Response(
+            JSON.stringify({ mode: "gh", gh_available: true, login: "octocat" }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/api/projects") && method === "POST") {
+          let body: unknown;
+          if (input instanceof Request) {
+            body = await input.clone().json();
+          } else if (init?.body) {
+            body = JSON.parse(init.body as string);
+          }
+          postRequests.push(body);
+          return new Response(
+            JSON.stringify({
+              id: "prj_gh_123",
+              name: "b",
+              source: "github",
+              status: "ok",
+              status_detail: null,
+              created_at: "2026-10-21T12:00:00Z",
+              last_opened_at: null,
+              local_path: null,
+              github_full_name: "a/b",
+              default_branch: "main",
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderGitHubTab();
+
+    const repoInput = await screen.findByRole("combobox", { name: "Repository" });
+
+    // The exact name is valid even though the longer match is listed first.
+    await user.type(repoInput, "a/b");
+    expect(await screen.findByRole("option", { name: /a\/bc/ })).toBeInTheDocument();
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(postRequests).toEqual([
+        {
+          source: "github",
+          repo: "a/b",
         },
       ]);
     });
