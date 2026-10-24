@@ -91,6 +91,28 @@ class HeldObserver(RecordingObserver):
             await self.release.wait()
 
 
+class HeldEndObserver(RecordingObserver):
+    """Holds the first turn_ended until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def turn_ended(
+        self,
+        project_id: str,
+        agent: str,
+        turn_id: str,
+        status: TurnEnd,
+        final_text: str | None,
+    ) -> None:
+        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        if not self.entered.is_set():
+            self.entered.set()
+            await self.release.wait()
+
+
 class SelfCancellingObserver(RecordingObserver):
     """Raises its own CancelledError, as an observer awaiting a task someone else cancelled."""
 

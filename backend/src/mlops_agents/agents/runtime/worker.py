@@ -10,6 +10,7 @@ from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
+from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -262,9 +263,12 @@ class TurnWorkers:
         for observer in self._observers:
             await _observed(observer.turn_started(project_id, agent, turn_id))
 
+    @shielded
     async def _turn_ended(
         self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd
     ) -> None:
+        """Every observer hears the end. A cancel of the worker that lands here waits for the
+        last of them (each is bounded by OBSERVER_TIMEOUT_S), then goes on to the worker."""
         if not self._observers:
             return
         try:
@@ -290,7 +294,7 @@ class TurnWorkers:
 
 async def _observed(call: Awaitable[None]) -> None:
     """Await one observer call, bounded. A failing or hanging observer is logged and never
-    stops the queue, nor holds a shutdown that is cancelling the worker."""
+    stops the queue; a hanging one holds a shutdown at most OBSERVER_TIMEOUT_S."""
     try:
         async with asyncio.timeout(OBSERVER_TIMEOUT_S):
             await call
