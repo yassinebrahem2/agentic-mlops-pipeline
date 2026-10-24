@@ -187,7 +187,12 @@ class TurnWorkers:
     ) -> None:
         if not self._observers:
             return
-        final_text = await self._final_text(project_id, session_id, turn_id)
+        try:
+            final_text = await self._final_text(project_id, session_id, turn_id)
+        except Exception:
+            # The turn has ended either way; the observers still hear of it.
+            logger.exception("Could not read the final text of turn %s", turn_id)
+            final_text = None
         for observer in self._observers:
             await _observed(observer.turn_ended(project_id, agent, turn_id, status, final_text))
 

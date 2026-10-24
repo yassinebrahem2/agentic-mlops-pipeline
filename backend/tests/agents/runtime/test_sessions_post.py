@@ -142,6 +142,15 @@ async def test_post_when_busy_queues_its_turn_like_send(
         sent.id: "done",
         posted.id: "done",
     }
+    # The queued trigger became complete and recorded its reader in one step.
+    engine = await databases.project(env.project_id)
+    async with engine.connect() as conn:
+        posted_turn = await conn.scalar(
+            select(turns.c.id).where(turns.c.trigger_message_id == posted.id)
+        )
+    row = await _message_row(databases, env.project_id, posted.id)
+    assert row["status"] == "complete"
+    assert row["read_by_turn"] == posted_turn
 
 
 async def test_post_rejects_an_empty_message_like_send(env: SessionEnv) -> None:
