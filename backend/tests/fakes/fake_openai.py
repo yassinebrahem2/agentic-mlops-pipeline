@@ -20,7 +20,13 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-MODELS: dict[str, int] = {"fake-tools": 32768, "fake-no-tools": 8192, "fake-slow": 32768}
+MODELS: dict[str, int] = {
+    "fake-tools": 32768,
+    "fake-no-tools": 8192,
+    "fake-slow": 32768,
+    "fake-invalid-tools": 32768,
+    "fake-mixed-tools": 32768,
+}
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "Read": {"file_path": "README.md"},
     "report_capabilities": {"ok": True},
@@ -42,6 +48,7 @@ class FakeState:
     auth_fail: bool = False
     usage_in_stream: bool = True
     drop_after_chunks: int | None = None
+    scripted_tool_calls: list[dict[str, Any]] | None = None
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     _slow_gate: threading.Event = field(default_factory=_open_gate)
@@ -60,6 +67,7 @@ class FakeState:
         self.auth_fail = False
         self.usage_in_stream = True
         self.drop_after_chunks = None
+        self.scripted_tool_calls = None
         self.requests.clear()
         self.request_headers.clear()
 
@@ -81,23 +89,40 @@ def _chunk(model: str, delta: dict[str, Any], finish: str | None = None) -> str:
 
 
 def _reply(
-    model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-) -> tuple[str, str | None]:
-    """(text, name of the tool to call or None)."""
+    state: FakeState,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]] | None]:
+    """(text, list of tool calls to make or None)."""
     last = messages[-1]
-    if model == "fake-slow" and any(
-        tool["function"]["name"] == "report_capabilities" for tool in tools
-    ):
-        return "", "report_capabilities"
-    if model == "fake-slow":
-        return SLOW_TEXT, None
     if model == "fake-no-tools" or not tools:
         return "Hello from the fake model.", None
+    if any(tool["function"]["name"] == "report_capabilities" for tool in tools):
+        return "", [{"name": "report_capabilities", "arguments": TOOL_ARGS["report_capabilities"]}]
+    if model == "fake-slow":
+        return SLOW_TEXT, None
     if last.get("role") == "tool":
         content = str(last.get("content") or "").strip()
         first_line = content.splitlines()[0] if content else "(empty)"
         return f"Done. First line: {first_line}", None
-    return "", str(tools[0]["function"]["name"])
+    if state.scripted_tool_calls is not None:
+        return "", list(state.scripted_tool_calls)
+    if model == "fake-invalid-tools":
+        return "", [{"name": str(tools[0]["function"]["name"]), "arguments": "{pattern: foo}"}]
+    if model == "fake-mixed-tools":
+        t0 = str(tools[0]["function"]["name"])
+        t1 = str(tools[1]["function"]["name"]) if len(tools) > 1 else t0
+        return "", [
+            {"name": t0, "arguments": TOOL_ARGS.get(t0, {})},
+            {"name": t1, "arguments": "{pattern: foo}"},
+        ]
+    return "", [
+        {
+            "name": str(tools[0]["function"]["name"]),
+            "arguments": TOOL_ARGS.get(str(tools[0]["function"]["name"]), {}),
+        }
+    ]
 
 
 async def _stream(
@@ -115,23 +140,34 @@ async def _stream(
             raise RuntimeError("fake connection drop")
         yielded += 1
 
-    text, tool = _reply(model, messages, tools)
+    text, tool_calls = _reply(state, model, messages, tools)
     maybe_drop()
     yield _chunk(model, {"role": "assistant", "content": ""})
-    if tool is not None:
-        args = json.dumps(TOOL_ARGS.get(tool, {}))
-        half = len(args) // 2
-        call_id = f"call_{len(state.requests)}"
-        first = {
-            "index": 0,
-            "id": call_id,
-            "type": "function",
-            "function": {"name": tool, "arguments": args[:half]},
-        }
-        maybe_drop()
-        yield _chunk(model, {"tool_calls": [first]})
-        maybe_drop()
-        yield _chunk(model, {"tool_calls": [{"index": 0, "function": {"arguments": args[half:]}}]})
+    if tool_calls is not None:
+        num_calls = len(tool_calls)
+        for idx, tc in enumerate(tool_calls):
+            tool = tc["name"]
+            raw_args = tc.get("arguments", {})
+            args = json.dumps(raw_args) if isinstance(raw_args, dict) else str(raw_args)
+            half = len(args) // 2
+            call_id = tc.get("id") or (
+                f"call_{len(state.requests)}_{idx}"
+                if num_calls > 1
+                else f"call_{len(state.requests)}"
+            )
+            first = {
+                "index": idx,
+                "id": call_id,
+                "type": "function",
+                "function": {"name": tool, "arguments": args[:half]},
+            }
+            maybe_drop()
+            yield _chunk(model, {"tool_calls": [first]})
+            maybe_drop()
+            yield _chunk(
+                model,
+                {"tool_calls": [{"index": idx, "function": {"arguments": args[half:]}}]},
+            )
         finish = "tool_calls"
     else:
         for i, word in enumerate(text.split(" ")):
