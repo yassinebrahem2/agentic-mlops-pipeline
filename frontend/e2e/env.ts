@@ -1,5 +1,6 @@
 // Values shared by playwright.config.ts and every spec. The token and the data folder are made
-// once by the config in the runner; workers inherit them through the environment.
+// once by e2e/run.mjs (npm run e2e) before it starts Playwright; the runner and its workers
+// inherit them through the environment.
 
 export const APP_PORT = 8798;
 export const FAKE_PORT = 8799;

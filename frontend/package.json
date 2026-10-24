@@ -14,7 +14,7 @@
     "format:check": "prettier --check .",
     "pretest": "npm run gen:api",
     "test": "vitest run",
-    "e2e": "playwright test",
+    "e2e": "node e2e/run.mjs",
     "gen:api": "openapi-typescript openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
