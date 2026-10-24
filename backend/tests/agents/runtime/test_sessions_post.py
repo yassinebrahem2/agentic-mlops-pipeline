@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from sqlalchemy import RowMapping, select
+from sqlalchemy import RowMapping, insert, select
 
 from mlops_agents.agents.runtime.contract import MessageCreated, TextPart, TurnEnded
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
@@ -15,7 +15,7 @@ from mlops_agents.agents.runtime.worker import TurnWorkers
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import messages, turns
+from mlops_agents.storage.tables import exchanges, messages, turns
 from tests.agents.runtime.session_env import (
     SessionEnv,
     build_session_env,
@@ -56,6 +56,15 @@ async def _message_row(databases: Databases, project_id: str, message_id: str) -
     return row
 
 
+async def _exchange(databases: Databases, project_id: str, exchange_id: str) -> None:
+    """Store the exchange a posted message continues: messages.exchange_id references it."""
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(exchanges).values(id=exchange_id, created_at="2026-10-24T00:00:00Z")
+        )
+
+
 async def _turn_statuses(databases: Databases, project_id: str) -> dict[str, str]:
     """Each turn's status, keyed by its trigger message."""
     engine = await databases.project(project_id)
@@ -70,6 +79,7 @@ async def test_post_when_idle_stores_an_inbound_message_and_starts_a_turn(
     manager = env.manager
     view = await manager.get(env.project_id, AGENT)
     sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
+    await _exchange(databases, env.project_id, "xch_01")
 
     posted = await manager.post(
         env.project_id,
@@ -173,6 +183,7 @@ async def test_a_turn_started_by_an_agent_message_records_that_it_read_it(
     manager = env.manager
     view = await manager.get(env.project_id, AGENT)
     sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
+    await _exchange(databases, env.project_id, "xch_01")
 
     posted = await manager.post(
         env.project_id,
