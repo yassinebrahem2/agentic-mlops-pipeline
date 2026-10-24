@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +250,46 @@ class DummySessions:
             author_name="user",
             from_agent=None,
             parts=[TextPart(type="text", text=text)],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        return MessageView(
+            id="msg_dummy",
+            turn_id=None,
+            author_kind="user",
+            author_name=author_name,
+            from_agent=from_agent,
+            parts=[TextPart(type="text", text=text)],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        return MessageView(
+            id=message_id,
+            turn_id=None,
+            author_kind="agent",
+            author_name="dummy",
+            from_agent=None,
+            parts=transform([]),
             status="complete",
             created_at="2026-10-21T18:00:00Z",
         )

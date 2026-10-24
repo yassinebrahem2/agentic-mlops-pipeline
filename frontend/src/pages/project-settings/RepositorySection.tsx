@@ -14,6 +14,7 @@ import {
 import { api, errorText, unwrap } from "@/lib/api";
 import { useAppInfo } from "@/lib/useAppInfo";
 import { projectKey } from "@/lib/useProject";
+import { projectsKey } from "@/lib/useProjects";
 
 export function RepositorySection({ project }: { project: components["schemas"]["Project"] }) {
   const queryClient = useQueryClient();
@@ -22,7 +23,7 @@ export function RepositorySection({ project }: { project: components["schemas"][
   const app = useAppInfo();
   const updateProject = (updated: components["schemas"]["Project"]) => {
     queryClient.setQueryData(projectKey(project.id), updated);
-    void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    void queryClient.invalidateQueries({ queryKey: projectsKey });
   };
   const refresh = useMutation({
     mutationFn: async () =>

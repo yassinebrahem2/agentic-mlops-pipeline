@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
@@ -13,8 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorText, unwrap } from "@/lib/api";
+import { errorText } from "@/lib/api";
 import { useOpenProject } from "@/lib/useOpenProject";
+import { useProjects } from "@/lib/useProjects";
 
 export type Project = components["schemas"]["Project"];
 
@@ -26,18 +26,7 @@ function formatLastOpened(lastOpenedAt: string | null): string {
 export function ProjectsPage() {
   const { openProject, openingId, error: openError, errorProjectId } = useOpenProject();
 
-  const {
-    data: projects,
-    error,
-    isPending,
-    isError,
-  } = useQuery({
-    queryKey: ["projects"],
-    queryFn: async () => {
-      const res = await api.GET("/api/projects");
-      return unwrap(res);
-    },
-  });
+  const { data: projects, error, isPending, isError } = useProjects();
 
   const sortedProjects = useMemo(() => {
     if (!projects) return [];

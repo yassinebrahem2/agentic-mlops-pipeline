@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -185,3 +186,33 @@ async def test_ripgrep_reports_canonical_case_when_disk_case_differs(
     assert await ctx.files.tracked() == ["src/App.py"]
     out = await GrepTool(RG).invoke(ctx, {"pattern": "needle_in_app"})
     assert out.content.splitlines() == ["src/App.py"]
+
+
+def test_grep_schema_clarifications() -> None:
+    schema = GrepTool(None).schema()
+    params = schema["function"]["parameters"]
+
+    def _has_key(obj: object, target: str) -> bool:
+        if isinstance(obj, dict):
+            d = cast(dict[object, object], obj)
+            return target in d or any(_has_key(v, target) for v in d.values())
+        if isinstance(obj, list):
+            lst = cast(list[object], obj)
+            return any(_has_key(item, target) for item in lst)
+        return False
+
+    assert not _has_key(schema, "title")
+    assert not _has_key(schema, "anyOf")
+    assert params["required"] == ["pattern"]
+    type_desc = params["properties"]["type"]["description"]
+    assert "output_mode" in type_desc
+    assert "py" in type_desc
+    assert "file-type" in type_desc.lower() or "file type" in type_desc.lower()
+    output_desc = params["properties"]["output_mode"]["description"]
+    assert "=content" not in output_desc
+    assert (
+        "content" in output_desc and "files_with_matches" in output_desc and "count" in output_desc
+    )
+    tool_desc = GrepTool.description
+    assert "=content" not in tool_desc
+    assert "output_mode" in tool_desc

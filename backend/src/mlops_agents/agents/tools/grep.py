@@ -52,11 +52,18 @@ class GrepArgs(BaseModel):
     )
     type: str | None = Field(
         default=None,
-        description=f"Only search one file type: {', '.join(sorted(TYPE_EXTENSIONS))}.",
+        description=(
+            "File-type filter (for example py to search Python files only). "
+            "Filters files by extension; this is not the output format (see output_mode). "
+            f"Known types: {', '.join(sorted(TYPE_EXTENSIONS))}."
+        ),
     )
     output_mode: Literal["content", "files_with_matches", "count"] = Field(
         default="files_with_matches",
-        description="content: matching lines; files_with_matches: file paths; count: matches per file.",
+        description=(
+            "Output format: files_with_matches returns file paths, "
+            "content returns matching lines, count returns match counts per file."
+        ),
     )
     case_insensitive: bool = Field(default=False, alias="-i", description="Ignore case.")
     line_numbers: bool = Field(
@@ -242,7 +249,8 @@ class GrepTool(AgentTool[GrepArgs]):
     name: ClassVar[str] = "Grep"
     description: ClassVar[str] = (
         "Search the contents of files committed to the repository with a regular expression. "
-        "Returns matching files by default; use output_mode=content to see the lines."
+        "Returns matching files by default (files_with_matches); set output_mode to content "
+        "to see matching lines, or count for match counts."
     )
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = GrepArgs

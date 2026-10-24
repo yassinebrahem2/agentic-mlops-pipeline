@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,9 @@ from typing import Any
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -55,6 +58,8 @@ async def build_session_env(
     files: dict[str, str] | None = None,
     extra_dirs: list[Path] | None = None,
     tools: ToolRegistry | None = None,
+    observers: Sequence[TurnObserver] = (),
+    bus: MessageBus | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -78,6 +83,8 @@ async def build_session_env(
         providers=providers_svc,
         http=model_http,
         git=GitRunner(paths.bin),
+        observers=observers,
+        bus=bus,
     )
 
     prov = await providers_svc.create_provider(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from enum import StrEnum
+from typing import Any, cast
 
 import httpx2
 import openai
@@ -15,6 +16,7 @@ class ProviderErrorKind(StrEnum):
     RATE_LIMIT = "rate_limit"
     TRANSIENT = "transient"
     UNREACHABLE = "unreachable"
+    BAD_GENERATION = "bad_generation"
     BAD_REQUEST = "bad_request"
     UNKNOWN = "unknown"
 
@@ -51,6 +53,20 @@ def _retry_after(response: httpx2.Response) -> float | None:
 
 def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:
     for e in _chain(exc):
+        if isinstance(e, openai.APIError):
+            body = getattr(e, "body", None)
+            code: object = getattr(e, "code", None)
+            if not code and isinstance(body, dict):
+                body_dict = cast(dict[str, Any], body)
+                code = body_dict.get("code")
+                if not code:
+                    nested_err = body_dict.get("error")
+                    if isinstance(nested_err, dict):
+                        nested_dict = cast(dict[str, Any], nested_err)
+                        code = nested_dict.get("code")
+            if code in ("tool_use_failed", "json_validate_failed"):
+                return ProviderErrorKind.BAD_GENERATION, None
+
         if isinstance(e, openai.AuthenticationError | openai.PermissionDeniedError):
             return ProviderErrorKind.AUTH, None
         if isinstance(e, openai.RateLimitError):
@@ -67,6 +83,27 @@ def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:
     return ProviderErrorKind.UNKNOWN, None
 
 
+def _provider_message(exc: BaseException) -> str | None:
+    for e in _chain(exc):
+        if isinstance(e, openai.APIError):
+            body = getattr(e, "body", None)
+            if isinstance(body, dict):
+                body_dict = cast(dict[str, Any], body)
+                msg = body_dict.get("message")
+                if isinstance(msg, str) and msg:
+                    return msg
+                nested = body_dict.get("error")
+                if isinstance(nested, dict):
+                    nested_dict = cast(dict[str, Any], nested)
+                    msg = nested_dict.get("message")
+                    if isinstance(msg, str) and msg:
+                        return msg
+    return None
+
+
 def classify(exc: BaseException, secrets: Iterable[str] = ()) -> ProviderCallError:
     kind, retry_after = _kind(exc)
-    return ProviderCallError(kind, scrub_values(error_text(exc), secrets), retry_after)
+    raw_message = _provider_message(exc) if kind is ProviderErrorKind.BAD_GENERATION else None
+    if raw_message is None:
+        raw_message = error_text(exc)
+    return ProviderCallError(kind, scrub_values(raw_message, secrets), retry_after)

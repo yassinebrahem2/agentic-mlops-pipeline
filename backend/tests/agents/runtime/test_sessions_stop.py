@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import httpx2
+import pytest
 from pydantic import BaseModel
 
 from mlops_agents.agents.runtime.contract import (
@@ -11,10 +12,12 @@ from mlops_agents.agents.runtime.contract import (
     Resync,
     TurnEnded,
 )
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, ToolOutput
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.observer_fakes import HeldObserver, turn_statuses
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
@@ -152,5 +155,218 @@ async def test_stop_during_slow_tool(
     evs = await collect_until_turn_ended(sub)
     assert isinstance(evs[-1], TurnEnded)
     assert evs[-1].data.status == "done"
+
+    await manager.close()
+
+
+async def test_stop_while_a_turn_started_observer_runs_stops_the_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    held = HeldObserver()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[held],
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    await asyncio.wait_for(held.entered.wait(), timeout=5)
+    requests_before = len(fake_openai.state.requests)
+    # The turn has started but its observers have not returned yet.
+    await manager.stop(env.project_id, "orchestrator")
+    held.release.set()
+
+    stopped = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(stopped, TurnEnded)
+    assert stopped.data.status == "stopped"
+    assert await asyncio.wait_for(held.ended.get(), timeout=5) == "stopped"
+    assert len(fake_openai.state.requests) == requests_before
+
+    # The session goes on: the next turn runs to its end.
+    await manager.send(env.project_id, "orchestrator", "Check readme again")
+    after = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(after, TurnEnded)
+    assert after.data.status == "done"
+    # The observer heard each turn end exactly once.
+    assert await asyncio.wait_for(held.ended.get(), timeout=5) == "done"
+    assert held.ended.qsize() == 0
+    assert [call[0] for call in held.calls] == ["started", "ended", "started", "ended"]
+    assert sorted(await turn_statuses(databases, env.project_id)) == ["done", "stopped"]
+
+    await manager.close()
+
+
+def _hold_next_queued_turn(
+    monkeypatch: pytest.MonkeyPatch, call: int
+) -> tuple[asyncio.Event, asyncio.Event, asyncio.Event]:
+    """Hold the worker's `call`-th look for a queued turn (1 is its first), under the lock.
+    The third event is set when that look returns; the worker acts on it before it yields."""
+    orig = SessionStore.next_queued_turn
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    returned = asyncio.Event()
+    calls = 0
+
+    async def held(self: SessionStore, project_id: str, session_id: str) -> tuple[str, str] | None:
+        nonlocal calls
+        calls += 1
+        if calls != call:
+            return await orig(self, project_id, session_id)
+        entered.set()
+        await release.wait()
+        result = await orig(self, project_id, session_id)
+        returned.set()
+        return result
+
+    monkeypatch.setattr(SessionStore, "next_queued_turn", held)
+    return entered, release, returned
+
+
+async def test_stop_before_the_worker_takes_the_queued_turn_stops_it(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+    entered, release, _ = _hold_next_queued_turn(monkeypatch, call=1)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    # Right after the Send: the session is busy and its turn queued, but the worker has not
+    # taken it yet (its first look is held).
+    await manager.stop(env.project_id, "orchestrator")
+    release.set()
+
+    first = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(first, TurnEnded)
+    assert first.data.status == "stopped"
+
+    # The Stop was for that turn only: the next one runs to its end.
+    await manager.send(env.project_id, "orchestrator", "Check readme again")
+    second = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(second, TurnEnded)
+    assert second.data.status == "done"
+    assert sorted(await turn_statuses(databases, env.project_id)) == ["done", "stopped"]
+
+    await manager.close()
+
+
+async def test_stop_while_idle_does_not_stop_the_next_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+
+    await manager.stop(env.project_id, "orchestrator")
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+
+    ended = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(ended, TurnEnded)
+    assert ended.data.status == "done"
+
+    await manager.close()
+
+
+async def test_stop_as_the_worker_finds_no_more_turns_does_not_stop_the_next_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+    # The second look comes after the first turn ended, and finds the queue empty.
+    entered, release, returned = _hold_next_queued_turn(monkeypatch, call=2)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    first = (await collect_until_turn_ended(sub))[-1]
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    await manager.stop(env.project_id, "orchestrator")
+    release.set()
+    await asyncio.wait_for(returned.wait(), timeout=5)
+    assert (await manager.get(env.project_id, "orchestrator")).busy is False
+
+    await manager.send(env.project_id, "orchestrator", "Check readme again")
+    second = (await collect_until_turn_ended(sub))[-1]
+    assert isinstance(first, TurnEnded) and first.data.status == "done"
+    assert isinstance(second, TurnEnded) and second.data.status == "done"
+
+    await manager.close()
+
+
+async def test_stop_between_two_queued_turns_stops_neither(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, "orchestrator")
+    sub = manager.subscribe(env.project_id, "orchestrator", after_seq=view.last_seq)
+    # The second look comes after the first turn ended, and finds the second turn queued.
+    entered, release, _ = _hold_next_queued_turn(monkeypatch, call=2)
+
+    await manager.send(env.project_id, "orchestrator", "Check readme")
+    queued = await manager.send(env.project_id, "orchestrator", "Check readme again")
+    first = (await collect_until_turn_ended(sub))[-1]
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    # As in stage 1, a Stop between two turns has no turn to stop and is dropped.
+    await manager.stop(env.project_id, "orchestrator")
+    release.set()
+    second = (await collect_until_turn_ended(sub))[-1]
+
+    assert queued.status == "queued"
+    assert isinstance(first, TurnEnded) and first.data.status == "done"
+    assert isinstance(second, TurnEnded) and second.data.status == "done"
+    assert await turn_statuses(databases, env.project_id) == ["done", "done"]
 
     await manager.close()
