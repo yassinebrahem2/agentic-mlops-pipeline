@@ -40,6 +40,9 @@ class TurnWorkers:
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.
         self._current_turns: dict[SessionKey, str] = {}
         self._stopped_turns: set[str] = set()
+        # A Stop that came while a worker ran but had not taken its turn yet: it is for the
+        # turn that worker takes next, and dropped if the worker finds none.
+        self._stop_next: set[SessionKey] = set()
 
     def running(self, key: SessionKey) -> bool:
         worker = self._workers.get(key)
@@ -54,10 +57,14 @@ class TurnWorkers:
         )
 
     def stop(self, key: SessionKey) -> None:
-        """Stop the session's current turn: before its task exists (while the turn_started
-        observers run), the turn ends stopped without running."""
+        """Stop the turn of a running worker: the one it is on, or the one it is about to take.
+        A turn stopped before its task exists ends stopped without running. With no worker
+        running there is nothing to stop, and nothing is kept for a later turn."""
+        if not self.running(key):
+            return
         turn_id = self._current_turns.get(key)
-        if turn_id is None or not self.running(key):
+        if turn_id is None:
+            self._stop_next.add(key)
             return
         self._stopped_turns.add(turn_id)
         child = self._child_tasks.get(key)
@@ -93,6 +100,7 @@ class TurnWorkers:
         for key in list(self._current_turns.keys()):
             if project_id in (None, key[0]):
                 self._current_turns.pop(key, None)
+        self._stop_next = {k for k in self._stop_next if project_id not in (None, k[0])}
         if project_id is None:
             self._stopped_turns.clear()
 
@@ -105,12 +113,18 @@ class TurnWorkers:
             while True:
                 async with lock:
                     next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    # Taking the turn and claiming an early Stop happen with no await between
+                    # them, so a Stop lands either here or on the turn itself.
                     if next_turn is None:
+                        self._stop_next.discard(key)
                         self._workers.pop(key, None)
                         break
+                    turn_id, trigger_msg_id = next_turn
+                    self._current_turns[key] = turn_id
+                    if key in self._stop_next:
+                        self._stop_next.discard(key)
+                        self._stopped_turns.add(turn_id)
 
-                turn_id, trigger_msg_id = next_turn
-                self._current_turns[key] = turn_id
                 try:
                     await self._take_turn(
                         project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock
@@ -120,6 +134,7 @@ class TurnWorkers:
                     self._stopped_turns.discard(turn_id)
 
         finally:
+            self._stop_next.discard(key)
             self._workers.pop(key, None)
 
     async def _take_turn(
