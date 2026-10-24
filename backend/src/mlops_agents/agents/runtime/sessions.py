@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
@@ -18,6 +19,7 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -49,6 +51,8 @@ class SessionManager(AgentSessions):
         providers: ProvidersService,
         http: httpx2.AsyncClient,
         git: GitRunner,
+        observers: Sequence[TurnObserver] = (),
+        bus: MessageBus | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -69,7 +73,7 @@ class SessionManager(AgentSessions):
             git=git,
         )
         self._executor = TurnExecutor(store=self._store, caller=self._caller, builder=self._builder)
-        self._workers = TurnWorkers(store=self._store, executor=self._executor)
+        self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
 
         self._hubs: dict[tuple[str, str], SessionHub] = {}
         self._locks: dict[tuple[str, str], AsyncRLock] = {}
@@ -77,6 +81,10 @@ class SessionManager(AgentSessions):
         self._recovery_lock = asyncio.Lock()
         self._session_ids: dict[tuple[str, str], str] = {}
         self._session_id_lock = asyncio.Lock()
+
+        # The bus is built first, and the manager binds itself to it once it is complete.
+        if bus is not None:
+            bus.bind(self)
 
     def _get_lock(self, project_id: str, session_id: str) -> AsyncRLock:
         key = (project_id, session_id)

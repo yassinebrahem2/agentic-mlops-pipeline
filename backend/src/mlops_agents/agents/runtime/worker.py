@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Sequence
 from typing import Any
 
-from mlops_agents.agents.runtime.contract import TurnEnd
+from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 
@@ -21,9 +23,16 @@ SessionKey = tuple[str, str]
 class TurnWorkers:
     """Owns each session's worker task and the turn task it is running."""
 
-    def __init__(self, *, store: SessionStore, executor: TurnExecutor) -> None:
+    def __init__(
+        self,
+        *,
+        store: SessionStore,
+        executor: TurnExecutor,
+        observers: Sequence[TurnObserver],
+    ) -> None:
         self._store = store
         self._executor = executor
+        self._observers = tuple(observers)
         self._workers: dict[SessionKey, asyncio.Task[None]] = {}
         self._child_tasks: dict[SessionKey, asyncio.Task[tuple[TurnEnd, str | None]]] = {}
         self._stopped_tasks: set[asyncio.Task[Any]] = set()
@@ -91,6 +100,7 @@ class TurnWorkers:
 
                 turn_id, trigger_msg_id = next_turn
                 await self._store.set_turn(project_id, turn_id, "running")
+                await self._turn_started(project_id, agent, turn_id)
 
                 # A queued trigger becomes complete; one from an agent records this turn read it.
                 async with lock:
@@ -114,11 +124,14 @@ class TurnWorkers:
                 )
                 self._child_tasks[key] = child_task
 
+                # The observers hear of the end after the turn's own handling, so a cancel that
+                # lands in an observer never rewrites how the turn ended.
                 try:
                     try:
                         end_status, error = await child_task
                         await self._store.set_turn(project_id, turn_id, end_status, error=error)
                         await hub.turn_ended(turn_id, status=end_status, error=error)
+                        ended = end_status
                     except asyncio.CancelledError:
                         current = asyncio.current_task()
                         if current is not None and current.cancelling() > 0:
@@ -139,10 +152,11 @@ class TurnWorkers:
                             self._stopped_tasks.discard(child_task)
                             await self._store.set_turn(project_id, turn_id, "stopped")
                             await hub.turn_ended(turn_id, status="stopped", error=None)
-                            continue
-                        await self._store.set_turn(project_id, turn_id, "interrupted")
-                        await self._store.mark_interrupted(project_id, turn_id)
-                        raise
+                            ended = "stopped"
+                        else:
+                            await self._store.set_turn(project_id, turn_id, "interrupted")
+                            await self._store.mark_interrupted(project_id, turn_id)
+                            raise
                     except Exception:
                         logger.exception("Turn %s failed outside the executor", turn_id)
                         await self._executor.record_failure(
@@ -154,9 +168,44 @@ class TurnWorkers:
                         await hub.turn_ended(
                             turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT
                         )
+                        ended = "failed"
                 finally:
                     self._stopped_tasks.discard(child_task)
                     self._child_tasks.pop(key, None)
 
+                await self._turn_ended(project_id, session_id, agent, turn_id, ended)
+
         finally:
             self._workers.pop(key, None)
+
+    async def _turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        for observer in self._observers:
+            await _observed(observer.turn_started(project_id, agent, turn_id))
+
+    async def _turn_ended(
+        self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd
+    ) -> None:
+        if not self._observers:
+            return
+        final_text = await self._final_text(project_id, session_id, turn_id)
+        for observer in self._observers:
+            await _observed(observer.turn_ended(project_id, agent, turn_id, status, final_text))
+
+    async def _final_text(self, project_id: str, session_id: str, turn_id: str) -> str | None:
+        """The last text the agent wrote in the turn, or None when it wrote none."""
+        texts = [
+            part.text
+            for message in await self._store.messages(project_id, session_id)
+            if message.turn_id == turn_id and message.author_kind == "agent"
+            for part in message.parts
+            if isinstance(part, TextPart) and part.text
+        ]
+        return texts[-1] if texts else None
+
+
+async def _observed(call: Awaitable[None]) -> None:
+    """Await one observer call. A failing observer is logged and never stops the queue."""
+    try:
+        await call
+    except Exception:
+        logger.exception("A turn observer failed")
