@@ -88,7 +88,7 @@ A **task** is one piece of code work by one agent. ID prefix `tsk`. It has:
 - Write, Edit or Bash with no current task returns a tool error: "Start a task first with StartTask."
 
 **Creating the worktree:**
-- The base is `origin/<default branch>`, fetched first, for every project that has a GitHub link (§6): a GitHub project's managed clone, or a local project whose `origin` is on github.com. A PR then holds only the task's changes, never the user's unpushed commits. A local project without a GitHub remote bases on its local default branch's commit.
+- The base is `origin/<default branch>`, fetched first, for every project that has a GitHub link (§6): a GitHub project's managed clone, or a local project whose `origin` is on github.com. A PR then holds only the task's changes, never the user's unpushed commits. For a local project, that fetch updates its remote-tracking refs (`origin/*`), which the stage 1 promise does not cover and this spec adds; working files and the checked-out branch are still untouched. A local project without a GitHub remote bases on its local default branch's commit.
 - The steps:
   1. `git worktree add -b <branch> <path> <base>`;
   2. `git update-index --skip-worktree` on every tracked file matching the secret denylist;
@@ -102,7 +102,7 @@ A **task** is one piece of code work by one agent. ID prefix `tsk`. It has:
 - every host git call on a task passes `GIT_DIR` and `GIT_WORK_TREE` from the task record, never trusting the worktree's `.git` entry;
 - it also passes `-c core.hooksPath=<an empty folder in the data folder>` and `-c core.fsmonitor=false`. Agent commits run no hooks, the user's included.
 
-One function in `agents/tasks/` builds these arguments; no other code runs git on a task. A test rewrites `.git` from the sandbox, then commits, and proves the commit lands in the right repository and nothing ran.
+It also passes `-c core.longpaths=true`, since task worktrees sit deep in the data folder on Windows, and worktrees are deleted with stage 1's read-only-aware removal. One function in `agents/tasks/` builds these arguments; no other code runs git on a task. A test rewrites `.git` from the sandbox, then commits, and proves the commit lands in the right repository and nothing ran.
 
 **The file view in a worktree:**
 - `git ls-files --cached --others --exclude-standard` minus the denylist, never outside the root.
@@ -161,7 +161,7 @@ Both have risk class `write_code`.
   - the task's worktree mounted read-write at `/workspace` (the working directory);
   - the host user's uid and gid on Linux and macOS;
   - labels with the project and task;
-  - no host environment variables.
+  - no host environment variables; `HOME=/tmp`, since the host uid has no home in the image.
 - `PYTHONPATH=/workspace/src:/workspace`, so the project's own code imports without an install, which needs network.
 - It is stopped and removed when its task ends and when the app shuts down. Containers left behind by a crash are removed at startup by label.
 
@@ -196,15 +196,15 @@ Both have risk class `write_code`.
 - The gate is its own node, because LangGraph re-runs a resumed node from its start. A node with side effects before its pause would repeat them.
 - Arguments are validated against the tool's pydantic model before the gate, so a malformed call gets its tool error and never becomes an approval request. The same model produces the tool's schema.
 - Tool calls of a step run one after another, never in parallel.
-- For each tool call of the step, the gate decides allow, deny or ask, and writes one audit record per decision, keyed by the tool-call id so a re-run adds none.
+- For each tool call of the step, the gate decides allow, deny or ask once, on its first pass, and stores the decision keyed by the tool-call id: an approval record for an ask, an audit record for the rest. A re-run of the gate (LangGraph re-runs a resumed node) reads those stored decisions back and adds nothing: no second record and no second approval part. A level change while a turn waits applies from that turn's next step.
 - For the asks, it creates approval requests: ID `apr`, keyed by the tool-call id, so a re-run finds them instead of duplicating them. Each carries the tool's preview:
   - the diff for Write and Edit;
   - the command for Bash;
   - the title, body and target for GitHub tools, and for OpenPullRequest also the staged diff that will be pushed, so changes made by Bash are shown before they leave the machine.
 - Then it calls `interrupt()` once with every pending approval.
 
-**In the session.** An approval is a message part, so the chat shows it on reload and live with no new mechanism:
-`{"type": "approval", "approval_id", "tool_call_id", "preview", "status": "pending" | "approved" | "rejected", "note"}`, placed after its tool call in the agent's message and updated through the existing `message.updated` event. `SessionView` gains `current_task` (id, title, branch, PR number and URL, or null) for the task bar. These two changes, and the message status `waiting`, are additions to I1; the frontend types are regenerated from them.
+**In the session.** An approval is a message part (the context builder and compaction skip it; the contracts task lists every reader of `Part`, frontend included), so the chat shows it on reload and live with no new mechanism:
+`{"type": "approval", "approval_id", "tool_call_id", "preview", "status": "pending" | "approved" | "rejected" | "cancelled" | "expired", "note"}`, placed after its tool call in the agent's message and updated through the existing `message.updated` event. `SessionView` gains `current_task` (id, title, branch, PR number and URL, or null) for the task bar. These two changes, and the message status `waiting`, are additions to I1; the frontend types are regenerated from them.
 
 **Waiting:**
 - When the graph pauses, the executor marks the turn `waiting`, and the agent message `waiting` (a new message status). It publishes `approval.requested`, and keeps the turn's checkpoint thread (stage 1 deleted it at every turn end).
@@ -213,11 +213,15 @@ Both have risk class `write_code`.
 
 **Deciding and resuming:**
 - The user approves or rejects each request, with an optional note, from the chat card or the Inbox. Each decision writes an audit record.
-- When the last request of the step is decided, the session resumes the turn with `Command(resume=[decision, ...])`: a list, so LangGraph never reads it as a mapping of interrupt ids. It uses a new checkpointer connection, so this also works after a restart.
+- When the last request of the step is decided, the session resumes the turn. The user's decisions are read from the approval records; the resume value is only a wake signal (`Command(resume=True)`), never a mapping LangGraph could read as interrupt ids. It uses a new checkpointer connection, so this also works after a restart.
+- Resuming loads the waiting agent message's id and parts into the executor before the graph continues, so the message keeps everything it had before the pause, after a restart too.
 - The tools step runs the approved calls. It answers each rejected call with the tool error "The user rejected this action" plus the note.
 
+**Approvals whose turn is gone:**
+- At startup, every pending approval whose turn is not `waiting` (it was `running` when the app stopped, and is now `interrupted`) becomes `expired`, and its message part says so.
+
 **Stop on a waiting turn:**
-- It rejects the turn's pending approvals ("stopped by the user").
+- It marks the turn's pending approvals `cancelled` (not `rejected`, so the audit tells the user's rejection from a Stop).
 - It ends the turn `stopped` and deletes its thread.
 
 ## 6. Pull requests, issues and the end-of-turn reminder
@@ -321,13 +325,13 @@ All are definition files on the one runtime.
 
 | Agent | Chat | Tools | May message | Wake-ups |
 |---|---|---|---|---|
-| Orchestrator | yes | all general tools, the task tools, PR and issue tools, ListAgents, SendMessage | all | yes |
+| Orchestrator | yes | all general tools, the task tools, PR and issue tools, ListAgents, SendMessage | all but Alert Prioritization | yes |
 | Onboarding & Diagnosis | yes | same | Orchestrator, Data Quality, Model Performance | yes |
-| Data Quality | yes | same | Orchestrator, Model Performance, Retraining, Alert Prioritization | yes |
-| Model Performance | yes | same | Orchestrator, Data Quality, Retraining, Alert Prioritization | yes |
+| Data Quality | yes | same | Orchestrator, Model Performance, Retraining | yes |
+| Model Performance | yes | same | Orchestrator, Data Quality, Retraining | yes |
 | Retraining | yes | same | Orchestrator, Model Performance, Deployment & Rollback | yes |
 | Deployment & Rollback | yes | same | Orchestrator, Retraining, Model Performance | yes |
-| Alert Prioritization | no | Read, Glob, Grep, ListAgents, SendMessage, SearchIssues, OpenIssue, CommentOnIssue | all | no |
+| Alert Prioritization | no | Read, Glob, Grep, ListAgents, SendMessage, SearchIssues, OpenIssue, CommentOnIssue | all chat agents | no |
 
 "All general tools" means Read, Glob, Grep, Write, Edit and Bash. "The task tools" means StartTask and ResumeTask. The PR and issue tools are OpenPullRequest, SearchIssues, OpenIssue and CommentOnIssue.
 
@@ -336,7 +340,7 @@ Each prompt states:
 - what it can do now, and nothing it cannot. Data connections, checks and deploy hooks come in later stages, and the prompts say so when asked.
 - how to work: start a task before changing code, read before editing, test in the sandbox, open a PR when done, search issues before opening one, and message only when another agent's part is needed.
 
-Alert Prioritization has no trigger until stage 4. It is listed with the status "starts in a later stage" and never runs in stage 2.
+Alert Prioritization has no trigger until stage 4, and no agent may message it in stage 2 (stage 4 adds it to their `can_message`). It is listed with the status "starts in a later stage" and never runs in stage 2.
 
 ## 10. UI
 
