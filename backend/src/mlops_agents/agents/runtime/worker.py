@@ -160,8 +160,7 @@ class TurnWorkers:
     ) -> None:
         """A queued trigger becomes complete; one from an agent records this turn read it."""
         async with lock:
-            history = await self._store.messages(project_id, session_id)
-            trigger = next((m for m in history if m.id == trigger_msg_id), None)
+            trigger = await self._store.message(project_id, session_id, trigger_msg_id)
             read_by = turn_id if trigger is not None and trigger.from_agent is not None else None
             if trigger is not None and trigger.status == "queued":
                 updated_msg = await self._store.update_message(
