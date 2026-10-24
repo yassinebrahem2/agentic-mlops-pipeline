@@ -24,6 +24,7 @@ export function FolderBrowser({
 }: FolderBrowserProps) {
   const [currentPath, setCurrentPath] = useState<string | undefined>(initialPath);
   const [folderPathInput, setFolderPathInput] = useState<string>(initialPath ?? "");
+  const [isEdited, setIsEdited] = useState(false);
 
   const {
     data: listing,
@@ -43,14 +44,15 @@ export function FolderBrowser({
   });
 
   useEffect(() => {
-    if (listing?.path) {
+    if (listing?.path && !isEdited) {
       setFolderPathInput(listing.path);
     }
-  }, [listing?.path]);
+  }, [listing?.path, isEdited]);
 
   const handleGo = () => {
     const trimmed = folderPathInput.trim();
     if (trimmed) {
+      setIsEdited(false);
       setCurrentPath(trimmed);
     }
   };
@@ -66,6 +68,7 @@ export function FolderBrowser({
           aria-label="Folder path"
           value={folderPathInput}
           onChange={(e) => {
+            setIsEdited(true);
             setFolderPathInput(e.target.value);
           }}
           onKeyDown={(e) => {
@@ -97,6 +100,7 @@ export function FolderBrowser({
             disabled={!listing?.parent || isPending}
             onClick={() => {
               if (listing?.parent) {
+                setIsEdited(false);
                 setCurrentPath(listing.parent);
               }
             }}
@@ -116,6 +120,7 @@ export function FolderBrowser({
                   size="sm"
                   className="h-8 px-2 text-xs"
                   onClick={() => {
+                    setIsEdited(false);
                     setCurrentPath(root);
                   }}
                 >
@@ -173,6 +178,7 @@ export function FolderBrowser({
                     key={entry.path}
                     type="button"
                     onClick={() => {
+                      setIsEdited(false);
                       setCurrentPath(entry.path);
                     }}
                     className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-left transition-colors hover:bg-muted"

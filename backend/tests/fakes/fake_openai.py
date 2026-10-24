@@ -170,15 +170,13 @@ def create_fake_app(state: FakeState) -> FastAPI:
             request.headers.get("authorization") == f"Bearer {state.required_key}"
         )
 
-    @app.get("/v1/models")
-    async def list_models(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+    async def list_models(request: Request) -> Response:
         if not authorized(request):
             return _error(401, "Invalid API key", "invalid_api_key")
         data = [{"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()]
         return JSONResponse({"object": "list", "data": data})
 
-    @app.post("/v1/chat/completions")
-    async def chat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+    async def chat(request: Request) -> Response:
         if not authorized(request):
             return _error(401, "Invalid API key", "invalid_api_key")
         body: dict[str, Any] = await request.json()
@@ -197,6 +195,9 @@ def create_fake_app(state: FakeState) -> FastAPI:
         usage = bool(options.get("include_usage")) and state.usage_in_stream
         stream = _stream(state, model, body["messages"], body.get("tools") or [], usage)
         return StreamingResponse(stream, media_type="text/event-stream")
+
+    app.add_api_route("/v1/models", list_models, methods=["GET"])
+    app.add_api_route("/v1/chat/completions", chat, methods=["POST"])
 
     return app
 
