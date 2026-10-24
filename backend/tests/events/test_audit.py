@@ -17,9 +17,14 @@ from mlops_agents.storage.tables import audit
 async def test_audit_scrubbing_and_capping(databases: Databases) -> None:
     project_id = "prj_audit1"
     secret = "sk-supersecret-token-12345"
-    audit_log = SqliteAuditLog(databases, secrets=[secret])
+
+    async def async_secrets() -> list[str]:
+        return [secret]
+
+    audit_log = SqliteAuditLog(databases, secrets=async_secrets)
 
     ten_thousand_chars = "x" * 5000 + secret + "y" * 5000
+    ten_thousand_key = "k" * 10000
     url_with_secret = "https://api.example.com/v1?token=query_secret_val"
 
     record = await audit_log.record(
@@ -34,9 +39,12 @@ async def test_audit_scrubbing_and_capping(databases: Databases) -> None:
             "long_val": ten_thousand_chars,
             "url_val": url_with_secret,
             "secret_val": f"prefix {secret} suffix",
+            f"key_with_{secret}": "key_secret_val",
+            ten_thousand_key: "long_key_val",
             "nested": {
                 "inner_secret": secret,
                 "inner_long": "z" * 6000,
+                f"inner_key_{secret}": "inner_val",
             },
             "num": 42,
         },
@@ -53,13 +61,18 @@ async def test_audit_scrubbing_and_capping(databases: Databases) -> None:
     # Scrubbed & capped checks
     # 1. Long value length capped at 4000
     assert len(record.detail["long_val"]) == 4000
-    # 2. Secret not present in detail
+    # 2. Secret not present anywhere in detail JSON (neither keys nor values)
     assert secret not in json.dumps(record.detail)
-    # 3. Secret masked with ***
+    # 3. Secret masked with *** in values
     assert record.detail["secret_val"] == "prefix *** suffix"
     assert record.detail["nested"]["inner_secret"] == "***"
     assert len(record.detail["nested"]["inner_long"]) == 4000
-    # 4. URL secret masked
+    # 4. Dict keys scrubbed of secret and capped at 4000
+    assert "key_with_***" in record.detail
+    assert len("k" * 4000) == 4000
+    assert ("k" * 4000) in record.detail
+    assert "inner_key_***" in record.detail["nested"]
+    # 5. URL secret masked
     assert "query_secret_val" not in record.detail["url_val"]
     assert "***" in record.detail["url_val"]
 

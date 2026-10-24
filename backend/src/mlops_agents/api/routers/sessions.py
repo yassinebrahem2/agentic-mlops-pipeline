@@ -19,9 +19,6 @@ from mlops_agents.api.sse import PING_SECONDS, SSE_HEADERS, SseResponse, parse_a
 
 router = APIRouter(tags=["sessions"])
 
-_parse_after_seq = parse_after_seq
-_EventSourceResponse = SseResponse
-
 
 class SendMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")

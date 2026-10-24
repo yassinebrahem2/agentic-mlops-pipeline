@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, cast
 
 from sqlalchemy import insert
@@ -16,6 +17,8 @@ from mlops_agents.events.contract import AuditDecision, AuditLog, AuditRecord
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import audit
+
+SecretSource = Iterable[str] | Callable[[], Iterable[str]] | Callable[[], Awaitable[Iterable[str]]]
 
 
 def _scrub_string(val: str, secrets: Iterable[str]) -> str:
@@ -31,7 +34,9 @@ def _scrub_and_cap(item: object, secrets: Iterable[str]) -> object:
         return _scrub_string(item, secrets)
     if isinstance(item, dict):
         mapping = cast(dict[object, object], item)
-        return {str(k): _scrub_and_cap(v, secrets) for k, v in mapping.items()}
+        return {
+            _scrub_string(str(k), secrets): _scrub_and_cap(v, secrets) for k, v in mapping.items()
+        }
     if isinstance(item, list):
         sequence = cast(list[object], item)
         return [_scrub_and_cap(v, secrets) for v in sequence]
@@ -45,16 +50,17 @@ class SqliteAuditLog(AuditLog):
         self,
         databases: Databases,
         *,
-        secrets: Iterable[str] | Callable[[], Iterable[str]] | None = None,
+        secrets: SecretSource,
     ) -> None:
         self._databases = databases
         self._secrets = secrets
 
-    def _get_secrets(self) -> Iterable[str]:
-        if self._secrets is None:
-            return []
+    async def _get_secrets(self) -> Iterable[str]:
         if callable(self._secrets):
-            return self._secrets()
+            res = self._secrets()
+            if inspect.isawaitable(res):
+                return await res
+            return res
         return self._secrets
 
     async def record(
@@ -71,9 +77,10 @@ class SqliteAuditLog(AuditLog):
     ) -> AuditRecord:
         aud_id = new_id("aud")
         ts = now_iso()
-        known_secrets = self._get_secrets()
+        known_secrets = await self._get_secrets()
         scrubbed_detail: dict[str, Any] = {
-            k: _scrub_and_cap(v, known_secrets) for k, v in detail.items()
+            _scrub_string(str(k), known_secrets): _scrub_and_cap(v, known_secrets)
+            for k, v in detail.items()
         }
         detail_json = json.dumps(scrubbed_detail)
 

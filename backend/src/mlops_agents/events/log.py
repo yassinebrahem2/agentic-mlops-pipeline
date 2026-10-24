@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
@@ -23,6 +24,14 @@ class SqliteEventLog(EventLog):
     def __init__(self, databases: Databases, hub: EventHub | None = None) -> None:
         self._databases = databases
         self._hub = hub if hub is not None else EventHub()
+        self._record_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_record_lock(self, project_id: str) -> asyncio.Lock:
+        lock = self._record_locks.get(project_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._record_locks[project_id] = lock
+        return lock
 
     async def record(
         self,
@@ -33,38 +42,40 @@ class SqliteEventLog(EventLog):
         payload: dict[str, Any],
         subject_id: str | None = None,
     ) -> EventRecord:
-        evt_id = new_id("evt")
-        ts = now_iso()
-        payload_json = json.dumps(payload)
+        lock = self._get_record_lock(project_id)
+        async with lock:
+            evt_id = new_id("evt")
+            ts = now_iso()
+            payload_json = json.dumps(payload)
 
-        engine = await self._databases.project(project_id)
-        async with engine.begin() as conn:
-            result = await conn.execute(
-                insert(events).values(
-                    id=evt_id,
-                    ts=ts,
-                    source=source,
-                    type=type,
-                    subject_id=subject_id,
-                    payload=payload_json,
+            engine = await self._databases.project(project_id)
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    insert(events).values(
+                        id=evt_id,
+                        ts=ts,
+                        source=source,
+                        type=type,
+                        subject_id=subject_id,
+                        payload=payload_json,
+                    )
                 )
-            )
-            pk = result.inserted_primary_key
-            if pk is None or not pk:
-                raise RuntimeError("Failed to insert event: no primary key returned")
-            seq = int(pk[0])
+                pk = result.inserted_primary_key
+                if pk is None or not pk:
+                    raise RuntimeError("Failed to insert event: no primary key returned")
+                seq = int(pk[0])
 
-        record = EventRecord(
-            id=evt_id,
-            seq=seq,
-            ts=ts,
-            source=source,
-            type=type,
-            subject_id=subject_id,
-            payload=payload,
-        )
-        await self._hub.publish(project_id, record)
-        return record
+            record = EventRecord(
+                id=evt_id,
+                seq=seq,
+                ts=ts,
+                source=source,
+                type=type,
+                subject_id=subject_id,
+                payload=payload,
+            )
+            await self._hub.publish(project_id, record)
+            return record
 
     def subscribe(
         self, project_id: str, after_seq: int | None

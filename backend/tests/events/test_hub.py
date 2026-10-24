@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import Resync
 from mlops_agents.events.contract import EventRecord
@@ -49,26 +50,59 @@ async def test_hub_replay_and_live_events(databases: Databases) -> None:
 
 
 @pytest.mark.asyncio
-async def test_hub_replay_older_than_buffer(databases: Databases) -> None:
+async def test_hub_replay_older_than_buffer_paged(databases: Databases) -> None:
     project_id = "prj_overflow1"
     hub = EventHub()
     event_log = SqliteEventLog(databases, hub=hub)
 
-    # Record 1005 events: buffer maxlen is 1000, so events 1..5 fall out of buffer
-    for i in range(1, 1006):
+    # Record 1205 events: buffer maxlen is 1000, replay page size is 500
+    for i in range(1, 1206):
         await event_log.record(project_id, source="system", type="turn.started", payload={"n": i})
 
-    # Subscribe at after_seq=3 (older than buffer which starts at 6)
+    # Subscribe at after_seq=3 (older than buffer which starts at 206)
     sub = event_log.subscribe(project_id, after_seq=3)
 
-    first_replayed = await anext(sub)
-    assert isinstance(first_replayed, EventRecord)
-    assert first_replayed.seq == 4
+    replayed: list[int] = []
+    for _ in range(1202):  # events 4 through 1205
+        ev = await anext(sub)
+        assert isinstance(ev, EventRecord)
+        replayed.append(ev.seq)
 
-    second_replayed = await anext(sub)
-    assert isinstance(second_replayed, EventRecord)
-    assert second_replayed.seq == 5
+    assert replayed[0] == 4
+    assert replayed[500] == 504
+    assert replayed[-1] == 1205
 
+    await sub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hub_live_subscriber_does_not_lose_event_during_subscribe(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_window1"
+    hub = EventHub()
+    event_log = SqliteEventLog(databases, hub=hub)
+
+    # Record initial event 1
+    await event_log.record(project_id, source="user", type="turn.started", payload={"n": 1})
+
+    # Hook databases.project to record an event inside it during the subscribe setup window
+    original_project = databases.project
+    recorded = False
+
+    async def recording_project(pid: str) -> AsyncEngine:
+        nonlocal recorded
+        if not recorded and pid == project_id:
+            recorded = True
+            await event_log.record(project_id, source="user", type="message.sent", payload={"n": 2})
+        return await original_project(pid)
+
+    monkeypatch.setattr(databases, "project", recording_project)
+
+    sub = event_log.subscribe(project_id, after_seq=None)
+    ev = await asyncio.wait_for(anext(sub), timeout=2.0)
+    assert isinstance(ev, EventRecord)
+    assert ev.seq == 2
     await sub.aclose()
 
 

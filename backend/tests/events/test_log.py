@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from mlops_agents.events.contract import EventRecord
+from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.storage.databases import Databases
 
@@ -44,3 +48,32 @@ async def test_event_log_record_and_history(databases: Databases) -> None:
     # History for nonexistent project returns empty list
     other_history = await event_log.history("prj_other1", types=["turn.started"], limit=10)
     assert other_history == []
+
+
+@pytest.mark.asyncio
+async def test_event_log_concurrent_records_publish_in_seq_order(databases: Databases) -> None:
+    project_id = "prj_concurrent1"
+    hub = EventHub()
+    event_log = SqliteEventLog(databases, hub=hub)
+
+    sub = event_log.subscribe(project_id, after_seq=None)
+    received: list[int] = []
+
+    async def consume() -> None:
+        async for ev in sub:
+            if isinstance(ev, EventRecord):
+                received.append(ev.seq)
+                if len(received) == 20:
+                    break
+
+    consume_task = asyncio.create_task(consume())
+    await asyncio.sleep(0.02)
+
+    async def record_one(i: int) -> None:
+        await event_log.record(project_id, source="user", type="turn.started", payload={"i": i})
+
+    await asyncio.gather(*(record_one(i) for i in range(20)))
+
+    await asyncio.wait_for(consume_task, timeout=3.0)
+    await sub.aclose()
+    assert received == list(range(1, 21))

@@ -8,7 +8,10 @@ from pathlib import Path
 import httpx2
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import insert
 
+from mlops_agents.agents.tools.base import RiskClass
+from mlops_agents.storage.tables import provider_keys, providers
 from tests.api.conftest import add_local_project
 from tests.api.fake_sessions import SseMessage, parse_sse_events
 
@@ -165,3 +168,74 @@ async def test_events_stream_unknown_project_404(
     resp = await client.get("/api/projects/prj_nonexistent/events/stream")
     assert resp.status_code == 404
     assert resp.headers["content-type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_delete_project_calls_events_close_project(
+    client: httpx2.AsyncClient,
+    app: FastAPI,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    closed: list[str] = []
+    original_close = app.state.services.events.close_project
+
+    async def spy_close(pid: str) -> None:
+        closed.append(pid)
+        await original_close(pid)
+
+    app.state.services.events.close_project = spy_close
+
+    resp = await client.delete(f"/api/projects/{project_id}")
+    assert resp.status_code == 204
+    assert closed == [project_id]
+
+
+@pytest.mark.asyncio
+async def test_services_audit_scrubs_keystore_secrets(
+    app: FastAPI,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    keystore = app.state.services.keystore
+    secret_key = "sk-live-secret-999888"
+    keystore.set("key:provider_1", secret_key)
+
+    app_engine = await app.state.services.databases.app()
+    async with app_engine.begin() as conn:
+        await conn.execute(
+            insert(providers).values(
+                id="prv_test",
+                name="test_p",
+                kind="hosted",
+                base_url="https://api.test.com",
+                status="ok",
+                created_at="2026-10-24T00:00:00Z",
+            )
+        )
+        await conn.execute(
+            insert(provider_keys).values(
+                provider_id="prv_test",
+                position=0,
+                keystore_ref="key:provider_1",
+                hint="••••9888",
+                created_at="2026-10-24T00:00:00Z",
+            )
+        )
+
+    record = await app.state.services.audit.record(
+        project_id,
+        actor="Orchestrator",
+        action="Bash",
+        risk_class=RiskClass.RUN,
+        permission_level="ask",
+        decision="allowed",
+        target="test",
+        detail={"key": secret_key, "url": f"https://api.test.com?k={secret_key}"},
+    )
+
+    assert secret_key not in json.dumps(record.detail)
+    assert record.detail["key"] == "***"
+    assert "***" in record.detail["url"]
