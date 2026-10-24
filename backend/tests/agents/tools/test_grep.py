@@ -10,6 +10,7 @@ from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.agents.tools.grep import MAX_FILE_BYTES, GrepTool
 from mlops_agents.integrations.github.git import GitRunner
+from tests.agents.ctx import tool_context
 from tests.conftest import make_repo
 
 ENGINES = [pytest.param(None, id="python")]
@@ -123,7 +124,7 @@ async def test_tracked_symlink_to_outside_is_never_searched(
     except OSError:
         pytest.skip("this machine does not allow creating symlinks")
     _commit_all(root, git_env)
-    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    ctx = tool_context(RepoFiles(root, GitRunner(tmp_path / "bin")))
     assert await ctx.files.tracked() == ["a.txt"]
     out = await GrepTool(rg).invoke(ctx, {"pattern": "private-marker-7731"})
     assert out.content == "No matches found."
@@ -136,7 +137,7 @@ async def test_files_over_the_size_limit_are_named_in_a_note(
     root = make_repo(tmp_path / "repo", {"small.csv": "needle\n"}, git_env)
     (root / "large.csv").write_bytes(b"needle\n" + b"x" * MAX_FILE_BYTES)
     _commit_all(root, git_env)
-    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    ctx = tool_context(RepoFiles(root, GitRunner(tmp_path / "bin")))
     out = await GrepTool(rg).invoke(ctx, {"pattern": "needle"})
     lines = out.content.splitlines()
     assert lines[0] == "small.csv"
@@ -180,7 +181,7 @@ async def test_ripgrep_reports_canonical_case_when_disk_case_differs(
 ) -> None:
     root = make_repo(tmp_path / "repo", {"src/App.py": "needle_in_app\n"}, git_env)
     (root / "src" / "App.py").rename(root / "src" / "app.py")
-    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    ctx = tool_context(RepoFiles(root, GitRunner(tmp_path / "bin")))
     assert await ctx.files.tracked() == ["src/App.py"]
     out = await GrepTool(RG).invoke(ctx, {"pattern": "needle_in_app"})
     assert out.content.splitlines() == ["src/App.py"]

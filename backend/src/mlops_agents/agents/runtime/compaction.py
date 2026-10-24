@@ -9,6 +9,7 @@ from mlops_agents.agents.runtime.contract import (
     MessageView,
     TextPart,
     ToolCallPart,
+    ToolResultPart,
 )
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -37,7 +38,7 @@ def _message_len(msg: MessageView) -> int:
             total += len(p.text)
         elif isinstance(p, ToolCallPart):
             total += len(p.name) + len(json.dumps(p.input))
-        else:
+        elif isinstance(p, ToolResultPart):
             total += len(p.content)
     return total
 
@@ -118,7 +119,7 @@ async def compact_if_needed(
                         lines.append(f"Agent: {p.text}")
                     elif isinstance(p, ToolCallPart):
                         lines.append(f"Agent tool call: {p.name}({p.input})")
-                    else:
+                    elif isinstance(p, ToolResultPart):
                         lines.append(f"Tool result: {p.content}")
 
     instruction = (

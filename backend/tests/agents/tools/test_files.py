@@ -1,4 +1,6 @@
+import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -60,3 +62,23 @@ async def test_resolve_dir(ctx: ToolContext) -> None:
     assert await ctx.files.resolve_dir(".") == ""
     assert await ctx.files.resolve_dir("src") == "src/"
     assert await ctx.files.under("src/") == ["src/app.py", "src/nested/util.py"]
+
+
+def _commit_new_file(repo: Path, git_env: dict[str, str]) -> None:
+    (repo / "added.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "added.py"], cwd=repo, env=git_env, check=True)
+    subprocess.run(["git", "commit", "-m", "add"], cwd=repo, env=git_env, check=True)
+
+
+async def test_invalidate_drops_the_cached_listing(
+    ctx: ToolContext, repo: Path, git_env: dict[str, str]
+) -> None:
+    assert "added.py" not in await ctx.files.tracked()
+    await asyncio.to_thread(_commit_new_file, repo, git_env)
+
+    assert "added.py" not in await ctx.files.tracked()  # still the cached listing
+
+    ctx.files.invalidate()
+
+    assert "added.py" in await ctx.files.tracked()
+    assert await ctx.files.resolve_file("added.py") == "added.py"

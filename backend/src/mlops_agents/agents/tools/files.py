@@ -64,6 +64,10 @@ class RepoFiles:
             self._lookup = {norm_path(p): p for p in self._tracked}
         return self._tracked
 
+    def invalidate(self) -> None:
+        self._tracked = None
+        self._lookup = {}
+
     async def under(self, prefix: str) -> list[str]:
         files = await self.tracked()
         if not prefix:
