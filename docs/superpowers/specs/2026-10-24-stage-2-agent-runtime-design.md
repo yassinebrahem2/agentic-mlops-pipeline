@@ -88,7 +88,7 @@ A **task** is one piece of code work by one agent. ID prefix `tsk`. It has:
 - Write, Edit or Bash with no current task returns a tool error: "Start a task first with StartTask."
 
 **Creating the worktree:**
-- The base is `origin/<default branch>`, fetched first, for every project that has a GitHub link (§6): a GitHub project's managed clone, or a local project whose `origin` is on github.com. A PR then holds only the task's changes, never the user's unpushed commits. For a local project, that fetch updates its remote-tracking refs (`origin/*`), which the stage 1 promise does not cover and this spec adds; working files and the checked-out branch are still untouched. A local project without a GitHub remote bases on its local default branch's commit.
+- The base is the remote's default branch, fetched first, for every project that has a GitHub link (§6): a GitHub project's managed clone, or a local project whose `origin` is on github.com. A PR then holds only the task's changes, never the user's unpushed commits. For a local project, the fetch writes one namespaced ref (§6) to the repository's git data, which this spec adds to the stage 1 promise; working files, the checked-out branch and the user's own refs are untouched. A local project without a GitHub remote bases on its local default branch's commit.
 - The steps:
   1. `git worktree add -b <branch> <path> <base>`;
   2. `git update-index --skip-worktree` on every tracked file matching the secret denylist;
@@ -192,16 +192,16 @@ Both have risk class `write_code`.
 - A denial returns a tool error naming the level and the risk class. The model reads it like any other tool result.
 
 **The gate.** The turn graph becomes:
-- model → gate → tools → model, and the end of a turn goes through the PR reminder (§6).
-- The gate is its own node, because LangGraph re-runs a resumed node from its start. A node with side effects before its pause would repeat them.
+- model → decide → wait → tools → model, and the end of a turn goes through the PR reminder (§6).
+- Two nodes, because LangGraph re-runs a resumed node from its start. `decide` never pauses, so it runs once per step; `wait` pauses and holds no side effects, so re-running it is harmless.
 - Arguments are validated against the tool's pydantic model before the gate, so a malformed call gets its tool error and never becomes an approval request. The same model produces the tool's schema.
 - Tool calls of a step run one after another, never in parallel.
-- For each tool call of the step, the gate decides allow, deny or ask once, on its first pass, and stores the decision keyed by the tool-call id: an approval record for an ask, an audit record for the rest. A re-run of the gate (LangGraph re-runs a resumed node) reads those stored decisions back and adds nothing: no second record and no second approval part. A level change while a turn waits applies from that turn's next step.
+- `decide`: for each tool call of the step, it decides allow, deny or ask from the project's level, writes one audit record per decision, and returns the decisions in the graph state (checkpointed when the node completes). For the asks, it creates the approval requests and their message parts.
 - For the asks, it creates approval requests: ID `apr`, keyed by the tool-call id, so a re-run finds them instead of duplicating them. Each carries the tool's preview:
   - the diff for Write and Edit;
   - the command for Bash;
   - the title, body and target for GitHub tools, and for OpenPullRequest also the staged diff that will be pushed, so changes made by Bash are shown before they leave the machine.
-- Then it calls `interrupt()` once with every pending approval.
+- `wait`: while any of the step's approvals is pending, it calls `interrupt()`. When resumed, it reads the decisions from the approval records, the one source; the audit log is never read back. A level change while a turn waits applies from that turn's next step.
 
 **In the session.** An approval is a message part (the context builder and compaction skip it; the contracts task lists every reader of `Part`, frontend included), so the chat shows it on reload and live with no new mechanism:
 `{"type": "approval", "approval_id", "tool_call_id", "preview", "status": "pending" | "approved" | "rejected" | "cancelled" | "expired", "note"}`, placed after its tool call in the agent's message and updated through the existing `message.updated` event. `SessionView` gains `current_task` (id, title, branch, PR number and URL, or null) for the task bar. These two changes, and the message status `waiting`, are additions to I1; the frontend types are regenerated from them.
@@ -230,6 +230,8 @@ Both have risk class `write_code`.
 - A project can use GitHub when it is a GitHub project, or a local project whose `origin` is a github.com repository, and the GitHub integration is set. Without a link, OpenIssue, CommentOnIssue and SearchIssues return a tool error saying so, and OpenPullRequest opens a local review.
 - Pushing, PRs, labels and issues need the token to have contents, pull-requests and issues write access. A GitHub refusal for lack of permission becomes a tool error naming the missing permission, and the Integrations page lists the permissions needed.
 - Tokens reach git only through stage 1's `GIT_ASKPASS` runner.
+
+**Fetching and pushing** never go through the user's configured remote: if their `origin` is SSH, ssh could wait on a passphrase or host-key prompt. Every fetch and push uses `https://github.com/<owner>/<repo>.git`, built from the project's owner and repository, with the token through stage 1's runner, plus `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` as a backstop. A local project's base is fetched into the namespaced ref `refs/<app name>/base/<default branch>`, so the user's own `origin/*` refs are never touched.
 
 **Committing** (one function, used by OpenPullRequest and local review):
 1. Stage everything in the worktree (`git add -A`, which respects `.gitignore`).
@@ -276,7 +278,7 @@ Both have risk class `write_code`.
 - Recipient waiting: delivered at the first model step after it resumes.
 - "Waiting for a reply" on the status board means the agent sent the last message of an exchange that is still open (no limit reached, no reply yet).
 - After every turn, an inbound message still undelivered starts the next turn. Nothing is lost when a message arrives just after the last model step.
-- User messages keep stage 1's queue: one turn at a time, in order.
+- User messages keep stage 1's queue: one turn at a time. When a turn ends, the next turn starts from the earliest waiting input, queued user message or undelivered agent message, by arrival order (message `seq`).
 
 **Replies and exchanges:**
 - A reply is a SendMessage back. ID prefix `xch` for an exchange.
@@ -401,8 +403,8 @@ Made in `docs/roadmap.md` before any plan is issued:
   - claim conflicts on Write, Edit and commit;
   - cleanup after a merge.
 - **Approvals:**
-  - pause and resume with the real checkpointer, including a resume after the session manager is rebuilt (a restart);
-  - the gate re-running without duplicate approvals;
+  - pause and resume with the real checkpointer, including a resume after the session manager is rebuilt (a restart), with the earlier parts of the message kept;
+  - `decide` running once per step: resuming creates no second approval or audit record;
   - Stop on a waiting turn.
 - **Messaging:**
   - delivery while idle, running and waiting;
