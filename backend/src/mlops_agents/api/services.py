@@ -16,6 +16,8 @@ from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
+from mlops_agents.events.audit import SqliteAuditLog
+from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -37,6 +39,8 @@ class Services:
     tools: ToolRegistry
     agent_settings: AgentSettingsService
     sessions: AgentSessions
+    events: SqliteEventLog
+    audit: SqliteAuditLog
 
 
 async def build_services(
@@ -77,6 +81,9 @@ async def build_services(
     )
     stack.push_async_callback(sessions.close)
 
+    events = SqliteEventLog(databases)
+    audit = SqliteAuditLog(databases)
+
     return Services(
         settings=settings,
         paths=paths,
@@ -89,4 +96,6 @@ async def build_services(
         tools=tools,
         agent_settings=agent_settings,
         sessions=sessions,
+        events=events,
+        audit=audit,
     )
