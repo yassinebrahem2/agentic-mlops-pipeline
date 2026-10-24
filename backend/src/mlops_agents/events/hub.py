@@ -146,7 +146,8 @@ class EventHub:
                     break
                 if isinstance(ev, Resync) or ev.seq > last_yielded:
                     yield ev
-                    last_yielded = ev.seq
+                    if ev.seq > last_yielded:
+                        last_yielded = ev.seq
         finally:
             async with lock:
                 subs = self._subscribers.get(project_id)
@@ -161,3 +162,4 @@ class EventHub:
             self._last_seq.pop(project_id, None)
             for q in subs:
                 q.put_nowait(None)
+            self._locks.pop(project_id, None)

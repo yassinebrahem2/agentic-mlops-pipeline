@@ -86,3 +86,60 @@ async def test_audit_scrubbing_and_capping(databases: Databases) -> None:
         stored_detail = json.loads(row.detail)
         assert stored_detail == record.detail
         assert secret not in row.detail
+
+
+@pytest.mark.asyncio
+async def test_audit_scrubs_tuples_and_handles_colliding_keys(databases: Databases) -> None:
+    project_id = "prj_audit2"
+    sec1 = "sec-alpha-111"
+    sec2 = "sec-beta-222"
+
+    audit_log = SqliteAuditLog(databases, secrets=[sec1, sec2])
+
+    record = await audit_log.record(
+        project_id,
+        actor="Orchestrator",
+        action="Tool",
+        risk_class=RiskClass.READ,
+        permission_level="ask",
+        decision="allowed",
+        target="filesystem",
+        detail={
+            # Keys that scrub to the exact same text
+            f"token_{sec1}": "val1",
+            f"token_{sec2}": "val2",
+            # Tuple with secrets
+            "my_tuple": ("prefix", sec1, ("nested_tuple", sec2)),
+            # Colliding keys that exceed 4000 chars
+            ("x" * 4500 + "1"): "long_key_1",
+            ("x" * 4500 + "2"): "long_key_2",
+        },
+    )
+
+    detail = record.detail
+    # 1. Colliding scrubbed keys kept distinct
+    assert "token_***" in detail
+    assert "token_***_1" in detail
+    assert detail["token_***"] == "val1"
+    assert detail["token_***_1"] == "val2"
+
+    # 2. Tuples scrubbed
+    assert sec1 not in json.dumps(detail["my_tuple"])
+    assert sec2 not in json.dumps(detail["my_tuple"])
+    # In JSON deserialization from record.detail, tuple is list or tuple
+    assert detail["my_tuple"][0] == "prefix"
+    assert detail["my_tuple"][1] == "***"
+    assert detail["my_tuple"][2] == ["nested_tuple", "***"] or detail["my_tuple"][2] == (
+        "nested_tuple",
+        "***",
+    )
+
+    # 3. Colliding long keys kept distinct and capped at <= 4000
+    long_k1 = "x" * 4000
+    long_k2 = "x" * 3998 + "_1"
+    assert long_k1 in detail
+    assert long_k2 in detail
+    assert len(long_k1) == 4000
+    assert len(long_k2) == 4000
+    assert detail[long_k1] == "long_key_1"
+    assert detail[long_k2] == "long_key_2"

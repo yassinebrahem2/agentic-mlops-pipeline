@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 import httpx2
-from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import AgentSessions
@@ -18,6 +16,7 @@ from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
+from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
@@ -25,7 +24,6 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import provider_keys
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -46,12 +44,8 @@ class Services:
     audit: SqliteAuditLog
 
 
-_logger = logging.getLogger(__name__)
-
-
 async def _app_secrets(
-    databases: Databases,
-    keystore: KeyStore,
+    providers: ProvidersService,
     github: GitHubAuth,
     settings: Settings,
 ) -> list[str]:
@@ -63,23 +57,15 @@ async def _app_secrets(
     if settings.master_key:
         secrets.append(settings.master_key)
 
-    try:
-        app_engine = await databases.app()
-        async with app_engine.connect() as conn:
-            refs = list(await conn.scalars(select(provider_keys.c.keystore_ref)))
-        for ref in refs:
-            val = await asyncio.to_thread(keystore.get, ref)
-            if val:
-                secrets.append(val)
-    except Exception:
-        _logger.debug("Failed to read provider keys for secrets source", exc_info=True)
+    secrets.extend(await providers.secret_values())
 
     try:
         gh_token = await github.token()
         if gh_token:
             secrets.append(gh_token)
-    except Exception:
-        _logger.debug("Failed to read GitHub token for secrets source", exc_info=True)
+    except DomainError as err:
+        if err.code not in ("gh_not_logged_in", "gh_not_installed"):
+            raise
 
     return secrets
 
@@ -123,7 +109,7 @@ async def build_services(
     stack.push_async_callback(sessions.close)
 
     async def secret_source() -> list[str]:
-        return await _app_secrets(databases, keystore, github, settings)
+        return await _app_secrets(providers, github, settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)

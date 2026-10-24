@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+import time
 from typing import Literal, Protocol
 
 import httpx2
@@ -83,6 +84,7 @@ class GitHubAuth:
         self._keys = keystore
         self._http = http
         self._gh = gh
+        self._gh_token_cache: tuple[str, float] | None = None
 
     async def _mode(self) -> tuple[str, str | None]:
         engine = await self._dbs.app()
@@ -116,6 +118,7 @@ class GitHubAuth:
         login = await get_login(self._http, await self._gh.token())
         await self._save("gh", login)
         await asyncio.to_thread(self._keys.delete, GITHUB_KEYSTORE_REF)
+        self._gh_token_cache = None
         return await self.status()
 
     async def set_token(self, value: str) -> GitHubStatus:
@@ -125,6 +128,7 @@ class GitHubAuth:
         login = await get_login(self._http, value)
         await asyncio.to_thread(self._keys.set, GITHUB_KEYSTORE_REF, value)
         await self._save("token", login)
+        self._gh_token_cache = None
         return await self.status()
 
     async def disconnect(self) -> None:
@@ -132,10 +136,20 @@ class GitHubAuth:
         async with engine.begin() as conn:
             await conn.execute(delete(integrations).where(integrations.c.name == GITHUB))
         await asyncio.to_thread(self._keys.delete, GITHUB_KEYSTORE_REF)
+        self._gh_token_cache = None
 
     async def token(self) -> str | None:
         mode, _ = await self._mode()
         if mode == "gh":
+            if isinstance(self._gh, GhCli):
+                now = time.monotonic()
+                if self._gh_token_cache is not None:
+                    cached_token, expires_at = self._gh_token_cache
+                    if now < expires_at:
+                        return cached_token
+                tok = await self._gh.token()
+                self._gh_token_cache = (tok, now + 30.0)
+                return tok
             return await self._gh.token()
         if mode == "token":
             try:

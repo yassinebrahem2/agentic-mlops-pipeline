@@ -239,3 +239,59 @@ async def test_services_audit_scrubs_keystore_secrets(
     assert secret_key not in json.dumps(record.detail)
     assert record.detail["key"] == "***"
     assert "***" in record.detail["url"]
+
+
+@pytest.mark.asyncio
+async def test_services_audit_fails_closed_on_keystore_error(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    keystore = app.state.services.keystore
+    keystore.set("key:provider_broken", "sk-secret")
+
+    # Insert provider and key
+    app_engine = await app.state.services.databases.app()
+    async with app_engine.begin() as conn:
+        await conn.execute(
+            insert(providers).values(
+                id="prv_broken",
+                name="test_broken",
+                kind="hosted",
+                base_url="https://api.broken.com",
+                status="ok",
+                created_at="2026-10-24T00:00:00Z",
+            )
+        )
+        await conn.execute(
+            insert(provider_keys).values(
+                provider_id="prv_broken",
+                position=0,
+                keystore_ref="key:provider_broken",
+                hint="••••secret",
+                created_at="2026-10-24T00:00:00Z",
+            )
+        )
+
+    # Invalidate cache
+    cache_attr = "_cached_secrets"
+    setattr(app.state.services.providers, cache_attr, None)
+
+    class BrokenKeystoreError(RuntimeError):
+        pass
+
+    def broken_get(ref: str) -> str:
+        raise BrokenKeystoreError("keystore corruption")
+
+    monkeypatch.setattr(keystore, "get", broken_get)
+
+    with pytest.raises(BrokenKeystoreError):
+        await app.state.services.audit.record(
+            project_id,
+            actor="Orchestrator",
+            action="Bash",
+            risk_class=RiskClass.RUN,
+            permission_level="ask",
+            decision="allowed",
+            target="test",
+            detail={"data": "test"},
+        )

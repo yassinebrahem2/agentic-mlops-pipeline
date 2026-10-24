@@ -102,4 +102,7 @@ class SqliteEventLog(EventLog):
         return [row_to_event(r) for r in rows]
 
     async def close_project(self, project_id: str) -> None:
-        await self._hub.close_project(project_id)
+        lock = self._get_record_lock(project_id)
+        async with lock:
+            await self._hub.close_project(project_id)
+            self._record_locks.pop(project_id, None)

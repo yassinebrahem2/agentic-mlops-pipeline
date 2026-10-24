@@ -32,7 +32,6 @@ __all__ = ["SLOW_SUBSCRIBER_THRESHOLD", "AsyncRLock", "SessionHub"]
 
 _RING_BUFFER_SIZE = 5000
 SLOW_SUBSCRIBER_THRESHOLD: Final[int] = 10000
-_SLOW_SUBSCRIBER_THRESHOLD = SLOW_SUBSCRIBER_THRESHOLD
 
 
 class AsyncRLock:
@@ -154,7 +153,7 @@ class SessionHub:
         self._buffer.append(event)
 
         for q in list(self._subscribers):
-            if q.qsize() >= _SLOW_SUBSCRIBER_THRESHOLD:
+            if q.qsize() >= SLOW_SUBSCRIBER_THRESHOLD:
                 while not q.empty():
                     try:
                         q.get_nowait()

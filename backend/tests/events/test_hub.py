@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from mlops_agents.agents.runtime.contract import Resync
+from mlops_agents.agents.runtime.contract import Resync, ResyncData
 from mlops_agents.events.contract import EventRecord
 from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
@@ -151,3 +151,59 @@ async def test_hub_close_project_terminates_stream(databases: Databases) -> None
     await hub.close_project(project_id)
     result = await asyncio.wait_for(consume_task, timeout=1.0)
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_hub_resync_does_not_lower_last_yielded(databases: Databases) -> None:
+    project_id = "prj_resync2"
+    hub = EventHub()
+    event_log = SqliteEventLog(databases, hub=hub)
+
+    for i in range(1, 4):
+        await event_log.record(project_id, source="user", type="turn.started", payload={"i": i})
+
+    sub = event_log.subscribe(project_id, after_seq=0)
+    ev1 = await asyncio.wait_for(anext(sub), timeout=2.0)
+    ev2 = await asyncio.wait_for(anext(sub), timeout=2.0)
+    ev3 = await asyncio.wait_for(anext(sub), timeout=2.0)
+    assert ev1.seq == 1
+    assert ev2.seq == 2
+    assert ev3.seq == 3
+
+    subs_attr = "_subscribers"
+    subs_map: dict[str, set[asyncio.Queue[EventRecord | Resync | None]]] = cast(
+        dict[str, set[asyncio.Queue[EventRecord | Resync | None]]], getattr(hub, subs_attr)
+    )
+    q: asyncio.Queue[EventRecord | Resync | None] = next(iter(subs_map[project_id]))
+    await q.put(Resync(seq=1, type="resync", data=ResyncData()))
+
+    old_ev = EventRecord(
+        id="evt_old",
+        seq=2,
+        ts="2026-10-24T00:00:00Z",
+        source="user",
+        type="turn.started",
+        payload={},
+        subject_id=None,
+    )
+    new_ev = EventRecord(
+        id="evt_new",
+        seq=4,
+        ts="2026-10-24T00:00:00Z",
+        source="user",
+        type="turn.started",
+        payload={},
+        subject_id=None,
+    )
+    await q.put(old_ev)
+    await q.put(new_ev)
+
+    resync = await asyncio.wait_for(anext(sub), timeout=2.0)
+    assert isinstance(resync, Resync)
+    assert resync.seq == 1
+
+    next_ev = await asyncio.wait_for(anext(sub), timeout=2.0)
+    assert isinstance(next_ev, EventRecord)
+    assert next_ev.seq == 4
+
+    await sub.aclose()

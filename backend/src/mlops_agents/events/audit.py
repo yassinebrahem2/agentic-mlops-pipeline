@@ -34,9 +34,21 @@ def _scrub_and_cap(item: object, secrets: Iterable[str]) -> object:
         return _scrub_string(item, secrets)
     if isinstance(item, dict):
         mapping = cast(dict[object, object], item)
-        return {
-            _scrub_string(str(k), secrets): _scrub_and_cap(v, secrets) for k, v in mapping.items()
-        }
+        out: dict[str, object] = {}
+        for k, v in mapping.items():
+            base_k = _scrub_string(str(k), secrets)
+            target_k = base_k
+            count = 1
+            while target_k in out:
+                suffix = f"_{count}"
+                prefix = base_k[: 4000 - len(suffix)]
+                target_k = f"{prefix}{suffix}"
+                count += 1
+            out[target_k] = _scrub_and_cap(v, secrets)
+        return out
+    if isinstance(item, tuple):
+        elements = cast(tuple[object, ...], item)
+        return tuple(_scrub_and_cap(v, secrets) for v in elements)
     if isinstance(item, list):
         sequence = cast(list[object], item)
         return [_scrub_and_cap(v, secrets) for v in sequence]
@@ -78,10 +90,7 @@ class SqliteAuditLog(AuditLog):
         aud_id = new_id("aud")
         ts = now_iso()
         known_secrets = await self._get_secrets()
-        scrubbed_detail: dict[str, Any] = {
-            _scrub_string(str(k), known_secrets): _scrub_and_cap(v, known_secrets)
-            for k, v in detail.items()
-        }
+        scrubbed_detail = cast(dict[str, Any], _scrub_and_cap(detail, known_secrets))
         detail_json = json.dumps(scrubbed_detail)
 
         engine = await self._databases.project(project_id)

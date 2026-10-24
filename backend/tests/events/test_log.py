@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from mlops_agents.events.contract import EventRecord
 from mlops_agents.events.hub import EventHub
@@ -51,10 +55,40 @@ async def test_event_log_record_and_history(databases: Databases) -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_log_concurrent_records_publish_in_seq_order(databases: Databases) -> None:
+async def test_event_log_concurrent_records_publish_in_seq_order(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project_id = "prj_concurrent1"
     hub = EventHub()
     event_log = SqliteEventLog(databases, hub=hub)
+
+    # Patch databases.project so each transaction yields with variable delay,
+    # proving the per-project lock prevents out-of-order commits/publishes.
+    real_project = databases.project
+    delays = [0.02, 0.001, 0.015, 0.001, 0.025]
+    call_idx = 0
+
+    class SlowEngineProxy:
+        def __init__(self, target: AsyncEngine) -> None:
+            self._target = target
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._target, name)
+
+        @contextlib.asynccontextmanager
+        async def begin(self) -> AsyncGenerator[AsyncConnection, None]:
+            nonlocal call_idx
+            delay = delays[call_idx % len(delays)]
+            call_idx += 1
+            async with self._target.begin() as conn:
+                yield conn
+            await asyncio.sleep(delay)
+
+    async def mock_project(pid: str) -> AsyncEngine:
+        eng = await real_project(pid)
+        return cast(AsyncEngine, SlowEngineProxy(eng))
+
+    monkeypatch.setattr(databases, "project", mock_project)
 
     sub = event_log.subscribe(project_id, after_seq=None)
     received: list[int] = []
@@ -74,6 +108,25 @@ async def test_event_log_concurrent_records_publish_in_seq_order(databases: Data
 
     await asyncio.gather(*(record_one(i) for i in range(20)))
 
-    await asyncio.wait_for(consume_task, timeout=3.0)
+    await asyncio.wait_for(consume_task, timeout=5.0)
     await sub.aclose()
     assert received == list(range(1, 21))
+
+
+@pytest.mark.asyncio
+async def test_event_log_close_project_cleans_locks(databases: Databases) -> None:
+    project_id = "prj_cleanlocks"
+    hub = EventHub()
+    event_log = SqliteEventLog(databases, hub=hub)
+
+    await event_log.record(project_id, source="user", type="turn.started", payload={})
+    rec_attr = "_record_locks"
+    hub_attr = "_locks"
+    rec_locks = cast(dict[str, Any], getattr(event_log, rec_attr))
+    hub_locks = cast(dict[str, Any], getattr(hub, hub_attr))
+    assert project_id in rec_locks
+    assert project_id in hub_locks
+
+    await event_log.close_project(project_id)
+    assert project_id not in rec_locks
+    assert project_id not in hub_locks
