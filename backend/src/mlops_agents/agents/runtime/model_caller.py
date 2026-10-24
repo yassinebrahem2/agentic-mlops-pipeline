@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx2
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderErrorKind, classify
@@ -53,6 +53,7 @@ def _extract_text_deltas(content: object) -> list[str]:
 
 MAX_ATTEMPTS = 6
 TRANSIENT_BACKOFFS = (1.0, 2.0)
+MAX_REJECTED_RETRIES = 2
 
 
 class ModelCaller:
@@ -74,14 +75,16 @@ class ModelCaller:
         tools: list[dict[str, Any]],
         on_text: Callable[[str], Awaitable[None]],
     ) -> ModelReply:
+        call_messages = list(messages)
         key_index = 0
         rate_limited_keys: set[int] = set()
         transient_retries = 0
+        rejected_retries = 0
         attempts = 0
+        text_sent = False
 
         while True:
             attempts += 1
-            streamed = False
             total_chunk: AIMessageChunk | None = None
             last_chunk: AIMessageChunk | None = None
 
@@ -92,19 +95,20 @@ class ModelCaller:
                     if tools
                     else client
                 )
-                async for chunk in runnable.astream(messages):
-                    streamed = True
+                async for chunk in runnable.astream(call_messages):
                     aim_chunk = cast(AIMessageChunk, chunk)
                     last_chunk = aim_chunk
                     total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
 
                     for delta in _extract_text_deltas(aim_chunk.content):
-                        try:
-                            res = on_text(delta)
-                            if inspect.isawaitable(res):
-                                await res
-                        except Exception as cb_exc:
-                            raise _OnTextCallbackError() from cb_exc
+                        if delta:
+                            text_sent = True
+                            try:
+                                res = on_text(delta)
+                                if inspect.isawaitable(res):
+                                    await res
+                            except Exception as cb_exc:
+                                raise _OnTextCallbackError() from cb_exc
 
                 prompt_tokens: int | None = None
                 completion_tokens: int | None = None
@@ -147,7 +151,18 @@ class ModelCaller:
             except Exception as exc:
                 error = classify(exc, secrets=model.keys)
 
-                if streamed:
+                if text_sent:
+                    raise TurnFailed(error.message) from exc
+
+                if error.kind is ProviderErrorKind.BAD_GENERATION:
+                    if rejected_retries < MAX_REJECTED_RETRIES:
+                        rejected_retries += 1
+                        corrective = (
+                            f"Your last tool call was rejected by the provider: {error.message}. "
+                            "Call the tool again with every required argument, or answer without it."
+                        )
+                        call_messages.append(HumanMessage(content=corrective))
+                        continue
                     raise TurnFailed(error.message) from exc
 
                 if error.kind is ProviderErrorKind.RATE_LIMIT:

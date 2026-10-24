@@ -49,6 +49,12 @@ class FakeState:
     usage_in_stream: bool = True
     drop_after_chunks: int | None = None
     scripted_tool_calls: list[dict[str, Any]] | None = None
+    bad_generation_remaining: int = 0
+    bad_generation_code: str = "tool_use_failed"
+    bad_generation_message: str = "Tool call validation failed"
+    sse_error_remaining: int = 0
+    sse_error_code: str = "tool_use_failed"
+    sse_error_message: str = "Tool call validation failed in stream"
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     _slow_gate: threading.Event = field(default_factory=_open_gate)
@@ -68,6 +74,12 @@ class FakeState:
         self.usage_in_stream = True
         self.drop_after_chunks = None
         self.scripted_tool_calls = None
+        self.bad_generation_remaining = 0
+        self.bad_generation_code = "tool_use_failed"
+        self.bad_generation_message = "Tool call validation failed"
+        self.sse_error_remaining = 0
+        self.sse_error_code = "tool_use_failed"
+        self.sse_error_message = "Tool call validation failed in stream"
         self.requests.clear()
         self.request_headers.clear()
 
@@ -143,6 +155,17 @@ async def _stream(
     text, tool_calls = _reply(state, model, messages, tools)
     maybe_drop()
     yield _chunk(model, {"role": "assistant", "content": ""})
+    if state.sse_error_remaining > 0:
+        state.sse_error_remaining -= 1
+        sse_err = {
+            "error": {
+                "message": state.sse_error_message,
+                "type": "invalid_request_error",
+                "code": state.sse_error_code,
+            }
+        }
+        yield f"event: error\ndata: {json.dumps(sse_err)}\n\n"
+        return
     if tool_calls is not None:
         num_calls = len(tool_calls)
         for idx, tc in enumerate(tool_calls):
@@ -224,6 +247,17 @@ def create_fake_app(state: FakeState) -> FastAPI:
         if state.server_error_remaining > 0:
             state.server_error_remaining -= 1
             return _error(503, "The model is overloaded", "overloaded")
+        if state.bad_generation_remaining > 0:
+            state.bad_generation_remaining -= 1
+            body_obj = {
+                "error": {
+                    "message": state.bad_generation_message,
+                    "type": "invalid_request_error",
+                    "code": state.bad_generation_code,
+                    "failed_generation": "...",
+                }
+            }
+            return JSONResponse(body_obj, status_code=400)
         model = str(body["model"])
         if model not in MODELS:
             return _error(404, f"Unknown model {model}", "model_not_found")
