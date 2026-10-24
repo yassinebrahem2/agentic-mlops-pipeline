@@ -1,6 +1,6 @@
 # Stage 2: Agent runtime, full
 
-Date: 2026-10-24. Status: draft, awaiting the lead's review.
+Date: 2026-10-24. Status: approved by the lead on 2026-10-24.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background: `project_knowledge.md`. Stage 1 behavior not mentioned here stays as `docs/superpowers/specs/2026-10-16-stage-1-foundation-design.md` says.
 
 The fixes and UI changes from the lead's stage 1 walkthrough are not part of this spec: they are planned directly (stage 2 overview, plans tool-errors, models, ui-polish, pickers, chat-layout, project-context).
@@ -242,7 +242,13 @@ Both have risk class `write_code`.
 **OpenPullRequest(title, body, fixes=[])**, risk class `github`:
 - With no PR yet: commit, push the branch, and open a PR into the default branch. The body ends with a line saying which agent opened it and from which task, plus `Fixes #n` for each entry of `fixes`. The task becomes `in_review`, and the event is `pr.opened`.
 - With a PR already open: commit, push, and update the title and body if they changed (`pr.updated`).
-- A local project without a GitHub remote gets a local review instead: an Inbox entry with the diff against the base. Approving merges it, as the lead decides in Open question 1. Rejecting closes the task, and a system message tells the agent.
+- A local project without a GitHub remote gets a local review instead: an Inbox entry with the diff against the base. Rejecting closes the task, and a system message tells the agent. Approving merges it (the lead's decision), which narrows the stage 1 promise to "never without your explicit approval":
+  1. The merge of the task branch into the default branch is built in a temporary worktree in the data folder. A conflict is reported to the user and the agent, and nothing in the user's repository changes.
+  2. The only step in the user's repository is `git merge --ff-only <that merge commit>`. Git itself refuses when uncommitted changes are in the way, atomically, so there is no separate cleanliness check to race the user's editor. When the default branch is checked out in none of the repository's worktrees (`git worktree list`), only the branch moves.
+  3. Both steps use the one task git function: no hooks, no fsmonitor.
+  4. The approval screen lists the files in the user's working tree that the merge will change.
+
+  A merged review ends the task (`merged`).
 
 **Issues:**
 - `SearchIssues(query)`: risk class `read`. It searches open issues in the project's repository.
@@ -431,10 +437,3 @@ Everything in this spec ships in stage 2. Plans are ordered so the core lands fi
 1. Contracts: `ToolContext` v2, the I1 additions, the event and audit records, the policy table, and the migration numbers.
 2. In parallel: tasks and worktrees with Write and Edit; the sandbox with Bash; the gate and approvals; events, audit and the status board; GitHub PRs and issues; messaging and wake-ups.
 3. Then: the seven definitions, the agents page, the Inbox and the settings sections.
-
-## Open questions for the lead
-
-1. **Local projects without a GitHub remote: what does approving a local review do?** It merges the task branch into the default branch. If the user has that branch checked out, merging changes their working files, which stage 1 promised never to do. The options:
-   - (a) merge only when the default branch is not checked out, or is checked out and clean, and say so before approving;
-   - (b) never touch the working tree: move the branch ref only when it can fast-forward, and otherwise tell the user to merge themselves;
-   - (c) leave the agent branch for the user to merge, and approving only marks it reviewed.
