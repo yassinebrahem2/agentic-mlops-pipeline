@@ -159,6 +159,7 @@ class SessionManager(AgentSessions):
             busy=is_busy,
             messages=messages_view,
             last_seq=last_seq,
+            current_task=None,
         )
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:

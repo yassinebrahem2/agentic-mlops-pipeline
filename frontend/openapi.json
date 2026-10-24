@@ -231,6 +231,58 @@
         "title": "AppInfo",
         "type": "object"
       },
+      "ApprovalPart": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/Preview"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "approval",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "approval_id",
+          "tool_call_id",
+          "preview",
+          "status",
+          "note"
+        ],
+        "title": "ApprovalPart",
+        "type": "object"
+      },
       "AuthStatus": {
         "properties": {
           "mode": {
@@ -527,6 +579,7 @@
             "items": {
               "discriminator": {
                 "mapping": {
+                  "approval": "#/components/schemas/ApprovalPart",
                   "text": "#/components/schemas/TextPart",
                   "tool_call": "#/components/schemas/ToolCallPart",
                   "tool_result": "#/components/schemas/ToolResultPart"
@@ -542,6 +595,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/ToolResultPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ApprovalPart"
                 }
               ]
             },
@@ -554,7 +610,8 @@
               "streaming",
               "queued",
               "stopped",
-              "interrupted"
+              "interrupted",
+              "waiting"
             ],
             "title": "Status",
             "type": "string"
@@ -724,6 +781,34 @@
           "password"
         ],
         "title": "PasswordSignIn",
+        "type": "object"
+      },
+      "Preview": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "diff",
+              "command",
+              "text"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "body"
+        ],
+        "title": "Preview",
         "type": "object"
       },
       "Project": {
@@ -1048,6 +1133,16 @@
             "title": "Busy",
             "type": "boolean"
           },
+          "current_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1069,7 +1164,8 @@
           "agent",
           "busy",
           "messages",
-          "last_seq"
+          "last_seq",
+          "current_task"
         ],
         "title": "SessionView",
         "type": "object"
@@ -1126,6 +1222,81 @@
           "token"
         ],
         "title": "SetGitHubToken",
+        "type": "object"
+      },
+      "TaskView": {
+        "properties": {
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pr_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Number"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url"
+          },
+          "review_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "github",
+                  "local"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Kind"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "in_review",
+              "merged",
+              "closed",
+              "discarded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "branch",
+          "status",
+          "review_kind",
+          "pr_number",
+          "pr_url"
+        ],
+        "title": "TaskView",
         "type": "object"
       },
       "TextDelta": {
@@ -1420,6 +1591,43 @@
           "error"
         ],
         "title": "TurnEndedData",
+        "type": "object"
+      },
+      "TurnWaiting": {
+        "description": "The turn is paused for an approval. An approval part changes through message.updated.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TurnWaitingData"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "turn.waiting",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "data"
+        ],
+        "title": "TurnWaiting",
+        "type": "object"
+      },
+      "TurnWaitingData": {
+        "properties": {
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id"
+        ],
+        "title": "TurnWaitingData",
         "type": "object"
       },
       "ValidationError": {
@@ -2689,7 +2897,8 @@
                       "text.delta": "#/components/schemas/TextDelta",
                       "tool.finished": "#/components/schemas/ToolFinished",
                       "tool.started": "#/components/schemas/ToolStarted",
-                      "turn.ended": "#/components/schemas/TurnEnded"
+                      "turn.ended": "#/components/schemas/TurnEnded",
+                      "turn.waiting": "#/components/schemas/TurnWaiting"
                     },
                     "propertyName": "type"
                   },
@@ -2708,6 +2917,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/MessageUpdated"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TurnWaiting"
                     },
                     {
                       "$ref": "#/components/schemas/TurnEnded"

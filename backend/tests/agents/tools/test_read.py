@@ -10,6 +10,7 @@ from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.integrations.github.git import GitRunner
+from tests.agents.ctx import tool_context
 from tests.conftest import make_repo
 
 
@@ -53,7 +54,7 @@ async def test_oversized_single_line_file_reads_bounded(
     # 50 MB single line file without newlines
     file_bytes = b"x" * 50_000_000
     root = make_repo(tmp_path / "repo", {"huge.txt": file_bytes.decode("latin1")}, git_env)
-    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    ctx = tool_context(RepoFiles(root, GitRunner(tmp_path / "bin")))
 
     class TrackingReader(io.BufferedReader):
         def readline(self, size: int | None = -1) -> bytes:
@@ -101,7 +102,7 @@ async def test_line_cut_counts_characters_not_bytes(
     text: str, cut: bool, tmp_path: Path, git_env: dict[str, str]
 ) -> None:
     root = make_repo(tmp_path / "repo", {"long.txt": f"{text}\nnext\n"}, git_env)
-    ctx = ToolContext(RepoFiles(root, GitRunner(tmp_path / "bin")))
+    ctx = tool_context(RepoFiles(root, GitRunner(tmp_path / "bin")))
     out = await ReadTool().invoke(ctx, {"file_path": "long.txt"})
     lines = out.content.splitlines()
     assert lines[0] == f"     1\t{text[:2000]}" + (" [line cut]" if cut else "")

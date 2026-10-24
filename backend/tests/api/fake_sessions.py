@@ -130,6 +130,7 @@ class FakeSessions(AgentSessions):
             busy=False,
             messages=[],
             last_seq=0,
+            current_task=None,
         )
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
@@ -152,6 +153,7 @@ class FakeSessions(AgentSessions):
             busy=view.busy,
             messages=[*view.messages, msg],
             last_seq=view.last_seq,
+            current_task=view.current_task,
         )
         return msg
 
