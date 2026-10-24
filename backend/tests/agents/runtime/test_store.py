@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import (
@@ -12,7 +12,7 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import llm_calls, turns
+from mlops_agents.storage.tables import exchanges, llm_calls, messages, turns
 
 
 async def test_session_id_is_stable_per_agent(databases: Databases) -> None:
@@ -289,3 +289,46 @@ async def test_cancel_waits_for_the_write_in_flight(
     stored = next(m for m in await store.messages("prj_test", session_id) if m.id == message.id)
     assert stored.status == "stopped"
     assert stored.parts == [TextPart(type="text", text="kept")]
+
+
+async def test_add_message_stores_exchange_id_and_hop(databases: Databases) -> None:
+    store = SessionStore(databases)
+    session_id = await store.session_id("prj_test", "orchestrator")
+    engine = await databases.project("prj_test")
+    async with engine.begin() as conn:  # messages.exchange_id references exchanges
+        await conn.execute(insert(exchanges).values(id="xch_1", created_at="2026-10-24T00:00:00Z"))
+    plain = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="me",
+        parts=[],
+        status="complete",
+    )
+    inbound = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="coder",
+        parts=[],
+        status="queued",
+        from_agent="coder",
+        exchange_id="xch_1",
+        hop=2,
+    )
+
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                select(
+                    messages.c.id,
+                    messages.c.exchange_id,
+                    messages.c.hop,
+                    messages.c.read_by_turn,
+                )
+            )
+        ).all()
+    assert {row[0]: tuple(row[1:]) for row in rows} == {
+        plain.id: (None, None, None),
+        inbound.id: ("xch_1", 2, None),
+    }
