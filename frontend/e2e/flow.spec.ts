@@ -63,9 +63,10 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
       /Verify/,
     ]);
 
-    const orchestratorModel = page.getByLabel("Model for Orchestrator");
-    await orchestratorModel.selectOption(modelAddress);
-    await expect(orchestratorModel).toHaveValue(modelAddress);
+    const orchestratorModel = page.getByRole("combobox", { name: "Model for Orchestrator" });
+    await orchestratorModel.click();
+    await page.getByRole("option", { name: modelAddress }).click();
+    await expect(orchestratorModel).toHaveText(modelAddress);
     await expect(orchestratorModel).toBeEnabled();
   });
 
