@@ -142,6 +142,7 @@ def test_indexes_exist(tmp_path: Path) -> None:
             "messages_session_seq",
             "messages_exchange",
             "messages_read_by_turn",
+            "events_type",
         } <= _names(conn, "index")
     finally:
         conn.close()
@@ -268,6 +269,64 @@ def test_messages_status_check_accepts_waiting_and_rejects_others(conn: sqlite3.
         _insert_message(conn, "msg_bad", status="paused")
 
 
+def test_messages_author_kind_check_survives_the_rebuild(conn: sqlite3.Connection) -> None:
+    for kind in ("user", "agent", "system"):
+        conn.execute(
+            "INSERT INTO messages (id, session_id, author_kind, author_name, parts, status, "
+            "created_at) VALUES (?, 'ses_1', ?, 'x', '[]', 'complete', ?)",
+            (f"msg_{kind}", kind, _TS),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(
+            "INSERT INTO messages (id, session_id, author_kind, author_name, parts, status, "
+            "created_at) VALUES ('msg_bad', 'ses_1', 'robot', 'x', '[]', 'complete', ?)",
+            (_TS,),
+        )
+
+
+_AUDIT_COLUMNS = (
+    "id",
+    "ts",
+    "actor",
+    "action",
+    "risk_class",
+    "permission_level",
+    "decision",
+    "target",
+    "detail",
+)
+
+
+def _audit(conn: sqlite3.Connection, **overrides: object) -> None:
+    values: dict[str, object] = {
+        "id": "aud_1",
+        "ts": _TS,
+        "actor": "coder",
+        "action": "tool.run",
+        "risk_class": "run",
+        "permission_level": "ask",
+        "decision": "allowed",
+        "target": "Bash",
+        "detail": "{}",
+    }
+    values.update(overrides)
+    conn.execute(
+        "INSERT INTO audit VALUES (:id, :ts, :actor, :action, :risk_class, :permission_level, "
+        ":decision, :target, :detail)",
+        values,
+    )
+
+
+def test_audit_accepts_a_complete_row(conn: sqlite3.Connection) -> None:
+    _audit(conn)
+
+
+@pytest.mark.parametrize("column", _AUDIT_COLUMNS)
+def test_audit_rejects_a_null_in_every_column(conn: sqlite3.Connection, column: str) -> None:
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        _audit(conn, **{column: None})
+
+
 def test_approvals_tool_call_id_is_unique(conn: sqlite3.Connection) -> None:
     _approval(conn)
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
@@ -357,12 +416,19 @@ def test_messages_exchange_columns_are_indexed(conn: sqlite3.Connection) -> None
     assert _index_columns(conn, "messages", "messages_read_by_turn") == ["read_by_turn"]
 
 
-def test_messages_exchange_id_references_exchanges_set_null(conn: sqlite3.Connection) -> None:
+def test_events_type_is_indexed(conn: sqlite3.Connection) -> None:
+    assert _index_columns(conn, "events", "events_type") == ["type"]
+
+
+def test_messages_exchange_id_and_read_by_turn_are_set_null_foreign_keys(
+    conn: sqlite3.Connection,
+) -> None:
     foreign_keys = {
         str(row[3]): (str(row[2]), str(row[4]), str(row[6]))
         for row in conn.execute("PRAGMA foreign_key_list(messages)")
     }
     assert foreign_keys["exchange_id"] == ("exchanges", "id", "SET NULL")
+    assert foreign_keys["read_by_turn"] == ("turns", "id", "SET NULL")
 
 
 def test_deleting_an_exchange_keeps_its_messages_with_a_null_exchange(
