@@ -13,8 +13,8 @@ export function AppShell({ routes }: { routes: PageRoute[] }) {
   const appRoutes = routes.filter((r) => r.nav?.area === "app");
 
   return (
-    <div className="flex min-h-screen w-full flex-col md:flex-row">
-      <header className="flex h-14 items-center justify-between border-b px-4 md:hidden">
+    <div className="flex h-dvh w-full flex-col md:flex-row">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b px-4 md:hidden">
         <Button
           variant="ghost"
           size="icon"
@@ -50,11 +50,11 @@ export function AppShell({ routes }: { routes: PageRoute[] }) {
         </DialogContent>
       </Dialog>
 
-      <div className="sticky top-0 hidden h-screen shrink-0 md:flex">
+      <div className="sticky top-0 hidden h-full shrink-0 md:flex">
         <Sidebar routes={routes} />
       </div>
 
-      <main className="flex-1 overflow-auto">
+      <main className="min-h-0 flex-1 overflow-auto">
         <Outlet context={routes} />
       </main>
     </div>

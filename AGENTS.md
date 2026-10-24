@@ -55,7 +55,7 @@ Run from `frontend/`:
 
 ## Team workflow
 
-The team is five people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
+The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
 
 Roles:
 - Lead: GitHub `yassinebrahem2`. Decides what is built. Writes the specs, the stage overviews, every plan, every task and every issue; owns the interfaces between plans; does the final review of every PR, merges, closes plan issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
