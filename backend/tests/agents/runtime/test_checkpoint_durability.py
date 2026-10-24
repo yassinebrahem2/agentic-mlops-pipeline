@@ -32,6 +32,9 @@ class GatedSaver(AsyncSqliteSaver):
         self.log = log
         self.write_started = asyncio.Event()
         self.release = asyncio.Event()
+        # The run goes on while the write is held, so later checkpoints can commit after it;
+        # the held write's own config (with its checkpoint id) is how the test reads it back.
+        self.held: RunnableConfig | None = None
 
     async def aput(
         self,
@@ -44,9 +47,9 @@ class GatedSaver(AsyncSqliteSaver):
             return await super().aput(config, checkpoint, metadata, new_versions)
         self.write_started.set()
         await self.release.wait()
-        saved = await super().aput(config, checkpoint, metadata, new_versions)
+        self.held = await super().aput(config, checkpoint, metadata, new_versions)
         self.log.append("checkpoint committed")
-        return saved
+        return self.held
 
 
 async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_returns(
@@ -145,9 +148,10 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
             await run
         assert log == ["checkpoint committed", "cancel returned"]
 
+        assert saver.held is not None
         reader = await connect_checkpointer(db_path)
         try:
-            saved = await AsyncSqliteSaver(reader).aget_tuple(config)  # pyright: ignore[reportUnknownMemberType]  # LangGraph aget_tuple is partially untyped
+            saved = await AsyncSqliteSaver(reader).aget_tuple(saver.held)  # pyright: ignore[reportUnknownMemberType]  # LangGraph aget_tuple is partially untyped
         finally:
             await reader.close()
         assert saved is not None
