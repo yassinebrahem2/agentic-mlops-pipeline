@@ -213,7 +213,10 @@ function SetContextWindowDialog({ model }: { model: ModelEntry }) {
       setValue("");
       return;
     }
-    const listed = remote.data?.find((m) => m.id === model.wire_model_id)?.context_window;
+    const matchId = (id: string) => id.replace(/^models\//, "");
+    const listed = remote.data?.find(
+      (m) => m.id === model.wire_model_id || matchId(m.id) === matchId(model.wire_model_id),
+    )?.context_window;
     if (!dirty && listed !== null && listed !== undefined) {
       setValue(String(listed));
     }
