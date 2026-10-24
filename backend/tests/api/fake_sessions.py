@@ -197,7 +197,7 @@ class FakeSessions(AgentSessions):
                     messages = [*view.messages[:i], updated, *view.messages[i + 1 :]]
                     self.views[(project_id, agent)] = view.model_copy(update={"messages": messages})
                     return updated
-        raise ValueError(f"Message {message_id} not found in session {session_id}")
+        raise DomainError("message_not_found", "This message does not exist.", status=404)
 
     async def stop(self, project_id: str, agent: str) -> None:
         self._check_agent(agent)

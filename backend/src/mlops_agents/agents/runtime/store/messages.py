@@ -122,17 +122,17 @@ class MessagesStore(StoreBase):
             raise ValueError(f"Message {message_id} not found in project {project_id}")
         return _view(row)
 
-    async def message(self, project_id: str, session_id: str, message_id: str) -> MessageView:
-        """Return one message of session_id; a message of another session is not found."""
+    async def message(
+        self, project_id: str, session_id: str, message_id: str
+    ) -> MessageView | None:
+        """Return one message of session_id, or None; a message of another session is None."""
         engine = await self._databases.project(project_id)
         query = select(messages).where(
             messages.c.id == message_id, messages.c.session_id == session_id
         )
         async with engine.connect() as conn:
             row = (await conn.execute(query)).mappings().first()
-        if row is None:
-            raise ValueError(f"Message {message_id} not found in session {session_id}")
-        return _view(row)
+        return None if row is None else _view(row)
 
     async def messages(
         self, project_id: str, session_id: str, *, after: str | None = None

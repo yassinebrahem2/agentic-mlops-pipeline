@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import pytest
 
@@ -16,8 +17,10 @@ from mlops_agents.agents.runtime.contract import (
     Part,
     TextPart,
 )
+from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools.base import Preview
+from mlops_agents.errors import DomainError
 from tests.agents.runtime.session_env import SessionEnv
 
 AGENT = "orchestrator"
@@ -181,9 +184,37 @@ async def test_update_message_of_another_session_fails_and_publishes_nothing(
     other = await env.store.session_id(env.project_id, "another-agent")
     before = await manager.get(env.project_id, AGENT)
 
-    with pytest.raises(ValueError, match=message.id):
+    with pytest.raises(DomainError) as caught:
         await manager.update_message(env.project_id, other, message.id, _decide("apr_1"))
+    assert (caught.value.code, caught.value.status) == ("message_not_found", 404)
 
     after = await manager.get(env.project_id, AGENT)
     assert after.last_seq == before.last_seq
     assert [m.parts for m in after.messages if m.id == message.id] == [[_approval("apr_1")]]
+
+
+async def test_update_message_of_an_unknown_session_is_not_found_and_keeps_no_state(
+    env: SessionEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = env.manager
+    _, message = await _agent_message(env, [_approval("apr_1")])
+    built: list[str] = []
+    hub_init = SessionHub.__init__
+    lock_init = AsyncRLock.__init__
+
+    def recording_hub(self: SessionHub, session_id: str, **kwargs: Any) -> None:
+        built.append(f"hub:{session_id}")
+        hub_init(self, session_id, **kwargs)
+
+    def recording_lock(self: AsyncRLock) -> None:
+        built.append("lock")
+        lock_init(self)
+
+    monkeypatch.setattr(SessionHub, "__init__", recording_hub)
+    monkeypatch.setattr(AsyncRLock, "__init__", recording_lock)
+
+    with pytest.raises(DomainError) as caught:
+        await manager.update_message(env.project_id, "ses_missing", message.id, _decide("apr_1"))
+
+    assert (caught.value.code, caught.value.status) == ("session_not_found", 404)
+    assert built == []

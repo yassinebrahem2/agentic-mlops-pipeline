@@ -256,17 +256,27 @@ class SessionManager(AgentSessions):
         transform: Callable[[list[Part]], list[Part]],
     ) -> MessageView:
         await self._workspace.get(project_id)
+        # Both are checked before the session gets a lock or a hub, so a bad id keeps no state.
+        if not await self._store.has_session(project_id, session_id):
+            raise DomainError("session_not_found", "This session does not exist.", status=404)
+        await self._message(project_id, session_id, message_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
         # Read, write and publish are one step under the session lock: a concurrent get() never
         # returns parts whose event it then receives again, and concurrent updates all land.
         async with lock:
-            current = await self._store.message(project_id, session_id, message_id)
+            current = await self._message(project_id, session_id, message_id)
             updated = await self._store.update_message(
                 project_id, message_id, parts=transform(list(current.parts))
             )
             await hub.message(updated, created=False)
         return updated
+
+    async def _message(self, project_id: str, session_id: str, message_id: str) -> MessageView:
+        message = await self._store.message(project_id, session_id, message_id)
+        if message is None:
+            raise DomainError("message_not_found", "This message does not exist.", status=404)
+        return message
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)

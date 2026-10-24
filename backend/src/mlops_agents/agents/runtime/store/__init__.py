@@ -48,6 +48,14 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
             )
             return sid
 
+    async def has_session(self, project_id: str, session_id: str) -> bool:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(select(sessions.c.id).where(sessions.c.id == session_id))
+            ).first()
+        return row is not None
+
     @shielded
     async def recover(self, project_id: str) -> None:
         """Mark running turns and their incomplete messages (streaming/running/stopped) as interrupted."""
