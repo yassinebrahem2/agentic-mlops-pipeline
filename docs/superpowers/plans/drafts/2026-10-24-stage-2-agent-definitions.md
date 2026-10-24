@@ -42,13 +42,14 @@
      - SearchIssues before OpenIssue, and comment on a match instead;
      - message another agent only when its part is needed, and keep messages short and specific.
 - Prompts are plain and short. Each stays under about 60 lines.
+- Read stays the first tool of every definition. The fake model `fake-tools` calls an agent's first tool, and the stage 1 e2e flow and runtime tests rely on it being Read.
 
 **Tests (stop condition):**
 - The catalog loads all definitions.
 - Each one's tools and `can_message` equal the spec's table, through one parametrized test reading the table as data.
 - Only the Orchestrator has `status_board`.
 - A live test (`-m live`, not in CI) asks the Orchestrator to add a line to the README on a temporary GitHub-less project at level `autonomous`. It starts a task, edits, and opens a local review. Run it once and state the result in the PR.
-- Full suite, checks; CI green.
+- Full backend suite, checks, and `npm run build && npm run e2e`; CI green, E2E included.
 
 ---
 

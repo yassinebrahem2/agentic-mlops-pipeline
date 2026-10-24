@@ -9,7 +9,7 @@
 
 Nothing here adds behavior a user can see. Every default keeps stage 1's behavior until the plan that owns it replaces the default.
 
-**Branch:** `plan/stage-2-runtime-contracts`. **Consumes:** merged code; task 3 also needs the tool-errors plan (#145) merged, because both edit `graph.py` and `model_caller.py`. **Produces:** I8 to I12 (stage 2 overview, Interfaces between plans).
+**Branch:** `plan/stage-2-runtime-contracts`. **Consumes:** merged code; task 4 also needs the tool-errors plan (#145) merged, because both edit `graph.py` and `model_caller.py`. **Produces:** I8 to I12 (stage 2 overview, Interfaces between plans).
 
 **Read first:** the stage 2 spec (`docs/superpowers/specs/2026-10-24-stage-2-agent-runtime-design.md`), all of it; the overview's interface section.
 
@@ -19,9 +19,10 @@ Nothing here adds behavior a user can see. Every default keeps stage 1's behavio
 |---|---|---|
 | 1 | Shared types and protocols | merged code |
 | 2 | The stage 2 schema | task 1 |
-| 3 | Turn graph hook points and per-call tool context | task 1, tool-errors plan merged |
+| 3 | The session side: file splits, busy, post, observers | tasks 1 and 2 |
+| 4 | Turn graph hook points and per-call tool context | task 3, tool-errors plan merged |
 
-Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its issue says so): every runtime plan waits on them.
+Tasks 1 to 3 get early PRs, from `plan/stage-2-runtime-contracts-task<n>` (their issues say so): the runtime plans wait on them. Task 4 is the last task, so it merges through the plan PR.
 
 ---
 
@@ -36,7 +37,7 @@ Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its 
 - New `backend/src/mlops_agents/sandbox/__init__.py` and `contract.py`.
 - New `backend/src/mlops_agents/agents/approvals/__init__.py` and `contract.py`.
 - New `backend/src/mlops_agents/agents/messaging/__init__.py` and `contract.py`.
-- New `backend/src/mlops_agents/agents/runtime/hooks.py` (the protocols and dataclasses only; the defaults come in task 3).
+- New `backend/src/mlops_agents/agents/runtime/hooks.py` (the protocols and dataclasses only; the defaults come in task 4).
 - `backend/src/mlops_agents/workspace/refs.py`: `github_remote`.
 - `backend/src/mlops_agents/agents/catalog.py`: the `status_board` field.
 - `frontend/openapi.json` and `frontend/src/api/schema.d.ts`, regenerated.
@@ -106,11 +107,11 @@ Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its 
 
 ---
 
-### Task 3: Turn graph hook points and per-call tool context
+### Task 3: The session side: file splits, busy, post, observers
 
-**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `sessions.py` and `store.py` (split first, see below), `backend/src/mlops_agents/api/services.py` (wiring the defaults), tests.
+**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` and `store.py` (split first, see below), new `runtime/worker.py` and the `runtime/store/` package, `backend/src/mlops_agents/api/services.py` (the observers and bus parameters), tests. tool-errors edits none of these files.
 
-**Interfaces:** Consumes task 1 and the merged tool-errors plan. Produces I12's hook points.
+**Interfaces:** Consumes tasks 1 and 2. Produces `AgentSessions.post` (I9), the observer calls, the bus binding, and the one "busy" rule.
 
 **Implementation notes:**
 - First, with no behavior change, split the two files at the size limit, so no later plan grows them past 400 lines:
@@ -119,7 +120,28 @@ Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its 
 
   Later plans add their own modules next to these: approvals' `runtime/waiting.py`, messaging's `store/inbound.py`.
 - "Busy" is defined in one function that `send`, `post` and `get` all use: a live worker, or a turn in `waiting`. Stage 1 has no waiting turns yet, so behavior is unchanged; approvals relies on it.
+- `SessionManager` gains `post` (I9). `send` becomes a call to the same internal path, so both store a message and a queued turn one way.
+- It takes an optional `MessageBus` and calls `bind(self)` on it. It takes a sequence of `TurnObserver`s and calls them when a turn starts and ends. Approvals adds the call for waiting.
 - When a turn starts from a trigger message that has `from_agent`, the worker sets that message's `read_by_turn` to the turn. Messaging's exchange rule depends on it.
+- It gains `update_message_parts(project_id, session_id, message_id, parts)`. It stores a message's new parts and publishes `message.updated` under the session lock, so a concurrent `get()` never returns a part whose event it then receives again. Approvals uses it when an approval part changes outside a running turn.
+
+**Tests (stop condition):**
+- `sessions.py` and every module of the store package are under 400 lines, and every stage 1 test passes unchanged after the split.
+- `post` stores an inbound message (`author_kind` user, `from_agent` set, `exchange_id` and `hop` stored), starts a turn when idle, and queues one when busy, exactly like `send`.
+- A test observer sees `turn_started` and `turn_ended`, with the final text, for a turn.
+- A turn started by a message with `from_agent` sets that message's `read_by_turn`.
+- `update_message_parts` publishes one `message.updated`, and `get` during it sees either the old or the new parts, never the event twice.
+- Full backend suite, ruff, format, pyright; CI green on Linux and Windows.
+
+---
+
+### Task 4: Turn graph hook points and per-call tool context
+
+**Files:** `backend/src/mlops_agents/agents/runtime/graph.py`, `executor.py`, `agent.py`, `hooks.py` (the four defaults), `backend/src/mlops_agents/api/services.py` (wiring the defaults), tests.
+
+**Interfaces:** Consumes tasks 1 and 3, and the merged tool-errors plan (both edit `graph.py` and `model_caller.py`). Produces I12's hook points.
+
+**Implementation notes:**
 - The graph becomes model → decide → wait → tools → model:
   - `decide` calls `Gate.decide` and stores its result in the state (`decisions: dict[str, GateDecision]`).
   - `wait` calls `Gate.wait` only when a decision is `ask`.
@@ -136,7 +158,6 @@ Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its 
 - The tools step builds a `ToolContext` for each call, from `TaskWorkspaces.current` and `TaskWorkspaces.files`. `Agent.tool_context` (stage 1, one per turn) is removed.
 - Tool arguments are parsed (`AgentTool.parse`) before `decide`. A call that fails to parse is answered with its error and never reaches the gate.
 - `decide` judges every call of the step with the context as it stands before any of them runs. A call whose `preview` raises `ToolFailure` (an Edit of a missing file, a Write before any task) is answered with that error and gets no approval. The model sees it and can retry next step.
-- `SessionManager` gains `post` (I9). `send` becomes a call to the same internal path, so both store a message and a queued turn one way. It also takes an optional `MessageBus` and calls `bind(self)` on it, and a sequence of `TurnObserver`s that it calls when a turn starts, waits and ends.
 - `services.py` builds the registry with `default_registry(...)`, taking the services tools need (none yet), and passes the four defaults to the session manager. Later plans each change their one line there.
 
 **Tests (stop condition):**
@@ -144,11 +165,6 @@ Every task gets an early PR, from `plan/stage-2-runtime-contracts-task<n>` (its 
 - A test gate that denies one call: that call gets the denial as its error result, and the others run. A test gate that asks: `wait` is reached, and with a test `wait` that approves, the call runs.
 - A test inbound source's messages appear in the next model request, after the previous step's tool results.
 - A test turn-end check's note causes exactly one more model step, and none when it returns `None`.
-- A call with invalid arguments never reaches the test gate.
-- `post` stores an inbound message (`author_kind` user, `from_agent` set, `exchange_id` and `hop` stored), starts a turn when idle, and queues one when busy, exactly like `send`.
-- A test observer sees `turn_started` and `turn_ended`, with the final text, for a turn.
-- A turn started by a message with `from_agent` sets that message's `read_by_turn`.
-- `sessions.py` and every module of the store package are under 400 lines, and every stage 1 test passes unchanged after the split.
-- A preview that raises is answered with its error and creates no gate call.
+- A call with invalid arguments never reaches the test gate, and a preview that raises is answered with its error without a gate call.
 - Two tool calls in one step, with a test `TaskWorkspaces` whose current task changes after the first: the second call's context sees the change.
 - Full backend suite, ruff, format, pyright; CI green on Linux and Windows.

@@ -16,7 +16,7 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | SendMessage, exchanges and limits | runtime-contracts tasks 1 to 3, events task 1 |
-| 2 | Mid-turn delivery | task 1 |
+| 2 | Mid-turn delivery | task 1, runtime-contracts task 4 merged |
 | 3 | ListAgents | task 1, events task 3 |
 | 4 | Wake-ups | task 2 |
 

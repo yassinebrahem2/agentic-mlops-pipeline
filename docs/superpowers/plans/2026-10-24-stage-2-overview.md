@@ -25,13 +25,13 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | pickers | `plan/stage-2-pickers` | One combobox component; the GitHub repo picker and the model picker use it | none | now | Planned |
 | chat-layout | `plan/stage-2-chat-layout` | Only the message list scrolls; a one-line composer that grows; one Send/Stop button; the styled agent switcher | none | now | Planned |
 | project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Planned |
-| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 3 after tool-errors merges | now | Draft |
-| events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts task 1 (task 3 for the observer) | Draft |
-| tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | after runtime-contracts tasks 1 to 3 | Draft |
+| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Draft |
+| events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer) | Draft |
+| tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | after runtime-contracts tasks 1 to 3 and its task 4 merged | Draft |
 | sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Draft |
-| approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | after runtime-contracts tasks 1 to 3 and events task 1 | Draft |
+| approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | after runtime-contracts tasks 1 to 3 and events task 1 (task 4 merged before its task 2) | Draft |
 | github-work | `plan/stage-2-github-work` | GitHub client for PRs, issues and labels, the fake GitHub server, OpenPullRequest, issue tools, local reviews, the PR reminder, PR state sync | I8 to I12; tasks task 4; events task 1 | client: after runtime-contracts task 1; tools: after the tasks plan's commit task | Draft |
-| messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 | Draft |
+| messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 (task 4 merged before its task 2) | Draft |
 | agent-definitions | `plan/stage-2-agent-definitions` | The seven definition files and their prompts | every stage 2 tool on `main` | after tasks, sandbox, github-work and messaging | Draft |
 | frontend-agents | `plan/stage-2-frontend-agents` | Agents list with status, approval cards, the task bar, the bypass warning, "From <agent>" labels | I9, I11, the approvals, tasks and events routes | coding: after runtime-contracts task 1 and chat-layout merged; merging: after the routes it uses | Draft |
 | frontend-inbox | `plan/stage-2-frontend-inbox` | The Inbox page and its badge, project settings for permissions, sandbox, issues and messaging | I9, I11, the routes it uses; frontend-agents tasks 1 and 2 (`useProjectEvents`, `ApprovalCard`) | coding: after runtime-contracts task 1, project-context merged and frontend-agents tasks 1 and 2; merging: after the routes it uses | Draft |
@@ -59,7 +59,7 @@ A plan that needs a change in another plan's file opens a Decision issue.
 
 ## Runtime sequencing
 
-- `graph.py`, `executor.py` and `model_caller.py`: tool-errors edits them first, then runtime-contracts task 3 adds every hook point once. After that the runtime plans fill only their own modules. The exception is approvals, which owns the executor and session-manager changes for waiting and resuming.
+- `graph.py`, `executor.py` and `model_caller.py`: tool-errors edits them first, then runtime-contracts task 4 adds every hook point once. After that the runtime plans fill only their own modules. The exception is approvals, which owns the executor and session-manager changes for waiting and resuming.
 - `api/services.py`: runtime-contracts sets the wiring up. Each plan changes only the line that builds its own service or default.
 - `agents/tools/__init__.py` (`default_registry`): each plan adds only its own tools' lines.
 - `frontend/src/pages/agents/*`: frontend-agents starts after chat-layout merges. Project settings and the sidebar badge: frontend-inbox starts after project-context merges.
@@ -145,6 +145,9 @@ class AgentSessions(Protocol):    # stage 1 members, plus:
                    text: str, exchange_id: str | None, hop: int | None) -> MessageView: ...
     # An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
     # from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send.
+    async def update_message_parts(self, project_id: str, session_id: str, message_id: str,
+                                   parts: list[Part]) -> MessageView: ...
+    # Stores new parts and publishes message.updated under the session lock (approval parts).
 ```
 
 ### I10: policy (`agents/policy/table.py`)

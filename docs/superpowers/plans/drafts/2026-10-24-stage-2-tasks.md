@@ -20,7 +20,7 @@
 
 | Task | Title | Consumes |
 |---|---|---|
-| 1 | The task git function, worktrees and the current task | runtime-contracts tasks 1 to 3, events task 1 |
+| 1 | The task git function, worktrees and the current task | runtime-contracts tasks 1 to 3, events task 1; runtime-contracts task 4 merged |
 | 2 | StartTask, ResumeTask and reading in a task | task 1 |
 | 3 | Write and Edit, with claims | task 2 |
 | 4 | Committing and pushing | task 3 |
@@ -148,7 +148,7 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
   - removes its claims;
   - records `task.ended`.
 - Discard is refused with 409 while the agent's turn is running or waiting.
-- At turn start, a task whose worktree is missing gets it recreated from its branch, and a system note tells the agent that uncommitted changes were lost. This goes in `Tasks.current`.
+- At turn start, a task whose worktree is missing gets it recreated from its branch. A note that uncommitted changes were lost is added to the next tool result of that task; no message is posted, since that would queue a turn. This goes in `Tasks.current`.
 
 **Tests (stop condition):**
 - Local merge with the default branch checked out and clean: the files change and the branch fast-forwards.
