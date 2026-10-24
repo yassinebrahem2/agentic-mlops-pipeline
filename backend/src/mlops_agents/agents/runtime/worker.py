@@ -19,6 +19,9 @@ __all__ = ["TurnWorkers"]
 
 SessionKey = tuple[str, str]
 
+# How long one observer call may take before it is abandoned and logged.
+OBSERVER_TIMEOUT_S = 10.0
+
 
 class TurnWorkers:
     """Owns each session's worker task and the turn task it is running."""
@@ -100,83 +103,99 @@ class TurnWorkers:
 
                 turn_id, trigger_msg_id = next_turn
                 await self._store.set_turn(project_id, turn_id, "running")
-                await self._turn_started(project_id, agent, turn_id)
-
-                # A queued trigger becomes complete; one from an agent records this turn read it.
-                async with lock:
-                    history = await self._store.messages(project_id, session_id)
-                    trigger = next((m for m in history if m.id == trigger_msg_id), None)
-                    read_by = (
-                        turn_id if trigger is not None and trigger.from_agent is not None else None
-                    )
-                    if trigger is not None and trigger.status == "queued":
-                        updated_msg = await self._store.update_message(
-                            project_id, trigger_msg_id, status="complete", read_by_turn=read_by
-                        )
-                        await hub.message(updated_msg, created=False)
-                    elif read_by is not None:
-                        await self._store.update_message(
-                            project_id, trigger_msg_id, read_by_turn=read_by
-                        )
-
-                child_task = asyncio.create_task(
-                    self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
-                )
-                self._child_tasks[key] = child_task
-
-                # The observers hear of the end after the turn's own handling, so a cancel that
-                # lands in an observer never rewrites how the turn ended.
                 try:
-                    try:
-                        end_status, error = await child_task
-                        await self._store.set_turn(project_id, turn_id, end_status, error=error)
-                        await hub.turn_ended(turn_id, status=end_status, error=error)
-                        ended = end_status
-                    except asyncio.CancelledError:
-                        current = asyncio.current_task()
-                        if current is not None and current.cancelling() > 0:
-                            # The worker itself is being cancelled (close / close_project).
-                            # Do not swallow worker cancellation!
-                            if not child_task.done():
-                                child_task.cancel()
-                                try:
-                                    await child_task
-                                except asyncio.CancelledError:
-                                    pass
-                                except Exception:
-                                    logger.exception("Turn %s failed while closing", turn_id)
-                            await self._store.set_turn(project_id, turn_id, "interrupted")
-                            await self._store.mark_interrupted(project_id, turn_id)
-                            raise
-                        if child_task in self._stopped_tasks:
-                            self._stopped_tasks.discard(child_task)
-                            await self._store.set_turn(project_id, turn_id, "stopped")
-                            await hub.turn_ended(turn_id, status="stopped", error=None)
-                            ended = "stopped"
-                        else:
-                            await self._store.set_turn(project_id, turn_id, "interrupted")
-                            await self._store.mark_interrupted(project_id, turn_id)
-                            raise
-                    except Exception:
-                        logger.exception("Turn %s failed outside the executor", turn_id)
-                        await self._executor.record_failure(
-                            project_id, session_id, turn_id, hub, lock, UNEXPECTED_FAILURE_TEXT
-                        )
-                        await self._store.set_turn(
-                            project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT
-                        )
-                        await hub.turn_ended(
-                            turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT
-                        )
-                        ended = "failed"
-                finally:
-                    self._stopped_tasks.discard(child_task)
-                    self._child_tasks.pop(key, None)
-
+                    await self._turn_started(project_id, agent, turn_id)
+                    await self._mark_trigger_read(
+                        project_id, session_id, turn_id, trigger_msg_id, hub, lock
+                    )
+                    ended = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
+                except asyncio.CancelledError:
+                    # The turn started, so it is reported ended, also when the cancel came first.
+                    await self._store.set_turn(project_id, turn_id, "interrupted")
+                    await self._store.mark_interrupted(project_id, turn_id)
+                    await self._turn_ended(project_id, session_id, agent, turn_id, "interrupted")
+                    raise
+                # The observers hear of the end after the turn's own handling, so a cancel that
+                # lands in an observer never rewrites how the turn ended, nor reports it twice.
                 await self._turn_ended(project_id, session_id, agent, turn_id, ended)
 
         finally:
             self._workers.pop(key, None)
+
+    async def _mark_trigger_read(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        trigger_msg_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> None:
+        """A queued trigger becomes complete; one from an agent records this turn read it."""
+        async with lock:
+            history = await self._store.messages(project_id, session_id)
+            trigger = next((m for m in history if m.id == trigger_msg_id), None)
+            read_by = turn_id if trigger is not None and trigger.from_agent is not None else None
+            if trigger is not None and trigger.status == "queued":
+                updated_msg = await self._store.update_message(
+                    project_id, trigger_msg_id, status="complete", read_by_turn=read_by
+                )
+                await hub.message(updated_msg, created=False)
+            elif read_by is not None:
+                await self._store.update_message(project_id, trigger_msg_id, read_by_turn=read_by)
+
+    async def _run_turn(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> TurnEnd:
+        """Run the turn task and store how it ended. A cancel of the worker, or of the turn
+        task other than by Stop, is raised for the caller to mark the turn interrupted."""
+        key = (project_id, session_id)
+        child_task = asyncio.create_task(
+            self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
+        )
+        self._child_tasks[key] = child_task
+        try:
+            end_status, error = await child_task
+            await self._store.set_turn(project_id, turn_id, end_status, error=error)
+            await hub.turn_ended(turn_id, status=end_status, error=error)
+            return end_status
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                # The worker itself is being cancelled (close / close_project).
+                # Do not swallow worker cancellation!
+                if not child_task.done():
+                    child_task.cancel()
+                    try:
+                        await child_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.exception("Turn %s failed while closing", turn_id)
+                raise
+            if child_task not in self._stopped_tasks:
+                raise
+            self._stopped_tasks.discard(child_task)
+            await self._store.set_turn(project_id, turn_id, "stopped")
+            await hub.turn_ended(turn_id, status="stopped", error=None)
+            return "stopped"
+        except Exception:
+            logger.exception("Turn %s failed outside the executor", turn_id)
+            await self._executor.record_failure(
+                project_id, session_id, turn_id, hub, lock, UNEXPECTED_FAILURE_TEXT
+            )
+            await self._store.set_turn(project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT)
+            await hub.turn_ended(turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT)
+            return "failed"
+        finally:
+            self._stopped_tasks.discard(child_task)
+            self._child_tasks.pop(key, None)
 
     async def _turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         for observer in self._observers:
@@ -209,8 +228,10 @@ class TurnWorkers:
 
 
 async def _observed(call: Awaitable[None]) -> None:
-    """Await one observer call. A failing observer is logged and never stops the queue."""
+    """Await one observer call, bounded. A failing or hanging observer is logged and never
+    stops the queue, nor holds a shutdown that is cancelling the worker."""
     try:
-        await call
+        async with asyncio.timeout(OBSERVER_TIMEOUT_S):
+            await call
     except Exception:
         logger.exception("A turn observer failed")
