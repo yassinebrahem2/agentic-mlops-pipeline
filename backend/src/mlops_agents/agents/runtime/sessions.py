@@ -2,27 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
-from typing import Any
 
 import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageStatus,
     MessageView,
+    Part,
     SessionView,
     StreamEvent,
     TextPart,
-    TurnEnd,
 )
-from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.worker import TurnWorkers
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
@@ -50,6 +52,8 @@ class SessionManager(AgentSessions):
         providers: ProvidersService,
         http: httpx2.AsyncClient,
         git: GitRunner,
+        observers: Sequence[TurnObserver] = (),
+        bus: MessageBus | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -70,16 +74,18 @@ class SessionManager(AgentSessions):
             git=git,
         )
         self._executor = TurnExecutor(store=self._store, caller=self._caller, builder=self._builder)
+        self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
 
         self._hubs: dict[tuple[str, str], SessionHub] = {}
         self._locks: dict[tuple[str, str], AsyncRLock] = {}
-        self._workers: dict[tuple[str, str], asyncio.Task[None]] = {}
-        self._child_tasks: dict[tuple[str, str], asyncio.Task[tuple[TurnEnd, str | None]]] = {}
-        self._stopped_tasks: set[asyncio.Task[Any]] = set()
         self._recovered_projects: set[str] = set()
         self._recovery_lock = asyncio.Lock()
         self._session_ids: dict[tuple[str, str], str] = {}
         self._session_id_lock = asyncio.Lock()
+
+        # The bus is built first, and the manager binds itself to it once it is complete.
+        if bus is not None:
+            bus.bind(self)
 
     def _get_lock(self, project_id: str, session_id: str) -> AsyncRLock:
         key = (project_id, session_id)
@@ -129,19 +135,15 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
 
         session_id = await self._get_session_id(project_id, agent)
-        key = (project_id, session_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
 
         async with lock:
-            worker = self._workers.get(key)
-            is_busy = worker is not None and not worker.done()
+            is_busy = await self._busy(project_id, session_id)
             if not is_busy:
                 queued = await self._store.next_queued_turn(project_id, session_id)
                 if queued is not None:
-                    self._workers[key] = asyncio.create_task(
-                        self._worker_loop(project_id, session_id, agent)
-                    )
+                    self._workers.start(project_id, session_id, agent, hub, lock)
                     is_busy = True
 
             stored = await self._store.messages(project_id, session_id)
@@ -162,7 +164,56 @@ class SessionManager(AgentSessions):
             current_task=None,
         )
 
+    async def _busy(self, project_id: str, session_id: str) -> bool:
+        """The one busy rule: a live worker, or a turn waiting for approval. Under the lock."""
+        return self._workers.running(
+            (project_id, session_id)
+        ) or await self._store.has_waiting_turn(project_id, session_id)
+
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
+        return await self._enqueue(
+            project_id,
+            agent,
+            text,
+            author_name="user",
+            from_agent=None,
+            exchange_id=None,
+            hop=None,
+        )
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        return await self._enqueue(
+            project_id,
+            agent,
+            text,
+            author_name=author_name,
+            from_agent=from_agent,
+            exchange_id=exchange_id,
+            hop=hop,
+        )
+
+    async def _enqueue(
+        self,
+        project_id: str,
+        agent: str,
+        text: str,
+        *,
+        author_name: str,
+        from_agent: str | None,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        """Store an input message and its queued turn; start the worker when the session is idle."""
         await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
@@ -171,122 +222,67 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
 
         session_id = await self._get_session_id(project_id, agent)
-        key = (project_id, session_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
 
         async with lock:
-            worker = self._workers.get(key)
-            is_busy = worker is not None and not worker.done()
+            is_busy = await self._busy(project_id, session_id)
             status: MessageStatus = "queued" if is_busy else "complete"
 
-            user_msg = await self._store.add_message(
+            message = await self._store.add_message(
                 project_id,
                 session_id,
                 author_kind="user",
-                author_name="user",
+                author_name=author_name,
                 parts=[TextPart(type="text", text=text)],
                 status=status,
+                from_agent=from_agent,
+                exchange_id=exchange_id,
+                hop=hop,
             )
-            await self._store.add_turn(project_id, session_id, user_msg.id, "queued")
-            await hub.message(user_msg, created=True)
+            await self._store.add_turn(project_id, session_id, message.id, "queued")
+            await hub.message(message, created=True)
 
             if not is_busy:
-                self._workers[key] = asyncio.create_task(
-                    self._worker_loop(project_id, session_id, agent)
-                )
+                self._workers.start(project_id, session_id, agent, hub, lock)
 
-        return user_msg
+        return message
 
-    async def _worker_loop(self, project_id: str, session_id: str, agent: str) -> None:
-        key = (project_id, session_id)
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        await self._workspace.get(project_id)
+        # Both are checked before the session gets a lock or a hub, so a bad id keeps no state.
+        if not await self._store.has_session(project_id, session_id):
+            raise DomainError("session_not_found", "This session does not exist.", status=404)
+        await self._message(project_id, session_id, message_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
+        # Read, write and publish are one step under the session lock: a concurrent get() never
+        # returns parts whose event it then receives again, and concurrent updates all land.
+        async with lock:
+            current = await self._message(project_id, session_id, message_id)
+            updated = await self._store.update_message(
+                project_id, message_id, parts=transform(list(current.parts))
+            )
+            await hub.message(updated, created=False)
+        return updated
 
-        try:
-            while True:
-                async with lock:
-                    next_turn = await self._store.next_queued_turn(project_id, session_id)
-                    if next_turn is None:
-                        self._workers.pop(key, None)
-                        break
-
-                turn_id, trigger_msg_id = next_turn
-                await self._store.set_turn(project_id, turn_id, "running")
-
-                # If trigger message was queued, update it to complete
-                async with lock:
-                    history = await self._store.messages(project_id, session_id)
-                    triggers = [m for m in history if m.id == trigger_msg_id]
-                    if triggers and triggers[0].status == "queued":
-                        updated_msg = await self._store.update_message(
-                            project_id, trigger_msg_id, status="complete"
-                        )
-                        await hub.message(updated_msg, created=False)
-
-                child_task = asyncio.create_task(
-                    self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
-                )
-                self._child_tasks[key] = child_task
-
-                try:
-                    try:
-                        end_status, error = await child_task
-                        await self._store.set_turn(project_id, turn_id, end_status, error=error)
-                        await hub.turn_ended(turn_id, status=end_status, error=error)
-                    except asyncio.CancelledError:
-                        current = asyncio.current_task()
-                        if current is not None and current.cancelling() > 0:
-                            # The worker itself is being cancelled (close / close_project).
-                            # Do not swallow worker cancellation!
-                            if not child_task.done():
-                                child_task.cancel()
-                                try:
-                                    await child_task
-                                except asyncio.CancelledError:
-                                    pass
-                                except Exception:
-                                    logger.exception("Turn %s failed while closing", turn_id)
-                            await self._store.set_turn(project_id, turn_id, "interrupted")
-                            await self._store.mark_interrupted(project_id, turn_id)
-                            raise
-                        if child_task in self._stopped_tasks:
-                            self._stopped_tasks.discard(child_task)
-                            await self._store.set_turn(project_id, turn_id, "stopped")
-                            await hub.turn_ended(turn_id, status="stopped", error=None)
-                            continue
-                        await self._store.set_turn(project_id, turn_id, "interrupted")
-                        await self._store.mark_interrupted(project_id, turn_id)
-                        raise
-                    except Exception:
-                        logger.exception("Turn %s failed outside the executor", turn_id)
-                        await self._executor.record_failure(
-                            project_id, session_id, turn_id, hub, lock, UNEXPECTED_FAILURE_TEXT
-                        )
-                        await self._store.set_turn(
-                            project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT
-                        )
-                        await hub.turn_ended(
-                            turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT
-                        )
-                finally:
-                    self._stopped_tasks.discard(child_task)
-                    self._child_tasks.pop(key, None)
-
-        finally:
-            self._workers.pop(key, None)
+    async def _message(self, project_id: str, session_id: str, message_id: str) -> MessageView:
+        message = await self._store.message(project_id, session_id, message_id)
+        if message is None:
+            raise DomainError("message_not_found", "This message does not exist.", status=404)
+        return message
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
         self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
-        key = (project_id, session_id)
-        worker = self._workers.get(key)
-        if worker is not None and not worker.done():
-            child = self._child_tasks.get(key)
-            if child is not None and not child.done():
-                self._stopped_tasks.add(child)
-                child.cancel()
+        self._workers.stop((project_id, session_id))
 
     async def _subscribe_stream(
         self, project_id: str, agent: str, after_seq: int | None = None
@@ -308,20 +304,7 @@ class SessionManager(AgentSessions):
 
     async def close_project(self, project_id: str) -> None:
         await self._workspace.get(project_id)
-        # Cancel workers for this project
-        project_workers = [task for (p, _), task in list(self._workers.items()) if p == project_id]
-        for task in project_workers:
-            task.cancel()
-        if project_workers:
-            await asyncio.gather(*project_workers, return_exceptions=True)
-
-        project_children = [
-            task for (p, _), task in list(self._child_tasks.items()) if p == project_id
-        ]
-        for task in project_children:
-            task.cancel()
-        if project_children:
-            await asyncio.gather(*project_children, return_exceptions=True)
+        await self._workers.cancel(project_id)
 
         # Close hubs for this project
         for (p, s), hub in list(self._hubs.items()):
@@ -333,12 +316,7 @@ class SessionManager(AgentSessions):
         for key in list(self._locks.keys()):
             if key[0] == project_id:
                 self._locks.pop(key, None)
-        for key in list(self._workers.keys()):
-            if key[0] == project_id:
-                self._workers.pop(key, None)
-        for key in list(self._child_tasks.keys()):
-            if key[0] == project_id:
-                self._child_tasks.pop(key, None)
+        self._workers.forget(project_id)
         for key in list(self._session_ids.keys()):
             if key[0] == project_id:
                 self._session_ids.pop(key, None)
@@ -356,23 +334,9 @@ class SessionManager(AgentSessions):
 
     async def close(self) -> None:
         # Recover projects with running turns - capture projects BEFORE cancelling workers
-        projects = (
-            {p for (p, _) in self._workers}
-            | {p for (p, _) in self._child_tasks}
-            | set(self._recovered_projects)
-        )
+        projects = self._workers.projects() | set(self._recovered_projects)
 
-        all_workers = list(self._workers.values())
-        for task in all_workers:
-            task.cancel()
-        if all_workers:
-            await asyncio.gather(*all_workers, return_exceptions=True)
-
-        all_children = list(self._child_tasks.values())
-        for task in all_children:
-            task.cancel()
-        if all_children:
-            await asyncio.gather(*all_children, return_exceptions=True)
+        await self._workers.cancel()
 
         for project_id in projects:
             try:
@@ -384,9 +348,7 @@ class SessionManager(AgentSessions):
             hub.close()
 
         self._hubs.clear()
-        self._workers.clear()
-        self._child_tasks.clear()
-        self._stopped_tasks.clear()
+        self._workers.forget()
         self._locks.clear()
         self._recovered_projects.clear()
         self._session_ids.clear()
