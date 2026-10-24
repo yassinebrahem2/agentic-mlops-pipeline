@@ -4,7 +4,14 @@ import type { components } from "@/api/schema";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -37,13 +44,18 @@ export function ProviderCard({ provider }: { provider: Provider }) {
   const headingId = useId();
   return (
     <section aria-labelledby={headingId}>
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
             <h3 id={headingId}>{provider.name}</h3>
             <Badge variant="secondary">{KIND_LABELS[provider.kind]}</Badge>
           </CardTitle>
-          <p className="text-muted-foreground break-all">{provider.base_url}</p>
+          <CardAction>
+            <RemoveProviderDialog name={provider.name} />
+          </CardAction>
+          <CardDescription className="text-muted-foreground break-all">
+            {provider.base_url}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {provider.status === "needs_attention" && (
@@ -55,10 +67,6 @@ export function ProviderCard({ provider }: { provider: Provider }) {
             </Alert>
           )}
           <KeyList provider={provider} />
-          <AddKeyForm provider={provider} />
-          <div>
-            <RemoveProviderDialog name={provider.name} />
-          </div>
         </CardContent>
       </Card>
     </section>
@@ -80,14 +88,20 @@ function KeyList({ provider }: { provider: Provider }) {
   });
 
   if (provider.keys.length === 0) {
+    const emptyMessage =
+      provider.kind === "hosted"
+        ? "No keys yet."
+        : "No key. A self-hosted server may not need one.";
     return (
-      <p className="text-muted-foreground">
-        {provider.kind === "hosted"
-          ? "No keys yet."
-          : "No key. A self-hosted server may not need one."}
-      </p>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-muted-foreground">{emptyMessage}</p>
+          <AddKeyForm provider={provider} />
+        </div>
+      </div>
     );
   }
+
   return (
     <div className="flex flex-col gap-2">
       <ul className="flex flex-col gap-2">
@@ -109,6 +123,9 @@ function KeyList({ provider }: { provider: Provider }) {
         ))}
       </ul>
       {removeKey.isError && <p className="text-destructive">{errorText(removeKey.error)}</p>}
+      <div className="flex justify-end">
+        <AddKeyForm provider={provider} />
+      </div>
     </div>
   );
 }
@@ -140,19 +157,18 @@ function AddKeyForm({ provider }: { provider: Provider }) {
 
   if (!open) {
     return (
-      <div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            addKey.reset();
-            setOpen(true);
-          }}
-        >
-          Add key
-        </Button>
-      </div>
+      <Button
+        variant="outline"
+        onClick={() => {
+          addKey.reset();
+          setOpen(true);
+        }}
+      >
+        Add key
+      </Button>
     );
   }
+
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
       <Label htmlFor={inputId}>New key for {provider.name}</Label>
