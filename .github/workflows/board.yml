@@ -51,6 +51,7 @@ jobs:
             exit 1
           fi
           move() { scripts/board-status.sh "$1" "$2"; }
+          # A closed issue stays Done whatever happens to the PR or Decision that names it.
           move_if_open() {
             state=$(GH_TOKEN="$REPO_TOKEN" gh issue view "$1" --repo "$GITHUB_REPOSITORY" --json state --jq .state)
             if [ "$state" = OPEN ]; then move "$1" "$2"; fi

@@ -3,18 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, unwrap } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { applyEvent, type SessionState } from "./applyEvent";
-import { parseEvent } from "./events";
+import { eventNames, parseEvent } from "./events";
 import { openStream, STREAM_CONNECTING, type StreamLike } from "./stream";
-
-const eventNames = [
-  "message.created",
-  "text.delta",
-  "tool.started",
-  "tool.finished",
-  "message.updated",
-  "turn.ended",
-  "resync",
-];
 
 export type UseSessionResult = {
   state: SessionState | undefined;
@@ -24,6 +14,10 @@ export type UseSessionResult = {
   stop(): Promise<void>;
   reload(): Promise<void>;
 };
+
+function isRefusal(status: number | undefined): boolean {
+  return status === 404 || status === 401;
+}
 
 export function useSession(projectId: string, agent: string): UseSessionResult {
   const [state, setState] = useState<SessionState>();
@@ -114,7 +108,6 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
               );
         if (!disposed) {
           setError(apiErr);
-          setConnection("closed");
         }
         return { error: apiErr };
       }
@@ -134,19 +127,36 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
       setConnection("reconnecting");
       void load().then((result) => {
         if (disposed) return;
-        if (result.error?.status === 404 || result.error?.status === 401) {
+        if (isRefusal(result.error?.status)) {
           setConnection("closed");
           return;
         }
+        setConnection("reconnecting");
         schedule();
       });
     };
 
     const connect = async (reloadSession = false) => {
-      const loaded = reloadSession
-        ? (await load()).state
-        : (stateRef.current ?? (await load()).state);
-      if (disposed || !loaded) return;
+      let loaded: SessionState | undefined;
+      if (reloadSession) {
+        setConnection("reconnecting");
+        const result = await load();
+        if (disposed) return;
+        if (!result.state) {
+          if (isRefusal(result.error?.status)) {
+            setConnection("closed");
+            return;
+          }
+          setConnection("reconnecting");
+          schedule();
+          return;
+        }
+        loaded = result.state;
+      } else {
+        const result = stateRef.current ? { state: stateRef.current } : await load();
+        if (disposed || !result.state) return;
+        loaded = result.state;
+      }
 
       close();
 
@@ -183,8 +193,11 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
             if (disposed) return;
             if (result.state) {
               void connect(false);
-            } else {
+            } else if (isRefusal(result.error?.status)) {
               setConnection("closed");
+            } else {
+              setConnection("reconnecting");
+              schedule();
             }
           });
           return;
@@ -219,12 +232,16 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
       const result = await load();
       if (result.state && !disposed) {
         void connect(false);
+      } else if (!disposed) {
+        setConnection("closed");
       }
     };
 
     void load().then((result) => {
       if (result.state && !disposed) {
         void connect(false);
+      } else if (!disposed) {
+        setConnection("closed");
       }
     });
 
