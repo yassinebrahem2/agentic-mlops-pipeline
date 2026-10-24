@@ -369,3 +369,65 @@ async def test_a_hanging_observer_does_not_hold_shutdown(
     assert after.calls[-1][4] == "interrupted"
     assert "A turn observer failed" in caplog.text
     fake_openai.state.release_slow()
+
+
+class SelfCancellingObserver(RecordingObserver):
+    """Raises its own CancelledError, as an observer awaiting a task someone else cancelled."""
+
+    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        await super().turn_started(project_id, agent, turn_id)
+        raise asyncio.CancelledError
+
+    async def turn_ended(
+        self,
+        project_id: str,
+        agent: str,
+        turn_id: str,
+        status: TurnEnd,
+        final_text: str | None,
+    ) -> None:
+        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        raise asyncio.CancelledError
+
+
+async def test_an_observers_own_cancel_leaves_the_turns_running(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cancelling = SelfCancellingObserver()
+    after = RecordingObserver()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[cancelling, after],
+    )
+    manager = env.manager
+    view = await manager.get(env.project_id, AGENT)
+    sub = manager.subscribe(env.project_id, AGENT, after_seq=view.last_seq)
+
+    await manager.send(env.project_id, AGENT, "First")
+    queued = await manager.send(env.project_id, AGENT, "Second")
+    first = (await collect_until_turn_ended(sub))[-1]
+    second = (await collect_until_turn_ended(sub))[-1]
+
+    assert queued.status == "queued"
+    assert isinstance(first, TurnEnded) and first.data.status == "done"
+    assert isinstance(second, TurnEnded) and second.data.status == "done"
+    for _ in range(2):
+        assert await asyncio.wait_for(after.ended.get(), timeout=5) == "done"
+    assert [call[0] for call in cancelling.calls] == ["started", "ended", "started", "ended"]
+    assert await _turn_statuses(databases, env.project_id) == ["done", "done"]
+    assert "A turn observer was cancelled" in caplog.text
+
+    await manager.close()

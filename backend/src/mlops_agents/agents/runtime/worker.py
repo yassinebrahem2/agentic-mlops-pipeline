@@ -233,5 +233,11 @@ async def _observed(call: Awaitable[None]) -> None:
     try:
         async with asyncio.timeout(OBSERVER_TIMEOUT_S):
             await call
+    except asyncio.CancelledError:
+        # Only a cancel of the worker itself goes on; an observer's own cancel is its failure.
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            raise
+        logger.exception("A turn observer was cancelled")
     except Exception:
         logger.exception("A turn observer failed")
