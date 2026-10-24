@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -8,16 +8,20 @@ from pydantic import TypeAdapter, ValidationError
 
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
+    ApprovalPart,
     MessageView,
     Part,
     Resync,
     ResyncData,
     SessionView,
     StreamEvent,
+    TaskView,
     TextPart,
     ToolCallPart,
     ToolResultPart,
+    TurnWaiting,
 )
+from mlops_agents.agents.tools.base import Preview
 
 MESSAGE: dict[str, Any] = {
     "id": "msg_01",
@@ -42,6 +46,7 @@ EVENT_DATA: dict[str, dict[str, Any]] = {
         "is_error": False,
     },
     "message.updated": {"message": MESSAGE},
+    "turn.waiting": {"turn_id": "trn_01"},
     "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None},
     "resync": {},
 }
@@ -193,6 +198,7 @@ def test_session_view_round_trip() -> None:
         busy=False,
         messages=[message],
         last_seq=10,
+        current_task=None,
     )
     dumped = session.model_dump_json()
     restored = SessionView.model_validate_json(dumped)
@@ -233,6 +239,7 @@ class DummySessions:
             busy=False,
             messages=[],
             last_seq=0,
+            current_task=None,
         )
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
@@ -243,6 +250,46 @@ class DummySessions:
             author_name="user",
             from_agent=None,
             parts=[TextPart(type="text", text=text)],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        return MessageView(
+            id="msg_dummy",
+            turn_id=None,
+            author_kind="user",
+            author_name=author_name,
+            from_agent=from_agent,
+            parts=[TextPart(type="text", text=text)],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+
+    async def update_message(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView:
+        return MessageView(
+            id=message_id,
+            turn_id=None,
+            author_kind="agent",
+            author_name="dummy",
+            from_agent=None,
+            parts=transform([]),
             status="complete",
             created_at="2026-10-21T18:00:00Z",
         )
@@ -276,3 +323,55 @@ def test_the_shared_fold_fixture_matches_the_contract() -> None:
     for state in [doc["end"], *doc["after_event"].values()]:
         for message in state["messages"]:
             MessageView.model_validate(message)
+
+
+def test_a_waiting_message_with_an_approval_part_round_trips() -> None:
+    message = MessageView(
+        id="msg_02",
+        turn_id="trn_01",
+        author_kind="agent",
+        author_name="orchestrator",
+        from_agent=None,
+        parts=[
+            ToolCallPart(type="tool_call", id="call_1", name="Write", input={"path": "a.py"}),
+            ApprovalPart(
+                type="approval",
+                approval_id="apr_01",
+                tool_call_id="call_1",
+                preview=Preview(kind="diff", title="Write a.py", body="+print('hi')"),
+                status="pending",
+                note=None,
+            ),
+        ],
+        status="waiting",
+        created_at="2026-10-24T09:00:00Z",
+    )
+    restored = MessageView.model_validate_json(message.model_dump_json())
+    assert restored == message
+    assert restored.status == "waiting"
+    approval = restored.parts[1]
+    assert isinstance(approval, ApprovalPart)
+    assert approval.preview.kind == "diff"
+
+
+def test_session_view_carries_the_current_task() -> None:
+    task = TaskView(
+        id="tsk_01",
+        title="Fix the loader",
+        branch="agent/tsk_01",
+        status="in_review",
+        review_kind="github",
+        pr_number=7,
+        pr_url="https://github.com/octo/demo/pull/7",
+    )
+    session = SessionView(
+        id="ses_01", agent="orchestrator", busy=False, messages=[], last_seq=0, current_task=task
+    )
+    assert SessionView.model_validate_json(session.model_dump_json()).current_task == task
+
+
+def test_turn_waiting_is_a_stream_event() -> None:
+    wire = {"seq": 3, "type": "turn.waiting", "data": {"turn_id": "trn_01"}}
+    event = STREAM_EVENT.validate_json(json.dumps(wire))
+    assert isinstance(event, TurnWaiting)
+    assert json.loads(STREAM_EVENT.dump_json(event)) == wire

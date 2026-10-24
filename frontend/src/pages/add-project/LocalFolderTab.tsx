@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError, api, errorText, unwrap } from "@/lib/api";
+import { projectsKey } from "@/lib/useProjects";
 
 interface LocalErrorState {
   code: string;
@@ -41,7 +42,7 @@ export function LocalFolderTab() {
       return unwrap(res);
     },
     onSuccess: (project) => {
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: projectsKey });
       void navigate(`/projects/${project.id}`);
     },
     onError: (err, variables) => {

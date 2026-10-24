@@ -31,6 +31,7 @@ class AgentDefinition(BaseModel):
     schedules: bool = False
     can_message: tuple[str, ...] = ()
     context_hooks: tuple[str, ...] = ()
+    status_board: bool = False
     limits: Limits = Limits()
     prompt: str = Field(min_length=1)
 

@@ -5,7 +5,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, ClassVar, Literal, Protocol, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -43,10 +43,39 @@ class FileAccess(Protocol):
 
     async def resolve_dir(self, user_path: str | None) -> str: ...
 
+    def invalidate(self) -> None:
+        """Drop the cached listing after a change."""
+        ...
+
+
+TaskStatus = Literal["active", "in_review", "merged", "closed", "discarded"]
+
+
+@dataclass(frozen=True)
+class TaskRef:
+    id: str
+    title: str
+    branch: str
+    worktree: Path
+    status: TaskStatus
+
 
 @dataclass(frozen=True)
 class ToolContext:
-    files: FileAccess
+    """Built for every tool call."""
+
+    project_id: str
+    agent: str
+    session_id: str
+    turn_id: str
+    files: FileAccess  # the current task's worktree view, else the repository's
+    task: TaskRef | None
+
+
+class Preview(BaseModel):
+    kind: Literal["diff", "command", "text"]
+    title: str
+    body: str
 
 
 def _summary(exc: ValidationError) -> str:
@@ -116,11 +145,22 @@ class AgentTool[A: BaseModel](ABC):
             },
         }
 
-    async def invoke(self, ctx: ToolContext, raw_args: Mapping[str, Any]) -> ToolOutput:
+    def parse(self, raw_args: Mapping[str, Any]) -> A | ToolOutput:
+        """The validated arguments, or the tool error to give the model when they are invalid."""
         try:
-            args = cast(A, self.args_model.model_validate(dict(raw_args)))
+            return cast(A, self.args_model.model_validate(dict(raw_args)))
         except ValidationError as exc:
             return ToolOutput(f"Invalid arguments for {self.name}: {_summary(exc)}", is_error=True)
+
+    async def preview(self, ctx: ToolContext, args: A) -> Preview:
+        return Preview(
+            kind="text", title=self.name, body=args.model_dump_json(indent=2, by_alias=True)
+        )
+
+    async def invoke(self, ctx: ToolContext, raw_args: Mapping[str, Any]) -> ToolOutput:
+        args = self.parse(raw_args)
+        if isinstance(args, ToolOutput):
+            return args
         try:
             return await self.run(ctx, args)
         except ToolFailure as exc:

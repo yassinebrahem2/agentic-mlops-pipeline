@@ -29,6 +29,20 @@ def test_parse_valid_definition() -> None:
     assert d.prompt == "You help."
 
 
+def test_status_board_defaults_to_off_and_can_be_switched_on() -> None:
+    assert parse_definition(VALID, "helper.md").status_board is False
+    on = parse_definition(
+        VALID.replace("tools: [Read]", "tools: [Read]\nstatus_board: true"), "h.md"
+    )
+    assert on.status_board is True
+
+
+def test_an_unknown_key_still_fails() -> None:
+    text = VALID.replace("tools: [Read]", "tools: [Read]\nstatus_bored: true")
+    with pytest.raises(DefinitionError, match="status_bored"):
+        parse_definition(text, "helper.md")
+
+
 def test_windows_line_endings() -> None:
     assert parse_definition(VALID.replace("\n", "\r\n"), "x.md").name == "helper"
 

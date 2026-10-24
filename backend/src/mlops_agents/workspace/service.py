@@ -23,15 +23,15 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.models import FolderEntry, FolderListing, Project, ProjectStatus
-from mlops_agents.workspace.refs import parse_github_ref, path_key
+from mlops_agents.workspace.refs import https_url, parse_github_ref, path_key, repo_ref
 
 EMPTY_REPO_DETAIL = "The repository has no committed files yet. Commit your files first."
 MISSING_DETAIL = "The folder no longer exists. Point the project to its new location."
 NOT_A_REPO_DETAIL = "The folder is no longer a git repository."
 
 
-def github_https_url(full_name: str) -> str:
-    return f"https://github.com/{full_name}.git"
+def _default_remote_url(full_name: str) -> str:
+    return https_url(repo_ref(full_name))
 
 
 def _rmtree(path: Path) -> None:
@@ -67,7 +67,7 @@ class WorkspaceService:
         github: GitHubAuth,
         http: httpx2.AsyncClient,
         *,
-        remote_url: Callable[[str], str] = github_https_url,
+        remote_url: Callable[[str], str] = _default_remote_url,
     ) -> None:
         self._settings = settings
         self._paths = paths

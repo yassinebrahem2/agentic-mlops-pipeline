@@ -117,6 +117,9 @@ messages = Table(
     Column("parts", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("created_at", Text, nullable=False),
+    Column("exchange_id", Text),
+    Column("hop", Integer),
+    Column("read_by_turn", Text),
 )
 
 llm_calls = Table(
@@ -137,4 +140,102 @@ project_settings = Table(
     project_metadata,
     Column("key", Text, primary_key=True),
     Column("value", Text, nullable=False),
+)
+
+tasks = Table(
+    "tasks",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("session_id", Text, nullable=False),
+    Column("agent", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("worktree", Text, nullable=False),
+    Column("base_ref", Text, nullable=False),
+    Column("base_sha", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("review_kind", Text),
+    Column("pr_number", Integer),
+    Column("pr_url", Text),
+    Column("created_at", Text, nullable=False),
+    Column("ended_at", Text),
+)
+
+task_reads = Table(
+    "task_reads",
+    project_metadata,
+    Column("task_id", Text, primary_key=True),
+    Column("path", Text, primary_key=True),
+    Column("sha256", Text, nullable=False),
+)
+
+file_claims = Table(
+    "file_claims",
+    project_metadata,
+    Column("task_id", Text, primary_key=True),
+    Column("path", Text, primary_key=True),
+)
+
+approvals = Table(
+    "approvals",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("turn_id", Text, nullable=False),
+    Column("session_id", Text, nullable=False),
+    Column("message_id", Text, nullable=False),
+    Column("agent", Text, nullable=False),
+    Column("tool_call_id", Text, nullable=False),
+    Column("tool", Text, nullable=False),
+    Column("risk_class", Text, nullable=False),
+    Column("preview", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("note", Text),
+    Column("created_at", Text, nullable=False),
+    Column("decided_at", Text),
+)
+
+events = Table(
+    "events",
+    project_metadata,
+    Column("seq", Integer, primary_key=True, autoincrement=True),
+    Column("id", Text, nullable=False),
+    Column("ts", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("subject_id", Text),
+    Column("payload", Text, nullable=False),
+)
+
+audit = Table(
+    "audit",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("ts", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("risk_class", Text, nullable=False),
+    Column("permission_level", Text, nullable=False),
+    Column("decision", Text, nullable=False),
+    Column("target", Text, nullable=False),
+    Column("detail", Text, nullable=False),
+)
+
+exchanges = Table(
+    "exchanges",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("created_at", Text, nullable=False),
+)
+
+wakeups = Table(
+    "wakeups",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("session_id", Text, nullable=False),
+    Column("agent", Text, nullable=False),
+    Column("note", Text, nullable=False),
+    Column("due_at", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Column("fired_at", Text),
 )

@@ -50,7 +50,7 @@ class AgentBuilder:
         self._workspace = workspace
         self._git = git
 
-    async def build(self, project_id: str, agent: str) -> Agent:
+    async def build(self, project_id: str, agent: str, *, session_id: str, turn_id: str) -> Agent:
         project = await self._workspace.get(project_id)
         if project.status in ("missing", "clone_failed"):
             detail = project.status_detail or f"Project is {project.status}."
@@ -71,7 +71,14 @@ class AgentBuilder:
         definition = self._catalog.get(agent)
         repo_root = self._workspace.repo_root(project)
         files = RepoFiles(repo_root, self._git)
-        tool_context = ToolContext(files=files)
+        tool_context = ToolContext(
+            project_id=project_id,
+            agent=agent,
+            session_id=session_id,
+            turn_id=turn_id,
+            files=files,
+            task=None,
+        )
         layout = await top_level_layout(files)
 
         agent_tools: list[AgentTool[Any]] = []

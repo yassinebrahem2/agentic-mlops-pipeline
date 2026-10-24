@@ -67,6 +67,7 @@ async def test_get_session_returns_fake_view(
                 )
             ],
             last_seq=5,
+            current_task=None,
         )
     )
     app.state.services.sessions = fake
