@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { vi, type MockInstance } from "vitest";
 import { queryClient } from "@/lib/query";
-import * as streamModule from "./stream";
+import * as streamModule from "@/lib/stream";
 import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "./stream";
 
 export { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./stream";
@@ -25,9 +25,13 @@ export class FakeStream implements StreamLike {
     this.url = url;
   }
 
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      this.listeners.set(type, listener);
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, listener);
+  }
+
+  removeEventListener(type: string, listener: (event: Event) => void): void {
+    if (this.listeners.get(type) === listener) {
+      this.listeners.delete(type);
     }
   }
 
@@ -39,12 +43,13 @@ export class FakeStream implements StreamLike {
     this.listeners.get("open")?.(new Event("open"));
   }
 
-  emit(type: string, data: unknown, seq: number): void {
-    this.listeners.get(type)?.({
+  emit(type: string, data: unknown, seq?: number): void {
+    const event = {
       type,
-      data: JSON.stringify(data),
-      lastEventId: String(seq),
-    } as MessageEvent);
+      data: typeof data === "string" ? data : JSON.stringify(data),
+      lastEventId: seq !== undefined ? String(seq) : undefined,
+    } as unknown as MessageEvent;
+    this.listeners.get(type)?.(event);
   }
 }
 
