@@ -16,6 +16,9 @@ from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
+from mlops_agents.errors import DomainError
+from mlops_agents.events.audit import SqliteAuditLog
+from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -40,6 +43,34 @@ class Services:
     agent_settings: AgentSettingsService
     sessions: AgentSessions
     sandbox: Sandbox
+    events: SqliteEventLog
+    audit: SqliteAuditLog
+
+
+async def _app_secrets(
+    providers: ProvidersService,
+    github: GitHubAuth,
+    settings: Settings,
+) -> list[str]:
+    secrets: list[str] = []
+    if settings.password:
+        secrets.append(settings.password)
+    if settings.access_token:
+        secrets.append(settings.access_token)
+    if settings.master_key:
+        secrets.append(settings.master_key)
+
+    secrets.extend(await providers.secret_values())
+
+    try:
+        gh_token = await github.token()
+        if gh_token:
+            secrets.append(gh_token)
+    except DomainError as err:
+        if err.code not in ("gh_not_logged_in", "gh_not_installed"):
+            raise
+
+    return secrets
 
 
 async def build_services(
@@ -83,6 +114,12 @@ async def build_services(
     sandbox = SandboxService()
     stack.push_async_callback(sandbox.close)
 
+    async def secret_source() -> list[str]:
+        return await _app_secrets(providers, github, settings)
+
+    events = SqliteEventLog(databases)
+    audit = SqliteAuditLog(databases, secrets=secret_source)
+
     return Services(
         settings=settings,
         paths=paths,
@@ -96,4 +133,6 @@ async def build_services(
         agent_settings=agent_settings,
         sessions=sessions,
         sandbox=sandbox,
+        events=events,
+        audit=audit,
     )

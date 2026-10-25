@@ -2,7 +2,7 @@ import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
-from mlops_agents.integrations.github.auth import GITHUB_KEYSTORE_REF, GitHubAuth
+from mlops_agents.integrations.github.auth import GITHUB_KEYSTORE_REF, GhCli, GitHubAuth
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
 
@@ -110,3 +110,29 @@ async def test_list_repos_when_connected(databases: Databases, keystore: MemoryK
     assert repos[0].private is False
     assert repos[0].default_branch == "main"
     assert repos[0].description == "Demo repo"
+
+
+async def test_gh_mode_with_gh_cli_caches_token_briefly(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    calls = 0
+
+    class CountingGhCli(GhCli):
+        async def token(self) -> str:
+            nonlocal calls
+            calls += 1
+            return "gho_a"
+
+    cli = CountingGhCli()
+    auth = GitHubAuth(databases, keystore, _http(), cli)
+    # Enable gh mode
+    await auth.enable_gh()
+    assert calls == 1
+
+    # First auth.token() populates cache
+    assert await auth.token() == "gho_a"
+    assert calls == 2
+
+    # Second call returns cached token without calling cli.token()
+    assert await auth.token() == "gho_a"
+    assert calls == 2
