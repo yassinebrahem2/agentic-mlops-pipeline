@@ -74,19 +74,29 @@ class GitRunner:
         check: bool = True,
         timeout: float = 600,  # noqa: ASYNC109 -- passed to subprocess.run in asyncio.to_thread
         authenticated: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> GitResult:
         token = await self._token_provider() if authenticated else None
         env = dict(os.environ)
+
+        # Clear inherited author/committer overrides
+        for key in list(env.keys()):
+            if key.startswith("GIT_AUTHOR_") or key.startswith("GIT_COMMITTER_"):
+                env.pop(key, None)
+
         env.update(
             {
                 "GIT_TERMINAL_PROMPT": "0",
                 "GCM_INTERACTIVE": "never",
                 "GIT_ASKPASS": str(self.askpass_path()),
+                "GIT_SSH_COMMAND": "ssh -o BatchMode=yes",
             }
         )
         env.pop(ASKPASS_ENV_VAR, None)
         if token:
             env[ASKPASS_ENV_VAR] = token
+        if extra_env:
+            env.update(extra_env)
         command = ["git", "-c", "credential.helper=", "-c", "core.quotepath=off", *args]
         try:
             completed = await asyncio.to_thread(

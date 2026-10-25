@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from mlops_agents.agents.tasks.git import task_git
+from mlops_agents.agents.tools.file_ops import MAX_DIFF_CHARS, cap_diff
 from mlops_agents.agents.tools.files import is_secret
 from mlops_agents.storage.tables import file_claims, tasks
 
@@ -15,7 +16,51 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tools.base import TaskRef
     from mlops_agents.integrations.github.git import GitRunner
 
-MAX_DIFF_CHARS = 60_000
+__all__ = [
+    "MAX_DIFF_CHARS",
+    "get_candidate_paths",
+    "staged_diff_task",
+]
+
+
+async def get_candidate_paths(
+    runner: GitRunner,
+    *,
+    git_dir: Path,
+    worktree: Path,
+    empty_hooks: Path,
+) -> list[str]:
+    """Returns all changed, deleted, and untracked file paths relative to worktree.
+
+    Excludes ignored files. Does not run git add, so untracked secrets never enter
+    the git object database.
+    """
+    res = await task_git(
+        runner,
+        git_dir=git_dir,
+        worktree=worktree,
+        empty_hooks=empty_hooks,
+        args=["status", "--porcelain=v1", "-uall", "-z"],
+    )
+    tokens = res.stdout.split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if not token:
+            i += 1
+            continue
+        # Format is 'XY path'
+        status = token[:2]
+        path = token[3:]
+        paths.append(path)
+        # If it's a rename, the next token is the original path
+        if "R" in status:
+            i += 1
+            if i < len(tokens) and tokens[i]:
+                paths.append(tokens[i])
+        i += 1
+    return paths
 
 
 async def staged_diff_task(
@@ -27,85 +72,82 @@ async def staged_diff_task(
     engine: AsyncEngine,
     task: TaskRef,
 ) -> str:
-    """Returns the staged diff of what commit would record, capped at 60,000 chars.
+    """Returns the staged diff of what commit would record, capped at 30,000 chars.
 
-    Never shows secret contents or files claimed by other tasks.
+    Never stages or reveals secret contents or files claimed by other tasks.
+    States plainly which paths commit would refuse.
     Unstages everything before returning.
     """
-    # 1. Stage everything
-    await task_git(
+    candidate_paths = await get_candidate_paths(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["add", "-A"],
     )
 
-    try:
-        # 2. Inspect staged files
-        staged_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["diff", "--cached", "--name-only", "-z"],
-        )
-        staged_paths = [p for p in staged_res.stdout.split("\0") if p]
-
-        # 3. Exclude denylisted secrets and claim conflicts
-        denylisted = [p for p in staged_paths if is_secret(p)]
-        conflicts: list[str] = []
-        if staged_paths:
-            async with engine.connect() as conn:
-                stmt = (
-                    select(file_claims.c.path)
-                    .join(tasks, tasks.c.id == file_claims.c.task_id)
-                    .where(
-                        tasks.c.status.in_(("active", "in_review")),
-                        tasks.c.id != task.id,
-                        file_claims.c.path.in_(staged_paths),
-                    )
-                )
-                conflicts = [str(r) for r in (await conn.execute(stmt)).scalars().all()]
-
-        to_unstage = list(dict.fromkeys(denylisted + conflicts))
-        if to_unstage:
-            await task_git(
-                runner,
-                git_dir=git_dir,
-                worktree=worktree,
-                empty_hooks=empty_hooks,
-                args=["reset", "-q", "--", *to_unstage],
-            )
-
-        # 4. Read base_sha
+    denylisted = [p for p in candidate_paths if is_secret(p)]
+    conflicts: list[str] = []
+    if candidate_paths:
         async with engine.connect() as conn:
-            row = (
-                await conn.execute(select(tasks.c.base_sha).where(tasks.c.id == task.id))
-            ).scalar_one_or_none()
-        base_sha = row or "HEAD"
+            stmt = (
+                select(file_claims.c.path)
+                .join(tasks, tasks.c.id == file_claims.c.task_id)
+                .where(
+                    tasks.c.status.in_(("active", "in_review")),
+                    tasks.c.id != task.id,
+                    file_claims.c.path.in_(candidate_paths),
+                )
+            )
+            conflicts = [str(r) for r in (await conn.execute(stmt)).scalars().all()]
 
-        # 5. Diff against base
-        diff_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["diff", "--cached", base_sha],
-        )
-        diff = diff_res.stdout
-    finally:
-        # 6. Unstage all
+    valid_paths = [p for p in candidate_paths if p not in denylisted and p not in conflicts]
+
+    diff = ""
+    if valid_paths:
         await task_git(
             runner,
             git_dir=git_dir,
             worktree=worktree,
             empty_hooks=empty_hooks,
-            args=["reset"],
-            check=False,
+            args=["add", "--", *valid_paths],
+        )
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(select(tasks.c.base_sha).where(tasks.c.id == task.id))
+                ).scalar_one_or_none()
+            base_sha = row or "HEAD"
+
+            diff_res = await task_git(
+                runner,
+                git_dir=git_dir,
+                worktree=worktree,
+                empty_hooks=empty_hooks,
+                args=["diff", "--cached", base_sha],
+            )
+            diff = diff_res.stdout
+        finally:
+            await task_git(
+                runner,
+                git_dir=git_dir,
+                worktree=worktree,
+                empty_hooks=empty_hooks,
+                args=["reset"],
+                check=False,
+            )
+
+    notices: list[str] = []
+    if denylisted:
+        notices.append(f"Commit will refuse: secret files present ({', '.join(denylisted)}).")
+    if conflicts:
+        notices.append(
+            f"Commit will refuse: files claimed by another task ({', '.join(conflicts)})."
         )
 
-    # 7. Cap output
-    if len(diff) > MAX_DIFF_CHARS:
-        diff = diff[:MAX_DIFF_CHARS] + "\n[diff cut]"
-    return diff
+    if notices:
+        header = "\n".join(notices) + "\n\n"
+        full_diff = header + diff
+    else:
+        full_diff = diff
+
+    return cap_diff(full_diff)

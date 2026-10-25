@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import delete, insert, select, update
+from sqlalchemy.engine import RowMapping
 
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.claims import claim_paths
@@ -18,6 +19,7 @@ from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tasks.git import git_dir_for_task
 from mlops_agents.agents.tasks.worktrees import TaskFiles, create_worktree
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
+from mlops_agents.agents.tools.file_ops import pause_task
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.clock import now_iso
 from mlops_agents.errors import DomainError
@@ -29,6 +31,9 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import task_reads, tasks
 from mlops_agents.workspace.service import WorkspaceService
 
+if TYPE_CHECKING:
+    from mlops_agents.sandbox.contract import Sandbox
+
 
 class TasksService(Tasks):
     def __init__(
@@ -39,13 +44,19 @@ class TasksService(Tasks):
         git: GitRunner,
         events: EventLog,
         workspace: WorkspaceService,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self._databases = databases
         self._paths = paths
         self._git = git
         self._events = events
         self._workspace = workspace
+        self._sandbox = sandbox
         self._current_tasks: dict[tuple[str, str], str] = {}
+
+    @property
+    def sandbox(self) -> Sandbox | None:
+        return self._sandbox
 
     async def start(
         self,
@@ -100,12 +111,8 @@ class TasksService(Tasks):
             type="task.started",
             payload={
                 "task_id": task_id,
-                "session_id": session_id,
-                "agent": agent,
                 "title": title,
                 "branch": branch,
-                "base_ref": base_ref,
-                "base_sha": base_sha,
             },
             subject_id=task_id,
         )
@@ -218,6 +225,20 @@ class TasksService(Tasks):
             status=row["status"],
         )
 
+    def _build_task_view(self, row: RowMapping) -> TaskView:
+        kwargs: dict[str, Any] = {
+            "id": row["id"],
+            "title": row["title"],
+            "branch": row["branch"],
+            "status": row["status"],
+            "review_kind": row["review_kind"],
+            "pr_number": row["pr_number"],
+            "pr_url": row["pr_url"],
+        }
+        if "agent" in TaskView.model_fields:
+            kwargs["agent"] = row["agent"]
+        return TaskView(**kwargs)
+
     async def view(self, project_id: str, task_id: str) -> TaskView:
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
@@ -228,15 +249,7 @@ class TasksService(Tasks):
         if row is None:
             raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
 
-        return TaskView(
-            id=row["id"],
-            title=row["title"],
-            branch=row["branch"],
-            status=row["status"],
-            review_kind=row["review_kind"],
-            pr_number=row["pr_number"],
-            pr_url=row["pr_url"],
-        )
+        return self._build_task_view(row)
 
     async def open_tasks(self, project_id: str) -> list[TaskView]:
         engine = await self._databases.project(project_id)
@@ -253,18 +266,7 @@ class TasksService(Tasks):
                 .all()
             )
 
-        return [
-            TaskView(
-                id=row["id"],
-                title=row["title"],
-                branch=row["branch"],
-                status=row["status"],
-                review_kind=row["review_kind"],
-                pr_number=row["pr_number"],
-                pr_url=row["pr_url"],
-            )
-            for row in rows
-        ]
+        return [self._build_task_view(row) for row in rows]
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
         project = await self._workspace.get(project_id)
@@ -333,30 +335,32 @@ class TasksService(Tasks):
         repo_root = self._workspace.repo_root(project)
         git_dir = git_dir_for_task(repo_root, task.id)
         engine = await self._databases.project(project_id)
-        return await staged_diff_task(
-            runner=self._git,
-            git_dir=git_dir,
-            worktree=task.worktree,
-            empty_hooks=self._paths.empty_hooks,
-            engine=engine,
-            task=task,
-        )
+        async with pause_task(self._sandbox, project_id, task.id):
+            return await staged_diff_task(
+                runner=self._git,
+                git_dir=git_dir,
+                worktree=task.worktree,
+                empty_hooks=self._paths.empty_hooks,
+                engine=engine,
+                task=task,
+            )
 
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult:
         project = await self._workspace.get(project_id)
         repo_root = self._workspace.repo_root(project)
         git_dir = git_dir_for_task(repo_root, task.id)
         engine = await self._databases.project(project_id)
-        return await commit_task(
-            runner=self._git,
-            git_dir=git_dir,
-            worktree=task.worktree,
-            empty_hooks=self._paths.empty_hooks,
-            databases=self._databases,
-            engine=engine,
-            task=task,
-            message=message,
-        )
+        async with pause_task(self._sandbox, project_id, task.id):
+            return await commit_task(
+                runner=self._git,
+                git_dir=git_dir,
+                worktree=task.worktree,
+                empty_hooks=self._paths.empty_hooks,
+                databases=self._databases,
+                engine=engine,
+                task=task,
+                message=message,
+            )
 
     async def push(self, project_id: str, task: TaskRef) -> None:
         project = await self._workspace.get(project_id)

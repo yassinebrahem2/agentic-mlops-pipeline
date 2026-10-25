@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import insert, select, update
 
 from mlops_agents.agents.runtime.contract import Resync
+from mlops_agents.agents.tasks import commit as commit_module
 from mlops_agents.agents.tasks.contract import CommitRefused, CommitResult
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.clock import now_iso
@@ -228,6 +229,62 @@ async def test_commit_secret_file_refused_and_unstaged(
     diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
     assert diff.stdout.strip() == ""
 
+    # Verify .env was never staged or written into git object store
+    hash_res = _cmd(["git", "hash-object", ".env"], cwd=task.worktree)
+    blob_sha = hash_res.stdout.strip()
+    cat_res = _cmd(["git", "cat-file", "-e", blob_sha], cwd=task.worktree, check=False)
+    assert cat_res.returncode != 0
+
+
+async def test_commit_failure_releases_claims_and_unstages(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    _cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
+    _cmd(["git", "config", "user.email", "jane@example.com"], cwd=repo)
+
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Failed commit test")
+
+    (task.worktree / "valid.py").write_text("x = 1\n", encoding="utf-8")
+
+    # Mock task_git to simulate a failure specifically during git commit
+    orig_task_git = commit_module.task_git
+
+    async def mock_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "commit" in git_args_raw:
+            raise RuntimeError("Simulated failure during git commit")
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", mock_task_git)
+
+    with pytest.raises(RuntimeError, match="Simulated failure during git commit"):
+        await service.commit(project_id, task, "feat: will fail")
+
+    # Verify nothing is staged
+    diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff.stdout.strip() == ""
+
+    # Verify claims were released
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        claims = (
+            await conn.execute(
+                select(file_claims).where(
+                    file_claims.c.task_id == task.id, file_claims.c.path == "valid.py"
+                )
+            )
+        ).all()
+        assert len(claims) == 0
+
 
 async def test_commit_claim_conflict_refused_and_unstaged(
     tmp_path: Path,
@@ -270,29 +327,29 @@ async def test_commit_author_identity_human_and_ai_fallback(
     keystore: MemoryKeyStore,
     git_env: dict[str, str],
 ) -> None:
-    # 1. Fallback to GitHub login when git config has AI identity
+    # 1. Fallback to GitHub login when git config is unset
     service, _, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env, github_login="octocat"
     )
-    # Set AI identity in repo config
-    _cmd(["git", "config", "user.name", "Claude Assistant"], cwd=repo)
-    _cmd(["git", "config", "user.email", "claude@anthropic.com"], cwd=repo)
+    # Unset user.name and user.email in repo config
+    _cmd(["git", "config", "--unset", "user.name"], cwd=repo, check=False)
+    _cmd(["git", "config", "--unset", "user.email"], cwd=repo, check=False)
 
     await _create_session(databases, project_id, "ses_1", agent="coder")
-    task = await service.start(project_id, "ses_1", "coder", "AI identity test")
+    task = await service.start(project_id, "ses_1", "coder", "Author fallback test")
 
     (task.worktree / "mod.py").write_text("a = 1\n", encoding="utf-8")
-    await service.commit(project_id, task, "commit with ai config")
+    await service.commit(project_id, task, "commit with login fallback")
 
     log = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
     assert log.stdout.strip() == "octocat <octocat@users.noreply.github.com>"
 
-    # 2. Human git config is preserved
+    # 2. Configured user.name and user.email are used
     _cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
     _cmd(["git", "config", "user.email", "jane@example.com"], cwd=repo)
 
     (task.worktree / "mod2.py").write_text("b = 2\n", encoding="utf-8")
-    await service.commit(project_id, task, "commit with human config")
+    await service.commit(project_id, task, "commit with user config")
 
     log2 = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
     assert log2.stdout.strip() == "Jane Doe <jane@example.com>"
@@ -349,19 +406,32 @@ async def test_staged_diff_and_cap(
     diff_cached = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
     assert diff_cached.stdout.strip() == ""
 
-    # Secret files (.env) are excluded from staged_diff and never exposed
+    # Secret files (.env) are excluded from staged_diff, state refusal plainly, and never enter object store
     (task.worktree / ".env").write_text("SUPER_SECRET_TOKEN=xyz\n", encoding="utf-8")
     (task.worktree / "public.py").write_text("public_var = 42\n", encoding="utf-8")
     diff_with_secret = await service.staged_diff(project_id, task)
     assert "+public_var = 42" in diff_with_secret
     assert "SUPER_SECRET_TOKEN" not in diff_with_secret
-    assert ".env" not in diff_with_secret
+    assert "Commit will refuse: secret files present (.env)." in diff_with_secret
 
-    # Large diff capped at 60,000 characters
+    hash_res = _cmd(["git", "hash-object", ".env"], cwd=task.worktree)
+    blob_sha = hash_res.stdout.strip()
+    cat_res = _cmd(["git", "cat-file", "-e", blob_sha], cwd=task.worktree, check=False)
+    assert cat_res.returncode != 0
+
+    # Claim conflict is stated plainly in staged_diff
+    await _create_session(databases, project_id, "ses_other", agent="other_agent")
+    task2 = await service.start(project_id, "ses_other", "other_agent", "Other task")
+    await service.claim(project_id, task2, ["claimed.py"])
+    (task.worktree / "claimed.py").write_text("import sys\n", encoding="utf-8")
+    diff_with_conflict = await service.staged_diff(project_id, task)
+    assert "Commit will refuse: files claimed by another task (claimed.py)." in diff_with_conflict
+
+    # Large diff capped at 30,000 characters
     (task.worktree / "large.txt").write_text("x" * 70000 + "\n", encoding="utf-8")
     large_diff = await service.staged_diff(project_id, task)
-    assert len(large_diff) <= 60000 + len("\n[diff cut]")
-    assert large_diff.endswith("\n[diff cut]")
+    assert len(large_diff) <= 30000 + 100
+    assert "[... diff cut:" in large_diff
 
 
 async def test_push_to_fake_remote(

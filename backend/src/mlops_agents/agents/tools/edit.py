@@ -21,12 +21,14 @@ from mlops_agents.agents.tools.file_ops import (
     cap_diff,
     compute_sha256,
     get_current_task,
+    pause_task,
     resolve_and_validate,
     safe_write_bytes,
 )
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.sandbox.contract import Sandbox
 
 
 class EditArgs(BaseModel):
@@ -50,8 +52,9 @@ class EditTool(AgentTool[EditArgs]):
     risk: ClassVar[RiskClass] = RiskClass.WRITE_CODE
     args_model: ClassVar[type[BaseModel]] = EditArgs
 
-    def __init__(self, tasks: Tasks) -> None:
+    def __init__(self, tasks: Tasks, sandbox: Sandbox | None = None) -> None:
         self._tasks = tasks
+        self._sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
 
     async def _validate_and_prepare(
         self, ctx: ToolContext, args: EditArgs
@@ -140,11 +143,12 @@ class EditTool(AgentTool[EditArgs]):
             diff_text,
         ) = await self._validate_and_prepare(ctx, args)
 
-        try:
-            await self._tasks.claim(ctx.project_id, current, [rel])
-        except ClaimConflict as exc:
-            raise ToolFailure(str(exc)) from None
+        async with pause_task(self._sandbox, ctx.project_id, current.id):
+            try:
+                await self._tasks.claim(ctx.project_id, current, [rel])
+            except ClaimConflict as exc:
+                raise ToolFailure(str(exc)) from None
 
-        safe_write_bytes(candidate, resolved_worktree, new_bytes)
-        ctx.files.invalidate()
-        return ToolOutput(content=cap_diff(diff_text))
+            safe_write_bytes(candidate, resolved_worktree, new_bytes)
+            ctx.files.invalidate()
+            return ToolOutput(content=cap_diff(diff_text))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -46,5 +47,7 @@ class Sandbox(Protocol):
         ...
 
     async def remove_task(self, project_id: str, task_id: str) -> None: ...
+
+    def paused(self, project_id: str, task_id: str) -> AbstractAsyncContextManager[None]: ...
 
     async def close(self) -> None: ...

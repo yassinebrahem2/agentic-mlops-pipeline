@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -8,6 +11,7 @@ from mlops_agents.agents.tools.base import RiskClass, ToolFailure
 from mlops_agents.agents.tools.edit import EditArgs, EditTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.contract import Sandbox
 from mlops_agents.storage.databases import Databases
 from tests.agents.ctx import tool_context
 from tests.agents.tools.test_tasks import create_session, setup_service
@@ -473,6 +477,16 @@ async def test_edit_non_utf8_file_is_tool_error(
     assert "not a valid UTF-8 text file" in res.content
 
 
+class FakeSandbox:
+    def __init__(self) -> None:
+        self.paused_calls: list[tuple[str, str]] = []
+
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None, None]:
+        self.paused_calls.append((project_id, task_id))
+        yield
+
+
 async def test_edit_planted_symlink_after_validation_refused(
     tmp_path: Path,
     paths: DataPaths,
@@ -499,7 +513,8 @@ async def test_edit_planted_symlink_after_validation_refused(
     read_tool = ReadTool(service)
     await read_tool.invoke(ctx, {"file_path": "target.txt"})
 
-    tool = EditTool(service)
+    fake_sandbox = FakeSandbox()
+    tool = EditTool(service, sandbox=cast(Sandbox, fake_sandbox))
     args = EditArgs(file_path="target.txt", old_string="hello", new_string="goodbye")
 
     preview = await tool.preview(ctx, args)
@@ -518,4 +533,5 @@ async def test_edit_planted_symlink_after_validation_refused(
     ):
         await tool.run(ctx, args)
 
+    assert fake_sandbox.paused_calls == [(project_id, task.id)]
     assert outside.read_text(encoding="utf-8") == "precious host data\n"

@@ -13,6 +13,7 @@ from mlops_agents.agents.tools.write import WriteTool
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.sandbox.contract import Sandbox
 
 __all__ = [
     "EditTool",
@@ -27,17 +28,22 @@ __all__ = [
 ]
 
 
-def default_registry(*, tasks: Tasks | None = None) -> ToolRegistry:
+def default_registry(
+    *,
+    tasks: Tasks | None = None,
+    sandbox: Sandbox | None = None,
+) -> ToolRegistry:
     """The tools agents can be given. No tool needs a service yet; a later plan whose tool
     needs one adds it as a keyword-only parameter here and passes it in `api/services.py`."""
     tools: list[AgentTool[Any]] = [ReadTool(tasks=tasks), GlobTool(), GrepTool(shutil.which("rg"))]
     if tasks is not None:
+        effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(
             [
                 StartTaskTool(tasks),
                 ResumeTaskTool(tasks),
-                WriteTool(tasks),
-                EditTool(tasks),
+                WriteTool(tasks, sandbox=effective_sandbox),
+                EditTool(tasks, sandbox=effective_sandbox),
             ]
         )
     return ToolRegistry(tools)

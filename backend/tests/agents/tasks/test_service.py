@@ -157,8 +157,12 @@ async def test_start_task_creates_worktree_db_row_and_event(
     assert event["project_id"] == project_id
     assert event["type"] == "task.started"
     assert event["source"] == "coder"
-    assert event["payload"]["task_id"] == task_ref.id
-    assert event["payload"]["title"] == "Implement user login"
+    assert event["subject_id"] == task_ref.id
+    assert event["payload"] == {
+        "task_id": task_ref.id,
+        "title": "Implement user login",
+        "branch": task_ref.branch,
+    }
 
 
 async def test_current_and_resume_task(

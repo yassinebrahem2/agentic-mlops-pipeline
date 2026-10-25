@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import uuid
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,17 +13,32 @@ from mlops_agents.agents.tools.files import is_secret
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.sandbox.contract import Sandbox
 
 __all__ = [
+    "MAX_DIFF_CHARS",
     "cap_diff",
     "compute_sha256",
     "get_current_task",
+    "pause_task",
     "resolve_and_validate",
     "safe_write_bytes",
 ]
 
 CHUNK_SIZE = 65536
 MAX_DIFF_CHARS = 30_000
+
+
+@asynccontextmanager
+async def pause_task(
+    sandbox: Sandbox | None, project_id: str, task_id: str
+) -> AsyncGenerator[None, None]:
+    """Freezes the task sandbox container during writes and commits so no host write races it."""
+    if sandbox is not None:
+        async with sandbox.paused(project_id, task_id):
+            yield
+    else:
+        yield
 
 
 def compute_sha256(path: Path) -> str:
@@ -86,8 +104,9 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
     """Writes bytes to a candidate path safely:
     - refuses if candidate or any parent directory is a symlink;
     - ensures the resolved path is within resolved_worktree at open time;
-    - opens with O_NOFOLLOW;
-    - writes through the open file descriptor handle.
+    - writes to a new temporary file in the same directory (created exclusively);
+    - drops O_TRUNC so link targets are never truncated;
+    - replaces candidate atomically using os.replace, replacing any link without following it.
     """
     # 1. Refuse symlinks in parent components
     cur = candidate.parent
@@ -113,27 +132,38 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
             raise ToolFailure(f"Path contains symlinked directory {cur.name}.")
         cur = cur.parent
 
-    # 4. Open with no-follow
-    o_nofollow: int = int(getattr(os, "O_NOFOLLOW", 0))
+    # 4. Write to a new temp file in the same directory (created exclusively)
     o_binary: int = int(getattr(os, "O_BINARY", 0))
-    flags: int = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | o_nofollow | o_binary
+    flags: int = os.O_WRONLY | os.O_CREAT | os.O_EXCL | o_binary
 
+    temp_path: Path | None = None
     try:
-        fd = os.open(candidate, flags, 0o666)
-    except OSError as exc:
-        raise ToolFailure(f"Failed to open file safely: {exc.strerror or exc}") from None
+        temp_name = f".tmp_{candidate.name}_{uuid.uuid4().hex}"
+        temp_path = candidate.parent / temp_name
+        try:
+            fd = os.open(temp_path, flags, 0o666)
+        except OSError as exc:
+            raise ToolFailure(f"Failed to create temporary file: {exc.strerror or exc}") from None
 
-    try:
+        try:
+            written = 0
+            while written < len(data):
+                n = os.write(fd, data[written:])
+                if n == 0:
+                    break
+                written += n
+        finally:
+            os.close(fd)
+
+        # Refuse if candidate is a symlink before replacing
         if candidate.is_symlink():
             raise ToolFailure(f"Cannot write directly to symlink {candidate.name}.")
         if not candidate.resolve(strict=False).is_relative_to(resolved_worktree):
             raise ToolFailure("File escaped worktree.")
 
-        written = 0
-        while written < len(data):
-            n = os.write(fd, data[written:])
-            if n == 0:
-                break
-            written += n
+        # Atomic replace replaces symlink without following or truncating target
+        temp_path.replace(candidate)
     finally:
-        os.close(fd)
+        if temp_path is not None and temp_path.exists():
+            with suppress(OSError):
+                temp_path.unlink()

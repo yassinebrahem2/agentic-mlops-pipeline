@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -8,6 +11,7 @@ from mlops_agents.agents.tools.base import RiskClass, ToolFailure
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.write import WriteArgs, WriteTool
 from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.contract import Sandbox
 from mlops_agents.storage.databases import Databases
 from tests.agents.ctx import tool_context
 from tests.agents.tools.test_tasks import create_session, setup_service
@@ -378,6 +382,16 @@ async def test_registry_has_write_and_edit(
     assert "Edit" in registry.names()
 
 
+class FakeSandbox:
+    def __init__(self) -> None:
+        self.paused_calls: list[tuple[str, str]] = []
+
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None, None]:
+        self.paused_calls.append((project_id, task_id))
+        yield
+
+
 async def test_write_planted_symlink_after_validation_refused(
     tmp_path: Path,
     paths: DataPaths,
@@ -399,7 +413,8 @@ async def test_write_planted_symlink_after_validation_refused(
     outside = tmp_path / "host_file.txt"
     outside.write_text("critical host data\n", encoding="utf-8")
 
-    tool = WriteTool(service)
+    fake_sandbox = FakeSandbox()
+    tool = WriteTool(service, sandbox=cast(Sandbox, fake_sandbox))
     args = WriteArgs(file_path="sub/target.py", content="evil payload\n")
 
     # Step 1: Preview succeeds before symlink exists
@@ -421,7 +436,8 @@ async def test_write_planted_symlink_after_validation_refused(
     ):
         await tool.run(ctx, args)
 
-    # Step 4: Host file was not overwritten
+    # Step 4: Sandbox was paused, and host file was not overwritten
+    assert fake_sandbox.paused_calls == [(project_id, task.id)]
     assert outside.read_text(encoding="utf-8") == "critical host data\n"
 
 

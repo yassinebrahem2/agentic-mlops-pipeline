@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
-from mlops_agents.integrations.github.git import ASKPASS_ENV_VAR, GitError, GitResult, GitRunner
+if TYPE_CHECKING:
+    from mlops_agents.integrations.github.git import GitResult, GitRunner
 
 
 def git_dir_for_task(repo_root: Path, task_id: str) -> Path:
@@ -55,40 +53,13 @@ async def run_safe_git(
     - clears inherited GIT_AUTHOR_* and GIT_COMMITTER_* from environment;
     - scrubs output of secrets and tokens.
     """
-    token = await runner.token() if authenticated else None
-    env = dict(os.environ)
-
-    # Clear inherited author/committer overrides
-    for key in list(env.keys()):
-        if key.startswith("GIT_AUTHOR_") or key.startswith("GIT_COMMITTER_"):
-            env.pop(key, None)
-
-    env.update(
-        {
-            "GIT_TERMINAL_PROMPT": "0",
-            "GCM_INTERACTIVE": "never",
-            "GIT_ASKPASS": str(runner.askpass_path()),
-            "GIT_SSH_COMMAND": "ssh -o BatchMode=yes",
-        }
-    )
+    merged_env: dict[str, str] = dict(extra_env) if extra_env else {}
     if git_dir is not None:
-        env["GIT_DIR"] = str(git_dir)
+        merged_env["GIT_DIR"] = str(git_dir)
     if worktree is not None:
-        env["GIT_WORK_TREE"] = str(worktree)
+        merged_env["GIT_WORK_TREE"] = str(worktree)
 
-    env.pop(ASKPASS_ENV_VAR, None)
-    if token:
-        env[ASKPASS_ENV_VAR] = token
-
-    if extra_env:
-        env.update(extra_env)
-
-    command = [
-        "git",
-        "-c",
-        "credential.helper=",
-        "-c",
-        "core.quotepath=off",
+    safe_args = [
         "-c",
         f"core.hooksPath={empty_hooks}",
         "-c",
@@ -98,34 +69,14 @@ async def run_safe_git(
         *args,
     ]
 
-    try:
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            command,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError:
-        raise GitError(
-            "git is not installed or not on PATH. Install git and restart the app.", code=-1
-        ) from None
-    except subprocess.TimeoutExpired:
-        cmd_name = args[0] if args else "command"
-        raise GitError(
-            f"git {cmd_name} took longer than {int(timeout)} seconds and was stopped.", code=-1
-        ) from None
-
-    hidden = [token] if token else []
-    stdout = scrub_values(completed.stdout.decode("utf-8", "replace"), hidden)
-    stderr = scrub_values(scrub_url_secrets(completed.stderr.decode("utf-8", "replace")), hidden)
-    if check and completed.returncode != 0:
-        cmd_name = args[0] if args else "command"
-        reason = stderr.strip() or stdout.strip() or "no output"
-        raise GitError(f"git {cmd_name} failed: {reason}", code=completed.returncode)
-    return GitResult(completed.returncode, stdout, stderr)
+    return await runner.run(
+        safe_args,
+        cwd=cwd,
+        check=check,
+        timeout=timeout,
+        authenticated=authenticated,
+        extra_env=merged_env if merged_env else None,
+    )
 
 
 async def task_git(

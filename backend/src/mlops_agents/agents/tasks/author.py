@@ -13,21 +13,6 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.git import GitRunner
     from mlops_agents.storage.databases import Databases
 
-_AI_KEYWORDS = (
-    "claude",
-    "anthropic",
-    "copilot",
-    "chatgpt",
-    "openai",
-    "gemini",
-    "github-actions",
-)
-
-
-def is_ai_identity(name: str, email: str) -> bool:
-    combined = f"{name} {email}".lower()
-    return any(keyword in combined for keyword in _AI_KEYWORDS)
-
 
 async def get_github_login(databases: Databases) -> str | None:
     engine = await databases.app()
@@ -50,7 +35,7 @@ async def resolve_commit_author(
 ) -> tuple[str, str]:
     """Resolves commit author name and email.
 
-    Uses user.name and user.email from git config. If not configured or an AI identity,
+    Uses user.name and user.email from git config. If not configured,
     falls back to the authenticated GitHub integration login. Never invents a generic identity
     and refuses with CommitRefused if no identity can be determined.
     """
@@ -74,12 +59,12 @@ async def resolve_commit_author(
     )
     user_email = email_res.stdout.strip() if email_res.code == 0 else ""
 
-    if not user_name or not user_email or is_ai_identity(user_name, user_email):
+    if not user_name or not user_email:
         login = await get_github_login(databases)
         if not login:
             raise CommitRefused(
-                "Cannot determine commit author: git user.name and user.email are not configured "
-                "(or identify an AI), and no GitHub integration login is available."
+                "Cannot determine commit author: git user.name and user.email are not configured, "
+                "and no GitHub integration login is available."
             )
         return login, f"{login}@users.noreply.github.com"
 
