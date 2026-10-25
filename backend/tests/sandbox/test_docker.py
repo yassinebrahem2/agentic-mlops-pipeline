@@ -14,7 +14,7 @@ from mlops_agents.sandbox.docker import (
     detect_docker,
 )
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import MemorySandboxProjects
+from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
 
 
 class FakeDockerRunner:
@@ -95,6 +95,37 @@ async def test_detect_docker_daemon_down_unparseable_output() -> None:
     assert "Docker daemon is not running" in status.detail
 
 
+async def test_detect_docker_unparseable_output_exit_code_zero() -> None:
+    runner = FakeDockerRunner(
+        stdout="invalid json payload",
+        stderr="",
+        exit_code=0,
+    )
+    status = await detect_docker(runner)
+    assert status.available is False
+    assert status.version is None
+    assert status.detail is not None
+    assert "Failed to parse docker version output" in status.detail
+
+
+async def test_consume_stream_multibyte_utf8_split_chunks() -> None:
+    import asyncio
+
+    from mlops_agents.sandbox.docker import StreamCapture, consume_stream
+
+    # Character '€' is 3 bytes in UTF-8: b'\xe2\x82\xac'
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"abc\xe2")
+    reader.feed_data(b"\x82\xacdef")
+    reader.feed_eof()
+
+    cap = StreamCapture()
+    comb = StreamCapture()
+    await consume_stream(reader, cap, comb)
+    assert cap.get_output() == "abc€def"
+    assert "\ufffd" not in cap.get_output()
+
+
 async def test_cli_runner_scrubs_output_and_secrets() -> None:
     import sys
 
@@ -164,9 +195,55 @@ async def test_cli_runner_timeout_preserves_captured_output() -> None:
     assert "captured output before sleep" in exc_info.value.stdout
 
 
+async def test_incremental_reader_never_retains_more_than_head_plus_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from mlops_agents.sandbox import docker
+
+    retained: list[int] = []
+    fed: list[int] = []
+
+    class ObservedCapture(docker.StreamCapture):
+        def feed(self, text: str) -> None:
+            super().feed(text)
+            retained.append(len(self.head) + len(self.tail))
+            fed.append(len(text))
+            assert retained[-1] <= self.head_limit + self.tail_limit
+
+    class ChunkReader:
+        def __init__(self, count: int) -> None:
+            self.remaining = count
+
+        async def read(self, size: int = -1) -> bytes:
+            assert 0 < size <= 8192, "A buffered read would retain the complete stream"
+            length = min(size, self.remaining)
+            self.remaining -= length
+            return b"x" * length
+
+    class Process:
+        stdout = ChunkReader(1_000_000)
+        stderr = ChunkReader(0)
+
+        async def wait(self) -> int:
+            return 0
+
+    async def create_process(*args: object, **kwargs: object) -> Process:
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(docker, "StreamCapture", ObservedCapture)
+    result = await CliDockerRunner().run(["exec", "container", "produce"])
+    assert len(fed) > 100
+    assert max(fed) <= 8192
+    assert max(retained) == 30_000
+    assert "970000 characters truncated" in result.stdout
+
+
 @pytest.mark.docker
 async def test_real_docker_available() -> None:
-    service = SandboxService(projects=MemorySandboxProjects())
+    service = SandboxService(projects=MemorySandboxProjects(), events=FakeEventLog())
     status = await service.docker()
     assert status.available is True
     assert status.version is not None

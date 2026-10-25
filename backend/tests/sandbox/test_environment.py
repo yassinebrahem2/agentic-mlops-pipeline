@@ -170,13 +170,13 @@ def test_symlinked_dependency_refused(tmp_path: Path) -> None:
 
     try:
         req.symlink_to(external)
-        env = detect_environment(tmp_path)
-        assert env.template == "base"
-        assert env.dependency_files == ()
     except OSError as exc:
         if getattr(exc, "winerror", None) == 1314:
             pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
         raise
+
+    with pytest.raises(OSError, match="symlink"):
+        detect_environment(tmp_path)
 
 
 def test_symlinked_python_version_refused(tmp_path: Path) -> None:
@@ -186,9 +186,18 @@ def test_symlinked_python_version_refused(tmp_path: Path) -> None:
 
     try:
         pyver.symlink_to(external)
-        ver = detect_python_version(tmp_path)
-        assert ver == DEFAULT_PYTHON_VERSION
     except OSError as exc:
         if getattr(exc, "winerror", None) == 1314:
             pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
         raise
+
+    with pytest.raises(OSError, match="symlink"):
+        detect_python_version(tmp_path)
+
+
+def test_dependency_file_exceeding_cap_is_refused(tmp_path: Path) -> None:
+    from mlops_agents.sandbox.dependencies import MAX_DEPENDENCY_FILE_BYTES, read_dependency_files
+
+    (tmp_path / "requirements.txt").write_bytes(b"a" * (MAX_DEPENDENCY_FILE_BYTES + 10))
+    with pytest.raises(OSError, match="exceeds size limit"):
+        read_dependency_files(tmp_path)

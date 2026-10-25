@@ -1,6 +1,9 @@
+from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
+from typing import Any
 
 from mlops_agents.errors import DomainError
+from mlops_agents.events.contract import EventLog, EventRecord, EventType, Resync
 
 
 class MemorySandboxProjects:
@@ -18,3 +21,40 @@ class MemorySandboxProjects:
 
     async def set_network(self, project_id: str, enabled: bool) -> None:
         self.network[project_id] = enabled
+
+
+class FakeEventLog(EventLog):
+    def __init__(self) -> None:
+        self.records: list[EventRecord] = []
+
+    async def record(
+        self,
+        project_id: str,
+        *,
+        source: str,
+        type: EventType,
+        payload: dict[str, Any],
+        subject_id: str | None = None,
+    ) -> EventRecord:
+        rec = EventRecord(
+            id=f"evt_{len(self.records) + 1}",
+            seq=len(self.records) + 1,
+            ts="2026-10-25T00:00:00Z",
+            source=source,
+            type=type,
+            subject_id=subject_id,
+            payload=payload,
+        )
+        self.records.append(rec)
+        return rec
+
+    async def subscribe(  # type: ignore[override]
+        self, project_id: str, after_seq: int | None
+    ) -> AsyncGenerator[EventRecord | Resync, None]:
+        if False:
+            yield  # type: ignore[misc]
+
+    async def history(
+        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
+    ) -> list[EventRecord]:
+        return [r for r in self.records if r.type in types][:limit]

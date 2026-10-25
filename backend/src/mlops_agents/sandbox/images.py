@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from mlops_agents.sandbox.environment import (
     environment_from_files,
 )
 
+logger = logging.getLogger(__name__)
+
 BUILD_TIMEOUT_S = 15 * 60  # 15 minutes (900 seconds)
 FAIL_DETAIL_LINES = 50
 
@@ -31,15 +34,11 @@ def load_template(template_name: str, python_version: str) -> str:
         python_version = DEFAULT_PYTHON_VERSION
 
     template_file = f"{template_name}.Dockerfile"
-    try:
-        content = (
-            resources.files("mlops_agents.sandbox.templates")
-            .joinpath(template_file)
-            .read_text(encoding="utf-8")
-        )
-    except (FileNotFoundError, TypeError):
-        path = Path(__file__).parent / "templates" / template_file
-        content = path.read_text(encoding="utf-8")
+    content = (
+        resources.files("mlops_agents.sandbox.templates")
+        .joinpath(template_file)
+        .read_text(encoding="utf-8")
+    )
 
     # Substitute literally line by line to prevent any regex or newline injection
     lines: list[str] = []
@@ -100,9 +99,6 @@ class ImageManager:
     def __init__(self, runner: DockerRunner) -> None:
         self._runner = runner
 
-    def tag_for(self, project_id: str, worktree: Path, detected: DetectedEnvironment) -> str:
-        return snapshot_image(project_id, worktree, detected).tag
-
     async def image_exists(self, tag: str) -> bool:
         res = await self._runner.run(["image", "inspect", tag], timeout_s=15.0)
         return res.exit_code == 0
@@ -152,6 +148,9 @@ class ImageManager:
             ["images", "--format", "{{.Repository}}:{{.Tag}}"], timeout_s=15.0
         )
         if res.exit_code != 0:
+            logger.warning(
+                "Failed to list images for pruning %s: %s", project_id, res.stderr or res.stdout
+            )
             return
         prefix = f"{APP_NAME}-env:{project_id}-"
         for line in res.stdout.splitlines():
@@ -162,5 +161,16 @@ class ImageManager:
                 ["ps", "-a", "--filter", f"ancestor={tag}", "--format", "{{.ID}}"],
                 timeout_s=15.0,
             )
-            if ps_res.exit_code == 0 and not ps_res.stdout.strip():
-                await self._runner.run(["image", "rm", tag], timeout_s=30.0)
+            if ps_res.exit_code != 0:
+                logger.warning(
+                    "Failed to check containers for image %s: %s",
+                    tag,
+                    ps_res.stderr or ps_res.stdout,
+                )
+                continue
+            if not ps_res.stdout.strip():
+                rm_res = await self._runner.run(["image", "rm", tag], timeout_s=30.0)
+                if rm_res.exit_code != 0:
+                    logger.warning(
+                        "Failed to prune image %s: %s", tag, rm_res.stderr or rm_res.stdout
+                    )

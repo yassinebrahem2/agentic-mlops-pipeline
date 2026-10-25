@@ -18,6 +18,8 @@ DEPENDENCY_NAMES = (
     "requirements.txt",
 )
 
+MAX_DEPENDENCY_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
+
 
 if sys.platform == "win32":
 
@@ -43,6 +45,30 @@ if sys.platform == "win32":
         if handle == wintypes.HANDLE(-1).value:
             raise ctypes.WinError(ctypes.get_last_error())
         try:
+
+            class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("dwFileAttributes", wintypes.DWORD),
+                    ("ftCreationTime", wintypes.FILETIME),
+                    ("ftLastAccessTime", wintypes.FILETIME),
+                    ("ftLastWriteTime", wintypes.FILETIME),
+                    ("dwVolumeSerialNumber", wintypes.DWORD),
+                    ("nFileSizeHigh", wintypes.DWORD),
+                    ("nFileSizeLow", wintypes.DWORD),
+                    ("nNumberOfLinks", wintypes.DWORD),
+                    ("nFileIndexHigh", wintypes.DWORD),
+                    ("nFileIndexLow", wintypes.DWORD),
+                ]
+
+            info = _BY_HANDLE_FILE_INFORMATION()
+            get_info = kernel.GetFileInformationByHandle
+            get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
+            get_info.restype = wintypes.BOOL
+            if get_info(handle, ctypes.byref(info)) and (info.dwFileAttributes & 0x0400):
+                raise OSError(
+                    errno.ELOOP, f"Dependency path '{path.name}' is a symlink or reparse point"
+                )
+
             final_path = kernel.GetFinalPathNameByHandleW
             final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
             final_path.restype = wintypes.DWORD
@@ -89,13 +115,26 @@ def read_dependency_files(root: Path) -> dict[str, bytes]:
                 continue
             except OSError as exc:
                 if exc.errno == errno.ELOOP:
-                    continue
+                    raise OSError(
+                        f"Dependency file '{name}' is a symlink, which is refused"
+                    ) from exc
                 raise
             with os.fdopen(descriptor, "rb") as stream:
                 metadata = os.fstat(stream.fileno())
                 if not stat.S_ISREG(metadata.st_mode):
-                    continue
+                    raise OSError(f"Dependency file '{name}' is not a regular file")
                 if getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
-                    continue
-                files[name] = stream.read()
+                    raise OSError(
+                        f"Dependency file '{name}' is a symlink or reparse point, which is refused"
+                    )
+                if metadata.st_size > MAX_DEPENDENCY_FILE_BYTES:
+                    raise OSError(
+                        f"Dependency file '{name}' exceeds size limit of {MAX_DEPENDENCY_FILE_BYTES} bytes"
+                    )
+                data = stream.read(MAX_DEPENDENCY_FILE_BYTES + 1)
+                if len(data) > MAX_DEPENDENCY_FILE_BYTES:
+                    raise OSError(
+                        f"Dependency file '{name}' exceeds size limit of {MAX_DEPENDENCY_FILE_BYTES} bytes"
+                    )
+                files[name] = data
     return files

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from dataclasses import dataclass
 from typing import cast
@@ -79,6 +80,7 @@ class ContainerInfo:
     network: bool
     project_id: str | None
     task_id: str | None
+    paused: bool = False
 
 
 class ContainerManager:
@@ -96,17 +98,24 @@ class ContainerManager:
         try:
             raw_data: object = json.loads(res.stdout)
             if not isinstance(raw_data, list) or not raw_data:
-                return None
+                raise SandboxUnavailable(
+                    f"Failed to parse inspect output for container {name}: empty or non-list JSON"
+                )
             first_raw = cast(list[object], raw_data)[0]
             if not isinstance(first_raw, dict):
-                return None
+                raise SandboxUnavailable(
+                    f"Failed to parse inspect output for container {name}: expected JSON object"
+                )
             item = cast(dict[str, object], first_raw)
-        except json.JSONDecodeError:
-            return None
+        except json.JSONDecodeError as err:
+            raise SandboxUnavailable(
+                f"Failed to parse inspect output for container {name}: {err}"
+            ) from err
 
         state_raw = item.get("State")
         state = cast(dict[str, object], state_raw) if isinstance(state_raw, dict) else {}
         running = bool(state.get("Running", False))
+        paused = bool(state.get("Paused", False))
 
         config_raw = item.get("Config")
         config = cast(dict[str, object], config_raw) if isinstance(config_raw, dict) else {}
@@ -141,6 +150,7 @@ class ContainerManager:
             network=network,
             project_id=project_id,
             task_id=task_id,
+            paused=paused,
         )
 
     async def start(
@@ -172,13 +182,50 @@ class ContainerManager:
             raise SandboxUnavailable(f"Failed to start sandbox container: {detail}")
         return name
 
+    async def pause(self, name: str) -> None:
+        """Pauses a running container."""
+        try:
+            res = await self._runner.run(["pause", name], timeout_s=15.0)
+        except FileNotFoundError as err:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except TimeoutError as err:
+            raise SandboxUnavailable(f"Timed out pausing container {name}.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Failed to pause container {name}: {err}") from err
+        if res.exit_code != 0:
+            detail = (res.stderr or res.stdout).strip()
+            raise SandboxUnavailable(f"Failed to pause sandbox container {name}: {detail}")
+
+    async def unpause(self, name: str) -> None:
+        """Unpauses a paused container."""
+        try:
+            res = await self._runner.run(["unpause", name], timeout_s=15.0)
+        except FileNotFoundError as err:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except TimeoutError as err:
+            raise SandboxUnavailable(f"Timed out unpausing sandbox container {name}.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Failed to unpause sandbox container {name}: {err}") from err
+        if res.exit_code != 0:
+            detail = (res.stderr or res.stdout).strip()
+            raise SandboxUnavailable(f"Failed to unpause sandbox container {name}: {detail}")
+
     async def remove(self, name: str) -> None:
         """Removes a container by name if it exists."""
         try:
-            await self._runner.run(["rm", "-f", name], timeout_s=30.0)
+            res = await self._runner.run(["rm", "-f", name], timeout_s=30.0)
         except FileNotFoundError:
             # Removal is already satisfied if Docker has been uninstalled.
             return
+        except TimeoutError as err:
+            raise SandboxUnavailable(f"Timed out removing sandbox container {name}.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Failed to remove sandbox container {name}: {err}") from err
+        if res.exit_code != 0:
+            detail = (res.stderr or res.stdout).strip()
+            if "no such container" in detail.lower():
+                return
+            raise SandboxUnavailable(f"Failed to remove sandbox container {name}: {detail}")
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
         """Stops and removes the container for a task."""
@@ -205,7 +252,8 @@ class ContainerManager:
             for cid in res.stdout.strip().splitlines():
                 cid = cid.strip()
                 if cid:
-                    await self.remove(cid)
+                    with contextlib.suppress(SandboxUnavailable):
+                        await self.remove(cid)
 
     async def cleanup_all(self) -> None:
         """Stops and removes all containers created by the app."""
@@ -220,7 +268,8 @@ class ContainerManager:
             for cid in res.stdout.strip().splitlines():
                 cid = cid.strip()
                 if cid:
-                    await self.remove(cid)
+                    with contextlib.suppress(SandboxUnavailable):
+                        await self.remove(cid)
 
     async def cleanup_orphans(self) -> None:
         """Removes leftover containers at startup. Does not fail if Docker is unavailable."""

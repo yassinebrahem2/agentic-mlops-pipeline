@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import json
 from collections.abc import Iterable, Sequence
@@ -24,10 +25,20 @@ TAIL_CAPTURE_CHARS = 15_000
 class DockerTimeoutError(TimeoutError):
     """Raised when a docker command exceeds its timeout, preserving captured streams."""
 
-    def __init__(self, message: str, *, stdout: str = "", stderr: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        output: str | None = None,
+        truncated: bool = False,
+    ) -> None:
         super().__init__(message)
         self.stdout = stdout
         self.stderr = stderr
+        self.output = output
+        self.truncated = truncated
 
 
 class StreamCapture:
@@ -57,6 +68,10 @@ class StreamCapture:
         if remaining:
             self.tail = (self.tail + remaining)[-self.tail_limit :]
 
+    @property
+    def truncated(self) -> bool:
+        return self.total_chars > self.head_limit + self.tail_limit
+
     def get_output(self) -> str:
         if self.total_chars <= self.head_limit:
             return self.head
@@ -67,18 +82,25 @@ class StreamCapture:
         return f"{self.head}{cut_note}{self.tail}"
 
 
-async def _consume_stream(
+async def consume_stream(
     reader: asyncio.StreamReader | None,
     capture: StreamCapture,
+    combined: StreamCapture,
 ) -> None:
     if reader is None:
         return
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     while True:
         chunk = await reader.read(8192)
         if not chunk:
+            final_text = decoder.decode(b"", final=True)
+            if final_text:
+                capture.feed(final_text)
+                combined.feed(final_text)
             break
-        text = chunk.decode("utf-8", errors="replace")
+        text = decoder.decode(chunk, final=False)
         capture.feed(text)
+        combined.feed(text)
 
 
 @dataclass(frozen=True)
@@ -86,6 +108,14 @@ class DockerResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: str | None = None
+    truncated: bool = False
+
+    def command_output(self) -> tuple[str, bool]:
+        if self.output is not None:
+            return self.output, self.truncated
+        combined = f"{self.stdout}{self.stderr}"
+        return combined, False
 
 
 @runtime_checkable
@@ -112,23 +142,21 @@ class CliDockerRunner:
         timeout_s: float | None = None,
         secrets: Iterable[str] = (),
     ) -> DockerResult:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._executable,
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            raise
+        proc = await asyncio.create_subprocess_exec(
+            self._executable,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
         stdout_cap = StreamCapture()
         stderr_cap = StreamCapture()
+        combined = StreamCapture()
 
         async def stream_and_wait() -> int:
             await asyncio.gather(
-                _consume_stream(proc.stdout, stdout_cap),
-                _consume_stream(proc.stderr, stderr_cap),
+                consume_stream(proc.stdout, stdout_cap, combined),
+                consume_stream(proc.stderr, stderr_cap, combined),
             )
             return await proc.wait()
 
@@ -147,6 +175,8 @@ class CliDockerRunner:
                 f"Docker command timed out after {timeout_s}s",
                 stdout=raw_stdout,
                 stderr=raw_stderr,
+                output=scrub_values(scrub_url_secrets(combined.get_output()), secrets),
+                truncated=combined.truncated,
             ) from None
 
         raw_stdout = scrub_values(scrub_url_secrets(stdout_cap.get_output()), secrets)
@@ -155,6 +185,8 @@ class CliDockerRunner:
             stdout=raw_stdout,
             stderr=raw_stderr,
             exit_code=returncode,
+            output=scrub_values(scrub_url_secrets(combined.get_output()), secrets),
+            truncated=combined.truncated,
         )
 
 
@@ -183,16 +215,38 @@ async def detect_docker(runner: DockerRunner) -> DockerStatus:
             detail="Docker command timed out checking version.",
         )
 
-    client_version: str | None = None
-    server_version: str | None = None
-    with contextlib.suppress(json.JSONDecodeError, KeyError, TypeError, ValueError):
-        loaded: object = json.loads(result.stdout)
-        if isinstance(loaded, dict):
-            d = cast(dict[object, object], loaded)
-            client_version = _extract_version(d.get("Client"))
-            server_version = _extract_version(d.get("Server"))
+    if result.exit_code != 0:
+        client_version: str | None = None
+        with contextlib.suppress(json.JSONDecodeError, KeyError, TypeError, ValueError):
+            loaded = json.loads(result.stdout)
+            if isinstance(loaded, dict):
+                d = cast(dict[object, object], loaded)
+                client_version = _extract_version(d.get("Client"))
+        return DockerStatus(
+            available=False,
+            version=client_version,
+            detail="Docker daemon is not running. Please start Docker Desktop or the Docker daemon.",
+        )
 
-    if result.exit_code != 0 or server_version is None:
+    try:
+        loaded = json.loads(result.stdout)
+        if not isinstance(loaded, dict):
+            return DockerStatus(
+                available=False,
+                version=None,
+                detail="Failed to parse docker version output: expected JSON object.",
+            )
+        d = cast(dict[object, object], loaded)
+        client_version = _extract_version(d.get("Client"))
+        server_version = _extract_version(d.get("Server"))
+    except json.JSONDecodeError as err:
+        return DockerStatus(
+            available=False,
+            version=None,
+            detail=f"Failed to parse docker version output: {err}",
+        )
+
+    if server_version is None:
         return DockerStatus(
             available=False,
             version=client_version,
