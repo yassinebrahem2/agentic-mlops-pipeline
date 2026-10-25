@@ -18,7 +18,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
-from tests.agents.runtime.graph_env import RecordingSink, make_agent
+from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent
 from tests.conftest import make_repo
 
 
@@ -88,10 +88,12 @@ async def test_graph_checkpointer_thread_lifecycle_on_done(
         store=store,
         sink=sink,
         project_id="prj_chk",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
         checkpointer=checkpointer,
     )
 
@@ -177,10 +179,12 @@ async def test_graph_checkpointer_thread_lifecycle_on_cancellation(
         store=store,
         sink=sink,
         project_id="prj_cancel",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
         checkpointer=checkpointer,
     )
 
@@ -264,10 +268,12 @@ async def test_graph_checkpointer_thread_lifecycle_on_failure(
         store=store,
         sink=sink,
         project_id="prj_fail",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
         checkpointer=checkpointer,
     )
 

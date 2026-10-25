@@ -10,6 +10,12 @@ import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import AgentSessions
+from mlops_agents.agents.runtime.hooks import (
+    AllowAllGate,
+    NoInbound,
+    NoTurnEndCheck,
+    RepositoryOnlyWorkspaces,
+)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
@@ -117,7 +123,10 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
-        git=git,
+        gate=AllowAllGate(),
+        inbound=NoInbound(),
+        turn_end=NoTurnEndCheck(),
+        workspaces=RepositoryOnlyWorkspaces(workspace=workspace, git=git),
         observers=[turn_observer],
     )
     stack.push_async_callback(sessions.close)

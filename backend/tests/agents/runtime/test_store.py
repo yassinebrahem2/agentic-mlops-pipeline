@@ -1,4 +1,5 @@
 import asyncio
+from typing import Literal
 
 import pytest
 from sqlalchemy import insert, select
@@ -332,3 +333,36 @@ async def test_add_message_stores_exchange_id_and_hop(databases: Databases) -> N
         plain.id: (None, None, None),
         inbound.id: ("xch_1", 2, None),
     }
+
+
+async def test_turn_agent_message_is_the_agent_message_of_that_turn_only(
+    databases: Databases,
+) -> None:
+    store = SessionStore(databases)
+    session_id = await store.session_id("prj_test", "orchestrator")
+    other_session = await store.session_id("prj_test", "coder")
+
+    async def add(turn_id: str, author_kind: Literal["agent", "system"], text: str) -> str:
+        msg = await store.add_message(
+            "prj_test",
+            session_id,
+            turn_id=turn_id,
+            author_kind=author_kind,
+            author_name=author_kind,
+            parts=[TextPart(type="text", text=text)],
+            status="complete",
+        )
+        return msg.id
+
+    t1, t2, t3 = [await store.add_turn("prj_test", session_id, "msg_1", "done") for _ in "123"]
+    first = await add(t1, "agent", "first")
+    await add(t1, "system", "a failure notice")
+    second = await add(t2, "agent", "second")
+    await add(t3, "system", "refused")
+
+    found = await store.turn_agent_message("prj_test", session_id, t1)
+    assert found is not None and found.id == first
+    found = await store.turn_agent_message("prj_test", session_id, t2)
+    assert found is not None and found.id == second
+    assert await store.turn_agent_message("prj_test", session_id, t3) is None
+    assert await store.turn_agent_message("prj_test", other_session, t1) is None

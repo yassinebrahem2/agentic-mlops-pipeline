@@ -40,14 +40,21 @@ class RecordingObserver:
 
 
 class HangingObserver(RecordingObserver):
-    """Hangs in turn_started or turn_ended until the test lets it go (which it never does)."""
+    """Hangs in turn_started or turn_ended until the test lets it go (which it never does).
 
-    def __init__(self, *, hang_in: str) -> None:
+    The first `passes` calls of that hook return; the next one hangs.
+    """
+
+    def __init__(self, *, hang_in: str, passes: int = 0) -> None:
         super().__init__()
         self.hanging = asyncio.Event()
         self._hang_in = hang_in
+        self._passes = passes
 
     async def _hang(self) -> None:
+        if self._passes > 0:
+            self._passes -= 1
+            return
         self.hanging.set()
         await asyncio.Event().wait()
 
@@ -82,6 +89,44 @@ class HeldObserver(RecordingObserver):
         if not self.entered.is_set():
             self.entered.set()
             await self.release.wait()
+
+
+class HeldEndObserver(RecordingObserver):
+    """Holds the first turn_ended until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def turn_ended(
+        self,
+        project_id: str,
+        agent: str,
+        turn_id: str,
+        status: TurnEnd,
+        final_text: str | None,
+    ) -> None:
+        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        if not self.entered.is_set():
+            self.entered.set()
+            await self.release.wait()
+
+
+class WorkerCapturingObserver(RecordingObserver):
+    """Keeps the task that calls turn_started: the session's worker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.workers: list[asyncio.Task[object]] = []
+        self.started = asyncio.Event()
+
+    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self.workers.append(task)
+        self.started.set()
+        await super().turn_started(project_id, agent, turn_id)
 
 
 class SelfCancellingObserver(RecordingObserver):
