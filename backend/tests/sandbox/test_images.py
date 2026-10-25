@@ -306,8 +306,19 @@ def test_build_context_refuses_symlinks(tmp_path: Path) -> None:
         (
             "uv",
             {
-                "pyproject.toml": '[project]\nname = "demo"\nversion = "0.1.0"\n',
-                "uv.lock": "version = 1\nrequires-python = '>=3.12'\n",
+                "pyproject.toml": (
+                    '[project]\nname = "demo"\nversion = "0.1.0"\n'
+                    'requires-python = ">=3.12"\ndependencies = ["six"]\n'
+                ),
+                "uv.lock": (
+                    'version = 1\nrequires-python = ">=3.12"\n\n'
+                    '[[package]]\nname = "demo"\nversion = "0.1.0"\n'
+                    'source = { virtual = "." }\ndependencies = [{ name = "six" }]\n\n'
+                    '[package.metadata]\nrequires-dist = [{ name = "six" }]\n\n'
+                    '[[package]]\nname = "six"\nversion = "1.17.0"\n'
+                    'source = { registry = "https://pypi.org/simple" }\n'
+                    'wheels = [{ url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050 }]\n'
+                ),
             },
         ),
         (
