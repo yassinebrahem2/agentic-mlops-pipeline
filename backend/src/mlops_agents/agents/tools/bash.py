@@ -66,7 +66,7 @@ class BashTool(AgentTool[BashArgs]):
         if self._sandbox is None:
             raise ToolFailure("Sandbox is not available.")
 
-        timeout_s = args.timeout or 120
+        timeout_s = args.timeout if args.timeout is not None else DEFAULT_BASH_TIMEOUT_S
         try:
             res = await self._sandbox.run(
                 ctx.project_id,

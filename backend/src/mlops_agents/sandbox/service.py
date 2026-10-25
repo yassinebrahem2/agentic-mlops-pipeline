@@ -225,32 +225,22 @@ class SandboxService(Sandbox):
                     ["exec", cname, "bash", "-lc", command],
                     timeout_s=timeout,
                 )
-            except TimeoutError as exc:
+            except asyncio.CancelledError as exc:
                 try:
-                    restarted = await self._runner.run(
-                        ["restart", "-t", "0", cname], timeout_s=30.0
-                    )
-                except FileNotFoundError as err:
-                    raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-                except TimeoutError as err:
-                    raise SandboxUnavailable("Timed out restarting sandbox container.") from err
-                except OSError as err:
-                    raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
-                if restarted.exit_code != 0:
-                    raise SandboxUnavailable(
-                        f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
-                    ) from exc
-                if isinstance(exc, DockerTimeoutError) and exc.output is not None:
-                    captured, truncated = exc.output, exc.truncated
-                else:
-                    captured, truncated = "", False
+                    await _finish_operation(self._restart_container(cname))
+                except BaseException as cleanup_error:
+                    raise exc from cleanup_error
+                raise
+            except DockerTimeoutError as exc:
+                await _finish_operation(self._restart_container(cname))
+                captured = exc.output
                 message = f"Command took longer than {timeout} seconds and was stopped."
                 output = f"{captured}\n\n{message}" if captured else message
                 return CommandResult(
                     output=output,
                     exit_code=None,
                     timed_out=True,
-                    truncated=truncated,
+                    truncated=exc.truncated,
                 )
             except FileNotFoundError as err:
                 raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
@@ -263,6 +253,20 @@ class SandboxService(Sandbox):
                 exit_code=res.exit_code,
                 timed_out=False,
                 truncated=truncated,
+            )
+
+    async def _restart_container(self, cname: str) -> None:
+        try:
+            restarted = await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
+        except FileNotFoundError as err:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except TimeoutError as err:
+            raise SandboxUnavailable("Timed out restarting sandbox container.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
+        if restarted.exit_code != 0:
+            raise SandboxUnavailable(
+                f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
             )
 
     @asynccontextmanager

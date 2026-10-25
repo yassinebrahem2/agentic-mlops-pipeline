@@ -22,6 +22,7 @@ from mlops_agents.sandbox.contract import (
     Sandbox,
     SandboxUnavailable,
 )
+from mlops_agents.sandbox.docker import DockerTimeoutError
 
 
 class FakeSandbox(Sandbox):
@@ -245,6 +246,18 @@ async def test_bash_tool_timeout(tmp_path: Path) -> None:
     assert mock_files.invalidated is True
 
 
+async def test_bash_uses_shared_timeout_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.agents.tools import bash
+
+    monkeypatch.setattr(bash, "DEFAULT_BASH_TIMEOUT_S", 73)
+    sandbox = FakeSandbox()
+    task = TaskRef("tsk_default", "Default", "branch", tmp_path, "active")
+    await BashTool(sandbox).run(make_context(tmp_path, task=task), BashArgs(command="echo ok"))
+    assert sandbox.run_calls[0][3] == 73
+
+
 def test_default_registry_with_and_without_sandbox() -> None:
     reg_without = default_registry()
     assert "Bash" not in reg_without.names()
@@ -281,7 +294,7 @@ async def test_real_service_build_path_failure_is_a_tool_error(
         ) -> DockerResult:
             if args[0] == "build":
                 if phase == "timeout":
-                    raise TimeoutError("build timed out")
+                    raise DockerTimeoutError("build timed out", stderr="download stalled")
                 raise OSError("build I/O failure")
             return await super().run(args, timeout_s=timeout_s, secrets=secrets)
 
@@ -305,7 +318,9 @@ async def test_real_service_build_path_failure_is_a_tool_error(
 
 
 @pytest.mark.parametrize("operation", ["inspect", "rm", "run", "exec"])
-@pytest.mark.parametrize("error", [TimeoutError("operation timed out"), OSError("I/O failed")])
+@pytest.mark.parametrize(
+    "error", [DockerTimeoutError("operation timed out"), OSError("I/O failed")]
+)
 async def test_container_operational_failure_becomes_tool_error(
     tmp_path: Path,
     operation: str,
