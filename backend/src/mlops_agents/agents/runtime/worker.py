@@ -27,8 +27,8 @@ OBSERVER_TIMEOUT_S = 10.0
 @dataclass(frozen=True)
 class _Ending:
     """How a taken turn ended, decided before anything of it is stored. `failure_notice` is
-    the system message of a failure still to be written: None once it is, or when the
-    executor recorded the failure itself."""
+    the system message of a failure still to be written: None when there is none left to
+    write (no failure, written already, or recorded by the executor itself)."""
 
     status: TurnEnd
     error: str | None = None
