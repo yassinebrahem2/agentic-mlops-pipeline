@@ -46,6 +46,7 @@ def build_messages(
     layout: str,
     summary: str | None,
     history: list[MessageView],
+    status_summary: str | None = None,
 ) -> list[BaseMessage]:
     """Assemble the langchain BaseMessage list for an agent run."""
     # 1. System message
@@ -64,6 +65,9 @@ def build_messages(
 
     if summary:
         sections.append(f"Summary of the earlier conversation:\n{summary}")
+
+    if status_summary:
+        sections.append(f"Status board:\n{status_summary}")
 
     system_content = "\n\n".join(sections)
     messages: list[BaseMessage] = [SystemMessage(content=system_content)]

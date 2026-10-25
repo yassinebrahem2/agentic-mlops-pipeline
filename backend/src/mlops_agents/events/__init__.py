@@ -15,6 +15,11 @@ from mlops_agents.events.contract import (
 )
 from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.events.status import (
+    SqliteStatusBoard,
+    derive_agent_status,
+    format_agent_status_line,
+)
 
 __all__ = [
     "AgentState",
@@ -29,5 +34,8 @@ __all__ = [
     "PrRef",
     "SqliteAuditLog",
     "SqliteEventLog",
+    "SqliteStatusBoard",
     "StatusBoard",
+    "derive_agent_status",
+    "format_agent_status_line",
 ]

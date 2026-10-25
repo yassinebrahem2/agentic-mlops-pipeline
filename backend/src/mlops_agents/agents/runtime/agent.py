@@ -10,6 +10,7 @@ from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import AgentTool, FileAccess, ToolRegistry
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.errors import DomainError
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
 from mlops_agents.workspace.service import WorkspaceService
@@ -24,6 +25,7 @@ class Agent:
     max_steps: int | None
     tools: tuple[AgentTool[Any], ...]  # exactly the definition's tools, in its order
     files: FileAccess  # the repository's view the layout was read from; the turn's tools reuse it
+    status_summary: str | None = None
 
 
 class TurnRefused(Exception):
@@ -42,12 +44,14 @@ class AgentBuilder:
         settings: AgentSettingsService,
         workspace: WorkspaceService,
         workspaces: TaskWorkspaces,
+        status_board: StatusBoard | None = None,
     ) -> None:
         self._catalog = catalog
         self._tools = tools
         self._settings = settings
         self._workspace = workspace
         self._workspaces = workspaces
+        self._status_board = status_board
 
     async def build(self, project_id: str, agent: str) -> Agent:
         project = await self._workspace.get(project_id)
@@ -77,6 +81,10 @@ class AgentBuilder:
             if t is not None:
                 agent_tools.append(t)
 
+        status_summary: str | None = None
+        if definition.status_board and self._status_board is not None:
+            status_summary = await self._status_board.summary(project_id)
+
         return Agent(
             definition=definition,
             project=project,
@@ -85,4 +93,5 @@ class AgentBuilder:
             max_steps=max_steps,
             tools=tuple(agent_tools),
             files=files,
+            status_summary=status_summary,
         )
