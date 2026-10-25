@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import * as streamModule from "@/lib/stream";
 import { FakeStream } from "@/pages/agents/session/testing";
-import * as streamModule from "@/pages/agents/session/stream";
 import { useProjectEvents, type EventRecord } from "./useProjectEvents";
 
 describe("useProjectEvents", () => {
@@ -38,7 +38,7 @@ describe("useProjectEvents", () => {
 
   it("dispatches parsed project events to onEvent callback", () => {
     const onEvent = vi.fn();
-    renderHook(() => useProjectEvents("prj_1", onEvent));
+    renderHook(() => useProjectEvents("prj_1", { onEvent }));
 
     const mockRecord: EventRecord = {
       id: "ev_1",
@@ -68,6 +68,44 @@ describe("useProjectEvents", () => {
     });
 
     expect(onResync).toHaveBeenCalled();
+  });
+
+  it("reconnects on invalid JSON rather than swallowing", () => {
+    vi.useFakeTimers();
+    const onEvent = vi.fn();
+    const { result } = renderHook(() => useProjectEvents("prj_1", { onEvent }));
+
+    act(() => {
+      createdStreams[0]?.emitOpen();
+    });
+    expect(result.current.connection).toBe("live");
+
+    act(() => {
+      createdStreams[0]?.emit("turn.started", "{not json", 1);
+    });
+
+    expect(result.current.connection).toBe("reconnecting");
+    expect(createdStreams[0]?.close).toHaveBeenCalled();
+  });
+
+  it("schedules reconnect on error", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useProjectEvents("prj_1"));
+
+    act(() => {
+      createdStreams[0]?.emitOpen();
+    });
+    expect(result.current.connection).toBe("live");
+
+    act(() => {
+      createdStreams[0]?.onerror?.(new Event("error"));
+    });
+    expect(result.current.connection).toBe("reconnecting");
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(createdStreams).toHaveLength(2);
   });
 
   it("cleans up stream on unmount", () => {

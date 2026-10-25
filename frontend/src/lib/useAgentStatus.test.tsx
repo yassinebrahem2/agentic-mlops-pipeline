@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { api } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { FakeStream, wrapper } from "@/pages/agents/session/testing";
-import * as streamModule from "@/pages/agents/session/stream";
+import * as streamModule from "@/lib/stream";
 import { useAgentStatus, type AgentStatus } from "./useAgentStatus";
 
 describe("useAgentStatus", () => {

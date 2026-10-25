@@ -108,6 +108,32 @@ describe("AgentList", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("renders loading state when isLoading is true", () => {
+    render(
+      <AgentList
+        agents={[]}
+        isLoading={true}
+        selectedAgent="orchestrator"
+        onSelectAgent={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Loading agents...")).toBeInTheDocument();
+  });
+
+  it("renders error state when error is provided", () => {
+    render(
+      <AgentList
+        agents={[]}
+        error={new Error("Failed to load status")}
+        selectedAgent="orchestrator"
+        onSelectAgent={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Failed to load status")).toBeInTheDocument();
+  });
+
   it("marks the selected agent with aria-current", () => {
     render(<AgentList agents={mockAgents} selectedAgent="coder" onSelectAgent={vi.fn()} />);
 

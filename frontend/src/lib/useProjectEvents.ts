@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { components } from "@/api/schema";
-import { openStream, STREAM_CONNECTING, type StreamLike } from "@/pages/agents/session/stream";
+import { isConnecting, openStream, StreamBackoff, type StreamLike } from "@/lib/stream";
 
 export type EventRecord = components["schemas"]["EventRecord"];
+export type ProjectEventType = EventRecord["type"];
 
-export const PROJECT_EVENT_TYPES = [
+export const PROJECT_EVENT_TYPES: readonly ProjectEventType[] = [
   "turn.started",
   "turn.waiting",
   "turn.ended",
@@ -21,8 +22,7 @@ export const PROJECT_EVENT_TYPES = [
   "sandbox.build.started",
   "sandbox.build.finished",
   "sandbox.build.failed",
-  "resync",
-] as const;
+] satisfies readonly ProjectEventType[];
 
 export type UseProjectEventsOptions = {
   onEvent?: (event: EventRecord) => void;
@@ -31,52 +31,50 @@ export type UseProjectEventsOptions = {
 
 export type UseProjectEventsResult = {
   connection: "live" | "reconnecting" | "closed";
-  error: Error | undefined;
 };
 
 /**
  * Subscribes to the project event stream over SSE (/api/projects/{projectId}/events/stream),
- * reusing the reconnect backoff and stream lifecycle logic.
+ * using the shared reconnect backoff and stream lifecycle logic.
  */
 export function useProjectEvents(
   projectId: string | undefined,
-  handlerOrOptions?: ((event: EventRecord) => void) | UseProjectEventsOptions,
+  options?: UseProjectEventsOptions,
 ): UseProjectEventsResult {
   const [connection, setConnection] = useState<"live" | "reconnecting" | "closed">("closed");
-  const [error, setError] = useState<Error | undefined>(undefined);
 
   const streamRef = useRef<StreamLike | undefined>(undefined);
-  const retryRef = useRef(0);
+  const backoffRef = useRef(new StreamBackoff());
   const lastSeqRef = useRef<number | undefined>(undefined);
 
-  const handlerRef = useRef(handlerOrOptions);
-  handlerRef.current = handlerOrOptions;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   useEffect(() => {
-    retryRef.current = 0;
+    const backoff = backoffRef.current;
+    backoff.reset();
     lastSeqRef.current = undefined;
     setConnection("closed");
-    setError(undefined);
 
     if (!projectId) {
       return;
     }
 
     let disposed = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const close = () => {
       streamRef.current?.close();
       streamRef.current = undefined;
     };
 
-    const schedule = () => {
-      const delays = [1000, 2000, 5000];
-      const delay = retryRef.current < delays.length ? delays[retryRef.current] : 10000;
-      retryRef.current += 1;
-      retryTimer = setTimeout(() => {
-        connect();
-      }, delay);
+    const handleStreamError = () => {
+      close();
+      setConnection("reconnecting");
+      backoff.schedule(() => {
+        if (!disposed) {
+          connect();
+        }
+      });
     };
 
     const connect = () => {
@@ -90,8 +88,7 @@ export function useProjectEvents(
       stream.addEventListener("open", () => {
         if (!disposed) {
           setConnection("live");
-          setError(undefined);
-          retryRef.current = 0;
+          backoff.reset();
         }
       });
 
@@ -104,44 +101,34 @@ export function useProjectEvents(
 
         if (!disposed) {
           setConnection("live");
-          retryRef.current = 0;
+          backoff.reset();
         }
 
         if (e.type === "resync") {
           lastSeqRef.current = undefined;
-          const opts = handlerRef.current;
-          if (typeof opts === "object" && opts.onResync) {
-            opts.onResync();
-          }
+          optionsRef.current?.onResync?.();
           return;
         }
 
         try {
           const parsed = JSON.parse(message.data) as EventRecord;
-          const opts = handlerRef.current;
-          if (typeof opts === "function") {
-            opts(parsed);
-          } else if (typeof opts === "object" && opts.onEvent) {
-            opts.onEvent(parsed);
-          }
+          optionsRef.current?.onEvent?.(parsed);
         } catch {
-          // ignore invalid JSON
+          handleStreamError();
         }
       };
 
-      for (const name of [...PROJECT_EVENT_TYPES, "message"]) {
+      for (const name of [...PROJECT_EVENT_TYPES, "resync", "message"]) {
         stream.addEventListener(name, handle);
       }
 
       stream.onerror = () => {
         if (disposed) return;
-        if (stream.readyState === STREAM_CONNECTING) {
+        if (isConnecting(stream)) {
           setConnection("reconnecting");
           return;
         }
-        close();
-        setConnection("reconnecting");
-        schedule();
+        handleStreamError();
       };
     };
 
@@ -149,10 +136,10 @@ export function useProjectEvents(
 
     return () => {
       disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      backoff.clear();
       close();
     };
   }, [projectId]);
 
-  return { connection, error };
+  return { connection };
 }
