@@ -114,9 +114,9 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
         cur = cur.parent
 
     # 4. Open with no-follow
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    if hasattr(os, "O_BINARY"):
-        flags |= os.O_BINARY
+    o_nofollow: int = int(getattr(os, "O_NOFOLLOW", 0))
+    o_binary: int = int(getattr(os, "O_BINARY", 0))
+    flags: int = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | o_nofollow | o_binary
 
     try:
         fd = os.open(candidate, flags, 0o666)
