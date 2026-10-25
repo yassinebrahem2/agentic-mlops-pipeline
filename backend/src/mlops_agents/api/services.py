@@ -128,6 +128,7 @@ async def build_services(
         turn_end=NoTurnEndCheck(),
         workspaces=RepositoryOnlyWorkspaces(workspace=workspace, git=git),
         observers=[turn_observer],
+        status_board=status_board,
     )
     stack.push_async_callback(sessions.close)
 

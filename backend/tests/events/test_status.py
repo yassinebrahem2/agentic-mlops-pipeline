@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
@@ -274,3 +276,61 @@ async def test_sqlite_status_board_snapshot_catalog_order(databases: Databases) 
     assert lines[1] == "- Alert Prioritization: inactive"
     assert lines[2] == "- Retraining: running"
     assert len(summary) <= 1500
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_system_message_contains_summary_and_another_agent_does_not(
+    databases: Databases,
+    tmp_path: Path,
+) -> None:
+    from mlops_agents.agents.runtime.context import build_messages
+    from mlops_agents.workspace.models import Project
+
+    project_id = "prj_statustest"
+    hub = EventHub()
+    events = SqliteEventLog(databases, hub=hub)
+
+    # Orchestrator has status_board=True; retraining has status_board=False
+    d_orch = make_definition("orchestrator", "Orchestrator", chat=True, status_board=True)
+    d_retrain = make_definition("retraining", "Retraining", chat=True, status_board=False)
+    catalog = AgentCatalog([d_orch, d_retrain], tool_names=frozenset())
+
+    board = SqliteStatusBoard(catalog, events, databases=databases)
+    await events.record(project_id, source="retraining", type="turn.started", payload={})
+
+    summary_text = await board.summary(project_id)
+    assert "- Orchestrator: idle" in summary_text
+    assert "- Retraining: running" in summary_text
+
+    project = Project(
+        id=project_id,
+        name="test-project",
+        source="local",
+        local_path=str(tmp_path / "test"),
+        github_full_name=None,
+        default_branch="main",
+        status="ok",
+        status_detail=None,
+        created_at="2026-10-24T12:00:00Z",
+        last_opened_at=None,
+    )
+
+    orch_summary = await board.summary(project_id) if d_orch.status_board else None
+    retrain_summary = await board.summary(project_id) if d_retrain.status_board else None
+
+    assert orch_summary is not None
+    assert retrain_summary is None
+
+    orch_msgs = build_messages(d_orch, project, "README.md", None, [], status_summary=orch_summary)
+    retrain_msgs = build_messages(
+        d_retrain, project, "README.md", None, [], status_summary=retrain_summary
+    )
+
+    orch_content = str(orch_msgs[0].content)
+    retrain_content = str(retrain_msgs[0].content)
+
+    assert "Status board:\n" in orch_content
+    assert "- Orchestrator: idle" in orch_content
+    assert "- Retraining: running" in orch_content
+
+    assert "Status board:" not in retrain_content

@@ -30,6 +30,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -58,6 +59,7 @@ class SessionManager(AgentSessions):
         workspaces: TaskWorkspaces,
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
+        status_board: StatusBoard | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -75,6 +77,7 @@ class SessionManager(AgentSessions):
             tools=tools,
             settings=settings,
             workspaces=workspaces,
+            status_board=status_board,
         )
         self._executor = TurnExecutor(
             store=self._store,

@@ -384,3 +384,18 @@ def test_build_messages_skips_approval_parts() -> None:
     )
     assert with_approval == without
     assert [type(m) for m in with_approval[1:]] == [AIMessage, ToolMessage]
+
+
+def test_build_messages_system_message_with_status_summary() -> None:
+    definition = _make_definition()
+    project = _make_project()
+    layout = "README.md"
+    status_summary = "- Orchestrator: running\n- Alert Prioritization: inactive"
+
+    messages = build_messages(definition, project, layout, None, [], status_summary=status_summary)
+    content = str(messages[0].content)
+    assert "Status board:\n- Orchestrator: running\n- Alert Prioritization: inactive" in content
+
+    # Without status summary
+    messages_without = build_messages(definition, project, layout, None, [])
+    assert "Status board:" not in str(messages_without[0].content)
