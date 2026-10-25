@@ -12,6 +12,11 @@ from typing import Protocol, cast, runtime_checkable
 from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
 from mlops_agents.sandbox.contract import DockerStatus
 
+DOCKER_INSTALL_MESSAGE = (
+    "Docker is not installed or not on PATH. Install Docker Desktop "
+    "(https://www.docker.com/products/docker-desktop) or Docker Engine to use the Bash sandbox."
+)
+
 HEAD_CAPTURE_CHARS = 15_000
 TAIL_CAPTURE_CHARS = 15_000
 
@@ -169,10 +174,7 @@ async def detect_docker(runner: DockerRunner) -> DockerStatus:
         return DockerStatus(
             available=False,
             version=None,
-            detail=(
-                "Docker is not installed or not on PATH. Install Docker Desktop "
-                "(https://www.docker.com/products/docker-desktop) or Docker Engine to use the Bash sandbox."
-            ),
+            detail=DOCKER_INSTALL_MESSAGE,
         )
     except TimeoutError:
         return DockerStatus(

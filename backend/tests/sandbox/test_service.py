@@ -7,9 +7,13 @@ import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.errors import DomainError
-from mlops_agents.sandbox.contract import DockerStatus, EnvironmentStatus, Sandbox
+from mlops_agents.sandbox.contract import (
+    DockerStatus,
+    Sandbox,
+)
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
+from tests.sandbox.fakes import MemorySandboxProjects
 
 
 class FakeRunner(DockerRunner):
@@ -25,7 +29,7 @@ class FakeRunner(DockerRunner):
 
 
 async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
-    service = SandboxService(FakeRunner())
+    service = SandboxService(FakeRunner(), projects=MemorySandboxProjects())
     # Static protocol check:
     sandbox: Sandbox = service
     assert {"docker", "environment", "rebuild", "run", "remove_task", "close"} <= set(dir(sandbox))
@@ -33,8 +37,8 @@ async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
     status = await service.docker()
     assert status == DockerStatus(available=True, version="25.0.0", detail=None)
 
-    env = await service.environment("prj_123")
-    assert env == EnvironmentStatus(state="none", tag=None, detail=None)
+    with pytest.raises(DomainError):
+        await service.environment("prj_123")
 
     with pytest.raises(DomainError):
         await service.rebuild("prj_123")
@@ -43,7 +47,7 @@ async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
         id="tsk_1",
         title="Test task",
         branch="agent/task-1",
-        worktree=tmp_path / "worktree",
+        worktree=tmp_path,
         status="active",
     )
     with pytest.raises(NotImplementedError):

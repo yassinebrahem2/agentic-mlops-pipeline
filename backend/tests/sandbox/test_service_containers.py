@@ -9,6 +9,7 @@ from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
+from tests.sandbox.fakes import MemorySandboxProjects
 
 
 class FakeServiceDocker(DockerRunner):
@@ -115,7 +116,7 @@ async def test_service_remove_task_and_close(tmp_path: Path) -> None:
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
-    service = SandboxService(runner=runner, repo_roots={"prj_1": worktree})
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects({"prj_1": worktree}))
 
     task = TaskRef(
         id="task_svc_1",
@@ -147,7 +148,7 @@ async def test_service_network_settings_and_container_recreation(tmp_path: Path)
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
-    service = SandboxService(runner=runner, repo_roots={"prj_1": worktree})
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects({"prj_1": worktree}))
 
     task = TaskRef(
         id="task_net_1",
@@ -190,6 +191,6 @@ async def test_service_cleanup_orphans(tmp_path: Path) -> None:
         "Config": {"Image": "some_img", "Labels": {f"{APP_NAME}": "true"}},
     }
 
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
     await service.cleanup_orphans()
     assert f"{APP_NAME}-orphan" not in runner.containers

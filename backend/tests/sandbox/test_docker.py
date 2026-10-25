@@ -14,6 +14,7 @@ from mlops_agents.sandbox.docker import (
     detect_docker,
 )
 from mlops_agents.sandbox.service import SandboxService
+from tests.sandbox.fakes import MemorySandboxProjects
 
 
 class FakeDockerRunner:
@@ -165,7 +166,7 @@ async def test_cli_runner_timeout_preserves_captured_output() -> None:
 
 @pytest.mark.docker
 async def test_real_docker_available() -> None:
-    service = SandboxService()
+    service = SandboxService(projects=MemorySandboxProjects())
     status = await service.docker()
     assert status.available is True
     assert status.version is not None

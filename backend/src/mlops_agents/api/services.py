@@ -32,6 +32,7 @@ from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -105,15 +106,21 @@ async def build_services(
     git = GitRunner(paths.bin, token_provider=github.token)
     workspace = WorkspaceService(settings, paths, databases, git, github, http)
     providers = ProvidersService(databases, keystore, http)
-    tools = default_registry()
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
-    agent_settings = AgentSettingsService(databases, providers, catalog)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+
+    sandbox = SandboxService(projects=DatabaseSandboxProjects(databases, workspace), events=events)
+    await sandbox.cleanup_orphans()
+    stack.push_async_callback(sandbox.close)
+
+    tools = default_registry()
+    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    agent_settings = AgentSettingsService(databases, providers, catalog)
+
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
 
@@ -134,10 +141,6 @@ async def build_services(
     )
     status_board.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
-
-    sandbox = SandboxService(databases=databases, workspace=workspace, events=events)
-    await sandbox.cleanup_orphans()
-    stack.push_async_callback(sandbox.close)
 
     return Services(
         settings=settings,

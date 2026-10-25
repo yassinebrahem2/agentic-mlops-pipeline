@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 from dataclasses import dataclass
 from typing import cast
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import SandboxUnavailable
-from mlops_agents.sandbox.docker import DockerRunner
+from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner
 
 
 def container_name(task_id: str) -> str:
@@ -25,10 +23,9 @@ def build_run_args(
     image_tag: str,
     *,
     network: bool = False,
-    is_posix: bool | None = None,
+    user: str | None = None,
 ) -> list[str]:
     """Builds docker run arguments for starting a task container."""
-    posix = (os.name == "posix") if is_posix is None else is_posix
     name = container_name(task.id)
     args = [
         "run",
@@ -67,10 +64,8 @@ def build_run_args(
             "PYTHONPATH=/workspace/src:/workspace",
         ]
     )
-    if posix:
-        uid = getattr(os, "getuid", lambda: 1000)()
-        gid = getattr(os, "getgid", lambda: 1000)()
-        args.extend(["-u", f"{uid}:{gid}"])
+    if user is not None:
+        args.extend(["-u", user])
     args.append(image_tag)
     args.extend(["sleep", "infinity"])
     return args
@@ -89,15 +84,13 @@ class ContainerInfo:
 class ContainerManager:
     """Manages Docker containers for tasks."""
 
-    def __init__(self, runner: DockerRunner) -> None:
+    def __init__(self, runner: DockerRunner, *, user: str | None = None) -> None:
         self._runner = runner
+        self._user = user
 
     async def inspect(self, name: str) -> ContainerInfo | None:
         """Inspects a container and returns its info, or None if not found."""
-        try:
-            res = await self._runner.run(["inspect", name], timeout_s=15.0)
-        except Exception:
-            return None
+        res = await self._runner.run(["inspect", name], timeout_s=15.0)
         if res.exit_code != 0:
             return None
         try:
@@ -108,7 +101,7 @@ class ContainerManager:
             if not isinstance(first_raw, dict):
                 return None
             item = cast(dict[str, object], first_raw)
-        except Exception:
+        except json.JSONDecodeError:
             return None
 
         state_raw = item.get("State")
@@ -157,7 +150,6 @@ class ContainerManager:
         image_tag: str,
         *,
         network: bool = False,
-        is_posix: bool | None = None,
     ) -> str:
         """Starts a new container for the task and returns its name."""
         name = container_name(task.id)
@@ -167,12 +159,12 @@ class ContainerManager:
             task,
             image_tag,
             network=network,
-            is_posix=is_posix,
+            user=self._user,
         )
         try:
             res = await self._runner.run(args, timeout_s=30.0)
         except FileNotFoundError as err:
-            raise SandboxUnavailable("Docker is not installed or not on PATH.") from err
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
         except TimeoutError as err:
             raise SandboxUnavailable("Timed out starting sandbox container.") from err
         if res.exit_code != 0:
@@ -182,8 +174,11 @@ class ContainerManager:
 
     async def remove(self, name: str) -> None:
         """Removes a container by name if it exists."""
-        with contextlib.suppress(Exception):
+        try:
             await self._runner.run(["rm", "-f", name], timeout_s=30.0)
+        except FileNotFoundError:
+            # Removal is already satisfied if Docker has been uninstalled.
+            return
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
         """Stops and removes the container for a task."""
@@ -204,7 +199,7 @@ class ContainerManager:
                 ],
                 timeout_s=15.0,
             )
-        except Exception:
+        except FileNotFoundError:
             return
         if res.exit_code == 0 and res.stdout.strip():
             for cid in res.stdout.strip().splitlines():
@@ -219,7 +214,7 @@ class ContainerManager:
                 ["ps", "-a", "--filter", f"label={APP_NAME}=true", "--format", "{{.ID}}"],
                 timeout_s=15.0,
             )
-        except Exception:
+        except FileNotFoundError:
             return
         if res.exit_code == 0 and res.stdout.strip():
             for cid in res.stdout.strip().splitlines():
@@ -238,7 +233,6 @@ class ContainerManager:
         image_tag: str,
         *,
         network: bool = False,
-        is_posix: bool | None = None,
     ) -> str:
         """Ensures a container is running for the task on the specified image and network setting."""
         name = container_name(task.id)
@@ -253,5 +247,12 @@ class ContainerManager:
             task,
             image_tag,
             network=network,
-            is_posix=is_posix,
         )
+
+
+def host_container_user() -> str | None:
+    import os
+
+    if os.name == "posix":
+        return f"{os.getuid()}:{os.getgid()}"
+    return None
