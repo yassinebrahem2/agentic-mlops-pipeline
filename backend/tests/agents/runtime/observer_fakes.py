@@ -119,11 +119,13 @@ class WorkerCapturingObserver(RecordingObserver):
     def __init__(self) -> None:
         super().__init__()
         self.workers: list[asyncio.Task[object]] = []
+        self.started = asyncio.Event()
 
     async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         task = asyncio.current_task()
         assert task is not None
         self.workers.append(task)
+        self.started.set()
         await super().turn_started(project_id, agent, turn_id)
 
 

@@ -34,6 +34,10 @@ class _Ending:
     failure_notice: str | None = None
 
 
+# A failure no part of the turn recorded: its system message is written with the end.
+_UNEXPECTED_FAILURE = _Ending("failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT)
+
+
 class TurnWorkers:
     """Owns each session's worker task and the turn task it is running."""
 
@@ -205,25 +209,42 @@ class TurnWorkers:
         for it and is raised after, so it never rewrites the end nor reports it twice.
 
         It runs in its own task and takes the session lock, which the worker never holds when
-        it gets here; the turn task has finished, except on the interrupted path when a further
-        cancel cut short the wait for it, where at worst this waits for it to let go.
+        it gets here, and the turn task has finished by then.
         """
-        status = ending.status
-        if status == "interrupted":
-            await self._store.set_turn(project_id, turn_id, status)
+        if ending.status == "interrupted":
+            await self._store.set_turn(project_id, turn_id, "interrupted")
             await self._store.mark_interrupted(project_id, turn_id)
             # A cancel before the trigger was read would leave it queued for good.
             await self._settle_trigger(
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
             )
         else:
-            if ending.failure_notice is not None:
-                await self._executor.record_failure(
-                    project_id, session_id, turn_id, hub, lock, ending.failure_notice
-                )
-            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
-            await hub.turn_ended(turn_id, status=status, error=ending.error)
-        await self._turn_ended(project_id, session_id, agent, turn_id, status)
+            try:
+                await self._store_end(project_id, session_id, turn_id, hub, lock, ending)
+            except Exception:
+                # As any other unexpected failure of the turn: it ends failed and the queue goes
+                # on. A failure of this fallback too is raised.
+                logger.exception("Could not store how turn %s ended; it ends failed", turn_id)
+                ending = _UNEXPECTED_FAILURE
+                await self._store_end(project_id, session_id, turn_id, hub, lock, ending)
+        await self._turn_ended(project_id, session_id, agent, turn_id, ending.status)
+
+    async def _store_end(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        ending: _Ending,
+    ) -> None:
+        """Store a turn's decided end, other than interrupted, and publish it."""
+        if ending.failure_notice is not None:
+            await self._executor.record_failure(
+                project_id, session_id, turn_id, hub, lock, ending.failure_notice
+            )
+        await self._store.set_turn(project_id, turn_id, ending.status, error=ending.error)
+        await hub.turn_ended(turn_id, status=ending.status, error=ending.error)
 
     async def _settle_trigger(
         self,
@@ -290,7 +311,7 @@ class TurnWorkers:
             return _Ending("stopped")
         except Exception:
             logger.exception("Turn %s failed outside the executor", turn_id)
-            return _Ending("failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT)
+            return _UNEXPECTED_FAILURE
         finally:
             self._child_tasks.pop(key, None)
 
