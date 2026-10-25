@@ -9,7 +9,11 @@ from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
-from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.executor import (
+    UNEXPECTED_FAILURE_TEXT,
+    TurnExecutor,
+    TurnOutcome,
+)
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.shielded import shielded
@@ -59,7 +63,7 @@ class TurnWorkers:
         self._executor = executor
         self._observers = tuple(observers)
         self._workers: dict[SessionKey, asyncio.Task[None]] = {}
-        self._child_tasks: dict[SessionKey, asyncio.Task[tuple[TurnEnd, str | None]]] = {}
+        self._child_tasks: dict[SessionKey, asyncio.Task[TurnOutcome]] = {}
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.
         self._current_turns: dict[SessionKey, str] = {}
         self._stopped_turns: set[str] = set()
@@ -384,7 +388,7 @@ class TurnWorkers:
         return texts[-1] if texts else None
 
 
-def _ending_of(turn_id: str, child_task: asyncio.Task[tuple[TurnEnd, str | None]]) -> _Ending:
+def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
     """How a finished, not cancelled turn task ended; an error that escaped it fails the turn."""
     error = child_task.exception()
     if error is not None:

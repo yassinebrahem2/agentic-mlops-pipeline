@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 OBSERVER_TIMEOUT_S = 10.0
 
 
-async def _observed(call: Any) -> None:
+async def _observed(call: Awaitable[None]) -> None:
     try:
         async with asyncio.timeout(OBSERVER_TIMEOUT_S):
             await call

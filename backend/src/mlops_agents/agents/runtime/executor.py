@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, cast
+from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -37,7 +37,15 @@ from mlops_agents.storage.sqlite import connect_checkpointer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TURN_DURABILITY", "UNEXPECTED_FAILURE_TEXT", "TurnExecutor", "TurnSink"]
+__all__ = [
+    "TURN_DURABILITY",
+    "UNEXPECTED_FAILURE_TEXT",
+    "TurnExecutor",
+    "TurnOutcome",
+    "TurnSink",
+]
+
+TurnOutcome = tuple[TurnEnd, str | None] | tuple[Literal["waiting"], None]
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 
@@ -110,7 +118,7 @@ class TurnExecutor:
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         agent_message_id: str | None = None
         current_parts: list[Part] = []
 
@@ -260,7 +268,7 @@ class TurnExecutor:
                     lock=lock,
                     observers=self._observers,
                 )
-                return cast(tuple[TurnEnd, str | None], ("waiting", None))
+                return ("waiting", None)
 
             await finish_agent_message("complete")
             return ("done", None)
