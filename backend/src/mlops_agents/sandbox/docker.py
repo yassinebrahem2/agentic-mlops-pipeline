@@ -12,6 +12,69 @@ from typing import Protocol, cast, runtime_checkable
 from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
 from mlops_agents.sandbox.contract import DockerStatus
 
+HEAD_CAPTURE_CHARS = 15_000
+TAIL_CAPTURE_CHARS = 15_000
+
+
+class DockerTimeoutError(TimeoutError):
+    """Raised when a docker command exceeds its timeout, preserving captured streams."""
+
+    def __init__(self, message: str, *, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class StreamCapture:
+    """Incrementally captures at most head and tail characters without unbounded buffering."""
+
+    def __init__(
+        self,
+        head_limit: int = HEAD_CAPTURE_CHARS,
+        tail_limit: int = TAIL_CAPTURE_CHARS,
+    ) -> None:
+        self.head_limit = head_limit
+        self.tail_limit = tail_limit
+        self.head = ""
+        self.tail = ""
+        self.total_chars = 0
+
+    def feed(self, text: str) -> None:
+        if not text:
+            return
+        self.total_chars += len(text)
+        if len(self.head) < self.head_limit:
+            needed = self.head_limit - len(self.head)
+            self.head += text[:needed]
+            remaining = text[needed:]
+        else:
+            remaining = text
+        if remaining:
+            self.tail = (self.tail + remaining)[-self.tail_limit :]
+
+    def get_output(self) -> str:
+        if self.total_chars <= self.head_limit:
+            return self.head
+        if self.total_chars <= self.head_limit + self.tail_limit:
+            return self.head + self.tail
+        cut_count = self.total_chars - (len(self.head) + len(self.tail))
+        cut_note = f"\n\n[... {cut_count} characters truncated ...]\n\n"
+        return f"{self.head}{cut_note}{self.tail}"
+
+
+async def _consume_stream(
+    reader: asyncio.StreamReader | None,
+    capture: StreamCapture,
+) -> None:
+    if reader is None:
+        return
+    while True:
+        chunk = await reader.read(8192)
+        if not chunk:
+            break
+        text = chunk.decode("utf-8", errors="replace")
+        capture.feed(text)
+
 
 @dataclass(frozen=True)
 class DockerResult:
@@ -32,7 +95,7 @@ class DockerRunner(Protocol):
 
 
 class CliDockerRunner:
-    """Runs the docker CLI without a shell, decoding and scrubbing output."""
+    """Runs the docker CLI without a shell, decoding, bounding, and scrubbing output."""
 
     def __init__(self, executable: str = "docker") -> None:
         self._executable = executable
@@ -54,27 +117,39 @@ class CliDockerRunner:
         except FileNotFoundError:
             raise
 
+        stdout_cap = StreamCapture()
+        stderr_cap = StreamCapture()
+
+        async def stream_and_wait() -> int:
+            await asyncio.gather(
+                _consume_stream(proc.stdout, stdout_cap),
+                _consume_stream(proc.stderr, stderr_cap),
+            )
+            return await proc.wait()
+
         try:
             if timeout_s is not None:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout_s
-                )
+                returncode = await asyncio.wait_for(stream_and_wait(), timeout=timeout_s)
             else:
-                stdout_bytes, stderr_bytes = await proc.communicate()
+                returncode = await stream_and_wait()
         except TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
                 await proc.wait()
-            raise
+            raw_stdout = scrub_values(scrub_url_secrets(stdout_cap.get_output()), secrets)
+            raw_stderr = scrub_values(scrub_url_secrets(stderr_cap.get_output()), secrets)
+            raise DockerTimeoutError(
+                f"Docker command timed out after {timeout_s}s",
+                stdout=raw_stdout,
+                stderr=raw_stderr,
+            ) from None
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
-        stdout = scrub_values(scrub_url_secrets(stdout), secrets)
-        stderr = scrub_values(scrub_url_secrets(stderr), secrets)
+        raw_stdout = scrub_values(scrub_url_secrets(stdout_cap.get_output()), secrets)
+        raw_stderr = scrub_values(scrub_url_secrets(stderr_cap.get_output()), secrets)
         return DockerResult(
-            stdout=stdout,
-            stderr=stderr,
-            exit_code=proc.returncode if proc.returncode is not None else -1,
+            stdout=raw_stdout,
+            stderr=raw_stderr,
+            exit_code=returncode,
         )
 
 
@@ -89,12 +164,21 @@ def _extract_version(container: object) -> str | None:
 async def detect_docker(runner: DockerRunner) -> DockerStatus:
     """Detects Docker availability and version via `docker version --format json`."""
     try:
-        result = await runner.run(["version", "--format", "json"])
+        result = await runner.run(["version", "--format", "json"], timeout_s=10.0)
     except FileNotFoundError:
         return DockerStatus(
             available=False,
             version=None,
-            detail="Docker is not installed or not on PATH.",
+            detail=(
+                "Docker is not installed or not on PATH. Install Docker Desktop "
+                "(https://www.docker.com/products/docker-desktop) or Docker Engine to use the Bash sandbox."
+            ),
+        )
+    except TimeoutError:
+        return DockerStatus(
+            available=False,
+            version=None,
+            detail="Docker command timed out checking version.",
         )
 
     client_version: str | None = None
@@ -110,7 +194,7 @@ async def detect_docker(runner: DockerRunner) -> DockerStatus:
         return DockerStatus(
             available=False,
             version=client_version,
-            detail="Docker daemon is not running.",
+            detail="Docker daemon is not running. Please start Docker Desktop or the Docker daemon.",
         )
 
     return DockerStatus(

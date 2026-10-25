@@ -6,7 +6,13 @@ from collections.abc import Iterable, Sequence
 import pytest
 
 from mlops_agents.sandbox.contract import DockerStatus
-from mlops_agents.sandbox.docker import CliDockerRunner, DockerResult, DockerRunner, detect_docker
+from mlops_agents.sandbox.docker import (
+    CliDockerRunner,
+    DockerResult,
+    DockerRunner,
+    DockerTimeoutError,
+    detect_docker,
+)
 from mlops_agents.sandbox.service import SandboxService
 
 
@@ -48,6 +54,7 @@ async def test_detect_docker_available() -> None:
     assert status == DockerStatus(available=True, version="27.3.1", detail=None)
     assert len(runner.calls) == 1
     assert runner.calls[0][0] == ["version", "--format", "json"]
+    assert runner.calls[0][1] == 10.0
 
 
 async def test_detect_docker_not_installed() -> None:
@@ -55,7 +62,9 @@ async def test_detect_docker_not_installed() -> None:
     status = await detect_docker(runner)
     assert status.available is False
     assert status.version is None
-    assert status.detail == "Docker is not installed or not on PATH."
+    assert status.detail is not None
+    assert "Docker is not installed or not on PATH" in status.detail
+    assert "Install Docker Desktop" in status.detail
 
 
 async def test_detect_docker_daemon_down_with_client_version() -> None:
@@ -68,7 +77,8 @@ async def test_detect_docker_daemon_down_with_client_version() -> None:
     status = await detect_docker(runner)
     assert status.available is False
     assert status.version == "27.3.1"
-    assert status.detail == "Docker daemon is not running."
+    assert status.detail is not None
+    assert "Docker daemon is not running" in status.detail
 
 
 async def test_detect_docker_daemon_down_unparseable_output() -> None:
@@ -80,7 +90,8 @@ async def test_detect_docker_daemon_down_unparseable_output() -> None:
     status = await detect_docker(runner)
     assert status.available is False
     assert status.version is None
-    assert status.detail == "Docker daemon is not running."
+    assert status.detail is not None
+    assert "Docker daemon is not running" in status.detail
 
 
 async def test_cli_runner_scrubs_output_and_secrets() -> None:
@@ -118,6 +129,38 @@ async def test_cli_runner_timeout() -> None:
     runner = CliDockerRunner(executable=sys.executable)
     with pytest.raises(TimeoutError):
         await runner.run(["-c", code], timeout_s=0.1)
+
+
+async def test_cli_runner_streams_incrementally_without_communicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio.subprocess
+    import sys
+
+    def fail_communicate(*args: object, **kwargs: object) -> object:
+        raise AssertionError("proc.communicate() was called, expected incremental stream reading!")
+
+    monkeypatch.setattr(asyncio.subprocess.Process, "communicate", fail_communicate)
+
+    # 50,000 characters: 20k 'A's, 10k 'B's, 20k 'C's
+    code = "import sys; sys.stdout.write('A' * 20000 + 'B' * 10000 + 'C' * 20000)"
+    runner = CliDockerRunner(executable=sys.executable)
+    res = await runner.run(["-c", code])
+
+    assert res.exit_code == 0
+    assert res.stdout.startswith("A" * 15000)
+    assert res.stdout.endswith("C" * 15000)
+    assert "characters truncated" in res.stdout
+
+
+async def test_cli_runner_timeout_preserves_captured_output() -> None:
+    import sys
+
+    code = "import sys, time; sys.stdout.write('captured output before sleep'); sys.stdout.flush(); time.sleep(5)"
+    runner = CliDockerRunner(executable=sys.executable)
+    with pytest.raises(DockerTimeoutError) as exc_info:
+        await runner.run(["-c", code], timeout_s=0.2)
+    assert "captured output before sleep" in exc_info.value.stdout
 
 
 @pytest.mark.docker

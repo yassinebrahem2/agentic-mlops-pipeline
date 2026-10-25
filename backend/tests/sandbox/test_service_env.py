@@ -95,8 +95,7 @@ async def test_service_rebuild_success_and_events(tmp_path: Path) -> None:
 
     runner = FakeDockerRunner()
     events = FakeEventLog()
-    service = SandboxService(runner, events=events)
-    service.register_project_root("prj_123", repo)
+    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
 
     status = await service.rebuild("prj_123")
     assert status.state == "ready"
@@ -126,8 +125,7 @@ async def test_service_rebuild_failure_and_events(tmp_path: Path) -> None:
     runner = FakeDockerRunner()
     runner.fail_build = True
     events = FakeEventLog()
-    service = SandboxService(runner, events=events)
-    service.register_project_root("prj_123", repo)
+    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
 
     status = await service.rebuild("prj_123")
     assert status.state == "failed"
@@ -149,8 +147,7 @@ async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> No
 
     runner = FakeDockerRunner()
     events = FakeEventLog()
-    service = SandboxService(runner, events=events)
-    service.register_project_root("prj_123", repo)
+    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
 
     original_run = runner.run
 

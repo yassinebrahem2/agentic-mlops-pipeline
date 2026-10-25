@@ -22,7 +22,7 @@ from mlops_agents.sandbox.contract import (
     SandboxUnavailable,
 )
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner, detect_docker
-from mlops_agents.sandbox.environment import detect_environment
+from mlops_agents.sandbox.environment import DetectedEnvironment, detect_environment
 from mlops_agents.sandbox.images import ImageManager
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import project_settings
@@ -52,31 +52,18 @@ class SandboxService(Sandbox):
         databases: Databases | None = None,
         workspace: WorkspaceService | None = None,
         events: EventLog | None = None,
+        repo_roots: dict[str, Path] | None = None,
     ) -> None:
-        self._docker_runner: DockerRunner = runner if runner is not None else CliDockerRunner()
-        self._image_manager = ImageManager(self._docker_runner)
-        self._container_manager = ContainerManager(self._docker_runner)
+        self._runner: DockerRunner = runner if runner is not None else CliDockerRunner()
+        self._image_manager = ImageManager(self._runner)
+        self._container_manager = ContainerManager(self._runner)
         self._databases = databases
         self._workspace = workspace
         self._events = events
         self._locks: dict[str, asyncio.Lock] = {}
         self._status: dict[str, EnvironmentStatus] = {}
-        self._repo_roots: dict[str, Path] = {}
+        self._repo_roots: dict[str, Path] = dict(repo_roots or {})
         self._network_settings: dict[str, bool] = {}
-
-    @property
-    def _runner(self) -> DockerRunner:
-        return self._docker_runner
-
-    @_runner.setter
-    def _runner(self, runner: DockerRunner) -> None:
-        self._docker_runner = runner
-        self._image_manager = ImageManager(runner)
-        self._container_manager = ContainerManager(runner)
-
-    def register_project_root(self, project_id: str, path: Path) -> None:
-        """Registers a project's root path directly (used in tests)."""
-        self._repo_roots[project_id] = path
 
     async def _get_repo_root(self, project_id: str) -> Path:
         if project_id in self._repo_roots:
@@ -106,13 +93,16 @@ class SandboxService(Sandbox):
 
         return self._status.get(project_id, EnvironmentStatus(state="none", tag=None, detail=None))
 
-    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+    async def _build_project_image(
+        self,
+        project_id: str,
+        worktree: Path,
+        detected: DetectedEnvironment,
+    ) -> EnvironmentStatus:
+        """Serializes image build for a project, tracking status and emitting build events."""
         lock = self._locks.setdefault(project_id, asyncio.Lock())
         async with lock:
-            root = await self._get_repo_root(project_id)
-            detected = detect_environment(root)
-            tag = self._image_manager.tag_for(project_id, root, detected)
-
+            tag = self._image_manager.tag_for(project_id, worktree, detected)
             if await self._image_manager.image_exists(tag):
                 status = EnvironmentStatus(state="ready", tag=tag, detail=None)
                 self._status[project_id] = status
@@ -128,7 +118,7 @@ class SandboxService(Sandbox):
                 )
 
             start_time = time.monotonic()
-            status = await self._image_manager.build_image(project_id, root, detected)
+            status = await self._image_manager.build_image(project_id, worktree, detected)
             duration_s = round(time.monotonic() - start_time, 2)
             self._status[project_id] = status
 
@@ -149,6 +139,11 @@ class SandboxService(Sandbox):
                     )
 
             return status
+
+    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        root = await self._get_repo_root(project_id)
+        detected = detect_environment(root)
+        return await self._build_project_image(project_id, root, detected)
 
     async def get_network(self, project_id: str) -> bool:
         if self._databases is not None:
@@ -198,47 +193,12 @@ class SandboxService(Sandbox):
             detected = detect_environment(task.worktree)
             tag = self._image_manager.tag_for(project_id, task.worktree, detected)
             if not await self._image_manager.image_exists(tag):
-                proj_lock = self._locks.setdefault(project_id, asyncio.Lock())
-                async with proj_lock:
-                    if not await self._image_manager.image_exists(tag):
-                        self._status[project_id] = EnvironmentStatus(
-                            state="building", tag=tag, detail=None
-                        )
-                        if self._events is not None:
-                            await self._events.record(
-                                project_id,
-                                source="system",
-                                type="sandbox.build.started",
-                                payload={"tag": tag, "template": detected.template},
-                            )
-                        start_time = time.monotonic()
-                        status = await self._image_manager.build_image(
-                            project_id, task.worktree, detected
-                        )
-                        duration_s = round(time.monotonic() - start_time, 2)
-                        self._status[project_id] = status
-
-                        if self._events is not None:
-                            if status.state == "ready":
-                                await self._events.record(
-                                    project_id,
-                                    source="system",
-                                    type="sandbox.build.finished",
-                                    payload={"tag": tag, "duration_s": duration_s},
-                                )
-                            elif status.state == "failed":
-                                await self._events.record(
-                                    project_id,
-                                    source="system",
-                                    type="sandbox.build.failed",
-                                    payload={"tag": tag, "detail": status.detail or ""},
-                                )
-
-                        if status.state != "ready" or not status.tag:
-                            raise SandboxUnavailable(
-                                f"Environment build failed: {status.detail or 'unknown error'}"
-                            )
-                        tag = status.tag
+                status = await self._build_project_image(project_id, task.worktree, detected)
+                if status.state != "ready" or not status.tag:
+                    raise SandboxUnavailable(
+                        f"Environment build failed: {status.detail or 'unknown error'}"
+                    )
+                tag = status.tag
 
             network = await self.get_network(project_id)
             return await self._container_manager.ensure_container(
@@ -256,14 +216,26 @@ class SandboxService(Sandbox):
                 ["exec", cname, "bash", "-lc", command],
                 timeout_s=timeout,
             )
-        except TimeoutError:
+        except TimeoutError as exc:
             with contextlib.suppress(Exception):
-                await self._runner.run(["restart", "-t", "0", cname])
+                await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
+            captured = ""
+            stdout_val = getattr(exc, "stdout", "")
+            stderr_val = getattr(exc, "stderr", "")
+            if isinstance(stdout_val, str) and isinstance(stderr_val, str):
+                captured = (stdout_val + stderr_val).strip()
+            msg = f"Command took longer than {timeout} seconds and was stopped."
+            if captured:
+                out, trunc = truncate_output(captured)
+                output = f"{out}\n\n{msg}"
+            else:
+                output = msg
+                trunc = False
             return CommandResult(
-                output=f"Command took longer than {timeout} seconds and was stopped.",
+                output=output,
                 exit_code=None,
                 timed_out=True,
-                truncated=False,
+                truncated=trunc,
             )
         except FileNotFoundError as err:
             raise SandboxUnavailable("Docker is not installed or not on PATH.") from err

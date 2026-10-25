@@ -23,6 +23,7 @@ class FakeRunDocker(DockerRunner):
         self.images: set[str] = set()
         self.exec_result: DockerResult | None = None
         self.exec_timeout: bool = False
+        self.exec_timeout_output: str = ""
         self.build_fail_detail: str | None = None
         self.docker_installed: bool = True
         self.daemon_running: bool = True
@@ -92,7 +93,13 @@ class FakeRunDocker(DockerRunner):
 
         if cmd[0] == "exec":
             if self.exec_timeout:
-                raise TimeoutError("Command timed out")
+                from mlops_agents.sandbox.docker import DockerTimeoutError
+
+                raise DockerTimeoutError(
+                    "Command timed out",
+                    stdout=self.exec_timeout_output,
+                    stderr="",
+                )
             if self.exec_result is not None:
                 return self.exec_result
             return DockerResult(stdout="executed\n", stderr="", exit_code=0)
@@ -259,6 +266,26 @@ async def test_run_timeout_restarts_container(tmp_path: Path) -> None:
     restart_calls = [c for c in runner.calls if c[0] == "restart"]
     assert len(restart_calls) == 1
     assert restart_calls[0] == ["restart", "-t", "0", f"{APP_NAME}-task_run_7"]
+
+
+async def test_run_timeout_returns_captured_output(tmp_path: Path) -> None:
+    runner = FakeRunDocker()
+    runner.exec_timeout = True
+    runner.exec_timeout_output = "processing step 1\nprocessing step 2"
+    service = SandboxService(runner=runner)
+
+    task = TaskRef(
+        id="task_run_timeout_captured",
+        title="Task Run Timeout Captured",
+        branch="branch-1",
+        worktree=tmp_path,
+        status="active",
+    )
+    result = await service.run("prj_1", task, "sleep 100", 15)
+    assert result.timed_out is True
+    assert result.exit_code is None
+    assert "processing step 1\nprocessing step 2" in result.output
+    assert "Command took longer than 15 seconds and was stopped." in result.output
 
 
 # Docker tests (run on Linux CI with pytest -m docker)

@@ -13,6 +13,7 @@ from mlops_agents.sandbox.images import (
     ImageManager,
     compute_image_tag,
     create_build_context,
+    load_template,
 )
 
 
@@ -23,6 +24,7 @@ class FakeDocker(DockerRunner):
         self.existing_images: set[str] = set()
         self.containers_by_image: dict[str, list[str]] = {}
         self.build_fail_output: str | None = None
+        self.raise_timeout: bool = False
 
     async def run(
         self,
@@ -42,6 +44,8 @@ class FakeDocker(DockerRunner):
             return DockerResult(stdout="", stderr="Error: No such image", exit_code=1)
 
         if cmd[0] == "build":
+            if self.raise_timeout:
+                raise TimeoutError("Docker build timed out")
             if self.build_fail_output is not None:
                 return DockerResult(stdout="", stderr=self.build_fail_output, exit_code=1)
             # Find the tag in cmd
@@ -230,3 +234,144 @@ async def test_real_docker_build_and_reuse(tmp_path: Path) -> None:
 
     # Cleanup image
     await runner.run(["image", "rm", status1.tag])
+
+
+async def test_build_timeout_caught_as_failed(tmp_path: Path) -> None:
+    runner = FakeDocker()
+    runner.raise_timeout = True
+    manager = ImageManager(runner)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    detected = DetectedEnvironment(
+        template="base",
+        python_version="3.12",
+        dependency_files=(),
+    )
+
+    status = await manager.build_image("prj_123", worktree, detected)
+    assert status.state == "failed"
+    assert status.detail is not None
+    assert "timed out" in status.detail
+
+
+def test_load_template_literal_substitution() -> None:
+    content = load_template("base", "3.11")
+    assert "ARG PYTHON_VERSION=3.11\n" in content
+
+    # Injected shell commands / newlines must be rejected and fall back to default 3.12
+    injected = load_template("base", "3.12\nRUN touch /tmp/pwned")
+    assert "ARG PYTHON_VERSION=3.12\n" in injected
+    assert "pwned" not in injected
+
+
+def test_build_context_refuses_symlinks(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    req = worktree / "requirements.txt"
+    external = tmp_path / "secret.env"
+    external.write_text("SECRET_TOKEN=xyz\n", encoding="utf-8")
+
+    detected = DetectedEnvironment(
+        template="requirements",
+        python_version="3.12",
+        dependency_files=("requirements.txt",),
+    )
+    context_dir = tmp_path / "context"
+
+    try:
+        req.symlink_to(external)
+        create_build_context(worktree, detected, context_dir)
+        assert not (context_dir / "requirements.txt").exists()
+    except OSError:
+        req.write_text("SECRET_TOKEN=xyz\n", encoding="utf-8")
+        with patch.object(Path, "is_symlink", return_value=True):
+            create_build_context(worktree, detected, context_dir)
+            assert not (context_dir / "requirements.txt").exists()
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize(
+    ("template", "files"),
+    [
+        ("base", {}),
+        ("requirements", {"requirements.txt": "six\n"}),
+        (
+            "pyproject",
+            {
+                "pyproject.toml": '[project]\nname = "demo"\nversion = "0.1.0"\ndependencies = ["six"]\n'
+            },
+        ),
+        (
+            "uv",
+            {
+                "pyproject.toml": '[project]\nname = "demo"\nversion = "0.1.0"\n',
+                "uv.lock": "version = 1\nrequires-python = '>=3.12'\n",
+            },
+        ),
+        (
+            "micromamba",
+            {
+                "environment.yml": "name: minenv\nchannels:\n  - conda-forge\ndependencies:\n  - python=3.12\n"
+            },
+        ),
+    ],
+)
+async def test_real_docker_all_templates_build(
+    tmp_path: Path, template: str, files: dict[str, str]
+) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    for fname, content in files.items():
+        (worktree / fname).write_text(content, encoding="utf-8")
+
+    detected = DetectedEnvironment(
+        template=template,
+        python_version="3.12",
+        dependency_files=tuple(files.keys()),
+    )
+    runner = CliDockerRunner()
+    manager = ImageManager(runner)
+    project_id = f"prj_tmpl_{template}"
+
+    status = await manager.build_image(project_id, worktree, detected)
+    try:
+        assert status.state == "ready", f"Build failed: {status.detail}"
+        assert status.tag is not None
+    finally:
+        if status.tag:
+            await runner.run(["image", "rm", status.tag])
+
+
+@pytest.mark.docker
+async def test_real_docker_environment_survives_login_shell(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "requirements.txt").write_text("six\n", encoding="utf-8")
+    detected = DetectedEnvironment(
+        template="requirements",
+        python_version="3.12",
+        dependency_files=("requirements.txt",),
+    )
+    runner = CliDockerRunner()
+    manager = ImageManager(runner)
+    project_id = "prj_login_shell"
+
+    status = await manager.build_image(project_id, worktree, detected)
+    assert status.state == "ready", f"Build failed: {status.detail}"
+    assert status.tag is not None
+    tag = status.tag
+
+    cname = "mlops-agents-test-login-shell"
+    try:
+        # Start container
+        await runner.run(
+            ["run", "-d", "--init", "--name", cname, "-w", "/workspace", tag, "sleep", "infinity"]
+        )
+        # Run bash -lc 'python -c "import six"'
+        res = await runner.run(["exec", cname, "bash", "-lc", 'python -c "import six"'])
+        assert res.exit_code == 0, f"Import in login shell failed: {res.stderr}"
+    finally:
+        await runner.run(["rm", "-f", cname])
+        await runner.run(["image", "rm", tag])
