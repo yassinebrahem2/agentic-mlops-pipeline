@@ -27,7 +27,7 @@
 **Implementation notes:**
 - Move the turn-ending logic out of `worker.py` into its own module (for example `runtime/turn_end.py`), so the worker keeps the loop and every file stays well under 400 lines.
 - Each of these must lead to a stored end, the observers hearing it, `turn.ended` published to connected subscribers, and the worker moving on to the next queued turn:
-  - a storage error inside the interrupted path, with the error logged and the end still recorded through one shielded fallback that cannot raise again;
+  - a storage error while recording any end (done, stopped, failed or interrupted), with the error logged and the end still reported through one shielded fallback that cannot raise again (Decision #249). `test_a_failing_fallback_is_raised_once_not_retried` changes to match;
   - a cancel of the turn task that is neither Stop nor close (the turn ends `interrupted`);
   - a failure while writing the failure notice: exactly one notice per failed turn.
 - A Stop or close that lands during the executor's failure path still marks the agent message `stopped`.
