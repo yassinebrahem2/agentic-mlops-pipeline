@@ -113,6 +113,20 @@ class HeldEndObserver(RecordingObserver):
             await self.release.wait()
 
 
+class WorkerCapturingObserver(RecordingObserver):
+    """Keeps the task that calls turn_started: the session's worker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.workers: list[asyncio.Task[object]] = []
+
+    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self.workers.append(task)
+        await super().turn_started(project_id, agent, turn_id)
+
+
 class SelfCancellingObserver(RecordingObserver):
     """Raises its own CancelledError, as an observer awaiting a task someone else cancelled."""
 

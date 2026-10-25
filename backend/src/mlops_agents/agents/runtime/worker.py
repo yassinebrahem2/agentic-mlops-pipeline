@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Sequence
+from dataclasses import dataclass
 
 from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
@@ -21,6 +22,16 @@ SessionKey = tuple[str, str]
 
 # How long one observer call may take before it is abandoned and logged.
 OBSERVER_TIMEOUT_S = 10.0
+
+
+@dataclass(frozen=True)
+class _Ending:
+    """How a taken turn ended, decided before anything of it is stored. `failure_notice` is
+    the system message of a failure the executor did not record itself."""
+
+    status: TurnEnd
+    error: str | None = None
+    failure_notice: str | None = None
 
 
 class TurnWorkers:
@@ -163,19 +174,22 @@ class TurnWorkers:
             await self._settle_trigger(
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=True
             )
-            ended = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
+            ending = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
         except asyncio.CancelledError:
             # The turn was taken, so it is reported ended, also when the cancel came first.
-            await self._end_interrupted(
-                project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock
+            interrupted = _Ending("interrupted")
+            await self._end_turn(
+                project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, interrupted
             )
             raise
-        # The observers hear of the end after the turn's own handling, so a cancel that
-        # lands in an observer never rewrites how the turn ended, nor reports it twice.
-        await self._turn_ended(project_id, session_id, agent, turn_id, ended)
+        # Nothing suspends between deciding the end and ending: a cancel from here on lands in
+        # the shielded ending, which keeps the decided status and reports it once.
+        await self._end_turn(
+            project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, ending
+        )
 
     @shielded
-    async def _end_interrupted(
+    async def _end_turn(
         self,
         project_id: str,
         session_id: str,
@@ -184,20 +198,32 @@ class TurnWorkers:
         trigger_msg_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
+        ending: _Ending,
     ) -> None:
-        """Leave an interrupted turn's end state and report it, whole: a further cancel of the
-        worker (close racing close_project) waits for it instead of cutting it short.
+        """The one owner of a taken turn's end: its stored end state, then the report to every
+        observer. It runs whole: a cancel of the worker (close, close_project, or both) waits
+        for it and is raised after, so it never rewrites the end nor reports it twice.
 
-        It runs in its own task, so the session lock it takes must be free of the worker: every
-        `async with lock` of the worker has exited by the time a cancel reaches `_take_turn`.
+        It runs in its own task and takes the session lock, which the worker never holds when
+        it gets here; the turn task has finished, except on the interrupted path when a further
+        cancel cut short the wait for it, where at worst this waits for it to let go.
         """
-        await self._store.set_turn(project_id, turn_id, "interrupted")
-        await self._store.mark_interrupted(project_id, turn_id)
-        # A cancel before the trigger was read would leave it queued for good.
-        await self._settle_trigger(
-            project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
-        )
-        await self._turn_ended(project_id, session_id, agent, turn_id, "interrupted")
+        status = ending.status
+        if status == "interrupted":
+            await self._store.set_turn(project_id, turn_id, status)
+            await self._store.mark_interrupted(project_id, turn_id)
+            # A cancel before the trigger was read would leave it queued for good.
+            await self._settle_trigger(
+                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
+            )
+        else:
+            if ending.failure_notice is not None:
+                await self._executor.record_failure(
+                    project_id, session_id, turn_id, hub, lock, ending.failure_notice
+                )
+            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
+            await hub.turn_ended(turn_id, status=status, error=ending.error)
+        await self._turn_ended(project_id, session_id, agent, turn_id, status)
 
     async def _settle_trigger(
         self,
@@ -232,21 +258,19 @@ class TurnWorkers:
         turn_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
-    ) -> TurnEnd:
-        """Run the turn task and store how it ended. A cancel of the worker, or of the turn
-        task other than by Stop, is raised for the caller to mark the turn interrupted."""
+    ) -> _Ending:
+        """Run the turn task and decide how it ended; `_end_turn` stores it. A cancel of the
+        worker, or of the turn task other than by Stop, is raised for an interrupted end."""
         key = (project_id, session_id)
         if turn_id in self._stopped_turns:
-            return await self._end_stopped(project_id, turn_id, hub)
+            return _Ending("stopped")
         child_task = asyncio.create_task(
             self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
         )
         self._child_tasks[key] = child_task
         try:
             end_status, error = await child_task
-            await self._store.set_turn(project_id, turn_id, end_status, error=error)
-            await hub.turn_ended(turn_id, status=end_status, error=error)
-            return end_status
+            return _Ending(end_status, error)
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if current is not None and current.cancelling() > 0:
@@ -263,33 +287,22 @@ class TurnWorkers:
                 raise
             if turn_id not in self._stopped_turns:
                 raise
-            return await self._end_stopped(project_id, turn_id, hub)
+            return _Ending("stopped")
         except Exception:
             logger.exception("Turn %s failed outside the executor", turn_id)
-            await self._executor.record_failure(
-                project_id, session_id, turn_id, hub, lock, UNEXPECTED_FAILURE_TEXT
-            )
-            await self._store.set_turn(project_id, turn_id, "failed", error=UNEXPECTED_FAILURE_TEXT)
-            await hub.turn_ended(turn_id, status="failed", error=UNEXPECTED_FAILURE_TEXT)
-            return "failed"
+            return _Ending("failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT)
         finally:
             self._child_tasks.pop(key, None)
-
-    async def _end_stopped(self, project_id: str, turn_id: str, hub: SessionHub) -> TurnEnd:
-        await self._store.set_turn(project_id, turn_id, "stopped")
-        await hub.turn_ended(turn_id, status="stopped", error=None)
-        return "stopped"
 
     async def _turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         for observer in self._observers:
             await _observed(observer.turn_started(project_id, agent, turn_id))
 
-    @shielded
     async def _turn_ended(
         self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd
     ) -> None:
-        """Every observer hears the end. A cancel of the worker that lands here waits for the
-        last of them (each is bounded by OBSERVER_TIMEOUT_S), then goes on to the worker."""
+        """Every observer hears the end, one after another. It runs inside `_end_turn`'s
+        shielded task, so a cancel of the worker waits for the last of them."""
         if not self._observers:
             return
         try:

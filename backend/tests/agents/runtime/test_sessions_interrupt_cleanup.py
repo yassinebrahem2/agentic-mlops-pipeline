@@ -16,6 +16,7 @@ from tests.agents.runtime.observer_fakes import (
     HangingObserver,
     HeldObserver,
     RecordingObserver,
+    WorkerCapturingObserver,
     turn_statuses,
 )
 from tests.agents.runtime.session_env import build_session_env
@@ -24,20 +25,6 @@ from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 AGENT = "orchestrator"
-
-
-class WorkerCapturingObserver(RecordingObserver):
-    """Keeps the task that calls turn_started: the session's worker."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.workers: list[asyncio.Task[object]] = []
-
-    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
-        task = asyncio.current_task()
-        assert task is not None
-        self.workers.append(task)
-        await super().turn_started(project_id, agent, turn_id)
 
 
 async def test_a_cancel_during_the_running_write_interrupts_the_turn(
