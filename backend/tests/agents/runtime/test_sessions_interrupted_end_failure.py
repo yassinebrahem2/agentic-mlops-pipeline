@@ -8,19 +8,16 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnded
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.observer_fakes import WorkerCapturingObserver, turn_statuses
 from tests.agents.runtime.session_env import (
-    SessionEnv,
     build_session_env,
-    collect_until_turn_ended,
     opened_stream,
     turn_ended_statuses,
 )
-from tests.agents.runtime.turn_tasks import record_turn_tasks
+from tests.agents.runtime.turn_tasks import interrupt_the_first_of_two_turns
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta
@@ -55,43 +52,6 @@ def fail_every_interrupted_write(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(SessionStore, "set_turn", failing_set_turn)
     return failed
-
-
-async def interrupt_the_first_of_two_turns(
-    env: SessionEnv,
-    fake_openai: RunningFake,
-    monkeypatch: pytest.MonkeyPatch,
-    observer: WorkerCapturingObserver,
-) -> None:
-    """Cancel the first turn's task, by neither Stop nor a close, while a second is queued; the
-    first ends interrupted, the second runs to its end."""
-    turn_tasks = record_turn_tasks(monkeypatch)
-    await env.settings.set_default_model(AGENT, f"{env.provider}:fake-slow")
-    fake_openai.state.hold_slow()
-    sub = await opened_stream(env)
-    await env.manager.send(env.project_id, AGENT, "Slow response")
-    queued = await env.manager.send(env.project_id, AGENT, "Slow response again")
-    assert queued.status == "queued"
-    await through_first_delta(sub)
-
-    turn_tasks[0].cancel()
-    first = (await collect_until_turn_ended(sub, timeout=10))[-1]
-    fake_openai.state.release_slow()
-    second = (await collect_until_turn_ended(sub, timeout=10))[-1]
-
-    assert isinstance(first, TurnEnded) and isinstance(second, TurnEnded)
-    assert first.data.turn_id != second.data.turn_id
-    assert (first.data.status, second.data.status) == ("interrupted", "done")
-    for _ in range(2):
-        await asyncio.wait_for(observer.ended.get(), timeout=10)
-    assert [(c[0], c[4]) for c in observer.calls if c[0] == "ended"] == [
-        ("ended", "interrupted"),
-        ("ended", "done"),
-    ]
-    first_worker, second_worker = observer.workers
-    assert first_worker is second_worker
-    await asyncio.wait_for(asyncio.gather(first_worker, return_exceptions=True), timeout=10)
-    assert not first_worker.cancelled() and first_worker.exception() is None
 
 
 async def test_a_failing_interrupted_cleanup_still_records_the_end_and_the_next_turn_runs(
