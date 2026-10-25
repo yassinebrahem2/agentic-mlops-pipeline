@@ -48,6 +48,7 @@ class ProvidersService:
         self._dbs = databases
         self._keys = keystore
         self._http = http
+        self._cached_secrets: list[str] | None = None
 
     # Providers
 
@@ -116,6 +117,7 @@ class ProvidersService:
             await conn.execute(delete(providers).where(providers.c.id == provider.id))
         for ref in refs:
             await asyncio.to_thread(self._keys.delete, ref)
+        self._cached_secrets = None
 
     async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
         engine = await self._dbs.app()
@@ -140,6 +142,20 @@ class ProvidersService:
             )
         values = [await asyncio.to_thread(self._keys.get, ref) for ref in refs]
         return [v for v in values if v]
+
+    async def secret_values(self) -> list[str]:
+        if self._cached_secrets is not None:
+            return list(self._cached_secrets)
+        engine = await self._dbs.app()
+        async with engine.connect() as conn:
+            refs = list(await conn.scalars(select(provider_keys.c.keystore_ref)))
+        values: list[str] = []
+        for ref in refs:
+            val = await asyncio.to_thread(self._keys.get, ref)
+            if val:
+                values.append(val)
+        self._cached_secrets = values
+        return list(values)
 
     async def add_key(self, name: str, value: str) -> Provider:
         value = value.strip()
@@ -184,6 +200,7 @@ class ProvidersService:
                     f"The new key could not be removed from the key store either: {del_err}"
                 )
             raise
+        self._cached_secrets = None
         return await self.get_provider(name)
 
     async def remove_key(self, name: str, position: int) -> Provider:
@@ -198,6 +215,7 @@ class ProvidersService:
                 raise DomainError("key_not_found", "That key is not saved.", status=404)
             await conn.execute(delete(provider_keys).where(where))
         await asyncio.to_thread(self._keys.delete, ref)
+        self._cached_secrets = None
         return await self.get_provider(name)
 
     # Remote calls

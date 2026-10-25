@@ -256,3 +256,41 @@ async def test_add_key_chains_keystore_delete_failure(
     assert err.value.__notes__ == [
         "The new key could not be removed from the key store either: keystore locked"
     ]
+
+
+async def test_secret_values_caching_and_invalidation(
+    make_service: MakeService,
+) -> None:
+    def _mock_handler(_req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"object": "list", "data": []})
+
+    svc = make_service(handler=_mock_handler)
+    await svc.create_provider(HOSTED)
+
+    # Initially empty
+    assert await svc.secret_values() == []
+
+    # Add a key
+    await svc.add_key("groq", GOOD)
+    assert await svc.secret_values() == [GOOD]
+
+    # Verify cached: modifying _cached_secrets directly affects subsequent call
+    cache_attr = "_cached_secrets"
+    setattr(svc, cache_attr, ["fake_cached"])
+    assert await svc.secret_values() == ["fake_cached"]
+
+    # add_key invalidates cache
+    await svc.add_key("groq", GOOD + "_2")
+    assert getattr(svc, cache_attr) is None
+    secrets = await svc.secret_values()
+    assert set(secrets) == {GOOD, GOOD + "_2"}
+
+    # remove_key invalidates cache
+    await svc.remove_key("groq", 2)
+    assert getattr(svc, cache_attr) is None
+    assert await svc.secret_values() == [GOOD]
+
+    # delete_provider invalidates cache
+    await svc.delete_provider("groq")
+    assert getattr(svc, cache_attr) is None
+    assert await svc.secret_values() == []
