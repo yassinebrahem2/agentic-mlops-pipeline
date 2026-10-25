@@ -11,7 +11,7 @@ from sse_starlette import ServerSentEvent
 from mlops_agents.agents.runtime.contract import Resync
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.api.sse import PING_SECONDS, SSE_HEADERS, SseResponse, parse_after_seq
-from mlops_agents.events.contract import EventRecord
+from mlops_agents.events.contract import AgentStatus, EventRecord
 
 router = APIRouter(tags=["events"])
 
@@ -57,3 +57,15 @@ async def stream_events(
         ping=PING_SECONDS,
         headers=dict(SSE_HEADERS),
     )
+
+
+@router.get(
+    "/projects/{project_id}/agents/status",
+    response_model=list[AgentStatus],
+)
+async def get_agents_status(
+    project_id: str,
+    services: ServicesDep,
+    _project: ProjectDep,
+) -> list[AgentStatus]:
+    return await services.status_board.snapshot(project_id)

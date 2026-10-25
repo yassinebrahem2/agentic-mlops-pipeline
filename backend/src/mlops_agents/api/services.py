@@ -24,7 +24,10 @@ from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.events.observer import EventTurnObserver
+from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -50,6 +53,7 @@ class Services:
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
+    status_board: StatusBoard
 
 
 async def _app_secrets(
@@ -104,6 +108,15 @@ async def build_services(
     tools = default_registry()
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     agent_settings = AgentSettingsService(databases, providers, catalog)
+
+    async def secret_source() -> list[str]:
+        return await _app_secrets(providers, github, settings)
+
+    events = SqliteEventLog(databases)
+    audit = SqliteAuditLog(databases, secrets=secret_source)
+    status_board = SqliteStatusBoard(catalog, events)
+    turn_observer = EventTurnObserver(events)
+
     sessions = SessionManager(
         databases=databases,
         workspace=workspace,
@@ -116,14 +129,11 @@ async def build_services(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=RepositoryOnlyWorkspaces(workspace=workspace, git=git),
+        observers=[turn_observer],
+        status_board=status_board,
     )
+    status_board.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
-
-    async def secret_source() -> list[str]:
-        return await _app_secrets(providers, github, settings)
-
-    events = SqliteEventLog(databases)
-    audit = SqliteAuditLog(databases, secrets=secret_source)
 
     sandbox = SandboxService(databases=databases, workspace=workspace, events=events)
     await sandbox.cleanup_orphans()
@@ -144,4 +154,5 @@ async def build_services(
         sandbox=sandbox,
         events=events,
         audit=audit,
+        status_board=status_board,
     )
