@@ -5,8 +5,11 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
 from tests.sandbox.fakes import MemorySandboxProjects
@@ -194,3 +197,47 @@ async def test_service_cleanup_orphans(tmp_path: Path) -> None:
     service = SandboxService(runner=runner, projects=MemorySandboxProjects())
     await service.cleanup_orphans()
     assert f"{APP_NAME}-orphan" not in runner.containers
+
+
+@pytest.mark.parametrize("operation", ["inspect", "rm", "run"])
+@pytest.mark.parametrize("error", [TimeoutError("operation timed out"), OSError("I/O failed")])
+async def test_container_operational_failure_becomes_unavailable(
+    tmp_path: Path,
+    operation: str,
+    error: OSError,
+) -> None:
+    class FailedOperation(FakeServiceDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args[0] == operation:
+                raise error
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    service = SandboxService(FailedOperation(), projects=MemorySandboxProjects())
+    task = TaskRef("tsk_container_failure", "Failure", "branch", tmp_path, "active")
+    with pytest.raises(SandboxUnavailable):
+        await service.ensure_container("prj_1", task)
+
+
+async def test_unexpected_container_failure_surfaces(tmp_path: Path) -> None:
+    class BrokenRunner(FakeServiceDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args[0] == "inspect":
+                raise RuntimeError("runner defect")
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    service = SandboxService(BrokenRunner(), projects=MemorySandboxProjects())
+    task = TaskRef("tsk_unexpected", "Failure", "branch", tmp_path, "active")
+    with pytest.raises(RuntimeError, match="runner defect"):
+        await service.ensure_container("prj_1", task)
