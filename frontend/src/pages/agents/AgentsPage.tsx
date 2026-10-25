@@ -3,16 +3,11 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { errorText } from "@/lib/api";
+import { useAgentStatus } from "@/lib/useAgentStatus";
 import { useProject } from "@/lib/useProject";
 import { useProjectAgents } from "@/lib/useProjectAgents";
+import { AgentList, AgentSelect } from "./AgentList";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { useSession } from "./session/useSession";
@@ -23,6 +18,7 @@ export function AgentsPage() {
 
   const projectQuery = useProject(projectId);
   const agentsQuery = useProjectAgents(projectId);
+  const statusQuery = useAgentStatus(projectId);
 
   const chatAgents = (agentsQuery.data ?? []).filter((agent) => agent.chat);
   const agentParam = searchParams.get("agent");
@@ -72,100 +68,101 @@ export function AgentsPage() {
   const showProjectStatus = project && project.status !== "ok";
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="space-y-2 p-4 pb-0">
-        {showProjectStatus && (
-          <ProjectStatus status={project.status} status_detail={project.status_detail} />
-        )}
-        {selectedAgent?.settings.model_problem && (
-          <Alert variant="warning">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Model configuration</AlertTitle>
-            <AlertDescription className="space-y-1">
-              <p>{selectedAgent.settings.model_problem}</p>
-              <div className="flex gap-4 text-xs">
-                <Link to="/providers" className="font-medium underline hover:text-foreground">
-                  AI providers
-                </Link>
-                <Link
-                  to={`/projects/${projectId}/settings`}
-                  className="font-medium underline hover:text-foreground"
-                >
-                  Project settings
-                </Link>
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
-        {session.connection === "closed" && session.error && (
-          <Alert variant="destructive">
-            <AlertDescription className="flex items-center justify-between gap-4">
-              <span>{errorText(session.error)}</span>
-              <div className="flex items-center gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void session.reload()}
-                >
-                  Retry
-                </Button>
-                <Link to="/" className="font-medium underline">
-                  Projects
-                </Link>
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
-      </div>
-
-      {session.connection === "reconnecting" && (
-        <div
-          role="status"
-          className="bg-amber-500/10 px-4 py-1 text-center text-xs text-amber-700 dark:text-amber-300"
-        >
-          Reconnecting...
-        </div>
-      )}
-
-      {chatAgents.length > 1 && (
-        <div className="flex items-center gap-2 border-b px-4 py-2 text-sm">
-          <label htmlFor="agent-select" className="font-medium">
-            Agent:
-          </label>
-          <Select
-            value={selectedAgentName}
-            onValueChange={(value) => {
-              setSearchParams((prev) => {
-                const next = new URLSearchParams(prev);
-                next.set("agent", value);
-                return next;
-              });
-            }}
-          >
-            <SelectTrigger id="agent-select" aria-label="Select agent" size="sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {chatAgents.map((agent) => (
-                <SelectItem key={agent.name} value={agent.name}>
-                  {agent.display_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      <MessageList messages={session.state?.messages ?? []} />
-
-      <Composer
-        agentName={selectedAgentName}
-        agentDisplayName={selectedAgentDisplayName}
-        busy={session.state?.busy ?? false}
-        onSend={(text) => session.send(text)}
-        onStop={() => session.stop()}
+    <div className="flex h-full overflow-hidden">
+      <AgentList
+        className="hidden md:flex"
+        agents={statusQuery.data ?? []}
+        isLoading={statusQuery.isLoading}
+        error={statusQuery.error}
+        selectedAgent={selectedAgentName}
+        onSelectAgent={(agentName) => {
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("agent", agentName);
+            return next;
+          });
+        }}
       />
+
+      <div className="flex h-full flex-1 min-w-0 flex-col overflow-hidden">
+        <div className="space-y-2 p-4 pb-0">
+          {showProjectStatus && (
+            <ProjectStatus status={project.status} status_detail={project.status_detail} />
+          )}
+          {selectedAgent?.settings.model_problem && (
+            <Alert variant="warning">
+              <AlertCircle className="size-4" />
+              <AlertTitle>Model configuration</AlertTitle>
+              <AlertDescription className="space-y-1">
+                <p>{selectedAgent.settings.model_problem}</p>
+                <div className="flex gap-4 text-xs">
+                  <Link to="/providers" className="font-medium underline hover:text-foreground">
+                    AI providers
+                  </Link>
+                  <Link
+                    to={`/projects/${projectId}/settings`}
+                    className="font-medium underline hover:text-foreground"
+                  >
+                    Project settings
+                  </Link>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+          {session.connection === "closed" && session.error && (
+            <Alert variant="destructive">
+              <AlertDescription className="flex items-center justify-between gap-4">
+                <span>{errorText(session.error)}</span>
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void session.reload()}
+                  >
+                    Retry
+                  </Button>
+                  <Link to="/" className="font-medium underline">
+                    Projects
+                  </Link>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+
+        {session.connection === "reconnecting" && (
+          <div
+            role="status"
+            className="bg-amber-500/10 px-4 py-1 text-center text-xs text-amber-700 dark:text-amber-300"
+          >
+            Reconnecting...
+          </div>
+        )}
+
+        <AgentSelect
+          className="md:hidden"
+          agents={chatAgents}
+          selectedAgent={selectedAgentName}
+          onSelectAgent={(value) => {
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("agent", value);
+              return next;
+            });
+          }}
+        />
+
+        <MessageList messages={session.state?.messages ?? []} />
+
+        <Composer
+          agentName={selectedAgentName}
+          agentDisplayName={selectedAgentDisplayName}
+          busy={session.state?.busy ?? false}
+          onSend={(text) => session.send(text)}
+          onStop={() => session.stop()}
+        />
+      </div>
     </div>
   );
 }

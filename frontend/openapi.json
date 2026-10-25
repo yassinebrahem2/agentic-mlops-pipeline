@@ -199,6 +199,67 @@
         "title": "AgentSettingsView",
         "type": "object"
       },
+      "AgentStatus": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "last_finished": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished"
+          },
+          "open_prs": {
+            "items": {
+              "$ref": "#/components/schemas/PrRef"
+            },
+            "title": "Open Prs",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_approval",
+              "waiting_reply",
+              "inactive"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "display_name",
+          "state",
+          "task",
+          "open_prs",
+          "last_finished"
+        ],
+        "title": "AgentStatus",
+        "type": "object"
+      },
       "AppInfo": {
         "properties": {
           "data_dir": {
@@ -349,6 +410,86 @@
           "provider_exists"
         ],
         "title": "DetectedKey",
+        "type": "object"
+      },
+      "DockerStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "available",
+          "version",
+          "detail"
+        ],
+        "title": "DockerStatus",
+        "type": "object"
+      },
+      "EnvironmentStatus": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "enum": [
+              "none",
+              "building",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "state",
+          "tag",
+          "detail"
+        ],
+        "title": "EnvironmentStatus",
         "type": "object"
       },
       "EventRecord": {
@@ -852,6 +993,29 @@
         "title": "PasswordSignIn",
         "type": "object"
       },
+      "PrRef": {
+        "properties": {
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "url",
+          "title"
+        ],
+        "title": "PrRef",
+        "type": "object"
+      },
       "Preview": {
         "properties": {
           "body": {
@@ -1177,6 +1341,40 @@
         "title": "ResyncData",
         "type": "object"
       },
+      "SandboxSettings": {
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "title": "SandboxSettings",
+        "type": "object"
+      },
+      "SandboxView": {
+        "properties": {
+          "docker": {
+            "$ref": "#/components/schemas/DockerStatus"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          },
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "docker",
+          "environment",
+          "network"
+        ],
+        "title": "SandboxView",
+        "type": "object"
+      },
       "SendMessage": {
         "additionalProperties": false,
         "properties": {
@@ -1295,6 +1493,10 @@
       },
       "TaskView": {
         "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
           "branch": {
             "title": "Branch",
             "type": "string"
@@ -1358,6 +1560,7 @@
         },
         "required": [
           "id",
+          "agent",
           "title",
           "branch",
           "status",
@@ -2620,6 +2823,52 @@
         ]
       }
     },
+    "/api/projects/{project_id}/agents/status": {
+      "get": {
+        "operationId": "get_agents_status_api_projects__project_id__agents_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentStatus"
+                  },
+                  "title": "Response Get Agents Status Api Projects  Project Id  Agents Status Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agents Status",
+        "tags": [
+          "events"
+        ]
+      }
+    },
     "/api/projects/{project_id}/agents/{agent}/limits": {
       "put": {
         "operationId": "set_project_agent_limits_api_projects__project_id__agents__agent__limits_put",
@@ -3237,6 +3486,142 @@
         "summary": "Relink Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/sandbox": {
+      "get": {
+        "operationId": "get_project_sandbox_api_projects__project_id__sandbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/sandbox/rebuild": {
+      "post": {
+        "operationId": "rebuild_project_sandbox_api_projects__project_id__sandbox_rebuild_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebuild Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/sandbox": {
+      "put": {
+        "operationId": "update_project_sandbox_settings_api_projects__project_id__settings_sandbox_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Sandbox Settings",
+        "tags": [
+          "sandbox"
         ]
       }
     },

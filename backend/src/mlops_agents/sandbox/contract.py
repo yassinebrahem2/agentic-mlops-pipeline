@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
 
-from mlops_agents.agents.tools.base import TaskRef
+if TYPE_CHECKING:
+    from mlops_agents.agents.tools.base import TaskRef
+
+DEFAULT_BASH_TIMEOUT_S = 120
+MAX_BASH_TIMEOUT_S = 600
 
 
 class SandboxUnavailable(Exception):
