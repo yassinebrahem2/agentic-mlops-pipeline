@@ -4,7 +4,7 @@ import { api, ApiError, unwrap } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { applyEvent, type SessionState } from "./applyEvent";
 import { eventNames, parseEvent } from "./events";
-import { openStream, STREAM_CONNECTING, type StreamLike } from "./stream";
+import { isConnecting, openStream, StreamBackoff, type StreamLike } from "@/lib/stream";
 
 export type UseSessionResult = {
   state: SessionState | undefined;
@@ -25,7 +25,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
   const [connection, setConnection] = useState<"live" | "reconnecting" | "closed">("closed");
 
   const streamRef = useRef<StreamLike | undefined>(undefined);
-  const retryRef = useRef(0);
+  const backoffRef = useRef(new StreamBackoff());
   const stateRef = useRef<SessionState | undefined>(undefined);
 
   const reloadRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -50,7 +50,8 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
   });
 
   useEffect(() => {
-    retryRef.current = 0;
+    const backoff = backoffRef.current;
+    backoff.reset();
     stateRef.current = undefined;
     setState(undefined);
     setError(undefined);
@@ -61,7 +62,6 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
     }
 
     let disposed = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const queryKey = ["session", projectId, agent] as const;
 
@@ -115,12 +115,9 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
     };
 
     const schedule = () => {
-      const delays = [1000, 2000, 5000];
-      const delay = retryRef.current < delays.length ? delays[retryRef.current] : 10000;
-      retryRef.current += 1;
-      retryTimer = setTimeout(() => {
+      backoffRef.current.schedule(() => {
         void connect(true);
-      }, delay);
+      });
     };
 
     const handleStreamError = () => {
@@ -168,7 +165,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
       stream.addEventListener("open", () => {
         if (!disposed) {
           setConnection("live");
-          retryRef.current = 0;
+          backoffRef.current.reset();
         }
       });
 
@@ -184,7 +181,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
 
         if (!disposed) {
           setConnection("live");
-          retryRef.current = 0;
+          backoffRef.current.reset();
         }
 
         if (parsed.type === "resync") {
@@ -218,7 +215,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
 
       stream.onerror = () => {
         if (disposed) return;
-        if (stream.readyState === STREAM_CONNECTING) {
+        if (isConnecting(stream)) {
           setConnection("reconnecting");
           return;
         }
@@ -227,8 +224,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
     };
 
     reloadRef.current = async () => {
-      if (retryTimer) clearTimeout(retryTimer);
-      retryRef.current = 0;
+      backoffRef.current.reset();
       close();
       const result = await load();
       if (result.state && !disposed) {
@@ -248,7 +244,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
 
     return () => {
       disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      backoff.clear();
       close();
     };
   }, [projectId, agent]);

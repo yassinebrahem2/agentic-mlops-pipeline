@@ -81,7 +81,11 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
       break;
     case "turn.waiting":
       messages = messages.map((message) =>
-        message.turn_id === event.turn_id ? { ...message, status: "waiting" } : message,
+        message.turn_id === event.turn_id &&
+        message.author_kind === "agent" &&
+        message.status === "streaming"
+          ? { ...message, status: "waiting" }
+          : message,
       );
       break;
     case "resync":

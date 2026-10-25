@@ -7,6 +7,21 @@ import { useProjectEvents } from "@/lib/useProjectEvents";
 
 export type AgentState = "idle" | "running" | "waiting_approval" | "waiting_reply" | "inactive";
 
+export const STATE_CONFIG: Record<
+  AgentState,
+  { label: string; detail?: string; dotClass: string }
+> = {
+  idle: { label: "idle", dotClass: "bg-emerald-500" },
+  running: { label: "running", dotClass: "bg-blue-500 animate-pulse" },
+  waiting_approval: { label: "waiting for approval", dotClass: "bg-amber-500" },
+  waiting_reply: { label: "waiting for a reply", dotClass: "bg-indigo-500" },
+  inactive: {
+    label: "inactive",
+    detail: "starts in a later stage",
+    dotClass: "bg-muted-foreground/40",
+  },
+};
+
 export type PrRef = {
   number: number;
   url: string;
@@ -68,19 +83,16 @@ export function useAgentStatus(projectId: string | undefined) {
     enabled: Boolean(projectId),
   });
 
+  const triggerDebouncedRefetch = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: agentStatusQueryKey(projectId) });
+    }, 150);
+  };
+
   useProjectEvents(projectId, {
-    onEvent: () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: agentStatusQueryKey(projectId) });
-      }, 150);
-    },
-    onResync: () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: agentStatusQueryKey(projectId) });
-      }, 150);
-    },
+    onEvent: triggerDebouncedRefetch,
+    onResync: triggerDebouncedRefetch,
   });
 
   useEffect(() => {

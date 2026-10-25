@@ -159,4 +159,28 @@ describe("ApprovalCard", () => {
     );
     expect(screen.getByText("expired")).toBeInTheDocument();
   });
+
+  it("shows error and re-enables buttons on failed decision, without changing card status before message.updated", async () => {
+    const user = userEvent.setup();
+    postSpy?.mockRejectedValueOnce(new Error("Network failed"));
+
+    render(<ApprovalCard approval={baseApproval} toolName="Write" projectId="prj_1" />);
+
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+    const rejectButton = screen.getByRole("button", { name: "Reject" });
+
+    await user.click(approveButton);
+
+    // Error is shown
+    const errorAlert = await screen.findByRole("alert");
+    expect(errorAlert).toBeInTheDocument();
+
+    // Buttons are re-enabled
+    expect(approveButton).toBeEnabled();
+    expect(rejectButton).toBeEnabled();
+
+    // Card status does not change optimistically before message.updated
+    expect(screen.queryByText("approved")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
 });

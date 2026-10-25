@@ -3,7 +3,7 @@ import type { PageRoute } from "@/app/routes";
 import { api } from "@/lib/api";
 import { queryClient } from "@/lib/query";
 import { route } from "./route";
-import * as streamModule from "./session/stream";
+import * as streamModule from "@/lib/stream";
 import {
   FakeStream,
   STREAM_CLOSED,
