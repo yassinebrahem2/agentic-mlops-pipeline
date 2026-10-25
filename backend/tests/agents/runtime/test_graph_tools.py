@@ -14,7 +14,7 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.graph_env import RecordingSink, make_agent
+from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent
 from tests.conftest import make_repo
 
 
@@ -96,10 +96,12 @@ async def test_graph_tool_not_in_definition_returns_error(
         store=store,
         sink=sink,
         project_id="prj_1",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
     )
 
     initial_state: TurnState = {
@@ -181,10 +183,12 @@ async def test_graph_parallel_tools_order(
         store=store,
         sink=sink,
         project_id="prj_1",
+        session_id=session_id,
         turn_id=turn_id,
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
+        hooks=graph_hooks(agent),
     )
 
     initial_state: TurnState = {
