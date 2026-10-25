@@ -32,6 +32,7 @@ class FakeSessionsForApproval:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self.resumed_turns: list[tuple[str, str, str]] = []
+        self._lock = asyncio.Lock()
 
     async def update_message(
         self,
@@ -40,11 +41,12 @@ class FakeSessionsForApproval:
         message_id: str,
         transform: Callable[[list[Part]], list[Part]],
     ) -> MessageView:
-        current = await self.store.message(project_id, session_id, message_id)
-        if current is None:
-            raise DomainError("message_not_found", "Message not found", status=404)
-        new_parts = transform(list(current.parts))
-        return await self.store.update_message(project_id, message_id, parts=new_parts)
+        async with self._lock:
+            current = await self.store.message(project_id, session_id, message_id)
+            if current is None:
+                raise DomainError("message_not_found", "Message not found", status=404)
+            new_parts = transform(list(current.parts))
+            return await self.store.update_message(project_id, message_id, parts=new_parts)
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         self.resumed_turns.append((project_id, session_id, turn_id))
