@@ -20,6 +20,7 @@ describe("AgentList", () => {
       state: "running",
       task: {
         id: "tsk_1",
+        agent: "coder",
         title: "Implement feature",
         branch: "feat-1",
         status: "active",
