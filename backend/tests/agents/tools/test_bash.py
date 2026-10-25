@@ -296,3 +296,40 @@ async def test_real_service_build_path_failure_is_a_tool_error(
     assert files.invalidated
     assert events.records[-1].type == "sandbox.build.failed"
     assert events.records[-1].payload["detail"]
+
+
+@pytest.mark.parametrize("operation", ["inspect", "rm", "run", "exec"])
+@pytest.mark.parametrize("error", [TimeoutError("operation timed out"), OSError("I/O failed")])
+async def test_container_operational_failure_becomes_tool_error(
+    tmp_path: Path,
+    operation: str,
+    error: OSError,
+) -> None:
+    from collections.abc import Iterable, Sequence
+
+    from mlops_agents.sandbox.docker import DockerResult
+    from mlops_agents.sandbox.service import SandboxService
+    from tests.sandbox.fakes import MemorySandboxProjects
+    from tests.sandbox.test_service_run import FakeRunDocker
+
+    class FailedOperation(FakeRunDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args[0] == operation:
+                raise error
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    service = SandboxService(FailedOperation(), projects=MemorySandboxProjects())
+    task = TaskRef("tsk_container_failure", "Failure", "branch", tmp_path, "active")
+    result = await BashTool(service).invoke(make_context(tmp_path, task), {"command": "ls"})
+    if operation == "exec" and isinstance(error, TimeoutError):
+        assert not result.is_error
+        assert "was stopped" in result.content
+    else:
+        assert result.is_error
+        assert "sandbox" in result.content.lower()

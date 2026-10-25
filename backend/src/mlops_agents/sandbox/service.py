@@ -138,9 +138,14 @@ class SandboxService(Sandbox):
             tag = status.tag
 
             network = await self.get_network(project_id)
-            return await self._container_manager.ensure_container(
-                project_id, task, tag, network=network
-            )
+            try:
+                return await self._container_manager.ensure_container(
+                    project_id, task, tag, network=network
+                )
+            except FileNotFoundError as exc:
+                raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
+            except OSError as exc:
+                raise SandboxUnavailable(f"Sandbox container operation failed: {exc}") from exc
 
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
@@ -160,6 +165,8 @@ class SandboxService(Sandbox):
                 raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
             except TimeoutError as err:
                 raise SandboxUnavailable("Timed out restarting sandbox container.") from err
+            except OSError as err:
+                raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
             if restarted.exit_code != 0:
                 raise SandboxUnavailable(
                     f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
@@ -184,6 +191,8 @@ class SandboxService(Sandbox):
             )
         except FileNotFoundError as err:
             raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Sandbox command failed: {err}") from err
 
         output, truncated = res.command_output()
         return CommandResult(
