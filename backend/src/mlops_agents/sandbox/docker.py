@@ -24,10 +24,20 @@ TAIL_CAPTURE_CHARS = 15_000
 class DockerTimeoutError(TimeoutError):
     """Raised when a docker command exceeds its timeout, preserving captured streams."""
 
-    def __init__(self, message: str, *, stdout: str = "", stderr: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        output: str | None = None,
+        truncated: bool = False,
+    ) -> None:
         super().__init__(message)
         self.stdout = stdout
         self.stderr = stderr
+        self.output = output
+        self.truncated = truncated
 
 
 class StreamCapture:
@@ -57,6 +67,17 @@ class StreamCapture:
         if remaining:
             self.tail = (self.tail + remaining)[-self.tail_limit :]
 
+    @property
+    def truncated(self) -> bool:
+        return self.total_chars > self.head_limit + self.tail_limit
+
+    @classmethod
+    def from_streams(cls, stdout: str, stderr: str) -> StreamCapture:
+        capture = cls()
+        capture.feed(stdout)
+        capture.feed(stderr)
+        return capture
+
     def get_output(self) -> str:
         if self.total_chars <= self.head_limit:
             return self.head
@@ -70,6 +91,7 @@ class StreamCapture:
 async def _consume_stream(
     reader: asyncio.StreamReader | None,
     capture: StreamCapture,
+    combined: StreamCapture,
 ) -> None:
     if reader is None:
         return
@@ -79,6 +101,7 @@ async def _consume_stream(
             break
         text = chunk.decode("utf-8", errors="replace")
         capture.feed(text)
+        combined.feed(text)
 
 
 @dataclass(frozen=True)
@@ -86,6 +109,14 @@ class DockerResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: str | None = None
+    truncated: bool = False
+
+    def command_output(self) -> tuple[str, bool]:
+        if self.output is not None:
+            return self.output, self.truncated
+        capture = StreamCapture.from_streams(self.stdout, self.stderr)
+        return capture.get_output(), capture.truncated
 
 
 @runtime_checkable
@@ -124,11 +155,12 @@ class CliDockerRunner:
 
         stdout_cap = StreamCapture()
         stderr_cap = StreamCapture()
+        combined = StreamCapture()
 
         async def stream_and_wait() -> int:
             await asyncio.gather(
-                _consume_stream(proc.stdout, stdout_cap),
-                _consume_stream(proc.stderr, stderr_cap),
+                _consume_stream(proc.stdout, stdout_cap, combined),
+                _consume_stream(proc.stderr, stderr_cap, combined),
             )
             return await proc.wait()
 
@@ -147,6 +179,8 @@ class CliDockerRunner:
                 f"Docker command timed out after {timeout_s}s",
                 stdout=raw_stdout,
                 stderr=raw_stderr,
+                output=scrub_values(scrub_url_secrets(combined.get_output()), secrets),
+                truncated=combined.truncated,
             ) from None
 
         raw_stdout = scrub_values(scrub_url_secrets(stdout_cap.get_output()), secrets)
@@ -155,6 +189,8 @@ class CliDockerRunner:
             stdout=raw_stdout,
             stderr=raw_stderr,
             exit_code=returncode,
+            output=scrub_values(scrub_url_secrets(combined.get_output()), secrets),
+            truncated=combined.truncated,
         )
 
 

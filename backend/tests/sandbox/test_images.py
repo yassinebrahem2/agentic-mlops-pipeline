@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.sandbox.containers import build_run_args, container_name, host_container_user
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerResult, DockerRunner
 from mlops_agents.sandbox.environment import DetectedEnvironment
 from mlops_agents.sandbox.images import (
@@ -408,12 +410,11 @@ async def test_real_docker_environment_survives_login_shell(tmp_path: Path) -> N
     assert status.tag is not None
     tag = status.tag
 
-    cname = "mlops-agents-test-login-shell"
+    task = TaskRef("test-login-shell", "Login shell", "branch", worktree, "active")
+    cname = container_name(task.id)
     try:
         # Start container
-        await runner.run(
-            ["run", "-d", "--init", "--name", cname, "-w", "/workspace", tag, "sleep", "infinity"]
-        )
+        await runner.run(build_run_args(project_id, task, tag, user=host_container_user()))
         # Run bash -lc 'python -c "import six"'
         res = await runner.run(["exec", cname, "bash", "-lc", 'python -c "import six"'])
         assert res.exit_code == 0, f"Import in login shell failed: {res.stderr}"

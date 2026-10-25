@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from pathlib import Path
 
@@ -17,22 +16,16 @@ from mlops_agents.sandbox.contract import (
     Sandbox,
     SandboxUnavailable,
 )
-from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner, detect_docker
+from mlops_agents.sandbox.docker import (
+    DOCKER_INSTALL_MESSAGE,
+    CliDockerRunner,
+    DockerRunner,
+    DockerTimeoutError,
+    StreamCapture,
+    detect_docker,
+)
 from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
-
-MAX_CAPTURE_CHARS = 30_000
-HALF_CAPTURE_CHARS = 15_000
-
-
-def truncate_output(raw_output: str) -> tuple[str, bool]:
-    if len(raw_output) <= MAX_CAPTURE_CHARS:
-        return raw_output, False
-    head = raw_output[:HALF_CAPTURE_CHARS]
-    tail = raw_output[-HALF_CAPTURE_CHARS:]
-    cut_count = len(raw_output) - MAX_CAPTURE_CHARS
-    cut_note = f"\n\n[... {cut_count} characters truncated ...]\n\n"
-    return f"{head}{cut_note}{tail}", True
 
 
 class SandboxService(Sandbox):
@@ -161,31 +154,38 @@ class SandboxService(Sandbox):
                 timeout_s=timeout,
             )
         except TimeoutError as exc:
-            with contextlib.suppress(Exception):
-                await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
-            captured = ""
-            stdout_val = getattr(exc, "stdout", "")
-            stderr_val = getattr(exc, "stderr", "")
-            if isinstance(stdout_val, str) and isinstance(stderr_val, str):
-                captured = (stdout_val + stderr_val).strip()
-            msg = f"Command took longer than {timeout} seconds and was stopped."
-            if captured:
-                out, trunc = truncate_output(captured)
-                output = f"{out}\n\n{msg}"
+            try:
+                restarted = await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
+            except FileNotFoundError as err:
+                raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+            except TimeoutError as err:
+                raise SandboxUnavailable("Timed out restarting sandbox container.") from err
+            if restarted.exit_code != 0:
+                raise SandboxUnavailable(
+                    f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
+                ) from exc
+            if isinstance(exc, DockerTimeoutError) and exc.output is not None:
+                captured, truncated = exc.output, exc.truncated
             else:
-                output = msg
-                trunc = False
+                stdout = getattr(exc, "stdout", "")
+                stderr = getattr(exc, "stderr", "")
+                capture = StreamCapture.from_streams(
+                    stdout if isinstance(stdout, str) else "",
+                    stderr if isinstance(stderr, str) else "",
+                )
+                captured, truncated = capture.get_output(), capture.truncated
+            message = f"Command took longer than {timeout} seconds and was stopped."
+            output = f"{captured}\n\n{message}" if captured else message
             return CommandResult(
                 output=output,
                 exit_code=None,
                 timed_out=True,
-                truncated=trunc,
+                truncated=truncated,
             )
         except FileNotFoundError as err:
-            raise SandboxUnavailable("Docker is not installed or not on PATH.") from err
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
 
-        raw_output = res.stdout + res.stderr
-        output, truncated = truncate_output(raw_output)
+        output, truncated = res.command_output()
         return CommandResult(
             output=output,
             exit_code=res.exit_code,

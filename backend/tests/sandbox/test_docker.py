@@ -164,6 +164,52 @@ async def test_cli_runner_timeout_preserves_captured_output() -> None:
     assert "captured output before sleep" in exc_info.value.stdout
 
 
+async def test_incremental_reader_never_retains_more_than_head_plus_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from mlops_agents.sandbox import docker
+
+    retained: list[int] = []
+    fed: list[int] = []
+
+    class ObservedCapture(docker.StreamCapture):
+        def feed(self, text: str) -> None:
+            super().feed(text)
+            retained.append(len(self.head) + len(self.tail))
+            fed.append(len(text))
+            assert retained[-1] <= self.head_limit + self.tail_limit
+
+    class ChunkReader:
+        def __init__(self, count: int) -> None:
+            self.remaining = count
+
+        async def read(self, size: int = -1) -> bytes:
+            assert 0 < size <= 8192, "A buffered read would retain the complete stream"
+            length = min(size, self.remaining)
+            self.remaining -= length
+            return b"x" * length
+
+    class Process:
+        stdout = ChunkReader(1_000_000)
+        stderr = ChunkReader(0)
+
+        async def wait(self) -> int:
+            return 0
+
+    async def create_process(*args: object, **kwargs: object) -> Process:
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(docker, "StreamCapture", ObservedCapture)
+    result = await CliDockerRunner().run(["exec", "container", "produce"])
+    assert len(fed) > 100
+    assert max(fed) <= 8192
+    assert max(retained) == 30_000
+    assert "970000 characters truncated" in result.stdout
+
+
 @pytest.mark.docker
 async def test_real_docker_available() -> None:
     service = SandboxService(projects=MemorySandboxProjects())

@@ -247,3 +247,52 @@ def test_default_registry_with_and_without_sandbox() -> None:
     reg_with = default_registry(sandbox=sandbox)
     assert "Bash" in reg_with.names()
     assert isinstance(reg_with.get("Bash"), BashTool)
+
+
+@pytest.mark.parametrize("phase", ["snapshot", "context", "build", "timeout"])
+async def test_real_service_build_path_failure_is_a_tool_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    from collections.abc import Iterable, Sequence
+
+    from mlops_agents.sandbox import images
+    from mlops_agents.sandbox import service as service_module
+    from mlops_agents.sandbox.docker import DockerResult
+    from mlops_agents.sandbox.service import SandboxService
+    from tests.sandbox.fakes import MemorySandboxProjects
+    from tests.sandbox.test_service_env import FakeEventLog
+    from tests.sandbox.test_service_run import FakeRunDocker
+
+    class FailingBuild(FakeRunDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args[0] == "build":
+                if phase == "timeout":
+                    raise TimeoutError("build timed out")
+                raise OSError("build I/O failure")
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise PermissionError(f"{phase} denied")
+
+    if phase == "snapshot":
+        monkeypatch.setattr(service_module, "snapshot_image", fail)
+    elif phase == "context":
+        monkeypatch.setattr(images, "create_build_context", fail)
+    events = FakeEventLog()
+    service = SandboxService(FailingBuild(), projects=MemorySandboxProjects(), events=events)
+    task = TaskRef("tsk_build_failure", "Failure", "branch", tmp_path, "active")
+    files = MockFileAccess(tmp_path)
+    result = await BashTool(service).invoke(make_context(tmp_path, task, files), {"command": "ls"})
+    assert result.is_error
+    assert "Environment build failed" in result.content
+    assert files.invalidated
+    assert events.records[-1].type == "sandbox.build.failed"
+    assert events.records[-1].payload["detail"]

@@ -14,6 +14,7 @@ from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
 from tests.agents.ctx import tool_context
 from tests.agents.tools.test_bash import MockFileAccess
+from tests.sandbox.fakes import MemorySandboxProjects
 
 
 class FakeRunDocker(DockerRunner):
@@ -118,7 +119,7 @@ class FakeRunDocker(DockerRunner):
 async def test_run_missing_docker(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.docker_installed = False
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_1",
@@ -134,7 +135,7 @@ async def test_run_missing_docker(tmp_path: Path) -> None:
 async def test_run_daemon_down(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.daemon_running = False
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_2",
@@ -150,7 +151,7 @@ async def test_run_daemon_down(tmp_path: Path) -> None:
 async def test_run_build_image_failure(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.build_fail_detail = "Step 4/5 : RUN pip install broken\nERROR: No matching distribution"
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_3",
@@ -166,7 +167,7 @@ async def test_run_build_image_failure(tmp_path: Path) -> None:
 async def test_run_successful_command(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.exec_result = DockerResult(stdout="Hello from container\n", stderr="", exit_code=0)
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_4",
@@ -197,7 +198,7 @@ async def test_run_successful_command(tmp_path: Path) -> None:
 async def test_run_non_zero_exit_code(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.exec_result = DockerResult(stdout="", stderr="syntax error\n", exit_code=2)
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_5",
@@ -224,7 +225,7 @@ async def test_run_bounded_capture_1mb_output(tmp_path: Path) -> None:
     big_output = head_char + middle_char + tail_char  # total 1,000,000 chars
 
     runner.exec_result = DockerResult(stdout=big_output, stderr="", exit_code=0)
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_6",
@@ -244,10 +245,29 @@ async def test_run_bounded_capture_1mb_output(tmp_path: Path) -> None:
     assert len(result.output) < 30_100
 
 
+async def test_run_preserves_runner_capture_and_truncation_count(tmp_path: Path) -> None:
+    import sys
+
+    from mlops_agents.sandbox.docker import CliDockerRunner
+
+    runner = FakeRunDocker()
+    runner.exec_result = await CliDockerRunner(sys.executable).run(
+        ["-c", "print('A'*15000 + 'M'*970000 + 'Z'*15000, end='')"]
+    )
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
+    task = TaskRef("tsk_capture", "Capture", "branch", tmp_path, "active")
+    result = await service.run("prj_1", task, "produce", 30)
+    assert result.truncated
+    assert result.output.startswith("A" * 15000)
+    assert result.output.endswith("Z" * 15000)
+    assert "970000 characters truncated" in result.output
+    assert result.output.count("characters truncated") == 1
+
+
 async def test_run_timeout_restarts_container(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.exec_timeout = True
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_7",
@@ -272,7 +292,7 @@ async def test_run_timeout_returns_captured_output(tmp_path: Path) -> None:
     runner = FakeRunDocker()
     runner.exec_timeout = True
     runner.exec_timeout_output = "processing step 1\nprocessing step 2"
-    service = SandboxService(runner=runner)
+    service = SandboxService(runner=runner, projects=MemorySandboxProjects())
 
     task = TaskRef(
         id="task_run_timeout_captured",
@@ -293,7 +313,7 @@ async def test_run_timeout_returns_captured_output(tmp_path: Path) -> None:
 
 @pytest.mark.docker
 async def test_docker_echo(tmp_path: Path) -> None:
-    service = SandboxService()
+    service = SandboxService(projects=MemorySandboxProjects())
     task = TaskRef(
         id="docker_test_echo",
         title="Docker Echo Task",
@@ -313,7 +333,7 @@ async def test_docker_echo(tmp_path: Path) -> None:
 
 @pytest.mark.docker
 async def test_docker_failing_command(tmp_path: Path) -> None:
-    service = SandboxService()
+    service = SandboxService(projects=MemorySandboxProjects())
     task = TaskRef(
         id="docker_test_fail",
         title="Docker Fail Task",
@@ -332,7 +352,7 @@ async def test_docker_failing_command(tmp_path: Path) -> None:
 
 @pytest.mark.docker
 async def test_docker_file_written_readable_by_read_tool(tmp_path: Path) -> None:
-    service = SandboxService()
+    service = SandboxService(projects=MemorySandboxProjects())
     task = TaskRef(
         id="docker_test_file",
         title="Docker File Task",
@@ -367,7 +387,7 @@ async def test_docker_file_written_readable_by_read_tool(tmp_path: Path) -> None
 
 @pytest.mark.docker
 async def test_docker_timeout_restarts_container(tmp_path: Path) -> None:
-    service = SandboxService()
+    service = SandboxService(projects=MemorySandboxProjects())
     task = TaskRef(
         id="docker_test_timeout",
         title="Docker Timeout Task",
