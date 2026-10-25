@@ -191,6 +191,10 @@ class TurnWorkers:
         await self._end_turn(
             project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, ending
         )
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            # The worker's cancel came in the pass its turn task ended (see `_run_turn`).
+            raise asyncio.CancelledError
 
     @shielded
     async def _end_turn(
@@ -290,11 +294,20 @@ class TurnWorkers:
         )
         self._child_tasks[key] = child_task
         try:
-            end_status, error = await child_task
-            return _Ending(end_status, error)
+            await child_task
+            return _ending_of(turn_id, child_task)
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if current is not None and current.cancelling() > 0:
+                if (
+                    child_task.done()
+                    and child_task.cancelling() == 0
+                    and not child_task.cancelled()
+                ):
+                    # The turn task ended in the pass the worker's cancel came in, so the wait
+                    # raised the cancel all the same: its end stands, and `_take_turn` raises
+                    # the cancel once that end is stored.
+                    return _ending_of(turn_id, child_task)
                 # The worker itself is being cancelled (close / close_project).
                 # Do not swallow worker cancellation!
                 if not child_task.done():
@@ -310,8 +323,7 @@ class TurnWorkers:
                 raise
             return _Ending("stopped")
         except Exception:
-            logger.exception("Turn %s failed outside the executor", turn_id)
-            return _UNEXPECTED_FAILURE
+            return _ending_of(turn_id, child_task)
         finally:
             self._child_tasks.pop(key, None)
 
@@ -342,6 +354,16 @@ class TurnWorkers:
             return None
         texts = [part.text for part in message.parts if isinstance(part, TextPart) and part.text]
         return texts[-1] if texts else None
+
+
+def _ending_of(turn_id: str, child_task: asyncio.Task[tuple[TurnEnd, str | None]]) -> _Ending:
+    """How a finished, not cancelled turn task ended; an error that escaped it fails the turn."""
+    error = child_task.exception()
+    if error is not None:
+        logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
+        return _UNEXPECTED_FAILURE
+    end_status, end_error = child_task.result()
+    return _Ending(end_status, end_error)
 
 
 async def _observed(call: Awaitable[None]) -> None:
