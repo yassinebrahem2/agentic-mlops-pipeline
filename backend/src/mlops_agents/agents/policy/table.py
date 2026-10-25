@@ -12,7 +12,7 @@ PermissionLevel = Literal["suggest", "ask", "autonomous", "bypass"]
 PolicyDecision = Literal["allow", "ask", "deny"]
 
 _R = RiskClass
-POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingProxyType(
+_POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingProxyType(
     {
         "suggest": MappingProxyType(
             {
@@ -59,4 +59,4 @@ POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingPr
 
 
 def decide(risk: RiskClass, level: PermissionLevel) -> PolicyDecision:
-    return POLICY[level][risk]
+    return _POLICY[level][risk]
