@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
@@ -27,11 +27,17 @@ OBSERVER_TIMEOUT_S = 10.0
 @dataclass(frozen=True)
 class _Ending:
     """How a taken turn ended, decided before anything of it is stored. `failure_notice` is
-    the system message of a failure the executor did not record itself."""
+    the system message of a failure still to be written: None once it is, or when the
+    executor recorded the failure itself."""
 
     status: TurnEnd
     error: str | None = None
     failure_notice: str | None = None
+
+    @property
+    def notice_recorded(self) -> bool:
+        """Whether this is a failed end whose failure notice is stored."""
+        return self.status == "failed" and self.failure_notice is None
 
 
 # A failure no part of the turn recorded: its system message is written with the end.
@@ -223,19 +229,20 @@ class TurnWorkers:
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
             )
         else:
-            notice_written = False
             try:
-                notice_written = await self._write_notice(
+                ending = await self._write_notice(
                     project_id, session_id, turn_id, hub, lock, ending
                 )
                 await self._store_end(project_id, turn_id, hub, ending)
             except Exception:
                 # As any other unexpected failure of the turn: it ends failed and the queue goes
-                # on, with one failure notice. A failure of this fallback too is raised.
+                # on, with one failure notice. A failed end whose notice is stored keeps its
+                # error. A failure of this fallback too is raised.
                 logger.exception("Could not store how turn %s ended; it ends failed", turn_id)
-                ending = _UNEXPECTED_FAILURE
-                if not notice_written:
-                    await self._write_notice(project_id, session_id, turn_id, hub, lock, ending)
+                if not ending.notice_recorded:
+                    ending = await self._write_notice(
+                        project_id, session_id, turn_id, hub, lock, _UNEXPECTED_FAILURE
+                    )
                 await self._store_end(project_id, turn_id, hub, ending)
         await self._turn_ended(project_id, session_id, agent, turn_id, ending.status)
 
@@ -247,14 +254,14 @@ class TurnWorkers:
         hub: SessionHub,
         lock: AsyncRLock,
         ending: _Ending,
-    ) -> bool:
-        """Write the ending's failure notice, if it has one; tell whether it did."""
+    ) -> _Ending:
+        """Write the ending's failure notice still to be written, if any; return it with none."""
         if ending.failure_notice is None:
-            return False
+            return ending
         await self._executor.record_failure(
             project_id, session_id, turn_id, hub, lock, ending.failure_notice
         )
-        return True
+        return replace(ending, failure_notice=None)
 
     async def _store_end(
         self, project_id: str, turn_id: str, hub: SessionHub, ending: _Ending

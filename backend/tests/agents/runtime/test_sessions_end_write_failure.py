@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.contract import TextPart, TurnEnd, TurnEnded
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
@@ -139,6 +140,39 @@ async def test_a_failing_fallback_is_raised_once_not_retried(
     await env.manager.close()
 
 
+async def _escaping_run(
+    self: TurnExecutor,
+    project_id: str,
+    session_id: str,
+    agent: str,
+    turn_id: str,
+    sink: TurnSink,
+    lock: AbstractAsyncContextManager[Any],
+) -> tuple[TurnEnd, str | None]:
+    raise RuntimeError("an error that escapes the executor")
+
+
+async def _self_recording_run(
+    self: TurnExecutor,
+    project_id: str,
+    session_id: str,
+    agent: str,
+    turn_id: str,
+    sink: TurnSink,
+    lock: AbstractAsyncContextManager[Any],
+) -> tuple[TurnEnd, str | None]:
+    # As `fail()` and `TurnRefused` do: the executor writes its own notice, then returns failed.
+    await self.record_failure(project_id, session_id, turn_id, sink, lock, "model said no")
+    return ("failed", "model said no")
+
+
+@pytest.mark.parametrize(
+    ("failing_run", "notice"),
+    [
+        pytest.param(_escaping_run, UNEXPECTED_FAILURE_TEXT, id="escaped-error"),
+        pytest.param(_self_recording_run, "model said no", id="executor-recorded"),
+    ],
+)
 async def test_the_fallback_writes_no_second_failure_notice(
     tmp_path: Path,
     paths: DataPaths,
@@ -148,18 +182,9 @@ async def test_the_fallback_writes_no_second_failure_notice(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    failing_run: Callable[..., Awaitable[tuple[TurnEnd, str | None]]],
+    notice: str,
 ) -> None:
-    async def failing_run(
-        self: TurnExecutor,
-        project_id: str,
-        session_id: str,
-        agent: str,
-        turn_id: str,
-        sink: TurnSink,
-        lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
-        raise RuntimeError("an error that escapes the executor")
-
     set_turn = SessionStore.set_turn
     failures = ["disk full"]
 
@@ -192,9 +217,62 @@ async def test_the_fallback_writes_no_second_failure_notice(
     assert await asyncio.wait_for(observer.ended.get(), timeout=10) == "failed"
     await env.manager.close()
 
-    assert isinstance(ended, TurnEnded) and ended.data.status == "failed"
     session_id = await env.store.session_id(env.project_id, AGENT)
-    authors = [m.author_kind for m in await env.store.messages(env.project_id, session_id)]
-    assert authors == ["user", "system"]
+    messages = await env.store.messages(env.project_id, session_id)
+    assert [m.author_kind for m in messages] == ["user", "system"]
+    assert messages[-1].parts == [TextPart(type="text", text=notice)]
+    assert isinstance(ended, TurnEnded)
+    # The stored end keeps the error the one notice shows.
+    assert (ended.data.status, ended.data.error) == ("failed", notice)
     assert await turn_statuses(databases, env.project_id) == ["failed"]
     assert [(c[0], c[4]) for c in observer.calls if c[0] == "ended"] == [("ended", "failed")]
+
+
+async def test_a_notice_whose_write_failed_is_written_by_the_fallback(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record_failure = TurnExecutor.record_failure
+    failures = ["disk full"]
+
+    async def record_failure_failing_once(
+        self: TurnExecutor,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+        text: str,
+    ) -> None:
+        if failures:
+            raise RuntimeError(failures.pop())
+        await record_failure(self, project_id, session_id, turn_id, sink, lock, text)
+
+    monkeypatch.setattr(TurnExecutor, "run", _escaping_run)
+    monkeypatch.setattr(TurnExecutor, "record_failure", record_failure_failing_once)
+    observer = RecordingObserver()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[observer],
+    )
+    await env.manager.send(env.project_id, AGENT, "Check readme")
+    assert await asyncio.wait_for(observer.ended.get(), timeout=10) == "failed"
+    await env.manager.close()
+
+    session_id = await env.store.session_id(env.project_id, AGENT)
+    messages = await env.store.messages(env.project_id, session_id)
+    assert [m.author_kind for m in messages] == ["user", "system"]
+    assert messages[-1].parts == [TextPart(type="text", text=UNEXPECTED_FAILURE_TEXT)]
+    assert await turn_statuses(databases, env.project_id) == ["failed"]
