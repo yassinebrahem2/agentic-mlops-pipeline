@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.runtime.contract import TaskView
 
 
 class ClaimConflict(Exception):
