@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+import sys
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -18,51 +19,53 @@ DEPENDENCY_NAMES = (
 )
 
 
-def _windows_open(path: Path, root: Path) -> int:
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
+if sys.platform == "win32":
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.c_void_p,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    create.restype = wintypes.HANDLE
-    # OPEN_REPARSE_POINT opens the link itself; it never opens its target.
-    handle = create(str(path), 0x80000000, 7, None, 3, 0x00200000, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        final_path = kernel.GetFinalPathNameByHandleW
-        final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
-        final_path.restype = wintypes.DWORD
-        buffer = ctypes.create_unicode_buffer(32768)
-        length = final_path(handle, buffer, len(buffer), 0)
-        if not length or length >= len(buffer):
+    def _windows_open(path: Path, root: Path) -> int:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create.restype = wintypes.HANDLE
+        # OPEN_REPARSE_POINT opens the link itself; it never opens its target.
+        handle = create(str(path), 0x80000000, 7, None, 3, 0x00200000, None)
+        if handle == wintypes.HANDLE(-1).value:
             raise ctypes.WinError(ctypes.get_last_error())
-        final_name = buffer.value
-        if final_name.startswith("\\\\?\\UNC\\"):
-            final_name = "\\\\" + final_name[8:]
-        else:
-            final_name = final_name.removeprefix("\\\\?\\")
-        resolved = Path(final_name)
-        if not resolved.is_relative_to(root):
-            raise OSError(errno.ELOOP, "Dependency path escapes the worktree")
-        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-    except BaseException:
-        close = kernel.CloseHandle
-        close.argtypes = [wintypes.HANDLE]
-        close.restype = wintypes.BOOL
-        close(handle)
-        raise
-    return descriptor
+        try:
+            final_path = kernel.GetFinalPathNameByHandleW
+            final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+            final_path.restype = wintypes.DWORD
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = final_path(handle, buffer, len(buffer), 0)
+            if not length or length >= len(buffer):
+                raise ctypes.WinError(ctypes.get_last_error())
+            final_name = buffer.value
+            if final_name.startswith("\\\\?\\UNC\\"):
+                final_name = "\\\\" + final_name[8:]
+            else:
+                final_name = final_name.removeprefix("\\\\?\\")
+            resolved = Path(final_name)
+            if not resolved.is_relative_to(root):
+                raise OSError(errno.ELOOP, "Dependency path escapes the worktree")
+            descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            close = kernel.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            close.restype = wintypes.BOOL
+            close(handle)
+            raise
+        return descriptor
 
 
 def read_dependency_files(root: Path) -> dict[str, bytes]:
@@ -71,12 +74,12 @@ def read_dependency_files(root: Path) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     with ExitStack() as handles:
         directory: int | None = None
-        if os.name != "nt":
+        if sys.platform != "win32":
             directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             handles.callback(os.close, directory)
         for name in DEPENDENCY_NAMES:
             try:
-                if os.name == "nt":
+                if sys.platform == "win32":
                     descriptor = _windows_open(root / name, root)
                 else:
                     descriptor = os.open(
