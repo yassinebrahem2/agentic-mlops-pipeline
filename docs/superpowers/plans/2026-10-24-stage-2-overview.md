@@ -26,8 +26,9 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | chat-layout | `plan/stage-2-chat-layout` | Only the message list scrolls; a one-line composer that grows; one Send/Stop button; the styled agent switcher | none | now | Merged |
 | project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Merged |
 | fixes | `plan/stage-2-fixes` | Review bugs #216, #217 (composer Stop with whitespace, chat layout leftovers) and #226 (one GitHub https URL builder) | none | now | Merged |
-| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Planned |
-| events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer); task 3: runtime-contracts task 4 merged | Planned |
+| runtime-fixes | `plan/stage-2-runtime-fixes` | Review bugs #242 (a turn's end can be lost) and #236 (provider key values read twice) | none | now | Planned |
+| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Merged |
+| events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer); task 3: runtime-contracts task 4 merged | Merged |
 | tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Planned |
 | sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Planned |
 | approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | tasks 1 and 2: after runtime-contracts tasks 1 and 2 and events task 1; task 3 on: runtime-contracts task 4 merged | Planned |
@@ -126,6 +127,7 @@ Part = Annotated[TextPart | ToolCallPart | ToolResultPart | ApprovalPart, Field(
 
 class TaskView(BaseModel):
     id: str
+    agent: str               # added in the review of #246: the status board groups tasks by agent
     title: str
     branch: str
     status: TaskStatus
@@ -149,6 +151,9 @@ class AgentSessions(Protocol):    # stage 1 members, plus:
                    text: str, exchange_id: str | None, hop: int | None) -> MessageView: ...
     # An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
     # from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send.
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]: ...
+    # Added in the review of #246: each agent whose session has a running or waiting turn now,
+    # read from the live sessions and the turns table (the status board's one source for both).
     async def update_message(self, project_id: str, session_id: str, message_id: str,
                              transform: Callable[[list[Part]], list[Part]]) -> MessageView: ...
     # Reads the stored parts, applies transform, stores and publishes message.updated, all under
@@ -173,6 +178,19 @@ EventType = Literal[
     "approval.requested", "approval.decided", "message.sent", "wakeup.scheduled",
     "sandbox.build.started", "sandbox.build.finished", "sandbox.build.failed",
 ]
+# Payload of each type (added in the review of #246). The writer's plan writes exactly these keys,
+# `source` is the agent that acted ("user" or "system" otherwise), and readers use only these.
+#   turn.started, turn.waiting:   {"turn_id"}
+#   turn.ended:                   {"turn_id", "status", "final_text"}   final_text capped at 200
+#   task.started:                 {"task_id", "title", "branch"}         subject_id = task_id
+#   task.ended:                   {"task_id", "status"}                  subject_id = task_id
+#   pr.opened, pr.updated:        {"task_id", "number", "url", "title"}  subject_id = task_id
+#   issue.opened, issue.commented: {"number", "url", "title"}
+#   approval.requested:           {"approval_id", "turn_id", "tool"}     subject_id = approval_id
+#   approval.decided:             {"approval_id", "status"}              subject_id = approval_id
+#   message.sent:                 {"to", "exchange_id", "hop"}           subject_id = exchange_id
+#   wakeup.scheduled:             {"wakeup_id", "due_at"}
+#   sandbox.build.*:              {"tag", "detail"}                      detail null unless failed
 
 class EventRecord(BaseModel):
     id: str
@@ -295,6 +313,10 @@ class Sandbox(Protocol):
     async def rebuild(self, project_id: str) -> EnvironmentStatus: ...
     async def run(self, project_id: str, task: TaskRef, command: str, timeout_s: int) -> CommandResult: ...  # raises SandboxUnavailable
     async def remove_task(self, project_id: str, task_id: str) -> None: ...
+    def paused(self, project_id: str, task_id: str) -> AbstractAsyncContextManager[None]: ...
+    # Added in the review of #241: freezes the task's container (docker pause, then unpause on exit;
+    # a no-op without a running container), so nothing in the sandbox can swap a file for a symlink
+    # while the host writes or commits the worktree. Write, Edit, commit and staged_diff run inside it.
     async def close(self) -> None: ...
 ```
 

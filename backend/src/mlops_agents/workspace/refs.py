@@ -8,11 +8,13 @@ from mlops_agents.workspace.models import Project
 
 _OWNER = r"(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))"
 _REPO = r"(?P<repo>[A-Za-z0-9._-]+?)"
-_PATTERNS = (
+# A github.com URL names a repository anywhere; the owner/name shorthand only where a
+# repository is asked for (as a remote it is a relative path).
+_URL_PATTERNS = (
     re.compile(rf"^https?://github\.com/{_OWNER}/{_REPO}(?:\.git)?/?$"),
     re.compile(rf"^git@github\.com:{_OWNER}/{_REPO}(?:\.git)?$"),
-    re.compile(rf"^{_OWNER}/(?P<repo>[A-Za-z0-9._-]+)$"),
 )
+_PATTERNS = (*_URL_PATTERNS, re.compile(rf"^{_OWNER}/(?P<repo>[A-Za-z0-9._-]+)$"))
 
 
 def path_key(path: Path) -> str:
@@ -58,7 +60,7 @@ def github_remote(project: Project, origin_url: str | None) -> RepoRef | None:
         return repo_ref(project.github_full_name)
     if not origin_url:
         return None
-    for pattern in _PATTERNS[:2]:
+    for pattern in _URL_PATTERNS:
         match = pattern.match(origin_url.strip())
         if match:
             return RepoRef(owner=match.group("owner"), repo=match.group("repo"))

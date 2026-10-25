@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Client } from "openapi-fetch";
 import type { components } from "@/api/schema";
-import { api, unwrap, type paths as GeneratedPaths } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
 import { useProjectEvents } from "@/lib/useProjectEvents";
 
-export type AgentState = "idle" | "running" | "waiting_approval" | "waiting_reply" | "inactive";
+export type AgentStatus = components["schemas"]["AgentStatus"];
+export type AgentState = AgentStatus["state"];
+export type PrRef = components["schemas"]["PrRef"];
+export type TaskView = components["schemas"]["TaskView"];
 
 export const STATE_CONFIG: Record<
   AgentState,
@@ -20,42 +22,6 @@ export const STATE_CONFIG: Record<
     detail: "starts in a later stage",
     dotClass: "bg-muted-foreground/40",
   },
-};
-
-export type PrRef = {
-  number: number;
-  url: string;
-  title: string;
-};
-
-export type TaskView = components["schemas"]["TaskView"];
-
-export type AgentStatus = {
-  agent: string;
-  display_name: string;
-  state: AgentState;
-  task: TaskView | null;
-  open_prs: PrRef[];
-  last_finished?: string | null;
-};
-
-export type AgentStatusPaths = GeneratedPaths & {
-  "/api/projects/{project_id}/agents/status": {
-    get: {
-      parameters: {
-        path: {
-          project_id: string;
-        };
-      };
-      responses: {
-        200: {
-          content: {
-            "application/json": AgentStatus[];
-          };
-        };
-      };
-    };
-  };
 };
 
 export function agentStatusQueryKey(projectId: string | undefined) {
@@ -74,8 +40,7 @@ export function useAgentStatus(projectId: string | undefined) {
     queryKey: agentStatusQueryKey(projectId),
     queryFn: async () => {
       if (!projectId) throw new Error("No projectId");
-      const client = api as unknown as Client<AgentStatusPaths>;
-      const result = await client.GET("/api/projects/{project_id}/agents/status", {
+      const result = await api.GET("/api/projects/{project_id}/agents/status", {
         params: { path: { project_id: projectId } },
       });
       return unwrap(result);
