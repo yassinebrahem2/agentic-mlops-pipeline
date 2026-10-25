@@ -101,3 +101,8 @@ Task 3 gets an early PR, from `plan/stage-2-sandbox-task3`: the tasks plan's tas
 - With a fake runner: the bounded capture keeps the head and tail of a 1 MB output; a timeout restarts the container; a missing Docker gives the error text; no task gives the error.
 - On the `docker` job: `echo`, a failing command with its exit code, a file written by Bash that Read sees afterwards, and a timeout.
 - Full suite, checks; CI green.
+
+**Review fixes (added in the review of #240):** task 4 also fixes bugs #253 and #252, which are on `main` since #239, in the sandbox files they name; the plan PR says `Closes #252` and `Closes #253`.
+- #253: `close()` skips container cleanup when Docker is unavailable, exactly as `cleanup_orphans` does, and never raises at shutdown. The API tests' app fixture gets a fake Docker runner, so no test outside the `docker` marker calls the real Docker CLI.
+- #252: every listed item. `images.py` maps a missing executable the way the other handlers do (`FileNotFoundError` → the install message, no `exc.filename` check), `image_exists` only reports "missing" for "no such image", and `environment()` does not turn a missing Docker into state `none`. `tests/sandbox/test_service_run.py` goes under 400 lines too.
+- Tests: shutdown with the daemon down (fake runner whose `ps` fails) does not raise; the API suite passes with no Docker daemon running; one test per #252 item.
