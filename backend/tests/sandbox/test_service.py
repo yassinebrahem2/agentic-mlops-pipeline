@@ -7,7 +7,12 @@ import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.errors import DomainError
-from mlops_agents.sandbox.contract import DockerStatus, EnvironmentStatus, Sandbox
+from mlops_agents.sandbox.contract import (
+    CommandResult,
+    DockerStatus,
+    EnvironmentStatus,
+    Sandbox,
+)
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
 
@@ -46,8 +51,9 @@ async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
         worktree=tmp_path / "worktree",
         status="active",
     )
-    with pytest.raises(NotImplementedError):
-        await service.run("prj_123", task, "echo hi", 60)
+    res = await service.run("prj_123", task, "echo hi", 60)
+    assert isinstance(res, CommandResult)
+    assert res.exit_code == 0
 
     # remove_task and close are safe no-ops
     await service.remove_task("prj_123", "tsk_1")

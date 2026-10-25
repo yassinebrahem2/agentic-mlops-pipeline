@@ -28,6 +28,19 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import project_settings
 from mlops_agents.workspace.service import WorkspaceService
 
+MAX_CAPTURE_CHARS = 30_000
+HALF_CAPTURE_CHARS = 15_000
+
+
+def truncate_output(raw_output: str) -> tuple[str, bool]:
+    if len(raw_output) <= MAX_CAPTURE_CHARS:
+        return raw_output, False
+    head = raw_output[:HALF_CAPTURE_CHARS]
+    tail = raw_output[-HALF_CAPTURE_CHARS:]
+    cut_count = len(raw_output) - MAX_CAPTURE_CHARS
+    cut_note = f"\n\n[... {cut_count} characters truncated ...]\n\n"
+    return f"{head}{cut_note}{tail}", True
+
 
 class SandboxService(Sandbox):
     """Manages Docker sandbox environments and task execution."""
@@ -176,16 +189,57 @@ class SandboxService(Sandbox):
         return enabled
 
     async def ensure_container(self, project_id: str, task: TaskRef) -> str:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
+
         lock = self._locks.setdefault(f"{project_id}:{task.id}", asyncio.Lock())
         async with lock:
-            status = await self.environment(project_id)
-            if status.state != "ready" or not status.tag:
-                status = await self.rebuild(project_id)
-                if status.state != "ready" or not status.tag:
-                    raise SandboxUnavailable(
-                        f"Environment build failed: {status.detail or 'unknown error'}"
-                    )
-            tag = status.tag
+            detected = detect_environment(task.worktree)
+            tag = self._image_manager.tag_for(project_id, task.worktree, detected)
+            if not await self._image_manager.image_exists(tag):
+                proj_lock = self._locks.setdefault(project_id, asyncio.Lock())
+                async with proj_lock:
+                    if not await self._image_manager.image_exists(tag):
+                        self._status[project_id] = EnvironmentStatus(
+                            state="building", tag=tag, detail=None
+                        )
+                        if self._events is not None:
+                            await self._events.record(
+                                project_id,
+                                source="system",
+                                type="sandbox.build.started",
+                                payload={"tag": tag, "template": detected.template},
+                            )
+                        start_time = time.monotonic()
+                        status = await self._image_manager.build_image(
+                            project_id, task.worktree, detected
+                        )
+                        duration_s = round(time.monotonic() - start_time, 2)
+                        self._status[project_id] = status
+
+                        if self._events is not None:
+                            if status.state == "ready":
+                                await self._events.record(
+                                    project_id,
+                                    source="system",
+                                    type="sandbox.build.finished",
+                                    payload={"tag": tag, "duration_s": duration_s},
+                                )
+                            elif status.state == "failed":
+                                await self._events.record(
+                                    project_id,
+                                    source="system",
+                                    type="sandbox.build.failed",
+                                    payload={"tag": tag, "detail": status.detail or ""},
+                                )
+
+                        if status.state != "ready" or not status.tag:
+                            raise SandboxUnavailable(
+                                f"Environment build failed: {status.detail or 'unknown error'}"
+                            )
+                        tag = status.tag
+
             network = await self.get_network(project_id)
             return await self._container_manager.ensure_container(
                 project_id, task, tag, network=network
@@ -194,7 +248,34 @@ class SandboxService(Sandbox):
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:
-        raise NotImplementedError("Run will be implemented in task 4.")
+        cname = await self.ensure_container(project_id, task)
+        timeout = max(1, min(timeout_s, 600)) if timeout_s > 0 else 120
+
+        try:
+            res = await self._runner.run(
+                ["exec", cname, "bash", "-lc", command],
+                timeout_s=timeout,
+            )
+        except TimeoutError:
+            with contextlib.suppress(Exception):
+                await self._runner.run(["restart", "-t", "0", cname])
+            return CommandResult(
+                output=f"Command took longer than {timeout} seconds and was stopped.",
+                exit_code=None,
+                timed_out=True,
+                truncated=False,
+            )
+        except FileNotFoundError as err:
+            raise SandboxUnavailable("Docker is not installed or not on PATH.") from err
+
+        raw_output = res.stdout + res.stderr
+        output, truncated = truncate_output(raw_output)
+        return CommandResult(
+            output=output,
+            exit_code=res.exit_code,
+            timed_out=False,
+            truncated=truncated,
+        )
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
         await self._container_manager.remove_task(project_id, task_id)
