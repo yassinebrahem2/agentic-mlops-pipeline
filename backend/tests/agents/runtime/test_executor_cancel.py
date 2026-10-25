@@ -20,6 +20,7 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
@@ -35,7 +36,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.graph_env import RecordingSink
+from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
@@ -124,14 +125,17 @@ async def test_executor_cancellation_during_slow_tool(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
-    executor = TurnExecutor(store=store, caller=caller, builder=builder)
+    executor = TurnExecutor(
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+    )
 
     prov = await providers_svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
@@ -217,14 +221,17 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
-    executor = TurnExecutor(store=store, caller=caller, builder=builder)
+    executor = TurnExecutor(
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+    )
 
     prov = await providers_svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
