@@ -69,18 +69,25 @@ class TurnExecutor:
 
         The one owner of that state; the worker calls it too when an error escapes `run`.
         `parts=None` keeps the parts already stored for the message.
+
+        A turn has one failure notice: a call made after an earlier one stored it (whose
+        publish failed, say) writes no second one. A client reloads the turn's messages when
+        the turn ends, so it still shows the stored one.
         """
         async with lock:
+            notice_stored = False
             for message in await self._store.messages(project_id, session_id):
-                if (
-                    message.turn_id == turn_id
-                    and message.author_kind == "agent"
-                    and message.status == "streaming"
-                ):
+                if message.turn_id != turn_id:
+                    continue
+                if message.author_kind == "system":
+                    notice_stored = True
+                elif message.author_kind == "agent" and message.status == "streaming":
                     updated = await self._store.update_message(
                         project_id, message.id, parts=parts, status="complete"
                     )
                     await sink.message(updated, created=False)
+            if notice_stored:
+                return
             system_message = await self._store.add_message(
                 project_id,
                 session_id,
