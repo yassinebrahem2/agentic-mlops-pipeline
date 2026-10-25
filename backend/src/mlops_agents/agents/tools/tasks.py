@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops_agents.agents.tasks.contract import Tasks
 from mlops_agents.agents.tools.base import (
     AgentTool,
     RiskClass,
@@ -13,6 +12,9 @@ from mlops_agents.agents.tools.base import (
     ToolOutput,
 )
 from mlops_agents.errors import DomainError
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.tasks.contract import Tasks
 
 
 class StartTaskArgs(BaseModel):

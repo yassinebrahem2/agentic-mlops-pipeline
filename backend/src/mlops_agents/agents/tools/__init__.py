@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import shutil
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mlops_agents.agents.tasks.contract import Tasks
 from mlops_agents.agents.tools.base import AgentTool, ToolRegistry
 from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.tasks.contract import Tasks
 
 __all__ = [
     "GlobTool",

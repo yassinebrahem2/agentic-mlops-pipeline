@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops_agents.agents.tasks.contract import Tasks
 from mlops_agents.agents.tools.base import (
     AgentTool,
     RiskClass,
@@ -15,6 +14,9 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.tasks.contract import Tasks
 
 MAX_LINES = 2000
 MAX_LINE_CHARS = 2000
