@@ -117,7 +117,8 @@ async def build_services(
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
 
-    sandbox = SandboxService(workspace=workspace, events=events)
+    sandbox = SandboxService(databases=databases, workspace=workspace, events=events)
+    await sandbox.cleanup_orphans()
     stack.push_async_callback(sandbox.close)
 
     return Services(

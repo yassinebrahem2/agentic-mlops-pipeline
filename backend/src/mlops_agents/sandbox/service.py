@@ -7,18 +7,25 @@ import contextlib
 import time
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
+from mlops_agents.sandbox.containers import ContainerManager
 from mlops_agents.sandbox.contract import (
     CommandResult,
     DockerStatus,
     EnvironmentStatus,
     Sandbox,
+    SandboxUnavailable,
 )
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner, detect_docker
 from mlops_agents.sandbox.environment import detect_environment
 from mlops_agents.sandbox.images import ImageManager
+from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import project_settings
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -29,16 +36,20 @@ class SandboxService(Sandbox):
         self,
         runner: DockerRunner | None = None,
         *,
+        databases: Databases | None = None,
         workspace: WorkspaceService | None = None,
         events: EventLog | None = None,
     ) -> None:
         self._docker_runner: DockerRunner = runner if runner is not None else CliDockerRunner()
         self._image_manager = ImageManager(self._docker_runner)
+        self._container_manager = ContainerManager(self._docker_runner)
+        self._databases = databases
         self._workspace = workspace
         self._events = events
         self._locks: dict[str, asyncio.Lock] = {}
         self._status: dict[str, EnvironmentStatus] = {}
         self._repo_roots: dict[str, Path] = {}
+        self._network_settings: dict[str, bool] = {}
 
     @property
     def _runner(self) -> DockerRunner:
@@ -48,6 +59,7 @@ class SandboxService(Sandbox):
     def _runner(self, runner: DockerRunner) -> None:
         self._docker_runner = runner
         self._image_manager = ImageManager(runner)
+        self._container_manager = ContainerManager(runner)
 
     def register_project_root(self, project_id: str, path: Path) -> None:
         """Registers a project's root path directly (used in tests)."""
@@ -125,13 +137,74 @@ class SandboxService(Sandbox):
 
             return status
 
+    async def get_network(self, project_id: str) -> bool:
+        if self._databases is not None:
+            proj_engine = await self._databases.project(project_id)
+            async with proj_engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        select(project_settings.c.value).where(
+                            project_settings.c.key == "sandbox_network"
+                        )
+                    )
+                ).scalar_one_or_none()
+            if row is not None:
+                return row.strip().lower() == "true"
+            return False
+        return self._network_settings.get(project_id, False)
+
+    async def set_network(self, project_id: str, enabled: bool) -> bool:
+        old = await self.get_network(project_id)
+        if self._databases is not None:
+            proj_engine = await self._databases.project(project_id)
+            stmt = (
+                sqlite_insert(project_settings)
+                .values(key="sandbox_network", value="true" if enabled else "false")
+                .on_conflict_do_update(
+                    index_elements=["key"],
+                    set_={"value": "true" if enabled else "false"},
+                )
+            )
+            async with proj_engine.begin() as conn:
+                await conn.execute(stmt)
+        else:
+            self._network_settings[project_id] = enabled
+
+        if old != enabled:
+            await self._container_manager.remove_project_containers(project_id)
+
+        return enabled
+
+    async def ensure_container(self, project_id: str, task: TaskRef) -> str:
+        lock = self._locks.setdefault(f"{project_id}:{task.id}", asyncio.Lock())
+        async with lock:
+            status = await self.environment(project_id)
+            if status.state != "ready" or not status.tag:
+                status = await self.rebuild(project_id)
+                if status.state != "ready" or not status.tag:
+                    raise SandboxUnavailable(
+                        f"Environment build failed: {status.detail or 'unknown error'}"
+                    )
+            tag = status.tag
+            network = await self.get_network(project_id)
+            return await self._container_manager.ensure_container(
+                project_id, task, tag, network=network
+            )
+
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:
         raise NotImplementedError("Run will be implemented in task 4.")
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
-        pass
+        await self._container_manager.remove_task(project_id, task_id)
 
     async def close(self) -> None:
-        pass
+        await self._container_manager.cleanup_all()
+
+    async def cleanup_orphans(self) -> None:
+        with contextlib.suppress(Exception):
+            docker_status = await self.docker()
+            if not docker_status.available:
+                return
+            await self._container_manager.cleanup_orphans()

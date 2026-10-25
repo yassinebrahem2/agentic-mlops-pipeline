@@ -1257,6 +1257,32 @@
         "title": "ResyncData",
         "type": "object"
       },
+      "SandboxSettings": {
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "title": "SandboxSettings",
+        "type": "object"
+      },
+      "SandboxSettingsUpdate": {
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "title": "SandboxSettingsUpdate",
+        "type": "object"
+      },
       "SandboxView": {
         "properties": {
           "docker": {
@@ -3420,6 +3446,58 @@
           }
         },
         "summary": "Rebuild Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/sandbox": {
+      "put": {
+        "operationId": "update_project_sandbox_settings_api_projects__project_id__settings_sandbox_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Sandbox Settings",
         "tags": [
           "sandbox"
         ]

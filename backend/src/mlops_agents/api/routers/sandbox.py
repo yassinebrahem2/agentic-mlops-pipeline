@@ -20,6 +20,14 @@ class SandboxView(BaseModel):
 SandboxResponse = SandboxView
 
 
+class SandboxSettings(BaseModel):
+    network: bool
+
+
+class SandboxSettingsUpdate(BaseModel):
+    network: bool
+
+
 @router.get("/sandbox", response_model=SandboxView)
 async def get_sandbox(services: ServicesDep) -> SandboxView:
     docker_status = await services.sandbox.docker()
@@ -34,11 +42,22 @@ async def get_sandbox(services: ServicesDep) -> SandboxView:
 async def get_project_sandbox(project: ProjectDep, services: ServicesDep) -> SandboxView:
     docker_status = await services.sandbox.docker()
     env_status = await services.sandbox.environment(project.id)
+    network = await services.sandbox.get_network(project.id)
     return SandboxView(
         docker=docker_status,
         environment=env_status,
-        network=False,
+        network=network,
     )
+
+
+@router.put("/projects/{project_id}/settings/sandbox", response_model=SandboxSettings)
+async def update_project_sandbox_settings(
+    project: ProjectDep,
+    body: SandboxSettingsUpdate,
+    services: ServicesDep,
+) -> SandboxSettings:
+    network = await services.sandbox.set_network(project.id, body.network)
+    return SandboxSettings(network=network)
 
 
 @router.post("/projects/{project_id}/sandbox/rebuild", response_model=EnvironmentStatus)
