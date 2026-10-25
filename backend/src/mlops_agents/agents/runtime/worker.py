@@ -50,6 +50,10 @@ class TurnWorkers:
         worker = self._workers.get(key)
         return worker is not None and not worker.done()
 
+    def running_sessions(self, project_id: str) -> set[str]:
+        """Session IDs in project_id with a currently running worker."""
+        return {sid for (p, sid) in self._workers if p == project_id and self.running((p, sid))}
+
     def start(
         self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
     ) -> None:
@@ -96,15 +100,11 @@ class TurnWorkers:
 
     def forget(self, project_id: str | None = None) -> None:
         """Drop the references of one project, or of all."""
-        for key in list(self._workers.keys()):
-            if project_id in (None, key[0]):
-                self._workers.pop(key, None)
-        for key in list(self._child_tasks.keys()):
-            if project_id in (None, key[0]):
-                self._child_tasks.pop(key, None)
-        for key in list(self._current_turns.keys()):
-            if project_id in (None, key[0]):
-                self._current_turns.pop(key, None)
+        keys = [k for k in self._workers if project_id in (None, k[0])]
+        for k in keys:
+            self._workers.pop(k, None)
+            self._child_tasks.pop(k, None)
+            self._current_turns.pop(k, None)
         self._first_look = {k for k in self._first_look if project_id not in (None, k[0])}
         self._stop_next = {k for k in self._stop_next if project_id not in (None, k[0])}
         if project_id is None:

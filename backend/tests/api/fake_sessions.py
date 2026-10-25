@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
@@ -212,6 +213,9 @@ class FakeSessions(AgentSessions):
         self.subscriptions.append(sub)
         self.subscribed.set()
         return sub.stream()
+
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        return {}
 
     async def close_project(self, project_id: str) -> None:
         self.closed_projects.append(project_id)
