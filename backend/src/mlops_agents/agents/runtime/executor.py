@@ -147,89 +147,93 @@ class TurnExecutor:
             )
             return ("failed", text)
 
+        # A cancel (Stop, close) marks the message stopped wherever it lands, also inside the
+        # failure handlers: a cancel raised from one of them is not caught by its siblings.
         try:
             try:
-                built_agent = await self._builder.build(project_id, agent)
-            except TurnRefused as exc:
-                text_part: list[Part] = [TextPart(type="text", text=exc.text)]
-                if exc.end == "done":
-                    await add_message("agent", agent, text_part, "complete")
-                    return ("done", None)
-                await add_message("system", "system", text_part, "complete")
-                return ("failed", exc.text)
+                try:
+                    built_agent = await self._builder.build(project_id, agent)
+                except TurnRefused as exc:
+                    text_part: list[Part] = [TextPart(type="text", text=exc.text)]
+                    if exc.end == "done":
+                        await add_message("agent", agent, text_part, "complete")
+                        return ("done", None)
+                    await add_message("system", "system", text_part, "complete")
+                    return ("failed", exc.text)
 
-            agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
-            agent_message_id = agent_msg.id
+                agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
+                agent_message_id = agent_msg.id
 
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            history = await self._store.messages(project_id, session_id)
-            history_for_compaction = [m for m in history if m.id != agent_message_id]
-            system_msg = build_messages(
-                built_agent.definition, built_agent.project, built_agent.layout, summary, []
-            )[0]
-            await compact_if_needed(
-                self._store,
-                self._caller,
-                built_agent.model,
-                project_id,
-                session_id,
-                history_for_compaction,
-                str(system_msg.content),
-                turn_id=turn_id,
-                agent_name=built_agent.definition.name,
-            )
-
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            active_history = await self._store.messages(
-                project_id, session_id, after=compacted_through
-            )
-            active_history = [m for m in active_history if m.id != agent_message_id]
-            initial_messages = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                active_history,
-            )
-
-            # The checkpointer connection is closed before any handler below writes the end state,
-            # so once a turn reports how it ended, nothing of it still holds the project file.
-            async with self._checkpointer(project_id, turn_id) as checkpointer:
-                graph = create_turn_graph(
-                    agent=built_agent,
-                    caller=self._caller,
-                    store=self._store,
-                    sink=sink,
-                    project_id=project_id,
-                    session_id=session_id,
+                summary, compacted_through = await self._store.summary(project_id, session_id)
+                history = await self._store.messages(project_id, session_id)
+                history_for_compaction = [m for m in history if m.id != agent_message_id]
+                system_msg = build_messages(
+                    built_agent.definition, built_agent.project, built_agent.layout, summary, []
+                )[0]
+                await compact_if_needed(
+                    self._store,
+                    self._caller,
+                    built_agent.model,
+                    project_id,
+                    session_id,
+                    history_for_compaction,
+                    str(system_msg.content),
                     turn_id=turn_id,
-                    message_id=agent_message_id,
-                    current_parts=current_parts,
-                    checkpointer=checkpointer,
-                    lock=lock,
-                    hooks=self._hooks,
+                    agent_name=built_agent.definition.name,
                 )
-                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
-                initial_state: TurnState = {
-                    "messages": initial_messages,
-                    "step_count": 0,
-                    "stopped_reason": None,
-                }
-                await graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
 
-            await finish_agent_message("complete")
-            return ("done", None)
+                summary, compacted_through = await self._store.summary(project_id, session_id)
+                active_history = await self._store.messages(
+                    project_id, session_id, after=compacted_through
+                )
+                active_history = [m for m in active_history if m.id != agent_message_id]
+                initial_messages = build_messages(
+                    built_agent.definition,
+                    built_agent.project,
+                    built_agent.layout,
+                    summary,
+                    active_history,
+                )
+
+                # The checkpointer connection is closed before any handler below writes the end
+                # state, so once a turn reports how it ended, nothing of it still holds the
+                # project file.
+                async with self._checkpointer(project_id, turn_id) as checkpointer:
+                    graph = create_turn_graph(
+                        agent=built_agent,
+                        caller=self._caller,
+                        store=self._store,
+                        sink=sink,
+                        project_id=project_id,
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        message_id=agent_message_id,
+                        current_parts=current_parts,
+                        checkpointer=checkpointer,
+                        lock=lock,
+                        hooks=self._hooks,
+                    )
+                    config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+                    initial_state: TurnState = {
+                        "messages": initial_messages,
+                        "step_count": 0,
+                        "stopped_reason": None,
+                    }
+                    await graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
+
+                await finish_agent_message("complete")
+                return ("done", None)
+
+            except TurnFailed as err:
+                return await fail(err.message)
+
+            except Exception:
+                logger.exception("Turn %s failed unexpectedly", turn_id)
+                return await fail(UNEXPECTED_FAILURE_TEXT)
 
         except asyncio.CancelledError:
             await finish_agent_message("stopped")
             raise
-
-        except TurnFailed as err:
-            return await fail(err.message)
-
-        except Exception:
-            logger.exception("Turn %s failed unexpectedly", turn_id)
-            return await fail(UNEXPECTED_FAILURE_TEXT)
 
     @asynccontextmanager
     async def _checkpointer(
