@@ -7,10 +7,9 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.config import APP_NAME
-from mlops_agents.events.contract import EventLog, EventRecord, EventType
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import MemorySandboxProjects
+from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
 
 
 async def test_context_failure_sets_failed_status_and_event(
@@ -62,7 +61,9 @@ async def test_failed_environment_is_invalidated_by_dependency_change(tmp_path: 
     dependency.write_text("broken\n", encoding="utf-8")
     runner = FakeDockerRunner()
     runner.fail_build = True
-    service = SandboxService(runner, projects=MemorySandboxProjects({"prj_123": tmp_path}))
+    service = SandboxService(
+        runner, events=FakeEventLog(), projects=MemorySandboxProjects({"prj_123": tmp_path})
+    )
     failed = await service.rebuild("prj_123")
     assert failed.state == "failed"
     dependency.write_text("six\n", encoding="utf-8")
@@ -82,43 +83,11 @@ async def test_environment_does_not_hide_unexpected_failures(tmp_path: Path) -> 
         ) -> DockerResult:
             raise RuntimeError("unexpected runner defect")
 
-    service = SandboxService(BrokenDocker(), projects=MemorySandboxProjects({"prj_123": tmp_path}))
+    service = SandboxService(
+        BrokenDocker(), events=FakeEventLog(), projects=MemorySandboxProjects({"prj_123": tmp_path})
+    )
     with pytest.raises(RuntimeError, match="unexpected runner defect"):
         await service.environment("prj_123")
-
-
-class FakeEventLog(EventLog):
-    def __init__(self) -> None:
-        self.records: list[EventRecord] = []
-
-    async def record(
-        self,
-        project_id: str,
-        *,
-        source: str,
-        type: EventType,
-        payload: dict[str, object],
-        subject_id: str | None = None,
-    ) -> EventRecord:
-        rec = EventRecord(
-            id="evt_test",
-            seq=len(self.records) + 1,
-            ts="2026-10-25T00:00:00Z",
-            source=source,
-            type=type,
-            subject_id=subject_id,
-            payload=payload,
-        )
-        self.records.append(rec)
-        return rec
-
-    def subscribe(self, project_id: str, after_seq: int | None):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
-
-    async def history(
-        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
-    ) -> list[EventRecord]:
-        return []
 
 
 class FakeDockerRunner(DockerRunner):
@@ -188,12 +157,11 @@ async def test_service_rebuild_success_and_events(tmp_path: Path) -> None:
 
     assert started.type == "sandbox.build.started"
     assert started.source == "system"
-    assert started.payload == {"tag": status.tag, "template": "requirements"}
+    assert started.payload == {"tag": status.tag, "detail": None}
 
     assert finished.type == "sandbox.build.finished"
     assert finished.source == "system"
-    assert finished.payload["tag"] == status.tag
-    assert "duration_s" in finished.payload
+    assert finished.payload == {"tag": status.tag, "detail": None}
 
 
 async def test_service_rebuild_failure_and_events(tmp_path: Path) -> None:
@@ -217,8 +185,7 @@ async def test_service_rebuild_failure_and_events(tmp_path: Path) -> None:
     failed = events.records[1]
     assert failed.type == "sandbox.build.failed"
     assert failed.source == "system"
-    assert failed.payload["tag"] == status.tag
-    assert "Syntax error" in str(failed.payload["detail"])
+    assert failed.payload == {"tag": status.tag, "detail": status.detail}
 
 
 async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> None:
@@ -255,3 +222,45 @@ async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> No
     assert res2.state == "ready"
     assert res1.tag == res2.tag
     assert runner.build_calls == 1
+
+
+async def test_environment_returns_failed_on_symlinked_dependency(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    req = worktree / "requirements.txt"
+    external = tmp_path / "secret.env"
+    external.write_text("SECRET=123", encoding="utf-8")
+    try:
+        req.symlink_to(external)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
+        raise
+
+    service = SandboxService(
+        FakeDockerRunner(),
+        projects=MemorySandboxProjects({"prj_symlink": worktree}),
+        events=FakeEventLog(),
+    )
+    status = await service.environment("prj_symlink")
+    assert status.state == "failed"
+    assert "symlink" in (status.detail or "").lower()
+
+
+async def test_environment_returns_failed_on_value_error_python_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import service as service_module
+
+    def fail_snapshot(*args: object, **kwargs: object) -> None:
+        raise ValueError("invalid python version format")
+
+    monkeypatch.setattr(service_module, "snapshot_image", fail_snapshot)
+    service = SandboxService(
+        FakeDockerRunner(),
+        projects=MemorySandboxProjects({"prj_val": tmp_path}),
+        events=FakeEventLog(),
+    )
+    status = await service.environment("prj_val")
+    assert status.state == "failed"
+    assert "invalid python version format" in (status.detail or "")

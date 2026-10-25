@@ -14,7 +14,7 @@ from mlops_agents.sandbox.docker import (
     detect_docker,
 )
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import MemorySandboxProjects
+from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
 
 
 class FakeDockerRunner:
@@ -93,6 +93,37 @@ async def test_detect_docker_daemon_down_unparseable_output() -> None:
     assert status.version is None
     assert status.detail is not None
     assert "Docker daemon is not running" in status.detail
+
+
+async def test_detect_docker_unparseable_output_exit_code_zero() -> None:
+    runner = FakeDockerRunner(
+        stdout="invalid json payload",
+        stderr="",
+        exit_code=0,
+    )
+    status = await detect_docker(runner)
+    assert status.available is False
+    assert status.version is None
+    assert status.detail is not None
+    assert "Failed to parse docker version output" in status.detail
+
+
+async def test_consume_stream_multibyte_utf8_split_chunks() -> None:
+    import asyncio
+
+    from mlops_agents.sandbox.docker import StreamCapture, consume_stream
+
+    # Character '€' is 3 bytes in UTF-8: b'\xe2\x82\xac'
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"abc\xe2")
+    reader.feed_data(b"\x82\xacdef")
+    reader.feed_eof()
+
+    cap = StreamCapture()
+    comb = StreamCapture()
+    await consume_stream(reader, cap, comb)
+    assert cap.get_output() == "abc€def"
+    assert "\ufffd" not in cap.get_output()
 
 
 async def test_cli_runner_scrubs_output_and_secrets() -> None:
@@ -212,7 +243,7 @@ async def test_incremental_reader_never_retains_more_than_head_plus_tail(
 
 @pytest.mark.docker
 async def test_real_docker_available() -> None:
-    service = SandboxService(projects=MemorySandboxProjects())
+    service = SandboxService(projects=MemorySandboxProjects(), events=FakeEventLog())
     status = await service.docker()
     assert status.available is True
     assert status.version is not None

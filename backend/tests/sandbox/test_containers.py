@@ -133,6 +133,24 @@ async def test_container_manager_inspect_and_start(tmp_path: Path) -> None:
     assert info.task_id == "task_1"
 
 
+async def test_container_manager_inspect_invalid_json_raises_unavailable() -> None:
+    class BadInspectDocker(FakeContainersDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args[0] == "inspect":
+                return DockerResult(stdout="not valid json", stderr="", exit_code=0)
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    manager = ContainerManager(BadInspectDocker())
+    with pytest.raises(SandboxUnavailable, match="Failed to parse inspect output"):
+        await manager.inspect("some_container")
+
+
 async def test_container_manager_start_failure(tmp_path: Path) -> None:
     runner = FakeContainersDocker()
     runner.fail_run = True

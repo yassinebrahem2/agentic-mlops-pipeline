@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -50,6 +52,10 @@ class FakeSandbox(Sandbox):
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
         pass
+
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
+        yield
 
     async def close(self) -> None:
         pass
@@ -309,7 +315,7 @@ async def test_container_operational_failure_becomes_tool_error(
 
     from mlops_agents.sandbox.docker import DockerResult
     from mlops_agents.sandbox.service import SandboxService
-    from tests.sandbox.fakes import MemorySandboxProjects
+    from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
     from tests.sandbox.test_service_run import FakeRunDocker
 
     class FailedOperation(FakeRunDocker):
@@ -324,7 +330,9 @@ async def test_container_operational_failure_becomes_tool_error(
                 raise error
             return await super().run(args, timeout_s=timeout_s, secrets=secrets)
 
-    service = SandboxService(FailedOperation(), projects=MemorySandboxProjects())
+    service = SandboxService(
+        FailedOperation(), projects=MemorySandboxProjects(), events=FakeEventLog()
+    )
     task = TaskRef("tsk_container_failure", "Failure", "branch", tmp_path, "active")
     result = await BashTool(service).invoke(make_context(tmp_path, task), {"command": "ls"})
     if operation == "exec" and isinstance(error, TimeoutError):

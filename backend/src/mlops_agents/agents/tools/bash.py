@@ -14,7 +14,12 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
-from mlops_agents.sandbox.contract import Sandbox, SandboxUnavailable
+from mlops_agents.sandbox.contract import (
+    DEFAULT_BASH_TIMEOUT_S,
+    MAX_BASH_TIMEOUT_S,
+    Sandbox,
+    SandboxUnavailable,
+)
 
 MAX_TITLE_CMD_LEN = 60
 
@@ -25,8 +30,8 @@ class BashArgs(BaseModel):
     timeout: int | None = Field(
         default=None,
         ge=1,
-        le=600,
-        description="Timeout in seconds (default 120, max 600).",
+        le=MAX_BASH_TIMEOUT_S,
+        description=f"Timeout in seconds (default {DEFAULT_BASH_TIMEOUT_S}, max {MAX_BASH_TIMEOUT_S}).",
     )
     description: str | None = Field(
         default=None,

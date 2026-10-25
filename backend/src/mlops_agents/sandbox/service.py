@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import time
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.events.contract import EventLog
-from mlops_agents.sandbox.containers import ContainerManager, host_container_user
+from mlops_agents.sandbox.containers import (
+    ContainerManager,
+    container_name,
+    host_container_user,
+)
 from mlops_agents.sandbox.contract import (
+    DEFAULT_BASH_TIMEOUT_S,
+    MAX_BASH_TIMEOUT_S,
     CommandResult,
     DockerStatus,
     EnvironmentStatus,
@@ -21,7 +28,6 @@ from mlops_agents.sandbox.docker import (
     CliDockerRunner,
     DockerRunner,
     DockerTimeoutError,
-    StreamCapture,
     detect_docker,
 )
 from mlops_agents.sandbox.images import ImageManager, snapshot_image
@@ -36,7 +42,7 @@ class SandboxService(Sandbox):
         runner: DockerRunner | None = None,
         *,
         projects: SandboxProjects,
-        events: EventLog | None = None,
+        events: EventLog,
     ) -> None:
         self._runner: DockerRunner = runner if runner is not None else CliDockerRunner()
         self._image_manager = ImageManager(self._runner)
@@ -44,7 +50,16 @@ class SandboxService(Sandbox):
         self._projects = projects
         self._events = events
         self._locks: dict[str, asyncio.Lock] = {}
+        self._task_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._status: dict[str, EnvironmentStatus] = {}
+
+    def _get_task_lock(self, project_id: str, task_id: str) -> asyncio.Lock:
+        key = (project_id, task_id)
+        lock = self._task_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._task_locks[key] = lock
+        return lock
 
     async def docker(self) -> DockerStatus:
         return await detect_docker(self._runner)
@@ -61,6 +76,10 @@ class SandboxService(Sandbox):
             exists = await self._image_manager.image_exists(inputs.tag)
         except FileNotFoundError:
             return EnvironmentStatus(state="none", tag=None, detail=None)
+        except (ValueError, OSError) as exc:
+            status = EnvironmentStatus(state="failed", tag=None, detail=str(exc))
+            self._status[project_id] = status
+            return status
         status = EnvironmentStatus(
             state="ready" if exists else "none", tag=inputs.tag if exists else None, detail=None
         )
@@ -72,7 +91,6 @@ class SandboxService(Sandbox):
         lock = self._locks.setdefault(project_id, asyncio.Lock())
         async with lock:
             tag: str | None = None
-            started = time.monotonic()
             try:
                 inputs = snapshot_image(project_id, worktree)
                 tag = inputs.tag
@@ -81,32 +99,29 @@ class SandboxService(Sandbox):
                     self._status[project_id] = status
                     return status
                 self._status[project_id] = EnvironmentStatus(state="building", tag=tag, detail=None)
-                if self._events is not None:
-                    await self._events.record(
-                        project_id,
-                        source="system",
-                        type="sandbox.build.started",
-                        payload={"tag": tag, "template": inputs.template_name},
-                    )
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="sandbox.build.started",
+                    payload={"tag": tag, "detail": None},
+                )
                 status = await self._image_manager.build_image(project_id, worktree, inputs=inputs)
             except (OSError, ValueError) as exc:
                 status = EnvironmentStatus(
                     state="failed", tag=tag, detail=f"Image build failed: {exc}"
                 )
             self._status[project_id] = status
-            if self._events is not None:
-                await self._events.record(
-                    project_id,
-                    source="system",
-                    type="sandbox.build.finished"
-                    if status.state == "ready"
-                    else "sandbox.build.failed",
-                    payload=(
-                        {"tag": status.tag, "duration_s": round(time.monotonic() - started, 2)}
-                        if status.state == "ready"
-                        else {"tag": status.tag, "detail": status.detail}
-                    ),
-                )
+            await self._events.record(
+                project_id,
+                source="system",
+                type="sandbox.build.finished"
+                if status.state == "ready"
+                else "sandbox.build.failed",
+                payload={
+                    "tag": status.tag,
+                    "detail": None if status.state == "ready" else status.detail,
+                },
+            )
             return status
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus:
@@ -150,60 +165,80 @@ class SandboxService(Sandbox):
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:
-        cname = await self.ensure_container(project_id, task)
-        timeout = max(1, min(timeout_s, 600)) if timeout_s > 0 else 120
-
-        try:
-            res = await self._runner.run(
-                ["exec", cname, "bash", "-lc", command],
-                timeout_s=timeout,
+        lock = self._get_task_lock(project_id, task.id)
+        async with lock:
+            cname = await self.ensure_container(project_id, task)
+            timeout = (
+                max(1, min(timeout_s, MAX_BASH_TIMEOUT_S))
+                if timeout_s > 0
+                else DEFAULT_BASH_TIMEOUT_S
             )
-        except TimeoutError as exc:
+
             try:
-                restarted = await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
+                res = await self._runner.run(
+                    ["exec", cname, "bash", "-lc", command],
+                    timeout_s=timeout,
+                )
+            except TimeoutError as exc:
+                try:
+                    restarted = await self._runner.run(
+                        ["restart", "-t", "0", cname], timeout_s=30.0
+                    )
+                except FileNotFoundError as err:
+                    raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+                except TimeoutError as err:
+                    raise SandboxUnavailable("Timed out restarting sandbox container.") from err
+                except OSError as err:
+                    raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
+                if restarted.exit_code != 0:
+                    raise SandboxUnavailable(
+                        f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
+                    ) from exc
+                if isinstance(exc, DockerTimeoutError) and exc.output is not None:
+                    captured, truncated = exc.output, exc.truncated
+                else:
+                    captured, truncated = "", False
+                message = f"Command took longer than {timeout} seconds and was stopped."
+                output = f"{captured}\n\n{message}" if captured else message
+                return CommandResult(
+                    output=output,
+                    exit_code=None,
+                    timed_out=True,
+                    truncated=truncated,
+                )
             except FileNotFoundError as err:
                 raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-            except TimeoutError as err:
-                raise SandboxUnavailable("Timed out restarting sandbox container.") from err
             except OSError as err:
-                raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
-            if restarted.exit_code != 0:
-                raise SandboxUnavailable(
-                    f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
-                ) from exc
-            if isinstance(exc, DockerTimeoutError) and exc.output is not None:
-                captured, truncated = exc.output, exc.truncated
-            else:
-                stdout = getattr(exc, "stdout", "")
-                stderr = getattr(exc, "stderr", "")
-                capture = StreamCapture.from_streams(
-                    stdout if isinstance(stdout, str) else "",
-                    stderr if isinstance(stderr, str) else "",
-                )
-                captured, truncated = capture.get_output(), capture.truncated
-            message = f"Command took longer than {timeout} seconds and was stopped."
-            output = f"{captured}\n\n{message}" if captured else message
+                raise SandboxUnavailable(f"Sandbox command failed: {err}") from err
+
+            output, truncated = res.command_output()
             return CommandResult(
                 output=output,
-                exit_code=None,
-                timed_out=True,
+                exit_code=res.exit_code,
+                timed_out=False,
                 truncated=truncated,
             )
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Sandbox command failed: {err}") from err
 
-        output, truncated = res.command_output()
-        return CommandResult(
-            output=output,
-            exit_code=res.exit_code,
-            timed_out=False,
-            truncated=truncated,
-        )
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
+        lock = self._get_task_lock(project_id, task_id)
+        async with lock:
+            cname = container_name(task_id)
+            info = await self._container_manager.inspect(cname)
+            if info is None or not info.running:
+                yield
+                return
+            await self._container_manager.pause(cname)
+            try:
+                yield
+            finally:
+                await self._container_manager.unpause(cname)
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
-        await self._container_manager.remove_task(project_id, task_id)
+        lock = self._get_task_lock(project_id, task_id)
+        async with lock:
+            await self._container_manager.remove_task(project_id, task_id)
+            self._task_locks.pop((project_id, task_id), None)
 
     async def close(self) -> None:
         await self._container_manager.cleanup_all()
