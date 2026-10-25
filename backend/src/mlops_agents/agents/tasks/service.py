@@ -8,8 +8,14 @@ from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.claims import claim_paths
+from mlops_agents.agents.tasks.commit import (
+    commit_task,
+    has_unpublished_changes_task,
+    push_task,
+    staged_diff_task,
+)
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
-from mlops_agents.agents.tasks.git import git_dir_for_task, task_git
+from mlops_agents.agents.tasks.git import git_dir_for_task
 from mlops_agents.agents.tasks.worktrees import TaskFiles, create_worktree
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
@@ -308,28 +314,62 @@ class TasksService(Tasks):
         await claim_paths(engine, task, paths)
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
-        if not task.worktree.exists():
-            return False
         project = await self._workspace.get(project_id)
         repo_root = self._workspace.repo_root(project)
         git_dir = git_dir_for_task(repo_root, task.id)
-        res = await task_git(
-            self._git,
+        engine = await self._databases.project(project_id)
+        return await has_unpublished_changes_task(
+            runner=self._git,
             git_dir=git_dir,
             worktree=task.worktree,
             empty_hooks=self._paths.empty_hooks,
-            args=["status", "--porcelain"],
+            engine=engine,
+            project=project,
+            task=task,
         )
-        return bool(res.stdout.strip())
 
     async def staged_diff(self, project_id: str, task: TaskRef) -> str:
-        raise NotImplementedError
+        project = await self._workspace.get(project_id)
+        repo_root = self._workspace.repo_root(project)
+        git_dir = git_dir_for_task(repo_root, task.id)
+        engine = await self._databases.project(project_id)
+        return await staged_diff_task(
+            runner=self._git,
+            git_dir=git_dir,
+            worktree=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            engine=engine,
+            task=task,
+        )
 
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult:
-        raise NotImplementedError
+        project = await self._workspace.get(project_id)
+        repo_root = self._workspace.repo_root(project)
+        git_dir = git_dir_for_task(repo_root, task.id)
+        engine = await self._databases.project(project_id)
+        return await commit_task(
+            runner=self._git,
+            git_dir=git_dir,
+            worktree=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            databases=self._databases,
+            engine=engine,
+            task=task,
+            message=message,
+        )
 
     async def push(self, project_id: str, task: TaskRef) -> None:
-        raise NotImplementedError
+        project = await self._workspace.get(project_id)
+        repo_root = self._workspace.repo_root(project)
+        git_dir = git_dir_for_task(repo_root, task.id)
+        await push_task(
+            runner=self._git,
+            git_dir=git_dir,
+            worktree=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            project=project,
+            task=task,
+        )
 
     async def local_merge_preview(self, project_id: str, task: TaskRef) -> list[str]:
         raise NotImplementedError

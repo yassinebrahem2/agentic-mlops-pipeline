@@ -1,0 +1,503 @@
+from __future__ import annotations
+
+import os
+import subprocess
+from collections.abc import AsyncGenerator, Sequence
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import httpx2
+import pytest
+from sqlalchemy import insert, select, update
+
+from mlops_agents.agents.runtime.contract import Resync
+from mlops_agents.agents.tasks.contract import CommitRefused, CommitResult
+from mlops_agents.agents.tasks.service import TasksService
+from mlops_agents.clock import now_iso
+from mlops_agents.config import RunMode, Settings, load_settings
+from mlops_agents.errors import DomainError
+from mlops_agents.events.contract import EventLog, EventRecord, EventType
+from mlops_agents.ids import new_id
+from mlops_agents.integrations.github.auth import GitHubAuth
+from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.paths import DataPaths
+from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import file_claims, integrations, sessions, tasks
+from mlops_agents.workspace.service import WorkspaceService
+from tests.conftest import MemoryKeyStore, make_repo
+from tests.integrations.test_github_auth import FakeGh
+
+
+def _cmd(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=cwd, env=env, check=check, capture_output=True, text=True)
+
+
+class FakeEventLog(EventLog):
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    async def record(
+        self,
+        project_id: str,
+        *,
+        source: str,
+        type: EventType,
+        payload: dict[str, Any],
+        subject_id: str | None = None,
+    ) -> EventRecord:
+        record = EventRecord(
+            id=new_id("evt"),
+            seq=len(self.records) + 1,
+            ts=now_iso(),
+            source=source,
+            type=type,
+            subject_id=subject_id,
+            payload=payload,
+        )
+        self.records.append(
+            {
+                "project_id": project_id,
+                "source": source,
+                "type": type,
+                "payload": payload,
+                "subject_id": subject_id,
+                "record": record,
+            }
+        )
+        return record
+
+    async def subscribe(
+        self, project_id: str, after_seq: int | None
+    ) -> AsyncGenerator[EventRecord | Resync, None]:
+        if False:
+            yield
+
+    async def history(
+        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
+    ) -> list[EventRecord]:
+        return [
+            r["record"]
+            for r in reversed(self.records)
+            if r["project_id"] == project_id and r["type"] in types
+        ][:limit]
+
+
+def _settings(paths: DataPaths) -> Settings:
+    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
+    return replace(base, mode=RunMode.LOCAL)
+
+
+async def _setup_service(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    *,
+    files: dict[str, str] | None = None,
+    github_login: str | None = None,
+) -> tuple[TasksService, WorkspaceService, FakeEventLog, str, Path]:
+    repo = make_repo(tmp_path / "repo", files or {"app.py": "print('hello')\n"}, git_env)
+    http = httpx2.AsyncClient()
+    github = GitHubAuth(databases, keystore, http, FakeGh(None))
+    if github_login:
+        engine = await databases.app()
+        async with engine.begin() as conn:
+            await conn.execute(
+                insert(integrations).values(
+                    name="github",
+                    mode="token",
+                    login=github_login,
+                    verified_at=now_iso(),
+                )
+            )
+    runner = GitRunner(paths.bin, github.token)
+    workspace = WorkspaceService(_settings(paths), paths, databases, runner, github, http)
+    project = await workspace.add_local(str(repo))
+    events = FakeEventLog()
+    service = TasksService(
+        databases=databases,
+        paths=paths,
+        git=runner,
+        events=events,
+        workspace=workspace,
+    )
+    return service, workspace, events, project.id, repo
+
+
+async def _create_session(
+    databases: Databases, project_id: str, session_id: str, agent: str = "coder"
+) -> None:
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(sessions).values(
+                id=session_id,
+                agent=agent,
+                summary=None,
+                compacted_through=None,
+                created_at=now_iso(),
+            )
+        )
+
+
+async def test_commit_bash_like_change(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Add script")
+
+    # Write a file directly into the worktree (Bash-like change)
+    script_file = task.worktree / "script.py"
+    script_file.write_text("print('bash like')\n", encoding="utf-8")
+
+    result = await service.commit(project_id, task, "feat: add bash script")
+
+    assert isinstance(result, CommitResult)
+    assert len(result.sha) == 40
+    assert result.changed == ("script.py",)
+
+    # Verify commit on HEAD
+    log = _cmd(["git", "log", "-1", "--pretty=format:%B"], cwd=task.worktree)
+    assert "feat: add bash script" in log.stdout
+
+    # Verify claims recorded
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        claims = (
+            (await conn.execute(select(file_claims.c.path).where(file_claims.c.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+    assert "script.py" in claims
+
+
+async def test_commit_clean_worktree_refused(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Clean commit")
+
+    with pytest.raises(CommitRefused, match="working tree clean"):
+        await service.commit(project_id, task, "feat: clean")
+
+
+async def test_commit_secret_file_refused_and_unstaged(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Secret test")
+
+    # Create secret file (.env)
+    (task.worktree / ".env").write_text("API_KEY=12345\n", encoding="utf-8")
+
+    with pytest.raises(CommitRefused, match=r"\.env"):
+        await service.commit(project_id, task, "feat: add env")
+
+    # Verify unstaged
+    diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff.stdout.strip() == ""
+
+
+async def test_commit_claim_conflict_refused_and_unstaged(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="agent_one")
+    await _create_session(databases, project_id, "ses_2", agent="agent_two")
+
+    task1 = await service.start(project_id, "ses_1", "agent_one", "Task 1")
+    task2 = await service.start(project_id, "ses_2", "agent_two", "Task 2")
+
+    # Task 1 claims shared.py
+    await service.claim(project_id, task1, ["shared.py"])
+
+    # Task 2 writes shared.py and attempts to commit
+    (task2.worktree / "shared.py").write_text("# task 2\n", encoding="utf-8")
+
+    with pytest.raises(CommitRefused) as exc_info:
+        await service.commit(project_id, task2, "feat: edit shared")
+
+    assert "shared.py" in str(exc_info.value)
+    assert "agent_one" in str(exc_info.value)
+    assert task1.id in str(exc_info.value)
+
+    # Verify task 2's worktree has nothing staged
+    diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task2.worktree)
+    assert diff.stdout.strip() == ""
+
+
+async def test_commit_author_identity_human_and_ai_fallback(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    # 1. Fallback to GitHub login when git config has AI identity
+    service, _, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env, github_login="octocat"
+    )
+    # Set AI identity in repo config
+    _cmd(["git", "config", "user.name", "Claude Assistant"], cwd=repo)
+    _cmd(["git", "config", "user.email", "claude@anthropic.com"], cwd=repo)
+
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "AI identity test")
+
+    (task.worktree / "mod.py").write_text("a = 1\n", encoding="utf-8")
+    await service.commit(project_id, task, "commit with ai config")
+
+    log = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
+    assert log.stdout.strip() == "octocat <octocat@users.noreply.github.com>"
+
+    # 2. Human git config is preserved
+    _cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
+    _cmd(["git", "config", "user.email", "jane@example.com"], cwd=repo)
+
+    (task.worktree / "mod2.py").write_text("b = 2\n", encoding="utf-8")
+    await service.commit(project_id, task, "commit with human config")
+
+    log2 = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
+    assert log2.stdout.strip() == "Jane Doe <jane@example.com>"
+
+
+async def test_staged_diff_and_cap(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Diff test")
+
+    # Normal diff
+    (task.worktree / "hello.txt").write_text("Hello World\n", encoding="utf-8")
+    diff = await service.staged_diff(project_id, task)
+    assert "+Hello World" in diff
+    assert "diff --git" in diff
+
+    # Calling staged_diff unstages changes
+    diff_cached = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff_cached.stdout.strip() == ""
+
+    # Large diff capped at 60,000 characters
+    (task.worktree / "large.txt").write_text("x" * 70000 + "\n", encoding="utf-8")
+    large_diff = await service.staged_diff(project_id, task)
+    assert len(large_diff) <= 60000 + len("\n[diff cut]")
+    assert large_diff.endswith("\n[diff cut]")
+
+
+async def test_push_to_fake_remote(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    # 1. Bare remote repo seeded with main
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    _cmd(["git", "init", "--bare", str(bare)])
+    seed = tmp_path / "seed"
+    make_repo(seed, {"remote_file.txt": "remote\n"}, git_env)
+    _cmd(["git", "push", str(bare), "main"], cwd=seed)
+
+    # 2. Local client repo with origin
+    service, _, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    _cmd(
+        ["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"],
+        cwd=repo,
+    )
+
+    # 3. Configure insteadOf via fake_global
+    fake_global = tmp_path / "fake_global.gitconfig"
+    bare_url = bare.as_uri()
+    _cmd(
+        [
+            "git",
+            "config",
+            "--file",
+            str(fake_global),
+            f"url.{bare_url}.insteadOf",
+            "https://github.com/test-owner/test-repo.git",
+        ]
+    )
+    old_global = os.environ.get("GIT_CONFIG_GLOBAL")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(fake_global)
+    try:
+        await _create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Push test")
+
+        (task.worktree / "pushed.txt").write_text("pushed content\n", encoding="utf-8")
+        commit_res = await service.commit(project_id, task, "feat: commit to push")
+
+        await service.push(project_id, task)
+
+        # Verify bare repo has the branch and commit
+        pushed_sha = _cmd(
+            ["git", "rev-parse", f"refs/heads/{task.branch}"], cwd=bare
+        ).stdout.strip()
+        assert pushed_sha == commit_res.sha
+    finally:
+        if old_global is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = old_global
+
+
+async def test_push_without_remote_raises_error(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    # Local project without GitHub origin
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "No remote push")
+
+    (task.worktree / "file.txt").write_text("hello\n", encoding="utf-8")
+    await service.commit(project_id, task, "feat: some change")
+
+    with pytest.raises(DomainError) as exc_info:
+        await service.push(project_id, task)
+    assert exc_info.value.code == "no_remote"
+
+
+async def test_has_unpublished_changes(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    # --- Case 1: Local project without RepoRef ---
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Local task")
+
+    # 1. Clean worktree, just started -> False
+    assert await service.has_unpublished_changes(project_id, task) is False
+
+    # 2. Dirty worktree -> True
+    (task.worktree / "change.txt").write_text("dirty\n", encoding="utf-8")
+    assert await service.has_unpublished_changes(project_id, task) is True
+
+    # 3. Committed -> ahead of base_sha, no review -> True
+    await service.commit(project_id, task, "feat: change")
+    assert await service.has_unpublished_changes(project_id, task) is True
+
+    # 4. Local review exists -> False
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(tasks)
+            .where(tasks.c.id == task.id)
+            .values(status="in_review", review_kind="local")
+        )
+    assert await service.has_unpublished_changes(project_id, task) is False
+
+    # --- Case 2: Project with RepoRef (remote) ---
+    bare = tmp_path / "remote2.git"
+    bare.mkdir()
+    _cmd(["git", "init", "--bare", str(bare)])
+    seed2 = tmp_path / "seed2"
+    make_repo(seed2, {"remote_file2.txt": "remote2\n"}, git_env)
+    _cmd(["git", "push", str(bare), "main"], cwd=seed2)
+
+    service2, _, _, prj2_id, repo2 = await _setup_service(
+        tmp_path / "prj2", paths, databases, keystore, git_env
+    )
+    _cmd(
+        ["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"],
+        cwd=repo2,
+    )
+
+    fake_global = tmp_path / "fake_global2.gitconfig"
+    bare_url = bare.as_uri()
+    _cmd(
+        [
+            "git",
+            "config",
+            "--file",
+            str(fake_global),
+            f"url.{bare_url}.insteadOf",
+            "https://github.com/test-owner/test-repo.git",
+        ]
+    )
+    old_global = os.environ.get("GIT_CONFIG_GLOBAL")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(fake_global)
+    try:
+        await _create_session(databases, prj2_id, "ses_2", agent="coder")
+        task2 = await service2.start(prj2_id, "ses_2", "coder", "Remote task")
+
+        # Clean worktree, just started -> False
+        assert await service2.has_unpublished_changes(prj2_id, task2) is False
+
+        # Dirty worktree -> True
+        (task2.worktree / "remote_change.txt").write_text("dirty\n", encoding="utf-8")
+        assert await service2.has_unpublished_changes(prj2_id, task2) is True
+
+        # Committed -> clean worktree, unpushed commits -> True
+        await service2.commit(prj2_id, task2, "feat: remote change")
+        assert await service2.has_unpublished_changes(prj2_id, task2) is True
+
+        # Pushed -> False
+        await service2.push(prj2_id, task2)
+        assert await service2.has_unpublished_changes(prj2_id, task2) is False
+
+        # Another commit -> True
+        (task2.worktree / "more.txt").write_text("more\n", encoding="utf-8")
+        await service2.commit(prj2_id, task2, "feat: more change")
+        assert await service2.has_unpublished_changes(prj2_id, task2) is True
+    finally:
+        if old_global is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = old_global
