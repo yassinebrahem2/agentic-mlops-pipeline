@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Coroutine
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from mlops_agents.agents.tools.base import TaskRef
@@ -34,7 +34,7 @@ from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
 
 
-async def _finish_operation(operation: Coroutine[object, object, None]) -> None:
+async def _finish_operation[T](operation: Coroutine[object, object, T]) -> T:
     """Settle a Docker state change before cancellation can release the task lock."""
     pending = asyncio.create_task(operation)
     cancelled: asyncio.CancelledError | None = None
@@ -43,9 +43,10 @@ async def _finish_operation(operation: Coroutine[object, object, None]) -> None:
             await asyncio.shield(pending)
         except asyncio.CancelledError as exc:
             cancelled = exc
-    pending.result()
+    result = pending.result()
     if cancelled is not None:
         raise cancelled
+    return result
 
 
 class SandboxService(Sandbox):
@@ -66,24 +67,40 @@ class SandboxService(Sandbox):
         self._build_locks: dict[str, asyncio.Lock] = {}
         self._task_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._task_owners: dict[tuple[str, str], asyncio.Task[object] | None] = {}
+        self._task_entry = asyncio.Lock()
         self._status: dict[str, EnvironmentStatus] = {}
 
     @asynccontextmanager
     async def _task_guard(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
         key = (project_id, task_id)
         owner = asyncio.current_task()
-        if key in self._task_owners and self._task_owners[key] is owner:
-            raise SandboxUnavailable(
-                "Call sandbox operations after leaving paused() or another operation for this task."
-            )
+        self._reject_nested_operation()
         # Never evict: queued callers must share this lock with future callers after removal.
-        lock = self._task_locks.setdefault(key, asyncio.Lock())
+        async with self._task_entry:
+            lock = self._task_locks.setdefault(key, asyncio.Lock())
         async with lock:
             self._task_owners[key] = owner
             try:
                 yield
             finally:
                 del self._task_owners[key]
+
+    def _reject_nested_operation(self) -> None:
+        # Check before the entry gate: cleanup may hold it while waiting for this caller's lock.
+        if asyncio.current_task() in self._task_owners.values():
+            raise SandboxUnavailable(
+                "Call sandbox operations after leaving paused() or another task operation."
+            )
+
+    @asynccontextmanager
+    async def _exclusive_tasks(self, project_id: str | None = None) -> AsyncGenerator[None]:
+        """Block new task operations while draining the same locks used by active operations."""
+        self._reject_nested_operation()
+        async with self._task_entry, AsyncExitStack() as held:
+            for key, lock in self._task_locks.items():
+                if project_id is None or key[0] == project_id:
+                    await held.enter_async_context(lock)
+            yield
 
     async def docker(self) -> DockerStatus:
         return await detect_docker(self._runner)
@@ -156,10 +173,13 @@ class SandboxService(Sandbox):
         return await self._projects.get_network(project_id)
 
     async def set_network(self, project_id: str, enabled: bool) -> bool:
-        old = await self.get_network(project_id)
-        if old != enabled:
-            await self._container_manager.remove_project_containers(project_id)
-        await self._projects.set_network(project_id, enabled)
+        async with self._exclusive_tasks(project_id):
+            old = await self.get_network(project_id)
+            if old != enabled:
+                await _finish_operation(
+                    self._container_manager.remove_project_containers(project_id)
+                )
+            await _finish_operation(self._projects.set_network(project_id, enabled))
         return enabled
 
     async def ensure_container(self, project_id: str, task: TaskRef) -> str:
@@ -179,8 +199,10 @@ class SandboxService(Sandbox):
             )
         network = await self.get_network(project_id)
         try:
-            return await self._container_manager.ensure_container(
-                project_id, task, status.tag, network=network
+            return await _finish_operation(
+                self._container_manager.ensure_container(
+                    project_id, task, status.tag, network=network
+                )
             )
         except FileNotFoundError as exc:
             raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
@@ -283,9 +305,11 @@ class SandboxService(Sandbox):
             await _finish_operation(self._container_manager.remove_task(project_id, task_id))
 
     async def close(self) -> None:
-        await self._container_manager.cleanup_all()
+        async with self._exclusive_tasks():
+            await _finish_operation(self._container_manager.cleanup_all())
 
     async def cleanup_orphans(self) -> None:
         docker_status = await self.docker()
         if docker_status.available:
-            await self._container_manager.cleanup_orphans()
+            async with self._exclusive_tasks():
+                await _finish_operation(self._container_manager.cleanup_orphans())

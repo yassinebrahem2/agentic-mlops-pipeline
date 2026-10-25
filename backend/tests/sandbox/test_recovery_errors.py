@@ -65,6 +65,12 @@ async def test_inspect_missing_container_is_none() -> None:
     assert await manager.inspect("container") is None
 
 
+async def test_inspect_requests_container_type_for_dockers_missing_container_error() -> None:
+    runner = ControlledDocker()
+    assert await ContainerManager(runner).inspect("missing") is None
+    assert runner.calls == [["inspect", "missing", "--type", "container"]]
+
+
 @pytest.mark.parametrize("operation", ["ps", "rm"])
 @pytest.mark.parametrize("cleanup", ["project", "all", "startup", "network"])
 async def test_cleanup_failures_surface(tmp_path: Path, operation: str, cleanup: str) -> None:

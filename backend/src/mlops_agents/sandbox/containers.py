@@ -91,7 +91,7 @@ class ContainerManager:
 
     async def inspect(self, name: str) -> ContainerInfo | None:
         """Inspects a container and returns its info, or None if not found."""
-        res = await self._runner.run(["inspect", name], timeout_s=15.0)
+        res = await self._runner.run(["inspect", name, "--type", "container"], timeout_s=15.0)
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             if "no such container" in detail.lower():
