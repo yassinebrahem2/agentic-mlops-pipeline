@@ -8,10 +8,12 @@ from dataclasses import dataclass
 
 import httpx2
 
+from mlops_agents.agents.approvals.contract import Approvals
+from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     NoInbound,
     NoTurnEndCheck,
     RepositoryOnlyWorkspaces,
@@ -48,6 +50,7 @@ class Services:
     sessions: AgentSessions
     events: SqliteEventLog
     audit: SqliteAuditLog
+    approvals: Approvals
 
 
 async def _app_secrets(
@@ -102,6 +105,15 @@ async def build_services(
     tools = default_registry()
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     agent_settings = AgentSettingsService(databases, providers, catalog)
+
+    async def secret_source() -> list[str]:
+        return await _app_secrets(providers, github, settings)
+
+    events = SqliteEventLog(databases)
+    audit = SqliteAuditLog(databases, secrets=secret_source)
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=git)
+    gate = ApprovalGate(databases, audit_log=audit, event_log=events)
+
     sessions = SessionManager(
         databases=databases,
         workspace=workspace,
@@ -110,18 +122,20 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
-        gate=AllowAllGate(),
+        gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace, git=git),
+        workspaces=workspaces,
     )
     stack.push_async_callback(sessions.close)
 
-    async def secret_source() -> list[str]:
-        return await _app_secrets(providers, github, settings)
-
-    events = SqliteEventLog(databases)
-    audit = SqliteAuditLog(databases, secrets=secret_source)
+    approvals = ApprovalsService(
+        databases=databases,
+        sessions=sessions,
+        audit_log=audit,
+        event_log=events,
+        workspaces=workspaces,
+    )
 
     return Services(
         settings=settings,
@@ -137,4 +151,5 @@ async def build_services(
         sessions=sessions,
         events=events,
         audit=audit,
+        approvals=approvals,
     )

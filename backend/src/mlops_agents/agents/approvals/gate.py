@@ -150,6 +150,7 @@ class ApprovalGate(Gate):
                         )
 
                     preview = await call.tool.preview(call.ctx, call.args)
+                    task_id = call.ctx.task.id if call.ctx.task is not None else None
                     approval = await self._store.create(
                         project_id,
                         turn_id=call.ctx.turn_id,
@@ -160,6 +161,7 @@ class ApprovalGate(Gate):
                         tool=call.tool.name,
                         risk_class=risk,
                         preview=preview,
+                        task_id=task_id,
                     )
 
                     if self._event_log is not None:
@@ -226,6 +228,7 @@ class ApprovalGate(Gate):
                         message=None,
                         approval_id=apr.id,
                         preview=apr.preview,
+                        task_id=apr.task_id,
                     )
                 elif apr.status in ("rejected", "cancelled", "expired"):
                     updated_decisions[tool_call_id] = GateDecision(

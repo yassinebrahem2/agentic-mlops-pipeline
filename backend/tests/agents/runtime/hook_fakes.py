@@ -18,7 +18,6 @@ from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import Part, TextPart
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     Gate,
     GateCall,
     GateDecision,
@@ -43,10 +42,22 @@ from mlops_agents.agents.tools.base import (
 )
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.graph_env import FixedWorkspaces, RecordingSink, make_agent
 
 ALLOW = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
 APPROVED = GateDecision(outcome="approved", message=None, approval_id="apr_1", preview=None)
+
+
+class AllowAllGate(Gate):
+    """Test fake gate that allows every call."""
+
+    async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]:
+        allow = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
+        return {call.tool_call_id: allow for call in calls}
+
+    async def wait(
+        self, project_id: str, turn_id: str, decisions: dict[str, GateDecision]
+    ) -> dict[str, GateDecision]:
+        return decisions
 
 
 def ask(approval_id: str) -> GateDecision:
@@ -193,7 +204,7 @@ def echo(call_id: str, text: str, name: str = "Echo") -> ToolCall:
 class GraphRun:
     agent: Agent
     caller: RecordingCaller
-    sink: RecordingSink
+    sink: Any
     parts: list[Part]
     state: dict[str, Any]
     message_id: str
@@ -216,6 +227,7 @@ async def run_graph(
     checkpointer: AsyncSqliteSaver | None = None,
 ) -> GraphRun:
     """One turn of the graph over a plain directory, with the given hooks (stage 1's elsewhere)."""
+    from tests.agents.runtime.graph_env import FixedWorkspaces, RecordingSink, make_agent
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)
     agent = replace(

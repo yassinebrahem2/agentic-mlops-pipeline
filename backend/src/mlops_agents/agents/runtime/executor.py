@@ -9,7 +9,7 @@ from typing import Any, Literal
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt
-from langgraph.types import Durability
+from langgraph.types import Command, Durability
 
 from mlops_agents.agents.runtime.agent import AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.compaction import compact_if_needed
@@ -282,6 +282,119 @@ class TurnExecutor:
 
         except Exception:
             logger.exception("Turn %s failed unexpectedly", turn_id)
+            return await fail(UNEXPECTED_FAILURE_TEXT)
+
+    async def resume(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+    ) -> TurnOutcome:
+        agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
+        if agent_msg is None:
+            raise RuntimeError(f"No agent message found for turn {turn_id}")
+
+        agent_message_id = agent_msg.id
+        current_parts = list(agent_msg.parts)
+
+        async def finish_agent_message(status: MessageStatus) -> None:
+            async with lock:
+                message = await self._store.update_message(
+                    project_id, agent_message_id, parts=current_parts, status=status
+                )
+                await sink.message(message, created=False)
+
+        async def fail(text: str) -> tuple[TurnEnd, str | None]:
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, text, parts=current_parts
+            )
+            return ("failed", text)
+
+        try:
+            async with lock:
+                updated_msg = await self._store.update_message(
+                    project_id, agent_message_id, parts=current_parts, status="streaming"
+                )
+                await sink.message(updated_msg, created=False)
+            await self._store.set_turn(project_id, turn_id, "running")
+
+            built_agent = await self._builder.build(project_id, agent)
+
+            is_interrupted = False
+            decisions_to_record: dict[str, GateDecision] | None = None
+
+            async with self._checkpointer(project_id, turn_id) as cp:
+                graph = create_turn_graph(
+                    agent=built_agent,
+                    caller=self._caller,
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    checkpointer=cp.saver,
+                    lock=lock,
+                    hooks=self._hooks,
+                )
+                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+                try:
+                    res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
+                        Command(resume=True), config=config, durability=TURN_DURABILITY
+                    )
+                    if isinstance(res, dict) and bool(res.get("__interrupt__")):  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                        is_interrupted = True
+                    else:
+                        chk_state = await graph.aget_state(config)
+                        if chk_state.tasks and any(t.interrupts for t in chk_state.tasks):
+                            is_interrupted = True
+                except GraphInterrupt:
+                    is_interrupted = True
+
+                if is_interrupted:
+                    cp.preserved = True
+                    try:
+                        chk_state = await graph.aget_state(config)
+                        decisions_to_record = chk_state.values.get("decisions")
+                    except Exception:
+                        logger.debug(
+                            "Could not read graph state decisions for turn %s",
+                            turn_id,
+                            exc_info=True,
+                        )
+
+            if is_interrupted:
+                await handle_turn_waiting(
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    session_id=session_id,
+                    agent=built_agent.definition.name,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    decisions=decisions_to_record,
+                    lock=lock,
+                    observers=self._observers,
+                )
+                return ("waiting", None)
+
+            await finish_agent_message("complete")
+            return ("done", None)
+
+        except asyncio.CancelledError:
+            await finish_agent_message("stopped")
+            raise
+
+        except TurnFailed as err:
+            return await fail(err.message)
+
+        except Exception:
+            logger.exception("Turn %s resume failed unexpectedly", turn_id)
             return await fail(UNEXPECTED_FAILURE_TEXT)
 
     @asynccontextmanager

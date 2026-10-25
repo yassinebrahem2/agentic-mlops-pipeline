@@ -92,3 +92,19 @@ class TurnsStore(StoreBase):
         async with engine.connect() as conn:
             row = (await conn.execute(query)).first()
         return row is not None
+
+    async def turn_status(self, project_id: str, turn_id: str) -> str | None:
+        """Return the status of turn_id, or None if not found."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (await conn.execute(select(turns.c.status).where(turns.c.id == turn_id))).first()
+        return None if row is None else str(row[0])
+
+    async def turn_trigger_id(self, project_id: str, turn_id: str) -> str | None:
+        """Return the trigger_message_id of turn_id, or None if not found."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(select(turns.c.trigger_message_id).where(turns.c.id == turn_id))
+            ).first()
+        return None if row is None else str(row[0])

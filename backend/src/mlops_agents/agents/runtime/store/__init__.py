@@ -56,6 +56,15 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
             ).first()
         return row is not None
 
+    async def session_agent(self, project_id: str, session_id: str) -> str | None:
+        """Return the agent name for session_id, or None if not found."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(select(sessions.c.agent).where(sessions.c.id == session_id))
+            ).first()
+        return None if row is None else str(row[0])
+
     @shielded
     async def recover(self, project_id: str) -> None:
         """Mark running turns and their incomplete messages (streaming/stopped) as interrupted."""

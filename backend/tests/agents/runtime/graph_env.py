@@ -9,7 +9,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.graph import TurnHooks
-from mlops_agents.agents.runtime.hooks import AllowAllGate, NoInbound, NoTurnEndCheck
+from mlops_agents.agents.runtime.hooks import NoInbound, NoTurnEndCheck
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
@@ -17,6 +17,7 @@ from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
+from tests.agents.runtime.hook_fakes import AllowAllGate
 
 
 class FixedWorkspaces:

@@ -78,6 +78,9 @@ class TurnWorkers:
         worker = self._workers.get(key)
         return worker is not None and not worker.done()
 
+    def get(self, key: SessionKey) -> asyncio.Task[None] | None:
+        return self._workers.get(key)
+
     def start(
         self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
     ) -> None:
@@ -86,6 +89,22 @@ class TurnWorkers:
         self._first_look.add(key)
         self._workers[key] = asyncio.create_task(
             self._loop(project_id, session_id, agent, hub, lock)
+        )
+
+    def resume(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> None:
+        """Resume a waiting turn in a worker."""
+        key = (project_id, session_id)
+        self._first_look.add(key)
+        self._workers[key] = asyncio.create_task(
+            self._loop(project_id, session_id, agent, hub, lock, resume_turn_id=turn_id)
         )
 
     def stop(self, key: SessionKey) -> None:
@@ -139,11 +158,36 @@ class TurnWorkers:
             self._stopped_turns.clear()
 
     async def _loop(
-        self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        resume_turn_id: str | None = None,
     ) -> None:
         key = (project_id, session_id)
 
         try:
+            if resume_turn_id is not None:
+                async with lock:
+                    self._first_look.discard(key)
+                    turn_id = resume_turn_id
+                    self._current_turns[key] = turn_id
+                    if key in self._stop_next:
+                        self._stop_next.discard(key)
+                        self._stopped_turns.add(turn_id)
+
+                try:
+                    should_continue = await self._resume_turn(
+                        project_id, session_id, agent, turn_id, hub, lock
+                    )
+                    if not should_continue:
+                        return
+                finally:
+                    self._current_turns.pop(key, None)
+                    self._stopped_turns.discard(turn_id)
+
             while True:
                 async with lock:
                     next_turn = await self._store.next_queued_turn(project_id, session_id)
@@ -174,6 +218,73 @@ class TurnWorkers:
             self._first_look.discard(key)
             self._stop_next.discard(key)
             self._workers.pop(key, None)
+
+    async def _resume_turn(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> bool:
+        trigger_msg_id = await self._store.turn_trigger_id(project_id, turn_id) or ""
+        try:
+            await self._store.set_turn(project_id, turn_id, "running")
+            ending = await self._run_resumed_turn(project_id, session_id, agent, turn_id, hub, lock)
+        except asyncio.CancelledError:
+            interrupted = _Ending("interrupted")
+            await self._end_turn(
+                project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, interrupted
+            )
+            raise
+
+        if ending.status == "waiting":
+            await self._store.set_turn(project_id, turn_id, "waiting")
+            return False
+
+        await self._end_turn(
+            project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, ending
+        )
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            raise asyncio.CancelledError
+        return True
+
+    async def _run_resumed_turn(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> _Ending:
+        key = (project_id, session_id)
+        if turn_id in self._stopped_turns:
+            return _Ending("stopped")
+        child_task = asyncio.create_task(
+            self._executor.resume(project_id, session_id, agent, turn_id, hub, lock=lock)
+        )
+        self._child_tasks[key] = child_task
+        try:
+            await child_task
+            return _ending_of(turn_id, child_task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                if child_task.cancelling() == 0 and not child_task.cancelled():
+                    return _ending_of(turn_id, child_task)
+                if child_task.cancelled() and turn_id in self._stopped_turns:
+                    return _Ending("stopped")
+                raise
+            if turn_id not in self._stopped_turns:
+                raise
+            return _Ending("stopped")
+        except Exception:
+            return _ending_of(turn_id, child_task)
+        finally:
+            self._child_tasks.pop(key, None)
 
     async def _take_turn(
         self,

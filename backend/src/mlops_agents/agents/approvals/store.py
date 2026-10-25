@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Sequence
 from typing import Any, cast
@@ -22,13 +23,26 @@ class ApprovalRecord(ApprovalView):
     """Database representation of an approval request, including its message_id."""
 
     message_id: str
+    task_id: str | None = None
 
 
 def _row_to_record(row: Any) -> ApprovalRecord:
     preview_raw = row["preview"]
+    task_id: str | None = None
     if isinstance(preview_raw, str):
+        with contextlib.suppress(Exception):
+            raw_parsed: object = json.loads(preview_raw)
+            if isinstance(raw_parsed, dict):
+                raw_dict: dict[str, object] = cast(dict[str, object], raw_parsed)
+                raw_val = raw_dict.get("task_id")
+                if raw_val is not None:
+                    task_id = str(raw_val)
         preview_obj = Preview.model_validate_json(preview_raw)
     elif isinstance(preview_raw, dict):
+        raw_dict: dict[str, object] = cast(dict[str, object], preview_raw)
+        raw_val = raw_dict.get("task_id")
+        if raw_val is not None:
+            task_id = str(raw_val)
         preview_obj = Preview.model_validate(preview_raw)
     else:
         preview_obj = cast(Preview, preview_raw)
@@ -52,6 +66,7 @@ def _row_to_record(row: Any) -> ApprovalRecord:
         note=row["note"],
         created_at=str(row["created_at"]),
         decided_at=row["decided_at"],
+        task_id=task_id,
     )
 
 
@@ -76,6 +91,7 @@ class ApprovalStore:
         status: ApprovalStatus = "pending",
         note: str | None = None,
         id: str | None = None,
+        task_id: str | None = None,
     ) -> ApprovalRecord:
         """Create an approval request. Idempotent by tool_call_id."""
         existing = await self.find_by_tool_call_id(project_id, tool_call_id)
@@ -90,11 +106,17 @@ class ApprovalStore:
 
         risk_class_val = risk_class.value if isinstance(risk_class, RiskClass) else str(risk_class)
         if isinstance(preview, Preview):
-            preview_str = preview.model_dump_json()
+            preview_dict = preview.model_dump()
         elif isinstance(preview, dict):
-            preview_str = json.dumps(preview)
+            preview_dict = dict(preview)
         else:
-            preview_str = str(preview)
+            try:
+                preview_dict = json.loads(str(preview))
+            except Exception:
+                preview_dict = {"kind": "text", "title": tool, "body": str(preview)}
+        if task_id is not None:
+            preview_dict["task_id"] = task_id
+        preview_str = json.dumps(preview_dict)
 
         engine = await self._databases.project(project_id)
         try:
@@ -195,6 +217,7 @@ class ApprovalStore:
         *,
         note: str | None = None,
         decided_at: str | None = None,
+        task_id: str | None = None,
     ) -> ApprovalRecord | None:
         """Update an approval's status and optional note."""
         engine = await self._databases.project(project_id)
@@ -206,6 +229,13 @@ class ApprovalStore:
         elif status == "pending":
             values["decided_at"] = None
 
+        if task_id is not None:
+            rec = await self.get(project_id, approval_id)
+            if rec is not None:
+                p_dict = rec.preview.model_dump()
+                p_dict["task_id"] = task_id
+                values["preview"] = json.dumps(p_dict)
+
         async with engine.begin() as conn:
             await conn.execute(
                 update(approvals).where(approvals.c.id == approval_id).values(**values)
@@ -213,11 +243,19 @@ class ApprovalStore:
         return await self.get(project_id, approval_id)
 
     async def decide(
-        self, project_id: str, approval_id: str, *, approve: bool, note: str | None = None
+        self,
+        project_id: str,
+        approval_id: str,
+        *,
+        approve: bool,
+        note: str | None = None,
+        task_id: str | None = None,
     ) -> ApprovalRecord:
         """Approve or reject an approval with an optional note."""
         status: ApprovalStatus = "approved" if approve else "rejected"
-        updated = await self.update_status(project_id, approval_id, status, note=note)
+        updated = await self.update_status(
+            project_id, approval_id, status, note=note, task_id=task_id
+        )
         if updated is None:
             raise KeyError(f"Approval not found: {approval_id}")
         return updated

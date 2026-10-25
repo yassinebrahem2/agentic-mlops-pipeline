@@ -162,8 +162,17 @@ class ToolStep:
         self, tool: AgentTool[Any], call: ToolCall, decision: GateDecision
     ) -> ToolOutput:
         match decision.outcome:
-            case "allow" | "approved":
+            case "allow":
                 return await tool.invoke(await self.context(), call["args"])
+            case "approved":
+                ctx = await self.context()
+                current_task_id = ctx.task.id if ctx.task is not None else None
+                if decision.task_id != current_task_id:
+                    return ToolOutput(
+                        "Action rejected: the task was changed since this action was approved.",
+                        is_error=True,
+                    )
+                return await tool.invoke(ctx, call["args"])
             case "deny":
                 return ToolOutput(decision.message or DENIED_TEXT, is_error=True)
             case "rejected":

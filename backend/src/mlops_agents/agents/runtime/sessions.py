@@ -287,6 +287,28 @@ class SessionManager(AgentSessions):
             raise DomainError("message_not_found", "This message does not exist.", status=404)
         return message
 
+    async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        await self._workspace.get(project_id)
+        if not await self._store.has_session(project_id, session_id):
+            raise DomainError("session_not_found", "This session does not exist.", status=404)
+
+        status = await self._store.turn_status(project_id, turn_id)
+        if status != "waiting":
+            return
+
+        agent = await self._store.session_agent(project_id, session_id)
+        if agent is None:
+            raise RuntimeError(f"Session {session_id} has no agent")
+
+        lock = self._get_lock(project_id, session_id)
+        hub = self._get_hub(project_id, session_id)
+
+        async with lock:
+            worker = self._workers.get((project_id, session_id))
+            if worker is not None and not worker.done():
+                await worker
+            self._workers.resume(project_id, session_id, agent, turn_id, hub, lock)
+
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
         self._check_agent(agent)

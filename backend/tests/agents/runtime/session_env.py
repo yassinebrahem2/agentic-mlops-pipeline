@@ -10,11 +10,11 @@ from typing import Any
 
 import httpx2
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     Gate,
     NoInbound,
     NoTurnEndCheck,
@@ -90,7 +90,7 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        gate=gate if gate is not None else AllowAllGate(),
+        gate=gate if gate is not None else ApprovalGate(databases),
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
