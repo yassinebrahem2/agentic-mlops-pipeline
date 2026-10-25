@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -12,8 +12,15 @@ import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
-from mlops_agents.agents.runtime.contract import TurnEnded
-from mlops_agents.agents.runtime.hooks import TurnObserver
+from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
+from mlops_agents.agents.runtime.hooks import (
+    AllowAllGate,
+    Gate,
+    NoInbound,
+    NoTurnEndCheck,
+    RepositoryOnlyWorkspaces,
+    TurnObserver,
+)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -60,6 +67,7 @@ async def build_session_env(
     tools: ToolRegistry | None = None,
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
+    gate: Gate | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -82,7 +90,10 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        git=GitRunner(paths.bin),
+        gate=gate if gate is not None else AllowAllGate(),
+        inbound=NoInbound(),
+        turn_end=NoTurnEndCheck(),
+        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
     )
@@ -121,3 +132,32 @@ async def collect_until_turn_ended(
 
     await asyncio.wait_for(collector(), timeout=timeout)
     return events
+
+
+async def opened_stream(
+    env: SessionEnv, agent: str = "orchestrator"
+) -> AsyncGenerator[StreamEvent, None]:
+    """The session's live stream, subscribed before the turn so it sees every event."""
+    sub = env.manager.subscribe(env.project_id, agent, after_seq=None)
+    await anext(sub)  # the opening resync
+    return sub
+
+
+async def turn_ended_statuses(sub: AsyncGenerator[StreamEvent, None]) -> list[str]:
+    """The turn.ended events of a stream the manager's close() has ended."""
+
+    async def drain() -> list[StreamEvent]:
+        return [event async for event in sub]
+
+    events = await asyncio.wait_for(drain(), timeout=10)
+    return [e.data.status for e in events if isinstance(e, TurnEnded)]
+
+
+async def agent_message_statuses(env: SessionEnv, agent: str = "orchestrator") -> list[str]:
+    """The statuses of the agent's messages, oldest first."""
+    session_id = await env.store.session_id(env.project_id, agent)
+    return [
+        m.status
+        for m in await env.store.messages(env.project_id, session_id)
+        if m.author_kind == "agent"
+    ]
