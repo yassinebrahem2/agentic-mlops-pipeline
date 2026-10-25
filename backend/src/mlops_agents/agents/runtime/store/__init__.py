@@ -58,7 +58,7 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
 
     @shielded
     async def recover(self, project_id: str) -> None:
-        """Mark running turns and their incomplete messages (streaming/running/stopped) as interrupted."""
+        """Mark running turns and their incomplete messages (streaming/stopped) as interrupted."""
         engine = await self._databases.project(project_id)
         now = now_iso()
         async with engine.begin() as conn:
@@ -80,7 +80,7 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
                         or_(
                             and_(
                                 messages.c.turn_id.in_(running_turn_ids),
-                                messages.c.status.in_(["streaming", "running", "stopped"]),
+                                messages.c.status.in_(["streaming", "stopped"]),
                             ),
                             messages.c.status == "streaming",
                         )

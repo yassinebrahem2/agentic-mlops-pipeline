@@ -13,10 +13,12 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.observer_fakes import (
     HangingObserver,
+    HeldObserver,
     RecordingObserver,
     turn_statuses,
 )
 from tests.agents.runtime.session_env import build_session_env
+from tests.agents.runtime.session_rows import create_exchange, message_row
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta
@@ -101,6 +103,55 @@ async def test_a_cancel_during_turn_started_reports_the_turn_interrupted(
     assert [call[0] for call in after.calls] == ["ended"]
     assert after.calls[0][4] == "interrupted"
     assert await turn_statuses(databases, env.project_id) == ["interrupted"]
+
+
+async def test_a_cancel_during_turn_started_leaves_no_trigger_queued(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    held = HeldObserver()
+    hanging = HangingObserver(hang_in="started", passes=1)
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[held, hanging],
+    )
+    manager = env.manager
+    await create_exchange(databases, env.project_id, "xch_01")
+    # The first turn is held, so the posted message waits for the second turn: queued.
+    await manager.send(env.project_id, AGENT, "Check readme")
+    await asyncio.wait_for(held.entered.wait(), timeout=5)
+    posted = await manager.post(
+        env.project_id,
+        AGENT,
+        author_name="Data Quality",
+        from_agent="data-quality",
+        text="Please look at the readme.",
+        exchange_id="xch_01",
+        hop=1,
+    )
+    assert posted.status == "queued"
+    held.release.set()
+    # The second turn's turn_started hangs: the cancel lands before the trigger is read.
+    await asyncio.wait_for(hanging.hanging.wait(), timeout=10)
+
+    await asyncio.wait_for(manager.close(), timeout=10)
+
+    # The trigger is no longer waiting for a turn, but the interrupted turn never read it.
+    row = await message_row(databases, env.project_id, posted.id)
+    assert row["status"] == "complete"
+    assert row["read_by_turn"] is None
+    assert await turn_statuses(databases, env.project_id) == ["done", "interrupted"]
 
 
 async def test_a_hanging_observer_does_not_hold_shutdown(
