@@ -24,6 +24,7 @@ __all__ = [
 ]
 
 _SUMMARY_MAX_CHARS: Final[int] = 1500
+_HISTORY_PER_TYPE_LIMIT: Final[int] = 100
 
 
 def derive_agent_status(
@@ -155,20 +156,26 @@ class SqliteStatusBoard(StatusBoard):
         self._tasks = tasks
 
     def bind_sessions(self, sessions: AgentSessions) -> None:
+        """The session manager binds itself once; a second call raises RuntimeError."""
+        if self._sessions is not None:
+            raise RuntimeError("sessions already bound to status board")
         self._sessions = sessions
 
     async def _fetch_events(self, project_id: str) -> list[EventRecord]:
-        history_records = await self._events.history(
-            project_id,
-            types=[
-                "turn.ended",
-                "pr.opened",
-                "pr.updated",
-                "message.sent",
-            ],
-            limit=200,
+        # Query each type with its own bound so high-volume message.sent cannot push pr.* out.
+        turn_ended = await self._events.history(
+            project_id, types=["turn.ended"], limit=_HISTORY_PER_TYPE_LIMIT
         )
-        return list(reversed(history_records))
+        pr_opened = await self._events.history(
+            project_id, types=["pr.opened"], limit=_HISTORY_PER_TYPE_LIMIT
+        )
+        pr_updated = await self._events.history(
+            project_id, types=["pr.updated"], limit=_HISTORY_PER_TYPE_LIMIT
+        )
+        message_sent = await self._events.history(
+            project_id, types=["message.sent"], limit=_HISTORY_PER_TYPE_LIMIT
+        )
+        return sorted([*turn_ended, *pr_opened, *pr_updated, *message_sent], key=lambda e: e.seq)
 
     async def snapshot(self, project_id: str) -> list[AgentStatus]:
         project_events = await self._fetch_events(project_id)

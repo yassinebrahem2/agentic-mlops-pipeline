@@ -382,3 +382,108 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     assert "- Retraining: running" in orch_content
 
     assert "Status board:" not in retrain_content
+
+
+@pytest.mark.asyncio
+async def test_sqlite_status_board_separate_history_windows_preserves_prs(
+    databases: Databases,
+) -> None:
+    project_id = "prj_windowstest"
+    events = SqliteEventLog(databases)
+    d_retrain = make_definition("retraining", "Retraining", chat=True)
+    catalog = AgentCatalog([d_retrain], tool_names=frozenset())
+
+    # Record 1 pr.opened event
+    await events.record(
+        project_id,
+        source="retraining",
+        type="pr.opened",
+        payload={
+            "task_id": "tsk_1",
+            "number": 99,
+            "url": "https://github.com/org/repo/pull/99",
+            "title": "PR 99",
+        },
+    )
+
+    # Record 150 message.sent events (which would push pr.opened out if limit were shared)
+    for i in range(150):
+        await events.record(
+            project_id,
+            source="retraining",
+            type="message.sent",
+            payload={"to": "orchestrator", "exchange_id": f"ex_{i}", "hop": 1},
+        )
+
+    task = TaskView(
+        id="tsk_1",
+        agent="retraining",
+        title="Retrain model",
+        branch="plan/retrain",
+        status="in_review",
+        review_kind="github",
+        pr_number=99,
+        pr_url="https://github.com/org/repo/pull/99",
+    )
+
+    class _FakeTasks:
+        async def open_tasks(self, pid: str) -> list[TaskView]:
+            return [task]
+
+    board = SqliteStatusBoard(
+        catalog,
+        events,
+        tasks=_FakeTasks(),  # pyright: ignore[reportArgumentType]
+    )
+    snapshot = await board.snapshot(project_id)
+    assert len(snapshot) == 1
+    # PR 99 is preserved because pr.opened has its own bounded window
+    assert len(snapshot[0].open_prs) == 1
+    assert snapshot[0].open_prs[0].number == 99
+
+
+@pytest.mark.asyncio
+async def test_sqlite_status_board_summary_cuts_at_line_boundary(databases: Databases) -> None:
+    project_id = "prj_cuttest"
+    events = SqliteEventLog(databases)
+
+    # Create 50 agent definitions with long names so total summary exceeds 1500 chars
+    definitions = [
+        make_definition(
+            f"agent-{i:02d}",
+            f"Very Long Agent Display Name Number {i:02d} With Additional Descriptive Words",
+            chat=True,
+        )
+        for i in range(50)
+    ]
+    catalog = AgentCatalog(definitions, tool_names=frozenset())
+    board = SqliteStatusBoard(catalog, events)
+
+    summary = await board.summary(project_id)
+    assert len(summary) <= 1500
+    assert summary.startswith("- ")
+
+    # Verify every line in the summary is a complete, formatted agent line
+    lines = summary.split("\n")
+    assert len(lines) > 5  # Has multiple lines
+    assert len(lines) < 50  # Cut before reaching all 50 agents
+
+    for i, line in enumerate(lines):
+        expected_line = format_agent_status_line(derive_agent_status(definitions[i], []))
+        assert line == expected_line
+
+    # The next agent that didn't fit is NOT partially included
+    next_agent_line = format_agent_status_line(derive_agent_status(definitions[len(lines)], []))
+    assert next_agent_line not in summary
+    assert not summary.endswith("\n")
+    assert summary.endswith(lines[-1])
+
+
+def test_sqlite_status_board_bind_sessions_twice_raises(databases: Databases) -> None:
+    events = SqliteEventLog(databases)
+    catalog = AgentCatalog([], tool_names=frozenset())
+    board = SqliteStatusBoard(catalog, events)
+    fake_sessions = _FakeSessions({})
+    board.bind_sessions(fake_sessions)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(RuntimeError, match="already bound"):
+        board.bind_sessions(fake_sessions)  # pyright: ignore[reportArgumentType]
