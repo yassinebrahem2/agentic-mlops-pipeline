@@ -222,10 +222,19 @@ async def detect_docker(runner: DockerRunner) -> DockerStatus:
             if isinstance(loaded, dict):
                 d = cast(dict[object, object], loaded)
                 client_version = _extract_version(d.get("Client"))
+        failure = (result.stderr or result.stdout).strip()
+        daemon_down = any(
+            message in failure.lower()
+            for message in ("cannot connect to the docker daemon", "is the docker daemon running")
+        )
         return DockerStatus(
             available=False,
             version=client_version,
-            detail="Docker daemon is not running. Please start Docker Desktop or the Docker daemon.",
+            detail=(
+                "Docker daemon is not running. Please start Docker Desktop or the Docker daemon."
+                if daemon_down
+                else f"Docker version check failed (exit {result.exit_code}): {failure or 'no output'}"
+            ),
         )
 
     try:
@@ -250,7 +259,7 @@ async def detect_docker(runner: DockerRunner) -> DockerStatus:
         return DockerStatus(
             available=False,
             version=client_version,
-            detail="Docker daemon is not running. Please start Docker Desktop or the Docker daemon.",
+            detail="Docker version output is missing the server version.",
         )
 
     return DockerStatus(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,6 +31,20 @@ from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
 
 
+async def _finish_operation(operation: Coroutine[object, object, None]) -> None:
+    """Settle a Docker state change before cancellation can release the task lock."""
+    pending = asyncio.create_task(operation)
+    cancelled: asyncio.CancelledError | None = None
+    while not pending.done():
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    pending.result()
+    if cancelled is not None:
+        raise cancelled
+
+
 class SandboxService(Sandbox):
     """Manages Docker sandbox environments and task execution."""
 
@@ -46,17 +60,27 @@ class SandboxService(Sandbox):
         self._container_manager = ContainerManager(self._runner, user=host_container_user())
         self._projects = projects
         self._events = events
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._build_locks: dict[str, asyncio.Lock] = {}
         self._task_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._task_owners: dict[tuple[str, str], asyncio.Task[object] | None] = {}
         self._status: dict[str, EnvironmentStatus] = {}
 
-    def _get_task_lock(self, project_id: str, task_id: str) -> asyncio.Lock:
+    @asynccontextmanager
+    async def _task_guard(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
         key = (project_id, task_id)
-        lock = self._task_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._task_locks[key] = lock
-        return lock
+        owner = asyncio.current_task()
+        if key in self._task_owners and self._task_owners[key] is owner:
+            raise SandboxUnavailable(
+                "Call sandbox operations after leaving paused() or another operation for this task."
+            )
+        # Never evict: queued callers must share this lock with future callers after removal.
+        lock = self._task_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            self._task_owners[key] = owner
+            try:
+                yield
+            finally:
+                del self._task_owners[key]
 
     async def docker(self) -> DockerStatus:
         return await detect_docker(self._runner)
@@ -85,7 +109,7 @@ class SandboxService(Sandbox):
 
     async def _build_project_image(self, project_id: str, worktree: Path) -> EnvironmentStatus:
         """Own the full build lifecycle, including dependency reads and context creation."""
-        lock = self._locks.setdefault(project_id, asyncio.Lock())
+        lock = self._build_locks.setdefault(project_id, asyncio.Lock())
         async with lock:
             tag: str | None = None
             try:
@@ -130,34 +154,35 @@ class SandboxService(Sandbox):
 
     async def set_network(self, project_id: str, enabled: bool) -> bool:
         old = await self.get_network(project_id)
-        await self._projects.set_network(project_id, enabled)
         if old != enabled:
             await self._container_manager.remove_project_containers(project_id)
+        await self._projects.set_network(project_id, enabled)
         return enabled
 
     async def ensure_container(self, project_id: str, task: TaskRef) -> str:
+        async with self._task_guard(project_id, task.id):
+            return await self._ensure_container_locked(project_id, task)
+
+    async def _ensure_container_locked(self, project_id: str, task: TaskRef) -> str:
+        """The caller holds the task guard through creation and any subsequent command."""
         docker_status = await self.docker()
         if not docker_status.available:
             raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
 
-        lock = self._locks.setdefault(f"{project_id}:{task.id}", asyncio.Lock())
-        async with lock:
-            status = await self._build_project_image(project_id, task.worktree)
-            if status.state != "ready" or not status.tag:
-                raise SandboxUnavailable(
-                    f"Environment build failed: {status.detail or 'unknown error'}"
-                )
-            tag = status.tag
-
-            network = await self.get_network(project_id)
-            try:
-                return await self._container_manager.ensure_container(
-                    project_id, task, tag, network=network
-                )
-            except FileNotFoundError as exc:
-                raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
-            except OSError as exc:
-                raise SandboxUnavailable(f"Sandbox container operation failed: {exc}") from exc
+        status = await self._build_project_image(project_id, task.worktree)
+        if status.state != "ready" or not status.tag:
+            raise SandboxUnavailable(
+                f"Environment build failed: {status.detail or 'unknown error'}"
+            )
+        network = await self.get_network(project_id)
+        try:
+            return await self._container_manager.ensure_container(
+                project_id, task, status.tag, network=network
+            )
+        except FileNotFoundError as exc:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
+        except OSError as exc:
+            raise SandboxUnavailable(f"Sandbox container operation failed: {exc}") from exc
 
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
@@ -166,24 +191,42 @@ class SandboxService(Sandbox):
 
     @asynccontextmanager
     async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
-        lock = self._get_task_lock(project_id, task_id)
-        async with lock:
+        """Freeze host writes exclusively; await remove_task only after exiting this context."""
+        async with self._task_guard(project_id, task_id):
             cname = container_name(task_id)
             info = await self._container_manager.inspect(cname)
             if info is None or not info.running:
                 yield
                 return
-            await self._container_manager.pause(cname)
+            if info.paused:
+                await _finish_operation(self._container_manager.unpause(cname))
+            frozen = False
+            body_error: BaseException | None = None
+
+            async def freeze() -> None:
+                nonlocal frozen
+                await self._container_manager.pause(cname)
+                frozen = True
+
             try:
+                await _finish_operation(freeze())
                 yield
+            except BaseException as exc:
+                body_error = exc
+                raise
             finally:
-                await self._container_manager.unpause(cname)
+                if frozen:
+                    try:
+                        await _finish_operation(self._container_manager.unpause(cname))
+                    except BaseException as cleanup_error:
+                        if body_error is not None:
+                            raise body_error from cleanup_error
+                        raise
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
-        lock = self._get_task_lock(project_id, task_id)
-        async with lock:
-            await self._container_manager.remove_task(project_id, task_id)
-            self._task_locks.pop((project_id, task_id), None)
+        """Wait for another caller's pause/command to end; reject same-caller nesting."""
+        async with self._task_guard(project_id, task_id):
+            await _finish_operation(self._container_manager.remove_task(project_id, task_id))
 
     async def close(self) -> None:
         await self._container_manager.cleanup_all()

@@ -123,7 +123,10 @@ def read_dependency_files(root: Path) -> dict[str, bytes]:
                 metadata = os.fstat(stream.fileno())
                 if not stat.S_ISREG(metadata.st_mode):
                     raise OSError(f"Dependency file '{name}' is not a regular file")
-                if getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                if (
+                    sys.platform == "win32"
+                    and metadata.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                ):
                     raise OSError(
                         f"Dependency file '{name}' is a symlink or reparse point, which is refused"
                     )

@@ -347,16 +347,20 @@ async def test_service_task_lock_serializes_paused(tmp_path: Path) -> None:
     await service.ensure_container("prj_1", task)
 
     events_sequence: list[str] = []
+    first_entered = asyncio.Event()
+    second_waiting = asyncio.Event()
 
     async def pause_block_1() -> None:
         async with service.paused("prj_1", task.id):
             events_sequence.append("p1_started")
-            await asyncio.sleep(0.05)
+            first_entered.set()
+            await second_waiting.wait()
             events_sequence.append("p1_ending")
 
     async def pause_block_2() -> None:
-        await asyncio.sleep(0.01)
+        await first_entered.wait()
         events_sequence.append("p2_waiting")
+        second_waiting.set()
         async with service.paused("prj_1", task.id):
             events_sequence.append("p2_started")
 
