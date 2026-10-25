@@ -65,7 +65,7 @@ A plan that needs a change in another plan's file opens a Decision issue.
 - `api/services.py`: runtime-contracts sets the wiring up. Each plan changes only the line that builds its own service or default.
 - `agents/tools/__init__.py` (`default_registry`): each plan adds only its own tools' lines.
 - `frontend/src/pages/agents/*`: frontend-agents starts after chat-layout merges. Project settings and the sidebar badge: frontend-inbox starts after project-context merges.
-- The only stage 2 migration is runtime-contracts task 2's `0002_stage2.sql`.
+- The only stage 2 migration is runtime-contracts task 2's `0002_stage2.sql`. One exception, decided in the review of #251: the approvals plan adds `0003_approvals_tool_call.sql`, which drops the UNIQUE on `approvals.tool_call_id` (providers may reuse call ids across steps and turns). An approval is found by its own id, carried in `GateDecision.approval_id`, never by its tool-call id.
 - `sessions.py` and `store.py` are at the size limit: runtime-contracts task 3 splits them first (`runtime/worker.py`, a `runtime/store/` package). Later plans add their own modules next to them and grow neither.
 
 ## Interfaces between plans
