@@ -105,6 +105,8 @@ async def _setup_service(
     github_login: str | None = None,
 ) -> tuple[TasksService, WorkspaceService, FakeEventLog, str, Path]:
     repo = make_repo(tmp_path / "repo", files or {"app.py": "print('hello')\n"}, git_env)
+    _cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
+    _cmd(["git", "config", "user.email", "jane@example.com"], cwd=repo)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     if github_login:
@@ -295,6 +297,34 @@ async def test_commit_author_identity_human_and_ai_fallback(
     log2 = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
     assert log2.stdout.strip() == "Jane Doe <jane@example.com>"
 
+    # 3. Inherited GIT_AUTHOR_* and GIT_COMMITTER_* env vars are cleared and ignored
+    old_author = os.environ.get("GIT_AUTHOR_NAME")
+    os.environ["GIT_AUTHOR_NAME"] = "Attacker Name"
+    os.environ["GIT_COMMITTER_NAME"] = "Attacker Name"
+    try:
+        (task.worktree / "mod3.py").write_text("c = 3\n", encoding="utf-8")
+        await service.commit(project_id, task, "commit with env override")
+        log3 = _cmd(["git", "log", "-1", "--pretty=format:%an <%ae>"], cwd=task.worktree)
+        assert log3.stdout.strip() == "Jane Doe <jane@example.com>"
+    finally:
+        if old_author is None:
+            os.environ.pop("GIT_AUTHOR_NAME", None)
+            os.environ.pop("GIT_COMMITTER_NAME", None)
+        else:
+            os.environ["GIT_AUTHOR_NAME"] = old_author
+            os.environ["GIT_COMMITTER_NAME"] = old_author
+
+    # 4. Refuse commit when neither git config nor GitHub login exists (never invent 'user')
+    _cmd(["git", "config", "--unset", "user.name"], cwd=repo)
+    _cmd(["git", "config", "--unset", "user.email"], cwd=repo)
+    app_engine = await databases.app()
+    async with app_engine.begin() as conn:
+        await conn.execute(update(integrations).values(login=None))
+
+    (task.worktree / "mod4.py").write_text("d = 4\n", encoding="utf-8")
+    with pytest.raises(CommitRefused, match="Cannot determine commit author"):
+        await service.commit(project_id, task, "commit with no identity")
+
 
 async def test_staged_diff_and_cap(
     tmp_path: Path,
@@ -318,6 +348,14 @@ async def test_staged_diff_and_cap(
     # Calling staged_diff unstages changes
     diff_cached = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
     assert diff_cached.stdout.strip() == ""
+
+    # Secret files (.env) are excluded from staged_diff and never exposed
+    (task.worktree / ".env").write_text("SUPER_SECRET_TOKEN=xyz\n", encoding="utf-8")
+    (task.worktree / "public.py").write_text("public_var = 42\n", encoding="utf-8")
+    diff_with_secret = await service.staged_diff(project_id, task)
+    assert "+public_var = 42" in diff_with_secret
+    assert "SUPER_SECRET_TOKEN" not in diff_with_secret
+    assert ".env" not in diff_with_secret
 
     # Large diff capped at 60,000 characters
     (task.worktree / "large.txt").write_text("x" * 70000 + "\n", encoding="utf-8")
@@ -372,7 +410,17 @@ async def test_push_to_fake_remote(
         (task.worktree / "pushed.txt").write_text("pushed content\n", encoding="utf-8")
         commit_res = await service.commit(project_id, task, "feat: commit to push")
 
+        # Snapshot user repo config and origin refs before push
+        config_before = (repo / ".git" / "config").read_bytes()
+        refs_before = _cmd(["git", "for-each-ref", "refs/remotes/origin"], cwd=repo).stdout
+
         await service.push(project_id, task)
+
+        # Assert user repo config and origin/* refs are byte-for-byte unchanged
+        config_after = (repo / ".git" / "config").read_bytes()
+        refs_after = _cmd(["git", "for-each-ref", "refs/remotes/origin"], cwd=repo).stdout
+        assert config_before == config_after
+        assert refs_before == refs_after
 
         # Verify bare repo has the branch and commit
         pushed_sha = _cmd(

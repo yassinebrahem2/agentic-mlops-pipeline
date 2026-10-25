@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mlops_agents.agents.tools.base import RiskClass
+from mlops_agents.agents.tools.base import RiskClass, ToolFailure
 from mlops_agents.agents.tools.edit import EditArgs, EditTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.paths import DataPaths
@@ -412,3 +412,109 @@ async def test_edit_rechecks_at_run_time(
 
     with pytest.raises(ToolFailure, match=r"app\.py changed since you read it\."):
         await tool.run(ctx, args)
+
+
+async def test_edit_empty_old_string_is_tool_error(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_empty_old"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Empty old test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    read_tool = ReadTool(service)
+    await read_tool.invoke(ctx, {"file_path": "app.py"})
+
+    tool = EditTool(service)
+    res = await tool.invoke(ctx, {"file_path": "app.py", "old_string": "", "new_string": "foo"})
+    assert res.is_error
+    assert "old_string cannot be empty" in res.content
+
+
+async def test_edit_non_utf8_file_is_tool_error(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_non_utf8"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Non utf8 test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    # Write non-UTF-8 bytes
+    (task.worktree / "binary.bin").write_bytes(b"\x80\x81\xff\xfe non utf8 data")
+
+    read_tool = ReadTool(service)
+    await read_tool.invoke(ctx, {"file_path": "binary.bin"})
+
+    tool = EditTool(service)
+    res = await tool.invoke(
+        ctx, {"file_path": "binary.bin", "old_string": "data", "new_string": "text"}
+    )
+    assert res.is_error
+    assert "not a valid UTF-8 text file" in res.content
+
+
+async def test_edit_planted_symlink_after_validation_refused(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_planted_edit"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Planted edit test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    outside = tmp_path / "host_edit.txt"
+    outside.write_text("precious host data\n", encoding="utf-8")
+
+    (task.worktree / "target.txt").write_text("hello world\n", encoding="utf-8")
+
+    read_tool = ReadTool(service)
+    await read_tool.invoke(ctx, {"file_path": "target.txt"})
+
+    tool = EditTool(service)
+    args = EditArgs(file_path="target.txt", old_string="hello", new_string="goodbye")
+
+    preview = await tool.preview(ctx, args)
+    assert preview.kind == "diff"
+
+    # Now plant symlink at target.txt pointing to outside file
+    (task.worktree / "target.txt").unlink()
+    try:
+        (task.worktree / "target.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlinks not supported in this environment")
+
+    with pytest.raises(
+        ToolFailure, match=r"(Cannot write directly to symlink|File escaped worktree)"
+    ):
+        await tool.run(ctx, args)
+
+    assert outside.read_text(encoding="utf-8") == "precious host data\n"

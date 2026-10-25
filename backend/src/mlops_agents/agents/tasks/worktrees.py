@@ -5,16 +5,13 @@ import ctypes
 import os
 import re
 import stat
-import subprocess
-from collections.abc import Sequence
 from pathlib import Path
 
-from mlops_agents.agents.tasks.git import git_dir_for_task, task_git
+from mlops_agents.agents.tasks.git import git_dir_for_task, run_safe_git, task_git
 from mlops_agents.agents.tools.base import FileAccess, ToolFailure
 from mlops_agents.agents.tools.files import is_secret, norm_path
 from mlops_agents.config import APP_NAME
-from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
-from mlops_agents.integrations.github.git import ASKPASS_ENV_VAR, GitError, GitResult, GitRunner
+from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.workspace.models import Project
 from mlops_agents.workspace.refs import github_remote, https_url, repo_ref
 
@@ -37,75 +34,6 @@ def _make_writable(path: Path) -> None:
     if os.name == "nt":
         ctypes.windll.kernel32.SetFileAttributesW(str(path), 128)  # FILE_ATTRIBUTE_NORMAL
     path.chmod(stat.S_IWRITE | stat.S_IREAD)
-
-
-async def _run_repo_git(
-    runner: GitRunner,
-    repo_root: Path,
-    empty_hooks: Path,
-    args: Sequence[str],
-    *,
-    check: bool = True,
-    authenticated: bool = False,
-    timeout: float = 600,  # noqa: ASYNC109 -- passed to subprocess.run in asyncio.to_thread
-) -> GitResult:
-    token = await runner._token_provider() if authenticated else None  # pyright: ignore[reportPrivateUsage]
-    env = dict(os.environ)
-    env.update(
-        {
-            "GIT_TERMINAL_PROMPT": "0",
-            "GCM_INTERACTIVE": "never",
-            "GIT_ASKPASS": str(runner.askpass_path()),
-            "GIT_SSH_COMMAND": "ssh -o BatchMode=yes",
-        }
-    )
-    env.pop(ASKPASS_ENV_VAR, None)
-    if token:
-        env[ASKPASS_ENV_VAR] = token
-
-    command = [
-        "git",
-        "-c",
-        "credential.helper=",
-        "-c",
-        "core.quotepath=off",
-        "-c",
-        f"core.hooksPath={empty_hooks}",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.longpaths=true",
-        *args,
-    ]
-
-    try:
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            command,
-            cwd=repo_root,
-            env=env,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError:
-        raise GitError(
-            "git is not installed or not on PATH. Install git and restart the app.", code=-1
-        ) from None
-    except subprocess.TimeoutExpired:
-        cmd_name = args[0] if args else "command"
-        raise GitError(
-            f"git {cmd_name} took longer than {int(timeout)} seconds and was stopped.", code=-1
-        ) from None
-
-    hidden = [token] if token else []
-    stdout = scrub_values(completed.stdout.decode("utf-8", "replace"), hidden)
-    stderr = scrub_values(scrub_url_secrets(completed.stderr.decode("utf-8", "replace")), hidden)
-    if check and completed.returncode != 0:
-        cmd_name = args[0] if args else "command"
-        reason = stderr.strip() or stdout.strip() or "no output"
-        raise GitError(f"git {cmd_name} failed: {reason}", code=completed.returncode)
-    return GitResult(completed.returncode, stdout, stderr)
 
 
 async def create_worktree(
@@ -137,14 +65,22 @@ async def create_worktree(
     if project.github_full_name:
         remote_ref = repo_ref(project.github_full_name)
     else:
-        origin_res = await _run_repo_git(
-            runner, repo_root, empty_hooks, ["config", "--get", "remote.origin.url"], check=False
+        origin_res = await run_safe_git(
+            runner,
+            args=["config", "--get", "remote.origin.url"],
+            cwd=repo_root,
+            empty_hooks=empty_hooks,
+            check=False,
         )
         origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
         remote_ref = github_remote(project, origin_url)
         if remote_ref is None:
-            origin_res = await _run_repo_git(
-                runner, repo_root, empty_hooks, ["remote", "get-url", "origin"], check=False
+            origin_res = await run_safe_git(
+                runner,
+                args=["remote", "get-url", "origin"],
+                cwd=repo_root,
+                empty_hooks=empty_hooks,
+                check=False,
             )
             origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
             remote_ref = github_remote(project, origin_url)
@@ -153,28 +89,33 @@ async def create_worktree(
     if remote_ref is not None:
         namespaced_ref = f"refs/{APP_NAME}/base/{default_branch}"
         fetch_refspec = f"+refs/heads/{default_branch}:{namespaced_ref}"
-        await _run_repo_git(
+        await run_safe_git(
             runner,
-            repo_root,
-            empty_hooks,
-            ["fetch", https_url(remote_ref), fetch_refspec],
+            args=["fetch", https_url(remote_ref), fetch_refspec],
+            cwd=repo_root,
+            empty_hooks=empty_hooks,
             authenticated=True,
         )
         base_ref = namespaced_ref
     else:
         base_ref = default_branch
 
-    sha_res = await _run_repo_git(runner, repo_root, empty_hooks, ["rev-parse", base_ref])
+    sha_res = await run_safe_git(
+        runner,
+        args=["rev-parse", base_ref],
+        cwd=repo_root,
+        empty_hooks=empty_hooks,
+    )
     base_sha = sha_res.stdout.strip()
 
     branch = task_branch_name(agent, task_id, title)
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
-    await _run_repo_git(
+    await run_safe_git(
         runner,
-        repo_root,
-        empty_hooks,
-        ["worktree", "add", "-b", branch, str(worktree_path), base_ref],
+        args=["worktree", "add", "-b", branch, str(worktree_path), base_ref],
+        cwd=repo_root,
+        empty_hooks=empty_hooks,
     )
 
     git_dir = git_dir_for_task(repo_root, task_id)

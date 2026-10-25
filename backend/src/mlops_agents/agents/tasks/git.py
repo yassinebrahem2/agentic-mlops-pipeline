@@ -32,41 +32,56 @@ def git_dir_for_task(repo_root: Path, task_id: str) -> Path:
     return git_entry / "worktrees" / task_id
 
 
-async def task_git(
+async def run_safe_git(
     runner: GitRunner,
     *,
-    git_dir: Path,
-    worktree: Path,
-    empty_hooks: Path,
     args: Sequence[str],
+    cwd: Path,
+    empty_hooks: Path,
+    git_dir: Path | None = None,
+    worktree: Path | None = None,
     check: bool = True,
     timeout: float = 600,  # noqa: ASYNC109 -- passed to subprocess.run in asyncio.to_thread
     authenticated: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> GitResult:
-    """The only code that runs git on a task worktree.
+    """Runs git safely on a repository or task worktree.
 
-    Every call:
-    - sets GIT_DIR and GIT_WORK_TREE from the task record, never trusting .git;
-    - passes -c core.hooksPath=<empty_hooks>, -c core.fsmonitor=false, -c core.longpaths=true;
-    - sets GIT_SSH_COMMAND="ssh -o BatchMode=yes";
-    - routes token through askpass when authenticated is True;
-    - scrubs output of secrets.
+    Safety measures applied on every call:
+    - empty hooksPath pointing to data folder empty-hooks;
+    - core.fsmonitor=false and core.longpaths=true;
+    - GIT_SSH_COMMAND="ssh -o BatchMode=yes";
+    - token routed strictly through GIT_ASKPASS;
+    - clears inherited GIT_AUTHOR_* and GIT_COMMITTER_* from environment;
+    - scrubs output of secrets and tokens.
     """
-    token = await runner._token_provider() if authenticated else None  # pyright: ignore[reportPrivateUsage]
+    token = await runner.token() if authenticated else None
     env = dict(os.environ)
+
+    # Clear inherited author/committer overrides
+    for key in list(env.keys()):
+        if key.startswith("GIT_AUTHOR_") or key.startswith("GIT_COMMITTER_"):
+            env.pop(key, None)
+
     env.update(
         {
             "GIT_TERMINAL_PROMPT": "0",
             "GCM_INTERACTIVE": "never",
             "GIT_ASKPASS": str(runner.askpass_path()),
-            "GIT_DIR": str(git_dir),
-            "GIT_WORK_TREE": str(worktree),
             "GIT_SSH_COMMAND": "ssh -o BatchMode=yes",
         }
     )
+    if git_dir is not None:
+        env["GIT_DIR"] = str(git_dir)
+    if worktree is not None:
+        env["GIT_WORK_TREE"] = str(worktree)
+
     env.pop(ASKPASS_ENV_VAR, None)
     if token:
         env[ASKPASS_ENV_VAR] = token
+
+    if extra_env:
+        env.update(extra_env)
 
     command = [
         "git",
@@ -87,7 +102,7 @@ async def task_git(
         completed = await asyncio.to_thread(
             subprocess.run,
             command,
-            cwd=worktree,
+            cwd=cwd,
             env=env,
             capture_output=True,
             timeout=timeout,
@@ -111,3 +126,30 @@ async def task_git(
         reason = stderr.strip() or stdout.strip() or "no output"
         raise GitError(f"git {cmd_name} failed: {reason}", code=completed.returncode)
     return GitResult(completed.returncode, stdout, stderr)
+
+
+async def task_git(
+    runner: GitRunner,
+    *,
+    git_dir: Path,
+    worktree: Path,
+    empty_hooks: Path,
+    args: Sequence[str],
+    check: bool = True,
+    timeout: float = 600,  # noqa: ASYNC109 -- passed to subprocess.run in asyncio.to_thread
+    authenticated: bool = False,
+    extra_env: dict[str, str] | None = None,
+) -> GitResult:
+    """The only code that runs git on a task worktree."""
+    return await run_safe_git(
+        runner,
+        args=args,
+        cwd=worktree,
+        empty_hooks=empty_hooks,
+        git_dir=git_dir,
+        worktree=worktree,
+        check=check,
+        timeout=timeout,
+        authenticated=authenticated,
+        extra_env=extra_env,
+    )

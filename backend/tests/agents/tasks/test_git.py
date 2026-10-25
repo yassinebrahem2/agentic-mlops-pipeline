@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import os
 import stat
@@ -74,6 +75,9 @@ async def test_task_git_ignores_planted_fsmonitor_in_worktree(
     _make_writable(wt_git_file)
     wt_git_file.write_text(f"gitdir: {planted / '.git'}\n", encoding="utf-8")
 
+    # Add an untracked file in worktree to verify task repository status is actually returned
+    (wt / "new_worktree_file.txt").write_text("task worktree change\n", encoding="utf-8")
+
     runner = GitRunner(paths.bin)
     result = await task_git(
         runner,
@@ -83,13 +87,29 @@ async def test_task_git_ignores_planted_fsmonitor_in_worktree(
         args=["status", "--porcelain"],
     )
     assert result.code == 0
+    assert "?? new_worktree_file.txt" in result.stdout
     assert not pwned_file.exists()
+
+    # Also assert that task git explicitly used task git_dir, not planted repo
+    git_dir_res = await task_git(
+        runner,
+        git_dir=git_dir,
+        worktree=wt,
+        empty_hooks=paths.empty_hooks,
+        args=["rev-parse", "--git-dir"],
+    )
+    is_matching = await asyncio.to_thread(
+        lambda: Path(git_dir_res.stdout.strip()).resolve() == git_dir.resolve()
+    )
+    assert is_matching
 
 
 async def test_task_git_disables_hooks(
     tmp_path: Path, git_env: dict[str, str], paths: DataPaths
 ) -> None:
     repo = make_repo(tmp_path / "repo", {"a.txt": "a\n"}, git_env)
+    _cmd(["git", "config", "user.name", "Test User"], cwd=repo)
+    _cmd(["git", "config", "user.email", "test@example.com"], cwd=repo)
     wt = tmp_path / "wt"
     _cmd(["git", "worktree", "add", "-b", "agent/test/task-hooks", str(wt)], cwd=repo)
     git_dir = git_dir_for_task(repo, "wt")
@@ -129,6 +149,8 @@ async def test_task_git_error_scrubbed_and_raised(
     tmp_path: Path, git_env: dict[str, str], paths: DataPaths
 ) -> None:
     repo = make_repo(tmp_path / "repo", {"a.txt": "a\n"}, git_env)
+    _cmd(["git", "config", "user.name", "Test User"], cwd=repo)
+    _cmd(["git", "config", "user.email", "test@example.com"], cwd=repo)
     wt = tmp_path / "wt"
     _cmd(["git", "worktree", "add", "-b", "agent/test/task-err", str(wt)], cwd=repo)
     git_dir = git_dir_for_task(repo, "wt")

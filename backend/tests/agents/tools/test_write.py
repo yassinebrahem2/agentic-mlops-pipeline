@@ -376,3 +376,114 @@ async def test_registry_has_write_and_edit(
     registry = default_registry(tasks=service)
     assert "Write" in registry.names()
     assert "Edit" in registry.names()
+
+
+async def test_write_planted_symlink_after_validation_refused(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_planted_symlink"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Planted symlink test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    outside = tmp_path / "host_file.txt"
+    outside.write_text("critical host data\n", encoding="utf-8")
+
+    tool = WriteTool(service)
+    args = WriteArgs(file_path="sub/target.py", content="evil payload\n")
+
+    # Step 1: Preview succeeds before symlink exists
+    preview = await tool.preview(ctx, args)
+    assert preview.kind == "diff"
+
+    # Step 2: Plant symlink at sub/target.py pointing to host file outside worktree
+    target = task.worktree / "sub" / "target.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlinks not supported in this environment")
+
+    # Step 3: Run tool - must refuse and not write through symlink
+    with pytest.raises(
+        ToolFailure, match=r"(Cannot write directly to symlink|File escaped worktree)"
+    ):
+        await tool.run(ctx, args)
+
+    # Step 4: Host file was not overwritten
+    assert outside.read_text(encoding="utf-8") == "critical host data\n"
+
+
+async def test_write_refuses_symlinked_parent_directory(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_symlink_dir"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Symlink dir test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "secret.txt"
+    outside_file.write_text("secret\n", encoding="utf-8")
+
+    symlink_dir = task.worktree / "symlink_dir"
+    try:
+        symlink_dir.symlink_to(outside_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlinks not supported in this environment")
+
+    tool = WriteTool(service)
+    res = await tool.invoke(
+        ctx, {"file_path": "symlink_dir/secret.txt", "content": "overwritten\n"}
+    )
+    assert res.is_error
+    assert outside_file.read_text(encoding="utf-8") == "secret\n"
+
+
+async def test_write_refuses_windows_secret_names(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_win_sec"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Secret test")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    tool = WriteTool(service)
+    res1 = await tool.invoke(ctx, {"file_path": ".env.", "content": "KEY=val\n"})
+    assert res1.is_error
+    assert "secret file" in res1.content
+
+    res2 = await tool.invoke(ctx, {"file_path": ".env ", "content": "KEY=val\n"})
+    assert res2.is_error
+    assert "secret file" in res2.content
