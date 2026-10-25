@@ -81,6 +81,7 @@ class SessionManager(AgentSessions):
             caller=self._caller,
             builder=self._builder,
             hooks=TurnHooks(gate=gate, inbound=inbound, turn_end=turn_end, workspaces=workspaces),
+            observers=observers,
         )
         self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
 

@@ -50,6 +50,7 @@ class RecordingSink:
         self.tools_started: list[ToolCallPart] = []
         self.tools_finished: list[ToolResultPart] = []
         self.messages: list[tuple[MessageView, bool]] = []
+        self.waiting_turns: list[str] = []
 
     async def text(self, message_id: str, text: str) -> None:
         self.texts.append(text)
@@ -62,6 +63,9 @@ class RecordingSink:
 
     async def message(self, message: MessageView, *, created: bool) -> None:
         self.messages.append((message, created))
+
+    async def turn_waiting(self, turn_id: str) -> None:
+        self.waiting_turns.append(turn_id)
 
 
 def make_agent(

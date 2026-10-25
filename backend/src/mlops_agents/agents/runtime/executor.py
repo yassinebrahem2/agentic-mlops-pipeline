@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Durability
 
 from mlops_agents.agents.runtime.agent import AgentBuilder, TurnRefused
@@ -28,8 +29,10 @@ from mlops_agents.agents.runtime.graph import (
     create_turn_graph,
     turn_checkpointer,
 )
+from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.waiting import handle_turn_waiting
 from mlops_agents.storage.sqlite import connect_checkpointer
 
 logger = logging.getLogger(__name__)
@@ -47,12 +50,19 @@ TURN_DURABILITY: Durability = "async"
 
 class TurnExecutor:
     def __init__(
-        self, *, store: SessionStore, caller: ModelCaller, builder: AgentBuilder, hooks: TurnHooks
+        self,
+        *,
+        store: SessionStore,
+        caller: ModelCaller,
+        builder: AgentBuilder,
+        hooks: TurnHooks,
+        observers: Sequence[TurnObserver] = (),
     ) -> None:
         self._store = store
         self._caller = caller
         self._builder = builder
         self._hooks = hooks
+        self._observers = tuple(observers)
 
     async def record_failure(
         self,
@@ -185,9 +195,12 @@ class TurnExecutor:
                 active_history,
             )
 
+            is_interrupted = False
+            decisions_to_record: dict[str, GateDecision] | None = None
+
             # The checkpointer connection is closed before any handler below writes the end state,
             # so once a turn reports how it ended, nothing of it still holds the project file.
-            async with self._checkpointer(project_id, turn_id) as checkpointer:
+            async with self._checkpointer(project_id, turn_id) as cp:
                 graph = create_turn_graph(
                     agent=built_agent,
                     caller=self._caller,
@@ -198,7 +211,7 @@ class TurnExecutor:
                     turn_id=turn_id,
                     message_id=agent_message_id,
                     current_parts=current_parts,
-                    checkpointer=checkpointer,
+                    checkpointer=cp.saver,
                     lock=lock,
                     hooks=self._hooks,
                 )
@@ -208,7 +221,46 @@ class TurnExecutor:
                     "step_count": 0,
                     "stopped_reason": None,
                 }
-                await graph.ainvoke(initial_state, config=config, durability=TURN_DURABILITY)  # pyright: ignore[reportUnknownMemberType]  # LangGraph ainvoke return type is partially untyped
+                try:
+                    res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
+                        initial_state, config=config, durability=TURN_DURABILITY
+                    )
+                    if isinstance(res, dict) and bool(res.get("__interrupt__")):  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                        is_interrupted = True
+                    else:
+                        chk_state = await graph.aget_state(config)
+                        if chk_state.tasks and any(t.interrupts for t in chk_state.tasks):
+                            is_interrupted = True
+                except GraphInterrupt:
+                    is_interrupted = True
+
+                if is_interrupted:
+                    cp.preserved = True
+                    try:
+                        chk_state = await graph.aget_state(config)
+                        decisions_to_record = chk_state.values.get("decisions")
+                    except Exception:
+                        logger.debug(
+                            "Could not read graph state decisions for turn %s",
+                            turn_id,
+                            exc_info=True,
+                        )
+
+            if is_interrupted:
+                await handle_turn_waiting(
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    session_id=session_id,
+                    agent=built_agent.definition.name,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    decisions=decisions_to_record,
+                    lock=lock,
+                    observers=self._observers,
+                )
+                return cast(tuple[TurnEnd, str | None], ("waiting", None))
 
             await finish_agent_message("complete")
             return ("done", None)
@@ -227,19 +279,29 @@ class TurnExecutor:
     @asynccontextmanager
     async def _checkpointer(
         self, project_id: str, turn_id: str
-    ) -> AsyncGenerator[AsyncSqliteSaver]:
+    ) -> AsyncGenerator[_CheckpointHolder]:
         conn = await connect_checkpointer(self._store.db_path(project_id))
         try:
-            checkpointer = turn_checkpointer(conn)
-            await checkpointer.setup()
+            saver = turn_checkpointer(conn)
+            await saver.setup()
+            holder = _CheckpointHolder(saver)
             try:
-                yield checkpointer
+                yield holder
             finally:
-                try:
-                    await checkpointer.adelete_thread(turn_id)
-                except Exception:
-                    logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
+                if not holder.preserved:
+                    try:
+                        await saver.adelete_thread(turn_id)
+                    except Exception:
+                        logger.exception(
+                            "Could not delete the checkpointer thread of turn %s", turn_id
+                        )
         finally:
             # Windows keeps the project folder locked until the connection is closed, also
             # when a second cancel interrupts the thread cleanup.
             await conn.close()
+
+
+class _CheckpointHolder:
+    def __init__(self, saver: AsyncSqliteSaver) -> None:
+        self.saver = saver
+        self.preserved = False

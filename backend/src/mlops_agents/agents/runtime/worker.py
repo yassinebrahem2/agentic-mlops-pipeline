@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, replace
+from typing import Literal, cast
 
 from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
@@ -30,7 +31,7 @@ class _Ending:
     the system message of a failure still to be written: None when there is none left to
     write (no failure, written already, or recorded by the executor itself)."""
 
-    status: TurnEnd
+    status: TurnEnd | Literal["waiting"]
     error: str | None = None
     failure_notice: str | None = None
 
@@ -156,9 +157,11 @@ class TurnWorkers:
                         self._stopped_turns.add(turn_id)
 
                 try:
-                    await self._take_turn(
+                    should_continue = await self._take_turn(
                         project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock
                     )
+                    if not should_continue:
+                        break
                 finally:
                     self._current_turns.pop(key, None)
                     self._stopped_turns.discard(turn_id)
@@ -177,7 +180,7 @@ class TurnWorkers:
         trigger_msg_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
-    ) -> None:
+    ) -> bool:
         try:
             await self._store.set_turn(project_id, turn_id, "running")
             await self._turn_started(project_id, agent, turn_id)
@@ -192,6 +195,11 @@ class TurnWorkers:
                 project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, interrupted
             )
             raise
+
+        if ending.status == "waiting":
+            await self._store.set_turn(project_id, turn_id, "waiting")
+            return False
+
         # Nothing suspends between deciding the end and ending: a cancel from here on lands in
         # the shielded ending, which keeps the decided status and reports it once.
         await self._end_turn(
@@ -201,6 +209,7 @@ class TurnWorkers:
         if current is not None and current.cancelling() > 0:
             # The worker's cancel came in the pass its turn task ended (see `_run_turn`).
             raise asyncio.CancelledError
+        return True
 
     @shielded
     async def _end_turn(
@@ -221,6 +230,9 @@ class TurnWorkers:
         It runs in its own task and takes the session lock, which the worker never holds when
         it gets here, and the turn task has finished by then.
         """
+        if ending.status == "waiting":
+            return
+
         if ending.status == "interrupted":
             await self._store.set_turn(project_id, turn_id, "interrupted")
             await self._store.mark_interrupted(project_id, turn_id)
@@ -244,7 +256,7 @@ class TurnWorkers:
                         project_id, session_id, turn_id, hub, lock, _UNEXPECTED_FAILURE
                     )
                 await self._store_end(project_id, turn_id, hub, ending)
-        await self._turn_ended(project_id, session_id, agent, turn_id, ending.status)
+        await self._turn_ended(project_id, session_id, agent, turn_id, cast(TurnEnd, ending.status))
 
     async def _write_notice(
         self,
@@ -268,7 +280,7 @@ class TurnWorkers:
     ) -> None:
         """Store a turn's decided end, other than interrupted, and publish it."""
         await self._store.set_turn(project_id, turn_id, ending.status, error=ending.error)
-        await hub.turn_ended(turn_id, status=ending.status, error=ending.error)
+        await hub.turn_ended(turn_id, status=cast(TurnEnd, ending.status), error=ending.error)
 
     async def _settle_trigger(
         self,
