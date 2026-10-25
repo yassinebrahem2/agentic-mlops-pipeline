@@ -7,8 +7,9 @@ import httpx2
 import pytest
 from sqlalchemy import update
 
-from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
+from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
@@ -16,6 +17,7 @@ from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.credentials.keystore import KeyStoreError
+from mlops_agents.events.contract import AgentStatus, StatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -330,3 +332,115 @@ async def test_repository_only_workspaces_has_no_task_and_the_repository_files(
     task = TaskRef(id="tsk_1", title="t", branch="b", worktree=tmp_path, status="active")
     with pytest.raises(ValueError, match="tsk_1"):
         await workspaces.files(project.id, task)
+
+
+class _FakeStatusBoard(StatusBoard):
+    def __init__(self, summary_text: str = "- Orchestrator: idle\n- Retraining: running") -> None:
+        self.summary_text = summary_text
+        self.calls: list[str] = []
+
+    async def snapshot(self, project_id: str) -> list[AgentStatus]:
+        return []
+
+    async def summary(self, project_id: str) -> str:
+        self.calls.append(project_id)
+        return self.summary_text
+
+
+async def test_orchestrator_system_message_contains_summary_and_other_agent_does_not(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    d_orch = AgentDefinition(
+        name="orchestrator",
+        display_name="Orchestrator",
+        description="Main assistant",
+        tools=("Read",),
+        chat=True,
+        schedules=False,
+        can_message=(),
+        context_hooks=(),
+        status_board=True,
+        prompt="You are the orchestrator.",
+    )
+    d_other = AgentDefinition(
+        name="other",
+        display_name="Other Agent",
+        description="Other assistant",
+        tools=("Read",),
+        chat=True,
+        schedules=False,
+        can_message=(),
+        context_hooks=(),
+        status_board=False,
+        prompt="You are the other agent.",
+    )
+
+    tools = default_registry()
+    catalog = AgentCatalog([d_orch, d_other], tool_names=tools.names())
+    providers_svc = ProvidersService(databases, keystore, model_http)
+    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
+    workspace_svc = _workspace_svc(paths, databases, keystore)
+    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    fake_board = _FakeStatusBoard(summary_text="- Orchestrator: idle\n- Retraining: running")
+
+    builder = AgentBuilder(
+        catalog=catalog,
+        tools=tools,
+        settings=settings_svc,
+        workspace=workspace_svc,
+        workspaces=workspaces,
+        status_board=fake_board,
+    )
+
+    prov = await providers_svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
+    await providers_svc.verify_model(f"{prov.name}:fake-tools")
+
+    repo_dir = make_repo(tmp_path / "repo_sb", {"README.md": "Line 1"}, git_env)
+    project = await workspace_svc.add_local(str(repo_dir))
+    await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
+    await settings_svc.set_default_model("other", f"{prov.name}:fake-tools")
+
+    # 1. Build Orchestrator: definition has status_board=True
+    orch_agent = await builder.build(project.id, "orchestrator")
+    assert orch_agent.status_summary == fake_board.summary_text
+    assert fake_board.calls == [project.id]
+
+    # 2. Build Other: definition has status_board=False
+    other_agent = await builder.build(project.id, "other")
+    assert other_agent.status_summary is None
+    # No additional call to summary
+    assert fake_board.calls == [project.id]
+
+    # 3. System messages generated with build_messages
+    orch_msgs = build_messages(
+        orch_agent.definition,
+        orch_agent.project,
+        orch_agent.layout,
+        None,
+        [],
+        status_summary=orch_agent.status_summary,
+    )
+    other_msgs = build_messages(
+        other_agent.definition,
+        other_agent.project,
+        other_agent.layout,
+        None,
+        [],
+        status_summary=other_agent.status_summary,
+    )
+
+    orch_content = str(orch_msgs[0].content)
+    other_content = str(other_msgs[0].content)
+
+    assert "Status board:\n" in orch_content
+    assert fake_board.summary_text in orch_content
+    assert "Status board:" not in other_content

@@ -4,8 +4,10 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
+from typing import Literal
 
 import httpx2
+from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
@@ -30,8 +32,11 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import sessions as sessions_table
+from mlops_agents.storage.tables import turns as turns_table
 from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -58,6 +63,7 @@ class SessionManager(AgentSessions):
         workspaces: TaskWorkspaces,
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
+        status_board: StatusBoard | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -75,6 +81,7 @@ class SessionManager(AgentSessions):
             tools=tools,
             settings=settings,
             workspaces=workspaces,
+            status_board=status_board,
         )
         self._executor = TurnExecutor(
             store=self._store,
@@ -256,6 +263,31 @@ class SessionManager(AgentSessions):
                 self._workers.start(project_id, session_id, agent, hub, lock)
 
         return message
+
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        """Each agent whose session has a running or waiting turn now."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(select(sessions_table.c.id, sessions_table.c.agent))).all()
+            session_to_agent = {str(r[0]): str(r[1]) for r in rows}
+
+            waiting_rows = (
+                await conn.execute(
+                    select(turns_table.c.session_id)
+                    .where(turns_table.c.status == "waiting")
+                    .distinct()
+                )
+            ).all()
+            waiting_session_ids = {str(r[0]) for r in waiting_rows}
+
+        running_session_ids = self._workers.running_sessions(project_id)
+        states: dict[str, Literal["running", "waiting"]] = {}
+        for sid, agent in session_to_agent.items():
+            if sid in running_session_ids:
+                states[agent] = "running"
+            elif sid in waiting_session_ids:
+                states[agent] = "waiting"
+        return states
 
     async def update_message(
         self,

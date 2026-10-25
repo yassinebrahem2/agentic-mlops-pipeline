@@ -176,7 +176,12 @@ class TurnExecutor:
             history = await self._store.messages(project_id, session_id)
             history_for_compaction = [m for m in history if m.id != agent_message_id]
             system_msg = build_messages(
-                built_agent.definition, built_agent.project, built_agent.layout, summary, []
+                built_agent.definition,
+                built_agent.project,
+                built_agent.layout,
+                summary,
+                [],
+                status_summary=built_agent.status_summary,
             )[0]
             await compact_if_needed(
                 self._store,
@@ -201,6 +206,7 @@ class TurnExecutor:
                 built_agent.layout,
                 summary,
                 active_history,
+                status_summary=built_agent.status_summary,
             )
 
             is_interrupted = False
