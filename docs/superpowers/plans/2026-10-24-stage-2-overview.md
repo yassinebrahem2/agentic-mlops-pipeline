@@ -26,7 +26,8 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | chat-layout | `plan/stage-2-chat-layout` | Only the message list scrolls; a one-line composer that grows; one Send/Stop button; the styled agent switcher | none | now | Merged |
 | project-context | `plan/stage-2-project-context` | App pages keep the current project; the sidebar header layout | none | now | Merged |
 | fixes | `plan/stage-2-fixes` | Review bugs #216, #217 (composer Stop with whitespace, chat layout leftovers) and #226 (one GitHub https URL builder) | none | now | Merged |
-| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Planned |
+| runtime-fixes | `plan/stage-2-runtime-fixes` | Review bugs #242 (a turn's end can be lost) and #236 (provider key values read twice) | none | now | Planned |
+| runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Merged |
 | events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer); task 3: runtime-contracts task 4 merged | Planned |
 | tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Planned |
 | sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Planned |

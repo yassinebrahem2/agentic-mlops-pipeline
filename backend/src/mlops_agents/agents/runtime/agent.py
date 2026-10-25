@@ -6,11 +6,10 @@ from typing import Any, Literal
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.context import top_level_layout
 from mlops_agents.agents.settings import AgentSettingsService
-from mlops_agents.agents.tools.base import AgentTool, ToolContext, ToolRegistry
-from mlops_agents.agents.tools.files import RepoFiles
+from mlops_agents.agents.tasks.contract import TaskWorkspaces
+from mlops_agents.agents.tools.base import AgentTool, FileAccess, ToolRegistry
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.errors import DomainError
-from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
 from mlops_agents.workspace.service import WorkspaceService
@@ -24,7 +23,7 @@ class Agent:
     model: ResolvedModel
     max_steps: int | None
     tools: tuple[AgentTool[Any], ...]  # exactly the definition's tools, in its order
-    tool_context: ToolContext  # one RepoFiles per turn (it caches git ls-files)
+    files: FileAccess  # the repository's view the layout was read from; the turn's tools reuse it
 
 
 class TurnRefused(Exception):
@@ -42,15 +41,15 @@ class AgentBuilder:
         tools: ToolRegistry,
         settings: AgentSettingsService,
         workspace: WorkspaceService,
-        git: GitRunner,
+        workspaces: TaskWorkspaces,
     ) -> None:
         self._catalog = catalog
         self._tools = tools
         self._settings = settings
         self._workspace = workspace
-        self._git = git
+        self._workspaces = workspaces
 
-    async def build(self, project_id: str, agent: str, *, session_id: str, turn_id: str) -> Agent:
+    async def build(self, project_id: str, agent: str) -> Agent:
         project = await self._workspace.get(project_id)
         if project.status in ("missing", "clone_failed"):
             detail = project.status_detail or f"Project is {project.status}."
@@ -69,16 +68,7 @@ class AgentBuilder:
             raise TurnRefused("failed", str(exc)) from exc
 
         definition = self._catalog.get(agent)
-        repo_root = self._workspace.repo_root(project)
-        files = RepoFiles(repo_root, self._git)
-        tool_context = ToolContext(
-            project_id=project_id,
-            agent=agent,
-            session_id=session_id,
-            turn_id=turn_id,
-            files=files,
-            task=None,
-        )
+        files = await self._workspaces.files(project_id, None)
         layout = await top_level_layout(files)
 
         agent_tools: list[AgentTool[Any]] = []
@@ -94,5 +84,5 @@ class AgentBuilder:
             model=resolved_model,
             max_steps=max_steps,
             tools=tuple(agent_tools),
-            tool_context=tool_context,
+            files=files,
         )

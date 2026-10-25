@@ -21,7 +21,13 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnd,
 )
-from mlops_agents.agents.runtime.graph import TurnSink, TurnState, create_turn_graph
+from mlops_agents.agents.runtime.graph import (
+    TurnHooks,
+    TurnSink,
+    TurnState,
+    create_turn_graph,
+    turn_checkpointer,
+)
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.storage.sqlite import connect_checkpointer
@@ -40,10 +46,13 @@ TURN_DURABILITY: Durability = "async"
 
 
 class TurnExecutor:
-    def __init__(self, *, store: SessionStore, caller: ModelCaller, builder: AgentBuilder) -> None:
+    def __init__(
+        self, *, store: SessionStore, caller: ModelCaller, builder: AgentBuilder, hooks: TurnHooks
+    ) -> None:
         self._store = store
         self._caller = caller
         self._builder = builder
+        self._hooks = hooks
 
     async def record_failure(
         self,
@@ -133,9 +142,7 @@ class TurnExecutor:
 
         try:
             try:
-                built_agent = await self._builder.build(
-                    project_id, agent, session_id=session_id, turn_id=turn_id
-                )
+                built_agent = await self._builder.build(project_id, agent)
             except TurnRefused as exc:
                 text_part: list[Part] = [TextPart(type="text", text=exc.text)]
                 if exc.end == "done":
@@ -187,11 +194,13 @@ class TurnExecutor:
                     store=self._store,
                     sink=sink,
                     project_id=project_id,
+                    session_id=session_id,
                     turn_id=turn_id,
                     message_id=agent_message_id,
                     current_parts=current_parts,
                     checkpointer=checkpointer,
                     lock=lock,
+                    hooks=self._hooks,
                 )
                 config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
                 initial_state: TurnState = {
@@ -221,7 +230,7 @@ class TurnExecutor:
     ) -> AsyncGenerator[AsyncSqliteSaver]:
         conn = await connect_checkpointer(self._store.db_path(project_id))
         try:
-            checkpointer = AsyncSqliteSaver(conn)
+            checkpointer = turn_checkpointer(conn)
             await checkpointer.setup()
             try:
                 yield checkpointer

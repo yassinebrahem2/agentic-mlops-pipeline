@@ -134,6 +134,24 @@ class MessagesStore(StoreBase):
             row = (await conn.execute(query)).mappings().first()
         return None if row is None else _view(row)
 
+    async def turn_agent_message(
+        self, project_id: str, session_id: str, turn_id: str
+    ) -> MessageView | None:
+        """Return the agent's message of a turn of session_id, or None when it wrote none."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(messages)
+            .where(
+                messages.c.session_id == session_id,
+                messages.c.turn_id == turn_id,
+                messages.c.author_kind == "agent",
+            )
+            .order_by(messages.c.seq.desc())
+        )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).mappings().first()
+        return None if row is None else _view(row)
+
     async def messages(
         self, project_id: str, session_id: str, *, after: str | None = None
     ) -> list[MessageView]:
