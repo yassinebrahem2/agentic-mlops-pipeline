@@ -4,7 +4,7 @@ import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { errorText } from "@/lib/api";
-import { useAgentStatus, type AgentStatus } from "@/lib/useAgentStatus";
+import { useAgentStatus } from "@/lib/useAgentStatus";
 import { useProject } from "@/lib/useProject";
 import { useProjectAgents } from "@/lib/useProjectAgents";
 import { AgentList, AgentSelect } from "./AgentList";
@@ -67,23 +67,13 @@ export function AgentsPage() {
   const project = projectQuery.data;
   const showProjectStatus = project && project.status !== "ok";
 
-  const displayStatuses: AgentStatus[] =
-    statusQuery.data && statusQuery.data.length > 0
-      ? statusQuery.data
-      : (agentsQuery.data ?? []).map((agent) => ({
-          agent: agent.name,
-          display_name: agent.display_name,
-          state: agent.chat ? ("idle" as const) : ("inactive" as const),
-          task: null,
-          open_prs: [],
-          last_finished: null,
-        }));
-
   return (
     <div className="flex h-full overflow-hidden">
       <AgentList
         className="hidden md:flex"
-        agents={displayStatuses}
+        agents={statusQuery.data ?? []}
+        isLoading={statusQuery.isLoading}
+        error={statusQuery.error}
         selectedAgent={selectedAgentName}
         onSelectAgent={(agentName) => {
           setSearchParams((prev) => {

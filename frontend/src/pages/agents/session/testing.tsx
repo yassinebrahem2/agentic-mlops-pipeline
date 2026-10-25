@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { vi, type MockInstance } from "vitest";
 import { queryClient } from "@/lib/query";
-import * as streamModule from "./stream";
+import * as streamModule from "@/lib/stream";
 import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "./stream";
 
 export { STREAM_CLOSED, STREAM_CONNECTING, STREAM_OPEN, type StreamLike } from "./stream";
@@ -20,30 +20,18 @@ export class FakeStream implements StreamLike {
   readyState = STREAM_OPEN;
   onerror: ((event: Event) => void) | null = null;
   listeners = new Map<string, (event: Event) => void>();
-  allListeners = new Map<string, Set<(event: Event) => void>>();
 
   constructor(url: string = "") {
     this.url = url;
   }
 
-  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      this.listeners.set(type, listener);
-      let set = this.allListeners.get(type);
-      if (!set) {
-        set = new Set();
-        this.allListeners.set(type, set);
-      }
-      set.add(listener);
-    }
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, listener);
   }
 
-  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
-    if (typeof listener === "function") {
-      if (this.listeners.get(type) === listener) {
-        this.listeners.delete(type);
-      }
-      this.allListeners.get(type)?.delete(listener);
+  removeEventListener(type: string, listener: (event: Event) => void): void {
+    if (this.listeners.get(type) === listener) {
+      this.listeners.delete(type);
     }
   }
 
@@ -52,30 +40,16 @@ export class FakeStream implements StreamLike {
   });
 
   emitOpen(): void {
-    const set = this.allListeners.get("open");
-    if (set && set.size > 0) {
-      set.forEach((fn) => {
-        fn(new Event("open"));
-      });
-    } else {
-      this.listeners.get("open")?.(new Event("open"));
-    }
+    this.listeners.get("open")?.(new Event("open"));
   }
 
-  emit(type: string, data: unknown, seq: number): void {
+  emit(type: string, data: unknown, seq?: number): void {
     const event = {
       type,
-      data: JSON.stringify(data),
-      lastEventId: String(seq),
-    } as MessageEvent;
-    const set = this.allListeners.get(type);
-    if (set && set.size > 0) {
-      set.forEach((fn) => {
-        fn(event);
-      });
-    } else {
-      this.listeners.get(type)?.(event);
-    }
+      data: typeof data === "string" ? data : JSON.stringify(data),
+      lastEventId: seq !== undefined ? String(seq) : undefined,
+    } as unknown as MessageEvent;
+    this.listeners.get(type)?.(event);
   }
 }
 
