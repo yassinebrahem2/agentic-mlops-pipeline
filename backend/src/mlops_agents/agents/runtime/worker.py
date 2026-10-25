@@ -308,6 +308,9 @@ class TurnWorkers:
                     # raised the cancel all the same: its end stands, and `_take_turn` raises
                     # the cancel once that end is stored.
                     return _ending_of(turn_id, child_task)
+                if child_task.cancelled() and turn_id in self._stopped_turns:
+                    # Likewise for a turn task Stop ended: the Stop stands.
+                    return _Ending("stopped")
                 # The worker itself is being cancelled (close / close_project).
                 # Do not swallow worker cancellation!
                 if not child_task.done():

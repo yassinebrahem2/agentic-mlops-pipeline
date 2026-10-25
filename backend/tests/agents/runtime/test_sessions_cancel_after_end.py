@@ -276,3 +276,65 @@ async def test_a_cancel_in_the_pass_the_turn_task_returns_keeps_the_turn_done(
     assert await agent_message_statuses(env) == ["complete"]
     assert [(c[0], c[4]) for c in observer.calls if c[0] == "ended"] == [("ended", "done")]
     assert observer.ended.qsize() == 0
+
+
+async def test_a_cancel_in_the_pass_a_stopped_turn_task_ends_keeps_the_turn_stopped(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer = WorkerCapturingObserver()
+    run_turn = TurnExecutor.run
+
+    async def run_then_cancel_the_worker_on_stop(
+        self: TurnExecutor,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+    ) -> tuple[TurnEnd, str | None]:
+        try:
+            return await run_turn(self, project_id, session_id, agent, turn_id, sink, lock)
+        except asyncio.CancelledError:
+            # Queued before the stopped turn task's end wakes the worker.
+            [worker] = observer.workers
+            asyncio.get_running_loop().call_soon(worker.cancel)
+            raise
+
+    monkeypatch.setattr(TurnExecutor, "run", run_then_cancel_the_worker_on_stop)
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[observer],
+    )
+    await env.settings.set_default_model(AGENT, f"{env.provider}:fake-slow")
+    fake_openai.state.hold_slow()
+    sub = await opened_stream(env)
+    await env.manager.send(env.project_id, AGENT, "Slow response")
+    await through_first_delta(sub)
+    await env.manager.stop(env.project_id, AGENT)
+
+    assert await asyncio.wait_for(observer.ended.get(), timeout=10) == "stopped"
+    [worker] = observer.workers
+    await asyncio.wait_for(asyncio.gather(worker, return_exceptions=True), timeout=10)
+    assert worker.cancelled()  # the worker's cancel still ends it
+    fake_openai.state.release_slow()
+    await asyncio.wait_for(env.manager.close(), timeout=10)
+
+    assert await turn_ended_statuses(sub) == ["stopped"]
+    assert await turn_statuses(databases, env.project_id) == ["stopped"]
+    assert await agent_message_statuses(env) == ["stopped"]
+    assert [(c[0], c[4]) for c in observer.calls if c[0] == "ended"] == [("ended", "stopped")]
+    assert observer.ended.qsize() == 0
