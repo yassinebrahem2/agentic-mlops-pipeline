@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import re
 import shutil
 import tempfile
 from importlib import resources
@@ -12,14 +12,22 @@ from pathlib import Path
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import EnvironmentStatus
 from mlops_agents.sandbox.docker import DockerRunner
-from mlops_agents.sandbox.environment import DetectedEnvironment
+from mlops_agents.sandbox.environment import (
+    DEFAULT_PYTHON_VERSION,
+    VALID_PYTHON_VERSION_RE,
+    DetectedEnvironment,
+    is_safe_regular_file,
+)
 
 BUILD_TIMEOUT_S = 15 * 60  # 15 minutes (900 seconds)
 FAIL_DETAIL_LINES = 50
 
 
 def load_template(template_name: str, python_version: str) -> str:
-    """Loads a Dockerfile template and injects the target Python version."""
+    """Loads a Dockerfile template and injects the target Python version literally."""
+    if not VALID_PYTHON_VERSION_RE.match(python_version):
+        python_version = DEFAULT_PYTHON_VERSION
+
     template_file = f"{template_name}.Dockerfile"
     try:
         content = (
@@ -31,7 +39,14 @@ def load_template(template_name: str, python_version: str) -> str:
         path = Path(__file__).parent / "templates" / template_file
         content = path.read_text(encoding="utf-8")
 
-    return re.sub(r"ARG PYTHON_VERSION=\S+", f"ARG PYTHON_VERSION={python_version}", content)
+    # Substitute literally line by line to prevent any regex or newline injection
+    lines: list[str] = []
+    for line in content.splitlines(keepends=True):
+        if line.startswith("ARG PYTHON_VERSION="):
+            lines.append(f"ARG PYTHON_VERSION={python_version}\n")
+        else:
+            lines.append(line)
+    return "".join(lines)
 
 
 def compute_image_tag(project_id: str, template_content: str, files: dict[str, bytes]) -> str:
@@ -46,15 +61,14 @@ def compute_image_tag(project_id: str, template_content: str, files: dict[str, b
 
 
 def create_build_context(worktree: Path, detected: DetectedEnvironment, target_dir: Path) -> Path:
-    """Populates build context with ONLY the template Dockerfile and dependency files."""
+    """Populates build context with ONLY the template Dockerfile and regular dependency files."""
     target_dir.mkdir(parents=True, exist_ok=True)
     dockerfile_content = load_template(detected.template, detected.python_version)
     (target_dir / "Dockerfile").write_text(dockerfile_content, encoding="utf-8")
 
     for dep_file in detected.dependency_files:
-        src = worktree / dep_file
-        if src.is_file():
-            shutil.copy2(src, target_dir / dep_file)
+        if is_safe_regular_file(worktree, dep_file):
+            shutil.copy2(worktree / dep_file, target_dir / dep_file)
 
     return target_dir
 
@@ -70,15 +84,15 @@ class ImageManager:
         files = {
             f: (worktree / f).read_bytes()
             for f in detected.dependency_files
-            if (worktree / f).is_file()
+            if is_safe_regular_file(worktree, f)
         }
         return compute_image_tag(project_id, template_content, files)
 
     async def image_exists(self, tag: str) -> bool:
         try:
-            res = await self._runner.run(["image", "inspect", tag])
+            res = await self._runner.run(["image", "inspect", tag], timeout_s=15.0)
             return res.exit_code == 0
-        except FileNotFoundError:
+        except Exception:
             return False
 
     async def build_image(
@@ -101,7 +115,23 @@ class ImageManager:
                 return EnvironmentStatus(
                     state="failed",
                     tag=tag,
-                    detail="Docker is not installed or not on PATH.",
+                    detail="Docker is not installed or not on PATH. Install Docker Desktop (https://www.docker.com/products/docker-desktop) or Docker Engine.",
+                )
+            except TimeoutError as err:
+                detail = f"Image build timed out after {BUILD_TIMEOUT_S}s."
+                stderr = getattr(err, "stderr", None)
+                if isinstance(stderr, str) and stderr:
+                    detail = f"{detail}\n{stderr}"
+                return EnvironmentStatus(
+                    state="failed",
+                    tag=tag,
+                    detail=detail,
+                )
+            except Exception as exc:
+                return EnvironmentStatus(
+                    state="failed",
+                    tag=tag,
+                    detail=f"Image build failed: {exc}",
                 )
 
         if res.exit_code != 0:
@@ -119,8 +149,10 @@ class ImageManager:
 
     async def prune_project_tags(self, project_id: str, keep_tag: str) -> None:
         try:
-            res = await self._runner.run(["images", "--format", "{{.Repository}}:{{.Tag}}"])
-        except FileNotFoundError:
+            res = await self._runner.run(
+                ["images", "--format", "{{.Repository}}:{{.Tag}}"], timeout_s=15.0
+            )
+        except Exception:
             return
 
         if res.exit_code != 0:
@@ -133,8 +165,10 @@ class ImageManager:
                 continue
 
             # Check if any container uses this older image tag
-            ps_res = await self._runner.run(
-                ["ps", "-a", "--filter", f"ancestor={tag}", "--format", "{{.ID}}"]
-            )
-            if ps_res.exit_code == 0 and not ps_res.stdout.strip():
-                await self._runner.run(["image", "rm", tag])
+            with contextlib.suppress(Exception):
+                ps_res = await self._runner.run(
+                    ["ps", "-a", "--filter", f"ancestor={tag}", "--format", "{{.ID}}"],
+                    timeout_s=15.0,
+                )
+                if ps_res.exit_code == 0 and not ps_res.stdout.strip():
+                    await self._runner.run(["image", "rm", tag], timeout_s=30.0)

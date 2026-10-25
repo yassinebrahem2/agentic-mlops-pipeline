@@ -1270,19 +1270,6 @@
         "title": "SandboxSettings",
         "type": "object"
       },
-      "SandboxSettingsUpdate": {
-        "properties": {
-          "network": {
-            "title": "Network",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "network"
-        ],
-        "title": "SandboxSettingsUpdate",
-        "type": "object"
-      },
       "SandboxView": {
         "properties": {
           "docker": {
@@ -3469,7 +3456,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SandboxSettingsUpdate"
+                "$ref": "#/components/schemas/SandboxSettings"
               }
             }
           },
@@ -3748,27 +3735,6 @@
         "summary": "List Remote Models",
         "tags": [
           "providers"
-        ]
-      }
-    },
-    "/api/sandbox": {
-      "get": {
-        "operationId": "get_sandbox_api_sandbox_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SandboxView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Get Sandbox",
-        "tags": [
-          "sandbox"
         ]
       }
     }

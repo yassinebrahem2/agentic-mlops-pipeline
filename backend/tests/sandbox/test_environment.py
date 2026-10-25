@@ -47,6 +47,8 @@ def test_python_version_precedence(tmp_path: Path) -> None:
         (">= 3.10.4", "3.10.4"),
         ("==3.11.*", "3.11"),
         ("~=3.9.0", "3.9.0"),
+        ("<3.13,>=3.10", "3.10"),
+        (">=3.8, <3.12, >=3.10", "3.10"),
     ],
 )
 def test_python_version_requires_python_formats(tmp_path: Path, spec: str, expected: str) -> None:
@@ -154,3 +156,46 @@ def test_detect_environment_precedence_order(tmp_path: Path) -> None:
     env = detect_environment(tmp_path)
     assert env.template == "base"
     assert env.dependency_files == ()
+
+
+def test_python_version_invalid_injection_rejected(tmp_path: Path) -> None:
+    (tmp_path / ".python-version").write_text("3.12\nRUN touch /tmp/pwned\n", encoding="utf-8")
+    assert detect_python_version(tmp_path) == DEFAULT_PYTHON_VERSION
+
+
+def test_symlinked_dependency_refused(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    req = tmp_path / "requirements.txt"
+    external = tmp_path.parent / "secret.txt"
+    external.write_text("secret_key=xyz", encoding="utf-8")
+
+    try:
+        req.symlink_to(external)
+        env = detect_environment(tmp_path)
+        assert env.template == "base"
+        assert env.dependency_files == ()
+    except OSError:
+        req.write_text("secret_key=xyz", encoding="utf-8")
+        with patch.object(Path, "is_symlink", return_value=True):
+            env = detect_environment(tmp_path)
+            assert env.template == "base"
+            assert env.dependency_files == ()
+
+
+def test_symlinked_python_version_refused(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    pyver = tmp_path / ".python-version"
+    external = tmp_path.parent / "secret_ver.txt"
+    external.write_text("3.11", encoding="utf-8")
+
+    try:
+        pyver.symlink_to(external)
+        ver = detect_python_version(tmp_path)
+        assert ver == DEFAULT_PYTHON_VERSION
+    except OSError:
+        pyver.write_text("3.11", encoding="utf-8")
+        with patch.object(Path, "is_symlink", return_value=True):
+            ver = detect_python_version(tmp_path)
+            assert ver == DEFAULT_PYTHON_VERSION

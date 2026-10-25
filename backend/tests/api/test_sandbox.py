@@ -23,22 +23,8 @@ class FakeRunner(DockerRunner):
 
 
 async def test_anonymous_cannot_access_sandbox(anonymous: httpx2.AsyncClient) -> None:
-    res = await anonymous.get("/api/sandbox")
-    assert res.status_code == 401
-
     res = await anonymous.get("/api/projects/prj_123/sandbox")
     assert res.status_code == 401
-
-
-async def test_sandbox_global_status(client: httpx2.AsyncClient) -> None:
-    res = await client.get("/api/sandbox")
-    assert res.status_code == 200
-    data = res.json()
-    assert "docker" in data
-    assert "environment" in data
-    assert data["network"] is False
-    assert "available" in data["docker"]
-    assert data["environment"]["state"] == "none"
 
 
 async def test_project_sandbox_status(

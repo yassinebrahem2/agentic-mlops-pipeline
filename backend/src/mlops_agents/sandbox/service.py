@@ -22,11 +22,24 @@ from mlops_agents.sandbox.contract import (
     SandboxUnavailable,
 )
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner, detect_docker
-from mlops_agents.sandbox.environment import detect_environment
+from mlops_agents.sandbox.environment import DetectedEnvironment, detect_environment
 from mlops_agents.sandbox.images import ImageManager
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import project_settings
 from mlops_agents.workspace.service import WorkspaceService
+
+MAX_CAPTURE_CHARS = 30_000
+HALF_CAPTURE_CHARS = 15_000
+
+
+def truncate_output(raw_output: str) -> tuple[str, bool]:
+    if len(raw_output) <= MAX_CAPTURE_CHARS:
+        return raw_output, False
+    head = raw_output[:HALF_CAPTURE_CHARS]
+    tail = raw_output[-HALF_CAPTURE_CHARS:]
+    cut_count = len(raw_output) - MAX_CAPTURE_CHARS
+    cut_note = f"\n\n[... {cut_count} characters truncated ...]\n\n"
+    return f"{head}{cut_note}{tail}", True
 
 
 class SandboxService(Sandbox):
@@ -39,31 +52,18 @@ class SandboxService(Sandbox):
         databases: Databases | None = None,
         workspace: WorkspaceService | None = None,
         events: EventLog | None = None,
+        repo_roots: dict[str, Path] | None = None,
     ) -> None:
-        self._docker_runner: DockerRunner = runner if runner is not None else CliDockerRunner()
-        self._image_manager = ImageManager(self._docker_runner)
-        self._container_manager = ContainerManager(self._docker_runner)
+        self._runner: DockerRunner = runner if runner is not None else CliDockerRunner()
+        self._image_manager = ImageManager(self._runner)
+        self._container_manager = ContainerManager(self._runner)
         self._databases = databases
         self._workspace = workspace
         self._events = events
         self._locks: dict[str, asyncio.Lock] = {}
         self._status: dict[str, EnvironmentStatus] = {}
-        self._repo_roots: dict[str, Path] = {}
+        self._repo_roots: dict[str, Path] = dict(repo_roots or {})
         self._network_settings: dict[str, bool] = {}
-
-    @property
-    def _runner(self) -> DockerRunner:
-        return self._docker_runner
-
-    @_runner.setter
-    def _runner(self, runner: DockerRunner) -> None:
-        self._docker_runner = runner
-        self._image_manager = ImageManager(runner)
-        self._container_manager = ContainerManager(runner)
-
-    def register_project_root(self, project_id: str, path: Path) -> None:
-        """Registers a project's root path directly (used in tests)."""
-        self._repo_roots[project_id] = path
 
     async def _get_repo_root(self, project_id: str) -> Path:
         if project_id in self._repo_roots:
@@ -93,13 +93,16 @@ class SandboxService(Sandbox):
 
         return self._status.get(project_id, EnvironmentStatus(state="none", tag=None, detail=None))
 
-    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+    async def _build_project_image(
+        self,
+        project_id: str,
+        worktree: Path,
+        detected: DetectedEnvironment,
+    ) -> EnvironmentStatus:
+        """Serializes image build for a project, tracking status and emitting build events."""
         lock = self._locks.setdefault(project_id, asyncio.Lock())
         async with lock:
-            root = await self._get_repo_root(project_id)
-            detected = detect_environment(root)
-            tag = self._image_manager.tag_for(project_id, root, detected)
-
+            tag = self._image_manager.tag_for(project_id, worktree, detected)
             if await self._image_manager.image_exists(tag):
                 status = EnvironmentStatus(state="ready", tag=tag, detail=None)
                 self._status[project_id] = status
@@ -115,7 +118,7 @@ class SandboxService(Sandbox):
                 )
 
             start_time = time.monotonic()
-            status = await self._image_manager.build_image(project_id, root, detected)
+            status = await self._image_manager.build_image(project_id, worktree, detected)
             duration_s = round(time.monotonic() - start_time, 2)
             self._status[project_id] = status
 
@@ -136,6 +139,11 @@ class SandboxService(Sandbox):
                     )
 
             return status
+
+    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        root = await self._get_repo_root(project_id)
+        detected = detect_environment(root)
+        return await self._build_project_image(project_id, root, detected)
 
     async def get_network(self, project_id: str) -> bool:
         if self._databases is not None:
@@ -176,16 +184,22 @@ class SandboxService(Sandbox):
         return enabled
 
     async def ensure_container(self, project_id: str, task: TaskRef) -> str:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
+
         lock = self._locks.setdefault(f"{project_id}:{task.id}", asyncio.Lock())
         async with lock:
-            status = await self.environment(project_id)
-            if status.state != "ready" or not status.tag:
-                status = await self.rebuild(project_id)
+            detected = detect_environment(task.worktree)
+            tag = self._image_manager.tag_for(project_id, task.worktree, detected)
+            if not await self._image_manager.image_exists(tag):
+                status = await self._build_project_image(project_id, task.worktree, detected)
                 if status.state != "ready" or not status.tag:
                     raise SandboxUnavailable(
                         f"Environment build failed: {status.detail or 'unknown error'}"
                     )
-            tag = status.tag
+                tag = status.tag
+
             network = await self.get_network(project_id)
             return await self._container_manager.ensure_container(
                 project_id, task, tag, network=network

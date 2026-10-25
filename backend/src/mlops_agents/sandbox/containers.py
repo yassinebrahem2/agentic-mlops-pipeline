@@ -33,6 +33,7 @@ def build_run_args(
     args = [
         "run",
         "-d",
+        "--init",
         "--name",
         name,
         "--label",
@@ -94,8 +95,8 @@ class ContainerManager:
     async def inspect(self, name: str) -> ContainerInfo | None:
         """Inspects a container and returns its info, or None if not found."""
         try:
-            res = await self._runner.run(["inspect", name])
-        except FileNotFoundError:
+            res = await self._runner.run(["inspect", name], timeout_s=15.0)
+        except Exception:
             return None
         if res.exit_code != 0:
             return None
@@ -169,9 +170,11 @@ class ContainerManager:
             is_posix=is_posix,
         )
         try:
-            res = await self._runner.run(args)
+            res = await self._runner.run(args, timeout_s=30.0)
         except FileNotFoundError as err:
             raise SandboxUnavailable("Docker is not installed or not on PATH.") from err
+        except TimeoutError as err:
+            raise SandboxUnavailable("Timed out starting sandbox container.") from err
         if res.exit_code != 0:
             detail = res.stderr.strip() or res.stdout.strip() or "docker run failed"
             raise SandboxUnavailable(f"Failed to start sandbox container: {detail}")
@@ -180,7 +183,7 @@ class ContainerManager:
     async def remove(self, name: str) -> None:
         """Removes a container by name if it exists."""
         with contextlib.suppress(Exception):
-            await self._runner.run(["rm", "-f", name])
+            await self._runner.run(["rm", "-f", name], timeout_s=30.0)
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
         """Stops and removes the container for a task."""
@@ -198,7 +201,8 @@ class ContainerManager:
                     f"label={APP_NAME}.project={project_id}",
                     "--format",
                     "{{.ID}}",
-                ]
+                ],
+                timeout_s=15.0,
             )
         except Exception:
             return
@@ -212,7 +216,8 @@ class ContainerManager:
         """Stops and removes all containers created by the app."""
         try:
             res = await self._runner.run(
-                ["ps", "-a", "--filter", f"label={APP_NAME}=true", "--format", "{{.ID}}"]
+                ["ps", "-a", "--filter", f"label={APP_NAME}=true", "--format", "{{.ID}}"],
+                timeout_s=15.0,
             )
         except Exception:
             return

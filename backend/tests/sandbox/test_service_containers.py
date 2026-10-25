@@ -112,12 +112,10 @@ class FakeServiceDocker(DockerRunner):
 
 async def test_service_remove_task_and_close(tmp_path: Path) -> None:
     runner = FakeServiceDocker()
-    service = SandboxService(runner=runner)
-
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
-    service.register_project_root("prj_1", worktree)
+    service = SandboxService(runner=runner, repo_roots={"prj_1": worktree})
 
     task = TaskRef(
         id="task_svc_1",
@@ -146,12 +144,10 @@ async def test_service_remove_task_and_close(tmp_path: Path) -> None:
 
 async def test_service_network_settings_and_container_recreation(tmp_path: Path) -> None:
     runner = FakeServiceDocker()
-    service = SandboxService(runner=runner)
-
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
-    service.register_project_root("prj_1", worktree)
+    service = SandboxService(runner=runner, repo_roots={"prj_1": worktree})
 
     task = TaskRef(
         id="task_net_1",
