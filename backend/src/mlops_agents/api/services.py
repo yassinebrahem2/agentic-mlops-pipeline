@@ -112,7 +112,7 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
-    status_board = SqliteStatusBoard(catalog, events, databases=databases)
+    status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
 
     sessions = SessionManager(
@@ -130,6 +130,7 @@ async def build_services(
         observers=[turn_observer],
         status_board=status_board,
     )
+    status_board.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
 
     return Services(

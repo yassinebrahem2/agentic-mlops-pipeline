@@ -312,6 +312,7 @@ async def test_get_agents_status_reflects_events(
     live_client: httpx2.AsyncClient,
     tmp_path: Path,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project_id = await add_local_project(live_app, tmp_path, git_env)
     events_service = live_app.state.services.events
@@ -328,19 +329,27 @@ async def test_get_agents_status_reflects_events(
     assert orch["state"] == "idle"
     assert orch["last_finished"] is None
 
-    # Record turn.started
-    await events_service.record(project_id, source="orchestrator", type="turn.started", payload={})
+    # Running turn reported by sessions
+    async def mock_turn_states_running(pid: str) -> dict[str, str]:
+        return {"orchestrator": "running"}
+
+    monkeypatch.setattr(live_app.state.services.sessions, "turn_states", mock_turn_states_running)
     res = await live_client.get(f"/api/projects/{project_id}/agents/status")
     assert res.status_code == 200
     data_running: list[dict[str, Any]] = res.json()
     assert data_running[0]["state"] == "running"
 
-    # Record turn.ended
+    # Idle again, record turn.ended event
+    async def mock_turn_states_idle(pid: str) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(live_app.state.services.sessions, "turn_states", mock_turn_states_idle)
     await events_service.record(
         project_id,
         source="orchestrator",
         type="turn.ended",
-        payload={"status": "done", "final_text": "Completed successfully."},
+        subject_id="trn_1",
+        payload={"turn_id": "trn_1", "status": "done", "final_text": "Completed successfully."},
     )
     res = await live_client.get(f"/api/projects/{project_id}/agents/status")
     assert res.status_code == 200

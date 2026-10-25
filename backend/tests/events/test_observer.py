@@ -37,7 +37,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
     assert history[0].source == agent
     assert history[0].type == "turn.started"
     assert history[0].subject_id == turn_id
-    assert history[0].payload == {}
+    assert history[0].payload == {"turn_id": turn_id}
 
     # 2. turn_waiting
     await observer.turn_waiting(project_id, agent, turn_id)
@@ -46,7 +46,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
     assert history[0].source == agent
     assert history[0].type == "turn.waiting"
     assert history[0].subject_id == turn_id
-    assert history[0].payload == {}
+    assert history[0].payload == {"turn_id": turn_id}
 
     # 3. turn_ended with final_text > 200 chars
     long_text = "A" * 350
@@ -57,6 +57,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
     assert history[0].type == "turn.ended"
     assert history[0].subject_id == turn_id
     payload = history[0].payload
+    assert payload["turn_id"] == turn_id
     assert payload["status"] == "done"
     assert len(payload["final_text"]) == 200
     assert payload["final_text"] == "A" * 200
@@ -68,7 +69,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
     assert len(history) == 2
     # Newest first
     assert history[0].subject_id == turn_id_2
-    assert history[0].payload == {"status": "failed", "final_text": None}
+    assert history[0].payload == {"turn_id": turn_id_2, "status": "failed", "final_text": None}
 
 
 @pytest.mark.asyncio
@@ -114,6 +115,7 @@ async def test_turn_on_fake_model_records_turn_events(
     assert history[0].type == "turn.ended"
     assert history[0].source == agent
     assert history[0].subject_id == turn_id
+    assert history[0].payload["turn_id"] == turn_id
     assert history[0].payload["status"] == "done"
     assert isinstance(history[0].payload["final_text"], str)
     assert len(history[0].payload["final_text"]) <= 200
@@ -121,7 +123,7 @@ async def test_turn_on_fake_model_records_turn_events(
     assert history[1].type == "turn.started"
     assert history[1].source == agent
     assert history[1].subject_id == turn_id
-    assert history[1].payload == {}
+    assert history[1].payload == {"turn_id": turn_id}
 
     await manager.close()
 
@@ -185,10 +187,11 @@ async def test_failed_turn_records_failed_turn_ended(
     assert history[0].type == "turn.ended"
     assert history[0].source == agent
     assert history[0].subject_id == turn_id
-    assert history[0].payload["status"] == "failed"
+    assert history[0].payload == {"turn_id": turn_id, "status": "failed", "final_text": None}
 
     assert history[1].type == "turn.started"
     assert history[1].source == agent
     assert history[1].subject_id == turn_id
+    assert history[1].payload == {"turn_id": turn_id}
 
     await manager.close()

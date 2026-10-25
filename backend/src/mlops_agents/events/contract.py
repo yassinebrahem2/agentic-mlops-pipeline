@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -50,6 +50,9 @@ class PrRef(BaseModel):
     number: int
     url: str
     title: str
+
+
+LAST_FINISHED_MAX_CHARS: Final[int] = 200
 
 
 class AgentStatus(BaseModel):

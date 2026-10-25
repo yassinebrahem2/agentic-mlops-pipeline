@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -61,67 +62,56 @@ def test_derive_agent_status_inactive_when_chat_false() -> None:
     defn = make_definition(
         name="alert-prioritization", display_name="Alert Prioritization", chat=False
     )
-    # Even if there are events, chat=False is always inactive
+    # Even if there are events and turn_state="running", chat=False is always inactive
     events = [
-        make_event(1, "turn.started", source="alert-prioritization", subject_id="trn_1"),
+        make_event(1, "turn.started", source="alert-prioritization", payload={"turn_id": "trn_1"}),
     ]
-    status = derive_agent_status(defn, events)
+    status = derive_agent_status(defn, events, turn_state="running")
     assert status.state == "inactive"
     assert status.agent == "alert-prioritization"
     assert status.display_name == "Alert Prioritization"
 
 
-def test_derive_agent_status_running() -> None:
+def test_derive_agent_status_running_from_turn_state() -> None:
     defn = make_definition()
-    events = [
-        make_event(1, "turn.started", source="orchestrator", subject_id="trn_1"),
-    ]
-    status = derive_agent_status(defn, events)
+    status = derive_agent_status(defn, [], turn_state="running")
     assert status.state == "running"
     assert status.last_finished is None
 
 
-def test_derive_agent_status_waiting_approval() -> None:
+def test_derive_agent_status_waiting_approval_from_turn_state() -> None:
     defn = make_definition()
-    events = [
-        make_event(1, "turn.started", source="orchestrator", subject_id="trn_1"),
-        make_event(2, "turn.waiting", source="orchestrator", subject_id="trn_1"),
-    ]
-    status = derive_agent_status(defn, events)
+    status = derive_agent_status(defn, [], turn_state="waiting")
     assert status.state == "waiting_approval"
 
 
-def test_derive_agent_status_idle_and_last_finished_capped() -> None:
+def test_derive_agent_status_idle_and_last_finished() -> None:
     defn = make_definition()
-    long_final = "Result: " + "X" * 300
+    final_text = "Result: " + "X" * 150
     events = [
-        make_event(1, "turn.started", source="orchestrator", subject_id="trn_1"),
         make_event(
-            2,
+            1,
             "turn.ended",
             source="orchestrator",
-            subject_id="trn_1",
-            payload={"final_text": long_final},
+            payload={"turn_id": "trn_1", "status": "done", "final_text": final_text},
         ),
     ]
-    status = derive_agent_status(defn, events)
+    status = derive_agent_status(defn, events, turn_state=None)
     assert status.state == "idle"
-    assert status.last_finished is not None
-    assert len(status.last_finished) == 200
-    assert status.last_finished == long_final[:200]
+    assert status.last_finished == final_text
 
 
 def test_derive_agent_status_waiting_reply_lifecycle() -> None:
     defn_a = make_definition(name="agent-a", display_name="Agent A")
     defn_b = make_definition(name="agent-b", display_name="Agent B")
 
-    # 1. Agent A sends message in exchange xch_1 to Agent B
+    # 1. Agent A sends message in exchange xch_1 to Agent B (reading only fixed keys: to, exchange_id, hop)
     events = [
         make_event(
             1,
             "message.sent",
             source="agent-a",
-            payload={"recipient": "agent-b", "exchange": "xch_1", "hop": 1},
+            payload={"to": "agent-b", "exchange_id": "xch_1", "hop": 1},
         )
     ]
     status_a = derive_agent_status(defn_a, events)
@@ -135,7 +125,7 @@ def test_derive_agent_status_waiting_reply_lifecycle() -> None:
             2,
             "message.sent",
             source="agent-b",
-            payload={"recipient": "agent-a", "exchange": "xch_1", "hop": 2},
+            payload={"to": "agent-a", "exchange_id": "xch_1", "hop": 2},
         )
     )
     status_a = derive_agent_status(defn_a, events)
@@ -149,7 +139,7 @@ def test_derive_agent_status_waiting_reply_lifecycle() -> None:
             3,
             "message.sent",
             source="agent-a",
-            payload={"recipient": "agent-c", "exchange": "xch_2", "hop": 1},
+            payload={"to": "agent-c", "exchange_id": "xch_2", "hop": 1},
         )
     )
     status_a = derive_agent_status(defn_a, events)
@@ -157,14 +147,13 @@ def test_derive_agent_status_waiting_reply_lifecycle() -> None:
     assert status_a.state == "waiting_reply"
 
 
-def test_derive_agent_status_open_prs_and_task_ended() -> None:
+def test_derive_agent_status_open_prs_from_open_tasks() -> None:
     defn = make_definition(name="retraining", display_name="Retraining")
     events = [
         make_event(
             1,
             "pr.opened",
             source="retraining",
-            subject_id="tsk_1",
             payload={
                 "number": 42,
                 "url": "https://github.com/org/repo/pull/42",
@@ -176,29 +165,49 @@ def test_derive_agent_status_open_prs_and_task_ended() -> None:
             2,
             "pr.updated",
             source="retraining",
-            subject_id="tsk_1",
-            payload={"number": 42, "title": "Retrain model v2"},
+            payload={
+                "number": 42,
+                "url": "https://github.com/org/repo/pull/42",
+                "title": "Retrain model v2",
+                "task_id": "tsk_1",
+            },
         ),
     ]
 
-    status = derive_agent_status(defn, events)
-    assert len(status.open_prs) == 1
-    assert status.open_prs[0].number == 42
-    assert status.open_prs[0].title == "Retrain model v2"
-    assert status.open_prs[0].url == "https://github.com/org/repo/pull/42"
+    # Without open_tasks: no open PRs shown
+    status_no_tasks = derive_agent_status(defn, events, open_tasks=None)
+    assert len(status_no_tasks.open_prs) == 0
 
-    # Now task_ended occurs for tsk_1
-    events.append(
-        make_event(
-            3,
-            "task.ended",
-            source="retraining",
-            subject_id="tsk_1",
-            payload={"task_id": "tsk_1"},
-        )
+    # With open_tasks where tsk_1 is in_review
+    task = TaskView(
+        id="tsk_1",
+        agent="retraining",
+        title="Retrain model",
+        branch="plan/retrain",
+        status="in_review",
+        review_kind="github",
+        pr_number=42,
+        pr_url="https://github.com/org/repo/pull/42",
     )
-    status_after = derive_agent_status(defn, events)
-    assert len(status_after.open_prs) == 0
+    status_with_tasks = derive_agent_status(defn, events, open_tasks=[task])
+    assert len(status_with_tasks.open_prs) == 1
+    assert status_with_tasks.open_prs[0].number == 42
+    assert status_with_tasks.open_prs[0].title == "Retrain model v2"
+    assert status_with_tasks.open_prs[0].url == "https://github.com/org/repo/pull/42"
+
+    # When task is closed: no open PRs
+    closed_task = TaskView(
+        id="tsk_1",
+        agent="retraining",
+        title="Retrain model",
+        branch="plan/retrain",
+        status="closed",
+        review_kind="github",
+        pr_number=42,
+        pr_url="https://github.com/org/repo/pull/42",
+    )
+    status_closed = derive_agent_status(defn, events, open_tasks=[closed_task])
+    assert len(status_closed.open_prs) == 0
 
 
 def test_format_agent_status_line() -> None:
@@ -209,6 +218,7 @@ def test_format_agent_status_line() -> None:
     # With task
     task = TaskView(
         id="tsk_123",
+        agent="orchestrator",
         title="Implement events",
         branch="plan/events",
         status="active",
@@ -216,7 +226,7 @@ def test_format_agent_status_line() -> None:
         pr_number=None,
         pr_url=None,
     )
-    status_with_task = derive_agent_status(defn, [], task=task)
+    status_with_task = derive_agent_status(defn, [], open_tasks=[task])
     assert (
         format_agent_status_line(status_with_task) == "- Orchestrator: idle, task: Implement events"
     )
@@ -227,20 +237,48 @@ def test_format_agent_status_line() -> None:
             1,
             "pr.opened",
             source="orchestrator",
-            payload={"number": 10, "url": "", "title": "PR 10"},
+            payload={
+                "task_id": "tsk_123",
+                "number": 10,
+                "url": "",
+                "title": "PR 10",
+            },
         ),
         make_event(
             2,
             "pr.opened",
             source="orchestrator",
-            payload={"number": 12, "url": "", "title": "PR 12"},
+            payload={
+                "task_id": "tsk_123",
+                "number": 12,
+                "url": "",
+                "title": "PR 12",
+            },
         ),
     ]
-    status_with_prs = derive_agent_status(defn, events, task=task)
+    task_in_review = TaskView(
+        id="tsk_123",
+        agent="orchestrator",
+        title="Implement events",
+        branch="plan/events",
+        status="in_review",
+        review_kind=None,
+        pr_number=None,
+        pr_url=None,
+    )
+    status_with_prs = derive_agent_status(defn, events, open_tasks=[task_in_review])
     assert (
         format_agent_status_line(status_with_prs)
         == "- Orchestrator: idle, task: Implement events, PRs: #10, #12"
     )
+
+
+class _FakeSessions:
+    def __init__(self, states: dict[str, Literal["running", "waiting"]]) -> None:
+        self._states = states
+
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        return self._states
 
 
 @pytest.mark.asyncio
@@ -255,15 +293,21 @@ async def test_sqlite_status_board_snapshot_catalog_order(databases: Databases) 
     d_alert = make_definition("alert-prioritization", "Alert Prioritization", chat=False)
     catalog = AgentCatalog([d_alert, d_orch, d_retrain], tool_names=frozenset())
 
-    board = SqliteStatusBoard(catalog, events, databases=databases)
-
-    # Record turn started for retraining
-    await events.record(project_id, source="retraining", type="turn.started", payload={})
+    fake_sessions = _FakeSessions({"retraining": "running"})
+    board = SqliteStatusBoard(
+        catalog,
+        events,
+        sessions=fake_sessions,  # pyright: ignore[reportArgumentType]
+    )
 
     snapshot = await board.snapshot(project_id)
     assert len(snapshot) == 3
     # Catalog order: Orchestrator first, then alphabetical (alert-prioritization, retraining)
-    assert [s.agent for s in snapshot] == ["orchestrator", "alert-prioritization", "retraining"]
+    assert [s.agent for s in snapshot] == [
+        "orchestrator",
+        "alert-prioritization",
+        "retraining",
+    ]
 
     assert snapshot[0].state == "idle"
     assert snapshot[1].state == "inactive"
@@ -295,8 +339,12 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     d_retrain = make_definition("retraining", "Retraining", chat=True, status_board=False)
     catalog = AgentCatalog([d_orch, d_retrain], tool_names=frozenset())
 
-    board = SqliteStatusBoard(catalog, events, databases=databases)
-    await events.record(project_id, source="retraining", type="turn.started", payload={})
+    fake_sessions = _FakeSessions({"retraining": "running"})
+    board = SqliteStatusBoard(
+        catalog,
+        events,
+        sessions=fake_sessions,  # pyright: ignore[reportArgumentType]
+    )
 
     summary_text = await board.summary(project_id)
     assert "- Orchestrator: idle" in summary_text

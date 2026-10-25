@@ -73,6 +73,10 @@ class TurnWorkers:
         worker = self._workers.get(key)
         return worker is not None and not worker.done()
 
+    def running_sessions(self, project_id: str) -> set[str]:
+        """Return the session_ids in project_id that have a currently running worker."""
+        return {sid for (p, sid) in self._workers if p == project_id and self.running((p, sid))}
+
     def start(
         self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
     ) -> None:

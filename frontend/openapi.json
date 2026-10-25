@@ -1379,6 +1379,10 @@
       },
       "TaskView": {
         "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
           "branch": {
             "title": "Branch",
             "type": "string"
@@ -1442,6 +1446,7 @@
         },
         "required": [
           "id",
+          "agent",
           "title",
           "branch",
           "status",
