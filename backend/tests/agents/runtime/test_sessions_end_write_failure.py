@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
+from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.observer_fakes import (
     HeldObserver,
+    RecordingObserver,
     WorkerCapturingObserver,
     turn_statuses,
 )
@@ -132,3 +137,64 @@ async def test_a_failing_fallback_is_raised_once_not_retried(
     assert str(outcome) == "disk full writing failed"
     assert end_writes == ["done", "failed"]
     await env.manager.close()
+
+
+async def test_the_fallback_writes_no_second_failure_notice(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_run(
+        self: TurnExecutor,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+    ) -> tuple[TurnEnd, str | None]:
+        raise RuntimeError("an error that escapes the executor")
+
+    set_turn = SessionStore.set_turn
+    failures = ["disk full"]
+
+    async def set_turn_failing_once(
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
+    ) -> None:
+        # The failure notice is written by then: the fallback must not write it again.
+        if status == "failed" and failures:
+            raise RuntimeError(failures.pop())
+        await set_turn(self, project_id, turn_id, status, error=error)
+
+    monkeypatch.setattr(TurnExecutor, "run", failing_run)
+    monkeypatch.setattr(SessionStore, "set_turn", set_turn_failing_once)
+    observer = RecordingObserver()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        observers=[observer],
+    )
+    sub = env.manager.subscribe(env.project_id, AGENT, after_seq=None)
+    await anext(sub)  # the opening resync
+    await env.manager.send(env.project_id, AGENT, "Check readme")
+
+    ended = (await collect_until_turn_ended(sub, timeout=10))[-1]
+    assert await asyncio.wait_for(observer.ended.get(), timeout=10) == "failed"
+    await env.manager.close()
+
+    assert isinstance(ended, TurnEnded) and ended.data.status == "failed"
+    session_id = await env.store.session_id(env.project_id, AGENT)
+    authors = [m.author_kind for m in await env.store.messages(env.project_id, session_id)]
+    assert authors == ["user", "system"]
+    assert await turn_statuses(databases, env.project_id) == ["failed"]
+    assert [(c[0], c[4]) for c in observer.calls if c[0] == "ended"] == [("ended", "failed")]

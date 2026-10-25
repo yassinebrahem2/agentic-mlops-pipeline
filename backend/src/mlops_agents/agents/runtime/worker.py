@@ -223,17 +223,23 @@ class TurnWorkers:
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
             )
         else:
+            notice_written = False
             try:
-                await self._store_end(project_id, session_id, turn_id, hub, lock, ending)
+                notice_written = await self._write_notice(
+                    project_id, session_id, turn_id, hub, lock, ending
+                )
+                await self._store_end(project_id, turn_id, hub, ending)
             except Exception:
                 # As any other unexpected failure of the turn: it ends failed and the queue goes
-                # on. A failure of this fallback too is raised.
+                # on, with one failure notice. A failure of this fallback too is raised.
                 logger.exception("Could not store how turn %s ended; it ends failed", turn_id)
                 ending = _UNEXPECTED_FAILURE
-                await self._store_end(project_id, session_id, turn_id, hub, lock, ending)
+                if not notice_written:
+                    await self._write_notice(project_id, session_id, turn_id, hub, lock, ending)
+                await self._store_end(project_id, turn_id, hub, ending)
         await self._turn_ended(project_id, session_id, agent, turn_id, ending.status)
 
-    async def _store_end(
+    async def _write_notice(
         self,
         project_id: str,
         session_id: str,
@@ -241,12 +247,19 @@ class TurnWorkers:
         hub: SessionHub,
         lock: AsyncRLock,
         ending: _Ending,
+    ) -> bool:
+        """Write the ending's failure notice, if it has one; tell whether it did."""
+        if ending.failure_notice is None:
+            return False
+        await self._executor.record_failure(
+            project_id, session_id, turn_id, hub, lock, ending.failure_notice
+        )
+        return True
+
+    async def _store_end(
+        self, project_id: str, turn_id: str, hub: SessionHub, ending: _Ending
     ) -> None:
         """Store a turn's decided end, other than interrupted, and publish it."""
-        if ending.failure_notice is not None:
-            await self._executor.record_failure(
-                project_id, session_id, turn_id, hub, lock, ending.failure_notice
-            )
         await self._store.set_turn(project_id, turn_id, ending.status, error=ending.error)
         await hub.turn_ended(turn_id, status=ending.status, error=ending.error)
 
