@@ -20,15 +20,16 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
-from mlops_agents.agents.runtime.hooks import TurnObserver
+from mlops_agents.agents.runtime.graph import TurnHooks
+from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.worker import TurnWorkers
 from mlops_agents.agents.settings import AgentSettingsService
+from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
-from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -51,7 +52,10 @@ class SessionManager(AgentSessions):
         settings: AgentSettingsService,
         providers: ProvidersService,
         http: httpx2.AsyncClient,
-        git: GitRunner,
+        gate: Gate,
+        inbound: InboundSource,
+        turn_end: TurnEndCheck,
+        workspaces: TaskWorkspaces,
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
     ) -> None:
@@ -62,7 +66,6 @@ class SessionManager(AgentSessions):
         self._settings = settings
         self._providers = providers
         self._http = http
-        self._git = git
 
         self._store = SessionStore(databases)
         self._caller = ModelCaller(providers=providers, http=http)
@@ -71,9 +74,14 @@ class SessionManager(AgentSessions):
             catalog=catalog,
             tools=tools,
             settings=settings,
-            git=git,
+            workspaces=workspaces,
         )
-        self._executor = TurnExecutor(store=self._store, caller=self._caller, builder=self._builder)
+        self._executor = TurnExecutor(
+            store=self._store,
+            caller=self._caller,
+            builder=self._builder,
+            hooks=TurnHooks(gate=gate, inbound=inbound, turn_end=turn_end, workspaces=workspaces),
+        )
         self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
 
         self._hubs: dict[tuple[str, str], SessionHub] = {}

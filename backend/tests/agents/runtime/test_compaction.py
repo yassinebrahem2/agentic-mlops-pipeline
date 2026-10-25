@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from mlops_agents.agents.runtime.compaction import compact_if_needed
-from mlops_agents.agents.runtime.contract import TextPart, ToolCallPart, ToolResultPart
+from mlops_agents.agents.runtime.contract import (
+    ApprovalPart,
+    MessageView,
+    Part,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.tools.base import Preview
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.compaction_fakes import MockSummaryCaller, make_model
@@ -165,3 +173,112 @@ async def test_compaction_triggered_when_size_exceeds_threshold(
     assert last_call is not None
     assert last_call[0] == 50
     assert last_call[2] == t2
+
+
+APPROVAL_BODY = "PREVIEW-BODY " * 800  # ~10,000 characters
+
+
+def _approval() -> ApprovalPart:
+    return ApprovalPart(
+        type="approval",
+        approval_id="apr_1",
+        tool_call_id="c1",
+        preview=Preview(kind="diff", title="Edit README.md", body=APPROVAL_BODY),
+        status="approved",
+        note="APPROVAL-NOTE",
+    )
+
+
+async def _three_turns(
+    store: SessionStore, session_id: str, filler: str
+) -> tuple[list[MessageView], str]:
+    """Three turns; the first agent message holds an approval between its call and result."""
+    history: list[MessageView] = []
+    turn_id = ""
+    for n in range(3):
+        user = await store.add_message(
+            "prj_1",
+            session_id,
+            author_kind="user",
+            author_name="user",
+            parts=[TextPart(type="text", text=f"Question {n} {filler}")],
+            status="complete",
+        )
+        history.append(user)
+        if n == 2:
+            break
+        turn_id = await store.add_turn("prj_1", session_id, user.id, "done")
+        parts: list[Part] = [TextPart(type="text", text=f"Answer {n}")]
+        if n == 0:
+            parts = [
+                ToolCallPart(type="tool_call", id="c1", name="Edit", input={"path": "README.md"}),
+                _approval(),
+                ToolResultPart(type="tool_result", tool_call_id="c1", content="ok", is_error=False),
+                *parts,
+            ]
+        agent = await store.add_message(
+            "prj_1",
+            session_id,
+            turn_id=turn_id,
+            author_kind="agent",
+            author_name="orchestrator",
+            parts=parts,
+            status="complete",
+        )
+        history.append(agent)
+    return history, turn_id
+
+
+async def test_compaction_does_not_count_an_approval_toward_the_size(
+    paths: DataPaths,
+    databases: Databases,
+) -> None:
+    store = SessionStore(databases)
+    caller = MockSummaryCaller()
+    session_id = await store.session_id("prj_1", "orchestrator")
+    history, turn_id = await _three_turns(store, session_id, filler="")
+
+    # Counted, the approval's ~2,500 tokens would pass 75% of this 1,000-token window.
+    await compact_if_needed(
+        store,
+        caller,
+        make_model(context_window=1000),
+        "prj_1",
+        session_id,
+        history,
+        system_text="System prompt",
+        turn_id=turn_id,
+        agent_name="orchestrator",
+    )
+
+    assert caller.calls == []
+
+
+async def test_compaction_leaves_an_approval_out_of_the_summary_prompt(
+    paths: DataPaths,
+    databases: Databases,
+) -> None:
+    store = SessionStore(databases)
+    caller = MockSummaryCaller()
+    session_id = await store.session_id("prj_1", "orchestrator")
+    history, turn_id = await _three_turns(store, session_id, filler="q" * 400)
+
+    await compact_if_needed(
+        store,
+        caller,
+        make_model(context_window=200),
+        "prj_1",
+        session_id,
+        history,
+        system_text="System prompt",
+        turn_id=turn_id,
+        agent_name="orchestrator",
+    )
+
+    assert len(caller.calls) == 1
+    prompt = str(caller.calls[0]["messages"][-1].content)
+    assert "Agent tool call: Edit" in prompt
+    assert "Tool result: ok" in prompt
+    assert "PREVIEW-BODY" not in prompt
+    assert "APPROVAL-NOTE" not in prompt
+    assert "apr_1" not in prompt
