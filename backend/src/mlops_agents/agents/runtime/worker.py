@@ -297,8 +297,11 @@ class TurnWorkers:
         hub: SessionHub,
         lock: AsyncRLock,
     ) -> _Ending:
-        """Run the turn task and decide how it ended; `_end_turn` stores it. A cancel of the
-        worker, or of the turn task other than by Stop, is raised for an interrupted end."""
+        """Run the turn task and decide how it ended; `_end_turn` stores it.
+
+        A cancel of the turn task other than by Stop, or of the worker before the turn task
+        ended, is raised for an interrupted end. A cancel of the worker that comes once the turn
+        task has ended, by itself or by Stop, keeps that end; `_take_turn` raises it after."""
         key = (project_id, session_id)
         if turn_id in self._stopped_turns:
             return _Ending("stopped")
@@ -310,30 +313,20 @@ class TurnWorkers:
             await child_task
             return _ending_of(turn_id, child_task)
         except asyncio.CancelledError:
+            # The turn task has ended here: a cancel of the worker while it waits is forwarded
+            # to the turn task, and the wait ends only with it.
             current = asyncio.current_task()
             if current is not None and current.cancelling() > 0:
-                if (
-                    child_task.done()
-                    and child_task.cancelling() == 0
-                    and not child_task.cancelled()
-                ):
+                # The worker itself is being cancelled (close / close_project).
+                if child_task.cancelling() == 0 and not child_task.cancelled():
                     # The turn task ended in the pass the worker's cancel came in, so the wait
                     # raised the cancel all the same: its end stands, and `_take_turn` raises
                     # the cancel once that end is stored.
                     return _ending_of(turn_id, child_task)
                 if child_task.cancelled() and turn_id in self._stopped_turns:
-                    # Likewise for a turn task Stop ended: the Stop stands.
+                    # A Stop was requested and the turn task ended cancelled before the
+                    # worker woke: the Stop stands.
                     return _Ending("stopped")
-                # The worker itself is being cancelled (close / close_project).
-                # Do not swallow worker cancellation!
-                if not child_task.done():
-                    child_task.cancel()
-                    try:
-                        await child_task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception:
-                        logger.exception("Turn %s failed while closing", turn_id)
                 raise
             if turn_id not in self._stopped_turns:
                 raise
