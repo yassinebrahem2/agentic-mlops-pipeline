@@ -24,7 +24,7 @@ def test_build_run_args_default_network_disabled(tmp_path: Path) -> None:
         status="active",
     )
     args = build_run_args(
-        "prj_abc", task, "mlops-agents-env:prj_abc-1234567890ab", network=False, is_posix=False
+        "prj_abc", task, "mlops-agents-env:prj_abc-1234567890ab", network=False, user=None
     )
 
     # Detached, init, and name
@@ -73,7 +73,7 @@ def test_build_run_args_default_network_disabled(tmp_path: Path) -> None:
     assert "HOME=/tmp" in env_vars
     assert "PYTHONPATH=/workspace/src:/workspace" in env_vars
 
-    # Posix user omitted when is_posix=False
+    # Posix user omitted when user=None
     assert "-u" not in args
 
     # Image tag and entrypoint/command
@@ -92,7 +92,7 @@ def test_build_run_args_network_enabled_and_posix(tmp_path: Path) -> None:
         status="active",
     )
     args = build_run_args(
-        "prj_abc", task, "mlops-agents-env:prj_abc-1234567890ab", network=True, is_posix=True
+        "prj_abc", task, "mlops-agents-env:prj_abc-1234567890ab", network=True, user="123:456"
     )
 
     assert "--init" in args
@@ -100,7 +100,7 @@ def test_build_run_args_network_enabled_and_posix(tmp_path: Path) -> None:
     assert "--network" not in args
     assert f"{APP_NAME}.network=true" in [args[i + 1] for i, v in enumerate(args) if v == "--label"]
 
-    # When is_posix=True, -u <uid>:<gid> is included
+    # When user="123:456", -u <uid>:<gid> is included
     assert "-u" in args
     u_idx = args.index("-u") + 1
-    assert ":" in args[u_idx]
+    assert args[u_idx] == "123:456"

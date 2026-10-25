@@ -164,8 +164,6 @@ def test_python_version_invalid_injection_rejected(tmp_path: Path) -> None:
 
 
 def test_symlinked_dependency_refused(tmp_path: Path) -> None:
-    from unittest.mock import patch
-
     req = tmp_path / "requirements.txt"
     external = tmp_path.parent / "secret.txt"
     external.write_text("secret_key=xyz", encoding="utf-8")
@@ -175,17 +173,13 @@ def test_symlinked_dependency_refused(tmp_path: Path) -> None:
         env = detect_environment(tmp_path)
         assert env.template == "base"
         assert env.dependency_files == ()
-    except OSError:
-        req.write_text("secret_key=xyz", encoding="utf-8")
-        with patch.object(Path, "is_symlink", return_value=True):
-            env = detect_environment(tmp_path)
-            assert env.template == "base"
-            assert env.dependency_files == ()
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
+        raise
 
 
 def test_symlinked_python_version_refused(tmp_path: Path) -> None:
-    from unittest.mock import patch
-
     pyver = tmp_path / ".python-version"
     external = tmp_path.parent / "secret_ver.txt"
     external.write_text("3.11", encoding="utf-8")
@@ -194,8 +188,7 @@ def test_symlinked_python_version_refused(tmp_path: Path) -> None:
         pyver.symlink_to(external)
         ver = detect_python_version(tmp_path)
         assert ver == DEFAULT_PYTHON_VERSION
-    except OSError:
-        pyver.write_text("3.11", encoding="utf-8")
-        with patch.object(Path, "is_symlink", return_value=True):
-            ver = detect_python_version(tmp_path)
-            assert ver == DEFAULT_PYTHON_VERSION
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
+        raise

@@ -14,7 +14,44 @@ from mlops_agents.sandbox.images import (
     compute_image_tag,
     create_build_context,
     load_template,
+    snapshot_image,
 )
+
+
+async def test_build_context_uses_the_bytes_hashed_before_inspect(tmp_path: Path) -> None:
+    from mlops_agents.sandbox.environment import detect_environment
+
+    dependency = tmp_path / "requirements.txt"
+    dependency.write_bytes(b"six==1.16.0\n")
+    original = dependency.read_bytes()
+    context_contents: list[bytes] = []
+
+    class SwappingDocker(FakeDocker):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if list(args[:2]) == ["image", "inspect"]:
+                dependency.write_bytes(b"secret-host-content\n")
+            if args[0] == "build":
+                context_contents.append((Path(args[-1]) / "requirements.txt").read_bytes())
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    status = await ImageManager(SwappingDocker()).build_image(
+        "prj_race", tmp_path, detect_environment(tmp_path)
+    )
+    assert status.state == "ready"
+    assert context_contents == [original]
+    assert status.tag == compute_image_tag(
+        "prj_race", load_template("requirements", "3.12"), {"requirements.txt": original}
+    )
+
+
+def test_template_version_rejects_trailing_newline() -> None:
+    assert load_template("base", "3.11\n") == load_template("base", "3.12")
 
 
 class FakeDocker(DockerRunner):
@@ -112,7 +149,7 @@ def test_build_context_contains_only_expected_files(tmp_path: Path) -> None:
     )
 
     context_dir = tmp_path / "context"
-    create_build_context(worktree, detected, context_dir)
+    create_build_context(snapshot_image("prj_123", worktree, detected), context_dir)
 
     files = set(f.name for f in context_dir.iterdir())
     assert files == {"Dockerfile", "requirements.txt"}
@@ -265,8 +302,6 @@ def test_load_template_literal_substitution() -> None:
 
 
 def test_build_context_refuses_symlinks(tmp_path: Path) -> None:
-    from unittest.mock import patch
-
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     req = worktree / "requirements.txt"
@@ -282,13 +317,12 @@ def test_build_context_refuses_symlinks(tmp_path: Path) -> None:
 
     try:
         req.symlink_to(external)
-        create_build_context(worktree, detected, context_dir)
+        create_build_context(snapshot_image("prj_123", worktree, detected), context_dir)
         assert not (context_dir / "requirements.txt").exists()
-    except OSError:
-        req.write_text("SECRET_TOKEN=xyz\n", encoding="utf-8")
-        with patch.object(Path, "is_symlink", return_value=True):
-            create_build_context(worktree, detected, context_dir)
-            assert not (context_dir / "requirements.txt").exists()
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks; exercised on Linux CI")
+        raise
 
 
 @pytest.mark.docker

@@ -4,10 +4,87 @@ import asyncio
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+import pytest
+
 from mlops_agents.config import APP_NAME
 from mlops_agents.events.contract import EventLog, EventRecord, EventType
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
+from tests.sandbox.fakes import MemorySandboxProjects
+
+
+async def test_context_failure_sets_failed_status_and_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import images
+
+    def fail_context(*args: object, **kwargs: object) -> Path:
+        raise PermissionError("context directory denied")
+
+    events = FakeEventLog()
+    service = SandboxService(
+        FakeDockerRunner(), events=events, projects=MemorySandboxProjects({"prj_123": tmp_path})
+    )
+    monkeypatch.setattr(images, "create_build_context", fail_context)
+    status = await service.rebuild("prj_123")
+    assert status.state == "failed"
+    assert "context directory denied" in (status.detail or "")
+    assert (await service.environment("prj_123")) == status
+    assert [record.type for record in events.records] == [
+        "sandbox.build.started",
+        "sandbox.build.failed",
+    ]
+    assert events.records[-1].payload == {"tag": status.tag, "detail": status.detail}
+
+
+async def test_dependency_read_failure_records_failed_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import service as service_module
+
+    def fail_snapshot(*args: object, **kwargs: object) -> None:
+        raise PermissionError("dependency denied")
+
+    events = FakeEventLog()
+    service = SandboxService(
+        FakeDockerRunner(), events=events, projects=MemorySandboxProjects({"prj_123": tmp_path})
+    )
+    monkeypatch.setattr(service_module, "snapshot_image", fail_snapshot)
+    status = await service.rebuild("prj_123")
+    assert status.state == "failed"
+    assert "dependency denied" in (status.detail or "")
+    assert events.records[-1].type == "sandbox.build.failed"
+    assert events.records[-1].payload == {"tag": None, "detail": status.detail}
+
+
+async def test_failed_environment_is_invalidated_by_dependency_change(tmp_path: Path) -> None:
+    dependency = tmp_path / "requirements.txt"
+    dependency.write_text("broken\n", encoding="utf-8")
+    runner = FakeDockerRunner()
+    runner.fail_build = True
+    service = SandboxService(runner, projects=MemorySandboxProjects({"prj_123": tmp_path}))
+    failed = await service.rebuild("prj_123")
+    assert failed.state == "failed"
+    dependency.write_text("six\n", encoding="utf-8")
+    current = await service.environment("prj_123")
+    assert current.state == "none"
+    assert current.tag != failed.tag
+
+
+async def test_environment_does_not_hide_unexpected_failures(tmp_path: Path) -> None:
+    class BrokenDocker(FakeDockerRunner):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            raise RuntimeError("unexpected runner defect")
+
+    service = SandboxService(BrokenDocker(), projects=MemorySandboxProjects({"prj_123": tmp_path}))
+    with pytest.raises(RuntimeError, match="unexpected runner defect"):
+        await service.environment("prj_123")
 
 
 class FakeEventLog(EventLog):
@@ -95,7 +172,9 @@ async def test_service_rebuild_success_and_events(tmp_path: Path) -> None:
 
     runner = FakeDockerRunner()
     events = FakeEventLog()
-    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
+    service = SandboxService(
+        runner, events=events, projects=MemorySandboxProjects({"prj_123": repo})
+    )
 
     status = await service.rebuild("prj_123")
     assert status.state == "ready"
@@ -125,7 +204,9 @@ async def test_service_rebuild_failure_and_events(tmp_path: Path) -> None:
     runner = FakeDockerRunner()
     runner.fail_build = True
     events = FakeEventLog()
-    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
+    service = SandboxService(
+        runner, events=events, projects=MemorySandboxProjects({"prj_123": repo})
+    )
 
     status = await service.rebuild("prj_123")
     assert status.state == "failed"
@@ -147,7 +228,9 @@ async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> No
 
     runner = FakeDockerRunner()
     events = FakeEventLog()
-    service = SandboxService(runner, events=events, repo_roots={"prj_123": repo})
+    service = SandboxService(
+        runner, events=events, projects=MemorySandboxProjects({"prj_123": repo})
+    )
 
     original_run = runner.run
 

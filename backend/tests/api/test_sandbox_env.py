@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
+from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from tests.conftest import make_repo
 
@@ -69,12 +70,12 @@ async def test_rebuild_success(
 ) -> None:
     runner = FakeRebuildRunner()
     # Replace sandbox service with fake runner
-    old_sandbox = app.state.services.sandbox
     app.state.services.sandbox = SandboxService(
         runner,
-        databases=old_sandbox._databases,
-        workspace=old_sandbox._workspace,
-        events=old_sandbox._events,
+        projects=DatabaseSandboxProjects(
+            app.state.services.databases, app.state.services.workspace
+        ),
+        events=app.state.services.events,
     )
 
     repo = make_repo(tmp_path / "repo", {"requirements.txt": "scikit-learn\n"}, git_env)
