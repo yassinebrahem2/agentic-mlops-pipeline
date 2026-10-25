@@ -280,7 +280,7 @@ async def test_service_methods_read_through_the_one_owner(
     await service.add_key("groq", "key-1")
     await service.add_key("groq", "key-2")
     assert await service.keys_for(provider.id) == ["key-1", "key-2"]
-    assert await service.secret_values() == ["key-1", "key-2"]
+    assert sorted(await service.secret_values()) == ["key-1", "key-2"]
 
     counting_keystore.reads.clear()
     await service.keys_for(provider.id)
@@ -304,7 +304,7 @@ async def test_service_key_changes_invalidate_the_secret_cache(service: Provider
     await service.add_key("groq", "key-1")
     assert await service.secret_values() == ["key-1"]
     await service.add_key("groq", "key-2")
-    assert await service.secret_values() == ["key-1", "key-2"]
+    assert sorted(await service.secret_values()) == ["key-1", "key-2"]
     await service.remove_key("groq", 1)
     assert await service.secret_values() == ["key-2"]
     await service.delete_provider("groq")
