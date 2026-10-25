@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import RowMapping
@@ -33,6 +35,14 @@ from mlops_agents.workspace.service import WorkspaceService
 
 if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
+
+
+def _clean_leftover_temp_files(worktree_path: Path) -> None:
+    if worktree_path.is_dir():
+        for item in worktree_path.rglob(".tmp_*"):
+            if item.is_file() and ".git" not in item.parts:
+                with suppress(OSError):
+                    item.unlink()
 
 
 class TasksService(Tasks):
@@ -165,11 +175,14 @@ class TasksService(Tasks):
 
         self._current_tasks[(project_id, session_id)] = task_id
 
+        worktree_path = Path(row["worktree"])
+        await asyncio.to_thread(_clean_leftover_temp_files, worktree_path)
+
         return TaskRef(
             id=row["id"],
             title=row["title"],
             branch=row["branch"],
-            worktree=Path(row["worktree"]),
+            worktree=worktree_path,
             status=row["status"],
         )
 
@@ -226,18 +239,16 @@ class TasksService(Tasks):
         )
 
     def _build_task_view(self, row: RowMapping) -> TaskView:
-        kwargs: dict[str, Any] = {
-            "id": row["id"],
-            "title": row["title"],
-            "branch": row["branch"],
-            "status": row["status"],
-            "review_kind": row["review_kind"],
-            "pr_number": row["pr_number"],
-            "pr_url": row["pr_url"],
-        }
-        if "agent" in TaskView.model_fields:
-            kwargs["agent"] = row["agent"]
-        return TaskView(**kwargs)
+        return TaskView(
+            id=row["id"],
+            agent=row["agent"],
+            title=row["title"],
+            branch=row["branch"],
+            status=row["status"],
+            review_kind=row["review_kind"],
+            pr_number=row["pr_number"],
+            pr_url=row["pr_url"],
+        )
 
     async def view(self, project_id: str, task_id: str) -> TaskView:
         engine = await self._databases.project(project_id)

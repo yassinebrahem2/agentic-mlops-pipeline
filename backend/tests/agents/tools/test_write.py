@@ -504,3 +504,33 @@ async def test_write_refuses_windows_secret_names(
     res2 = await tool.invoke(ctx, {"file_path": ".env ", "content": "KEY=val\n"})
     assert res2.is_error
     assert "secret file" in res2.content
+
+
+def test_safe_write_bytes_replace_error_raises_tool_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.agents.tools.file_ops import safe_write_bytes
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    target = worktree / "file.txt"
+
+    def mock_replace(self: Path, dest: Path) -> None:
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(Path, "replace", mock_replace)
+    with pytest.raises(ToolFailure, match="Failed to replace"):
+        safe_write_bytes(target, worktree, b"hello")
+
+
+def test_safe_write_bytes_preserves_mode(tmp_path: Path) -> None:
+    from mlops_agents.agents.tools.file_ops import safe_write_bytes
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    target = worktree / "file.txt"
+    target.write_text("initial", encoding="utf-8")
+    initial_mode = target.stat().st_mode
+
+    safe_write_bytes(target, worktree, b"updated")
+    assert target.stat().st_mode == initial_mode

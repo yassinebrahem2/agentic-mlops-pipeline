@@ -52,9 +52,8 @@ class WriteTool(AgentTool[WriteArgs]):
         self._sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
 
     async def _validate_and_prepare(
-        self, ctx: ToolContext, args: WriteArgs
-    ) -> tuple[TaskRef, Path, str, Path, bytes, str]:
-        current = await get_current_task(ctx, self._tasks)
+        self, ctx: ToolContext, args: WriteArgs, current: TaskRef
+    ) -> tuple[Path, str, Path, bytes, str]:
         candidate, rel, resolved_worktree = resolve_and_validate(current.worktree, args.file_path)
 
         if candidate.exists():
@@ -92,23 +91,23 @@ class WriteTool(AgentTool[WriteArgs]):
             )
         )
         diff_text = "\n".join(diff_lines)
-        return current, candidate, rel, resolved_worktree, new_bytes, diff_text
+        return candidate, rel, resolved_worktree, new_bytes, diff_text
 
     async def preview(self, ctx: ToolContext, args: WriteArgs) -> Preview:
-        _, _, rel, _, _, diff_text = await self._validate_and_prepare(ctx, args)
+        current = await get_current_task(ctx, self._tasks)
+        _, rel, _, _, diff_text = await self._validate_and_prepare(ctx, args, current)
         return Preview(kind="diff", title=f"Write {rel}", body=diff_text)
 
     async def run(self, ctx: ToolContext, args: WriteArgs) -> ToolOutput:
         current = await get_current_task(ctx, self._tasks)
         async with pause_task(self._sandbox, ctx.project_id, current.id):
             (
-                _,
                 candidate,
                 rel,
                 resolved_worktree,
                 new_bytes,
                 diff_text,
-            ) = await self._validate_and_prepare(ctx, args)
+            ) = await self._validate_and_prepare(ctx, args, current)
 
             try:
                 await self._tasks.claim(ctx.project_id, current, [rel])

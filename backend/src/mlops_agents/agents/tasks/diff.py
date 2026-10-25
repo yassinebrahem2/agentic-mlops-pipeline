@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from mlops_agents.agents.constants import MAX_DIFF_CHARS
 from mlops_agents.agents.tasks.git import task_git
-from mlops_agents.agents.tools.file_ops import MAX_DIFF_CHARS, cap_diff
+from mlops_agents.agents.tools.file_ops import cap_diff
 from mlops_agents.agents.tools.files import is_secret
 from mlops_agents.storage.tables import file_claims, tasks
 
@@ -60,7 +61,7 @@ async def get_candidate_paths(
             if i < len(tokens) and tokens[i]:
                 paths.append(tokens[i])
         i += 1
-    return paths
+    return [p for p in paths if not Path(p).name.startswith(".tmp_")]
 
 
 async def staged_diff_task(
@@ -104,14 +105,14 @@ async def staged_diff_task(
 
     diff = ""
     if valid_paths:
-        await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["add", "--", *valid_paths],
-        )
         try:
+            await task_git(
+                runner,
+                git_dir=git_dir,
+                worktree=worktree,
+                empty_hooks=empty_hooks,
+                args=["add", "--", *valid_paths],
+            )
             async with engine.connect() as conn:
                 row = (
                     await conn.execute(select(tasks.c.base_sha).where(tasks.c.id == task.id))

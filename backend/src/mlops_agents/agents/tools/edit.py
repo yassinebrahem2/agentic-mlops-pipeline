@@ -57,12 +57,11 @@ class EditTool(AgentTool[EditArgs]):
         self._sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
 
     async def _validate_and_prepare(
-        self, ctx: ToolContext, args: EditArgs
-    ) -> tuple[TaskRef, Path, str, Path, bytes, str]:
+        self, ctx: ToolContext, args: EditArgs, current: TaskRef
+    ) -> tuple[Path, str, Path, bytes, str]:
         if not args.old_string:
             raise ToolFailure("old_string cannot be empty.")
 
-        current = await get_current_task(ctx, self._tasks)
         candidate, rel, resolved_worktree = resolve_and_validate(current.worktree, args.file_path)
 
         if not candidate.exists():
@@ -127,23 +126,23 @@ class EditTool(AgentTool[EditArgs]):
             )
         )
         diff_text = "\n".join(diff_lines)
-        return current, candidate, rel, resolved_worktree, new_bytes, diff_text
+        return candidate, rel, resolved_worktree, new_bytes, diff_text
 
     async def preview(self, ctx: ToolContext, args: EditArgs) -> Preview:
-        _, _, rel, _, _, diff_text = await self._validate_and_prepare(ctx, args)
+        current = await get_current_task(ctx, self._tasks)
+        _, rel, _, _, diff_text = await self._validate_and_prepare(ctx, args, current)
         return Preview(kind="diff", title=f"Edit {rel}", body=diff_text)
 
     async def run(self, ctx: ToolContext, args: EditArgs) -> ToolOutput:
         current = await get_current_task(ctx, self._tasks)
         async with pause_task(self._sandbox, ctx.project_id, current.id):
             (
-                _,
                 candidate,
                 rel,
                 resolved_worktree,
                 new_bytes,
                 diff_text,
-            ) = await self._validate_and_prepare(ctx, args)
+            ) = await self._validate_and_prepare(ctx, args, current)
 
             try:
                 await self._tasks.claim(ctx.project_id, current, [rel])

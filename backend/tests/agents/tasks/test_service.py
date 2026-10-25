@@ -299,3 +299,29 @@ async def test_files_returns_task_files_or_repo_files(
     task_files = await service.files(project_id, task)
     assert isinstance(task_files, TaskFiles)
     assert task_files.root == task.worktree
+
+
+async def test_resume_cleans_leftover_temp_files(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_coder", agent="coder")
+    task = await service.start(
+        project_id=project_id,
+        session_id="ses_coder",
+        agent="coder",
+        title="Temp cleanup test",
+    )
+
+    tmp_file = task.worktree / ".tmp_file_12345"
+    tmp_file.write_text("temp", encoding="utf-8")
+    assert tmp_file.exists()
+
+    await service.resume(project_id, "ses_coder", "coder", task.id)
+    assert not tmp_file.exists()

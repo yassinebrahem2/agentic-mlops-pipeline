@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from sqlalchemy import insert, select, update
 
 from mlops_agents.agents.runtime.contract import Resync
 from mlops_agents.agents.tasks import commit as commit_module
+from mlops_agents.agents.tasks import service as service_module
 from mlops_agents.agents.tasks.contract import CommitRefused, CommitResult
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.clock import now_iso
@@ -104,6 +107,7 @@ async def _setup_service(
     *,
     files: dict[str, str] | None = None,
     github_login: str | None = None,
+    sandbox: Any = None,
 ) -> tuple[TasksService, WorkspaceService, FakeEventLog, str, Path]:
     repo = make_repo(tmp_path / "repo", files or {"app.py": "print('hello')\n"}, git_env)
     _cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
@@ -131,6 +135,7 @@ async def _setup_service(
         git=runner,
         events=events,
         workspace=workspace,
+        sandbox=sandbox,
     )
     return service, workspace, events, project.id, repo
 
@@ -619,3 +624,199 @@ async def test_has_unpublished_changes(
             os.environ.pop("GIT_CONFIG_GLOBAL", None)
         else:
             os.environ["GIT_CONFIG_GLOBAL"] = old_global
+
+
+class FakeSandbox:
+    def __init__(self) -> None:
+        self.paused_calls: list[tuple[str, str]] = []
+        self.is_paused: bool = False
+
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None, None]:
+        self.paused_calls.append((project_id, task_id))
+        self.is_paused = True
+        try:
+            yield
+        finally:
+            self.is_paused = False
+
+
+async def test_commit_and_staged_diff_pause_and_unpause_on_raise(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_sandbox = FakeSandbox()
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env, sandbox=fake_sandbox
+    )
+
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Pause test")
+
+    # 1. staged_diff enters and exits paused
+    (task.worktree / "file.py").write_text("x = 1\n", encoding="utf-8")
+    assert not fake_sandbox.is_paused
+    diff = await service.staged_diff(project_id, task)
+    assert diff
+    assert not fake_sandbox.is_paused
+    assert (project_id, task.id) in fake_sandbox.paused_calls
+
+    # 2. staged_diff exits paused even when raising
+    async def failing_diff(*args: Any, **kwargs: Any) -> Any:
+        assert fake_sandbox.is_paused
+        raise RuntimeError("diff crash")
+
+    monkeypatch.setattr(service_module, "staged_diff_task", failing_diff)
+    with pytest.raises(RuntimeError, match="diff crash"):
+        await service.staged_diff(project_id, task)
+    assert not fake_sandbox.is_paused
+
+    # 3. commit enters and exits paused
+    monkeypatch.undo()
+    assert not fake_sandbox.is_paused
+    await service.commit(project_id, task, "feat: commit pause test")
+    assert not fake_sandbox.is_paused
+
+    # 4. commit exits paused even when raising
+    (task.worktree / "file2.py").write_text("y = 2\n", encoding="utf-8")
+
+    async def failing_commit(*args: Any, **kwargs: Any) -> Any:
+        assert fake_sandbox.is_paused
+        raise RuntimeError("commit crash")
+
+    monkeypatch.setattr(service_module, "commit_task", failing_commit)
+    with pytest.raises(RuntimeError, match="commit crash"):
+        await service.commit(project_id, task, "feat: will fail")
+    assert not fake_sandbox.is_paused
+
+
+async def test_commit_failure_releases_only_newly_claimed_paths(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Partial release test")
+
+    # Claim earlier.py beforehand (simulating Write/Edit tool claim)
+    await service.claim(project_id, task, ["earlier.py"])
+
+    (task.worktree / "earlier.py").write_text("# edited earlier\n", encoding="utf-8")
+    (task.worktree / "new_file.py").write_text("# newly added\n", encoding="utf-8")
+
+    orig_task_git = commit_module.task_git
+
+    async def mock_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "commit" in git_args_raw:
+            raise RuntimeError("Git commit failed unexpectedly")
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", mock_task_git)
+
+    with pytest.raises(RuntimeError, match="Git commit failed unexpectedly"):
+        await service.commit(project_id, task, "feat: fail commit")
+
+    # Check database: earlier.py MUST STILL be claimed, new_file.py MUST NOT be claimed
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        claims = set(
+            (await conn.execute(select(file_claims.c.path).where(file_claims.c.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+    assert "earlier.py" in claims
+    assert "new_file.py" not in claims
+
+    # Check git: nothing is staged
+    diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff.stdout.strip() == ""
+
+
+async def test_commit_cancellation_cleans_up_claims_and_unstages(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Cancel test")
+
+    await service.claim(project_id, task, ["earlier.py"])
+
+    (task.worktree / "earlier.py").write_text("# edited\n", encoding="utf-8")
+    (task.worktree / "new_file.py").write_text("# new\n", encoding="utf-8")
+
+    orig_task_git = commit_module.task_git
+
+    async def mock_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "commit" in git_args_raw:
+            raise asyncio.CancelledError()
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", mock_task_git)
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.commit(project_id, task, "feat: cancel commit")
+
+    # Check database: earlier.py still claimed, new_file.py released
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        claims = set(
+            (await conn.execute(select(file_claims.c.path).where(file_claims.c.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+    assert "earlier.py" in claims
+    assert "new_file.py" not in claims
+
+    # Check git: nothing is staged
+    diff = _cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff.stdout.strip() == ""
+
+
+async def test_temp_files_excluded_from_candidate_paths(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    from mlops_agents.agents.tasks.diff import get_candidate_paths
+    from mlops_agents.agents.tasks.git import git_dir_for_task
+
+    service, _, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Temp exclusion test")
+
+    (task.worktree / "valid.py").write_text("x = 1\n", encoding="utf-8")
+    (task.worktree / ".tmp_valid_abc123").write_text("temp data\n", encoding="utf-8")
+
+    git_dir = git_dir_for_task(repo, task.id)
+    runner = GitRunner(paths.bin)
+    candidates = await get_candidate_paths(
+        runner,
+        git_dir=git_dir,
+        worktree=task.worktree,
+        empty_hooks=paths.empty_hooks,
+    )
+    assert "valid.py" in candidates
+    assert ".tmp_valid_abc123" not in candidates

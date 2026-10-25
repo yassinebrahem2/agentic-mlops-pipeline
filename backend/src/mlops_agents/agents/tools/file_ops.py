@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from mlops_agents.agents.constants import MAX_DIFF_CHARS
 from mlops_agents.agents.tools.base import TaskRef, ToolContext, ToolFailure
 from mlops_agents.agents.tools.files import is_secret
 
@@ -26,7 +27,6 @@ __all__ = [
 ]
 
 CHUNK_SIZE = 65536
-MAX_DIFF_CHARS = 30_000
 
 
 @asynccontextmanager
@@ -161,8 +161,18 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
         if not candidate.resolve(strict=False).is_relative_to(resolved_worktree):
             raise ToolFailure("File escaped worktree.")
 
+        if candidate.exists():
+            st_mode = candidate.stat().st_mode
+            with suppress(OSError):
+                temp_path.chmod(st_mode)
+
         # Atomic replace replaces symlink without following or truncating target
-        temp_path.replace(candidate)
+        try:
+            temp_path.replace(candidate)
+        except OSError as exc:
+            raise ToolFailure(
+                f"Failed to replace {candidate.name}: {exc.strerror or exc}"
+            ) from None
     finally:
         if temp_path is not None and temp_path.exists():
             with suppress(OSError):

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from sqlalchemy import select
 
 from mlops_agents.agents.tasks.author import resolve_commit_author
 from mlops_agents.agents.tasks.claims import claim_paths, release_claims
@@ -10,6 +14,7 @@ from mlops_agents.agents.tasks.diff import get_candidate_paths, staged_diff_task
 from mlops_agents.agents.tasks.git import task_git
 from mlops_agents.agents.tasks.push import has_unpublished_changes_task, push_task
 from mlops_agents.agents.tools.files import is_secret
+from mlops_agents.storage.tables import file_claims
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -72,13 +77,24 @@ async def commit_task(
         )
 
     # 4. Check & claim paths atomically
+    committed = False
+    newly_claimed_paths: list[str] = []
     try:
-        await claim_paths(engine, task, candidate_paths)
-    except ClaimConflict as exc:
-        raise CommitRefused(f"Cannot commit: {exc}") from None
+        # Check existing claims by this task to compute newly_claimed_paths
+        async with engine.connect() as conn:
+            stmt = select(file_claims.c.path).where(
+                file_claims.c.task_id == task.id,
+                file_claims.c.path.in_(candidate_paths),
+            )
+            existing_claims = set((await conn.execute(stmt)).scalars().all())
+        newly_claimed_paths = [p for p in candidate_paths if p not in existing_claims]
 
-    # 5. Stage, commit, and inspect commit inside guarded block
-    try:
+        try:
+            await claim_paths(engine, task, candidate_paths)
+        except ClaimConflict as exc:
+            raise CommitRefused(f"Cannot commit: {exc}") from None
+
+        # 5. Stage, commit, and inspect commit inside guarded block
         await task_git(
             runner,
             git_dir=git_dir,
@@ -112,17 +128,24 @@ async def commit_task(
             args=["rev-parse", "HEAD"],
         )
         sha = sha_res.stdout.strip()
+        committed = True
         return CommitResult(sha=sha, changed=tuple(candidate_paths))
 
-    except Exception:
-        # Release claims and unstage on any failure path
-        await release_claims(engine, task.id, candidate_paths)
-        await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["reset"],
-            check=False,
-        )
-        raise
+    finally:
+        if not committed:
+
+            async def _cleanup() -> None:
+                with suppress(Exception):
+                    await task_git(
+                        runner,
+                        git_dir=git_dir,
+                        worktree=worktree,
+                        empty_hooks=empty_hooks,
+                        args=["reset"],
+                        check=False,
+                    )
+                if newly_claimed_paths:
+                    with suppress(Exception):
+                        await release_claims(engine, task.id, newly_claimed_paths)
+
+            await asyncio.shield(_cleanup())
