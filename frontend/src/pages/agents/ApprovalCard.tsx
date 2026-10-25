@@ -10,7 +10,43 @@ import { api, errorText, unwrap, type paths as GeneratedPaths } from "@/lib/api"
 import { cn } from "@/lib/utils";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
-export type Preview = components["schemas"]["Preview"];
+export type ApprovalStatus = ApprovalPart["status"];
+
+const APPROVAL_STATUS_CONFIG: Record<
+  ApprovalStatus,
+  {
+    label: string;
+    variant: "default" | "secondary" | "destructive" | "outline";
+    className?: string;
+  }
+> = {
+  pending: {
+    label: "pending",
+    variant: "outline",
+    className: "text-[10px] px-1.5 py-0",
+  },
+  approved: {
+    label: "approved",
+    variant: "outline",
+    className:
+      "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 text-[10px] px-1.5 py-0",
+  },
+  rejected: {
+    label: "rejected",
+    variant: "destructive",
+    className: "text-[10px] px-1.5 py-0",
+  },
+  cancelled: {
+    label: "cancelled",
+    variant: "outline",
+    className: "text-[10px] px-1.5 py-0",
+  },
+  expired: {
+    label: "expired",
+    variant: "outline",
+    className: "text-[10px] px-1.5 py-0",
+  },
+};
 
 export type ApprovalsDecisionPaths = GeneratedPaths & {
   "/api/projects/{project_id}/approvals/{approval_id}/decision": {
@@ -61,8 +97,9 @@ function DiffView({ diff }: { diff: string }) {
               rowClass = "bg-sky-500/10 text-sky-700 dark:text-sky-400 font-semibold";
             }
 
+            const key = `${String(idx + 1)}:${line}`;
             return (
-              <tr key={idx} className={rowClass}>
+              <tr key={key} className={rowClass}>
                 <td className="w-10 select-none px-2 py-0.5 text-right font-mono text-[11px] opacity-40">
                   {idx + 1}
                 </td>
@@ -144,6 +181,7 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
   };
 
   const isPending = approval.status === "pending";
+  const statusConfig = APPROVAL_STATUS_CONFIG[approval.status];
 
   return (
     <Card
@@ -158,21 +196,8 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
               {toolName || "Approval required"}
             </span>
             {!isPending && (
-              <Badge
-                variant={
-                  approval.status === "approved"
-                    ? "outline"
-                    : approval.status === "rejected"
-                      ? "destructive"
-                      : "outline"
-                }
-                className={
-                  approval.status === "approved"
-                    ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 text-[10px] px-1.5 py-0"
-                    : "text-[10px] px-1.5 py-0"
-                }
-              >
-                {approval.status}
+              <Badge variant={statusConfig.variant} className={statusConfig.className}>
+                {statusConfig.label}
               </Badge>
             )}
           </div>
@@ -227,7 +252,11 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
               >
                 Reject
               </Button>
-              {error && <span className="text-xs text-destructive">{error}</span>}
+              {error && (
+                <span role="alert" className="text-xs text-destructive">
+                  {error}
+                </span>
+              )}
             </div>
           </div>
         )}

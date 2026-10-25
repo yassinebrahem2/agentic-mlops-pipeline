@@ -17,8 +17,7 @@ export const MAX_RETRY_DELAY = 10000;
 
 export function getRetryDelay(retryCount: number): number {
   return (
-    (retryCount < RETRY_DELAYS.length ? RETRY_DELAYS[retryCount] : undefined) ??
-    MAX_RETRY_DELAY
+    (retryCount < RETRY_DELAYS.length ? RETRY_DELAYS[retryCount] : undefined) ?? MAX_RETRY_DELAY
   );
 }
 
