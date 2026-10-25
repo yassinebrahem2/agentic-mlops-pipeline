@@ -403,6 +403,19 @@ class TurnExecutor:
             logger.exception("Turn %s resume failed unexpectedly", turn_id)
             return await fail(UNEXPECTED_FAILURE_TEXT)
 
+    async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
+        """Delete a turn's checkpoint thread from the SQLite checkpointer."""
+        conn = await connect_checkpointer(self._store.db_path(project_id))
+        try:
+            saver = turn_checkpointer(conn)
+            await saver.setup()
+            try:
+                await saver.adelete_thread(turn_id)
+            except Exception:
+                logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
+        finally:
+            await conn.close()
+
     @asynccontextmanager
     async def _checkpointer(
         self, project_id: str, turn_id: str

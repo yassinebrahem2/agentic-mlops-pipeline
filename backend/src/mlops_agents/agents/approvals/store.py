@@ -7,7 +7,7 @@ import json
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from mlops_agents.agents.approvals.contract import ApprovalView
@@ -16,7 +16,7 @@ from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.clock import now_iso
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import approvals
+from mlops_agents.storage.tables import approvals, turns
 
 _UNSET = object()
 
@@ -281,3 +281,57 @@ class ApprovalStore:
                 .all()
             )
         return [_row_to_record(r) for r in rows]
+
+    async def cancel_for_turn(self, project_id: str, turn_id: str) -> list[ApprovalRecord]:
+        """Cancel all pending approvals for a turn. Returns the cancelled records."""
+        now = now_iso()
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            pending_rows = (
+                (
+                    await conn.execute(
+                        select(approvals).where(
+                            approvals.c.turn_id == turn_id, approvals.c.status == "pending"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if pending_rows:
+                pending_ids = [str(r["id"]) for r in pending_rows]
+                await conn.execute(
+                    update(approvals)
+                    .where(approvals.c.id.in_(pending_ids))
+                    .values(status="cancelled", decided_at=now)
+                )
+        if not pending_rows:
+            return []
+        return await self.list_for_step(
+            project_id, turn_id, approval_ids=[str(r["id"]) for r in pending_rows]
+        )
+
+    async def expire_non_waiting(self, project_id: str) -> list[ApprovalRecord]:
+        """Expire all pending approvals whose turn is not in 'waiting' status."""
+        now = now_iso()
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            query = (
+                select(approvals)
+                .select_from(approvals.outerjoin(turns, approvals.c.turn_id == turns.c.id))
+                .where(
+                    approvals.c.status == "pending",
+                    or_(turns.c.status.is_(None), turns.c.status != "waiting"),
+                )
+            )
+            rows = (await conn.execute(query)).mappings().all()
+            if rows:
+                ids = [str(r["id"]) for r in rows]
+                await conn.execute(
+                    update(approvals)
+                    .where(approvals.c.id.in_(ids))
+                    .values(status="expired", decided_at=now)
+                )
+        if not rows:
+            return []
+        return await self.list_for_step(project_id, approval_ids=[str(r["id"]) for r in rows])

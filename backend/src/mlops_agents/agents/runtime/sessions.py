@@ -27,12 +27,13 @@ from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck,
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.waiting import stop_waiting_turn
 from mlops_agents.agents.runtime.worker import TurnWorkers
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
-from mlops_agents.events.contract import StatusBoard
+from mlops_agents.events.contract import AuditLog, StatusBoard
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import sessions as sessions_table
@@ -64,6 +65,8 @@ class SessionManager(AgentSessions):
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
         status_board: StatusBoard | None = None,
+        audit_log: AuditLog | None = None,
+        audit: AuditLog | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -72,8 +75,10 @@ class SessionManager(AgentSessions):
         self._settings = settings
         self._providers = providers
         self._http = http
+        self._audit_log = audit if audit is not None else audit_log
+        self._observers = tuple(observers)
 
-        self._store = SessionStore(databases)
+        self._store = SessionStore(databases, audit_log=self._audit_log)
         self._caller = ModelCaller(providers=providers, http=http)
         self._builder = AgentBuilder(
             workspace=workspace,
@@ -348,6 +353,29 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
         self._workers.stop((project_id, session_id))
+
+        if not self._workers.running((project_id, session_id)):
+            waiting = await self._store.waiting_turn(project_id, session_id)
+            if waiting is not None:
+                turn_id, _ = waiting
+                hub = self._get_hub(project_id, session_id)
+                await stop_waiting_turn(
+                    project_id=project_id,
+                    session_id=session_id,
+                    agent=agent,
+                    turn_id=turn_id,
+                    store=self._store,
+                    hub=hub,
+                    executor=self._executor,
+                    audit_log=self._audit_log,
+                    observers=self._observers,
+                )
+                lock = self._get_lock(project_id, session_id)
+                async with lock:
+                    if not self._workers.running((project_id, session_id)):
+                        next_turn = await self._store.next_queued_turn(project_id, session_id)
+                        if next_turn is not None:
+                            self._workers.start(project_id, session_id, agent, hub, lock)
 
     async def _subscribe_stream(
         self, project_id: str, agent: str, after_seq: int | None = None

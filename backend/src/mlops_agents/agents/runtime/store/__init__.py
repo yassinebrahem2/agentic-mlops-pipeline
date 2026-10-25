@@ -7,12 +7,17 @@ from typing import cast
 
 from sqlalchemy import and_, insert, or_, select, update
 
+from mlops_agents.agents.approvals.settings import get_permission_level
+from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
+from mlops_agents.agents.runtime.contract import ApprovalPart, Part
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store.messages import MessagesStore
 from mlops_agents.agents.runtime.store.turns import TurnsStore
 from mlops_agents.agents.runtime.store.usage import UsageStore
 from mlops_agents.clock import now_iso
+from mlops_agents.events.contract import AuditLog
 from mlops_agents.ids import new_id
+from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, sessions, turns
 
 __all__ = ["SessionStore"]
@@ -20,6 +25,10 @@ __all__ = ["SessionStore"]
 
 class SessionStore(MessagesStore, TurnsStore, UsageStore):
     """The sessions table, and recovery across turns and messages."""
+
+    def __init__(self, databases: Databases, audit_log: AuditLog | None = None) -> None:
+        super().__init__(databases)
+        self._audit_log = audit_log
 
     def db_path(self, project_id: str) -> Path:
         """Return the filesystem Path to the project database."""
@@ -66,8 +75,10 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
         return None if row is None else str(row[0])
 
     @shielded
-    async def recover(self, project_id: str) -> None:
-        """Mark running turns and their incomplete messages (streaming/stopped) as interrupted."""
+    async def recover(self, project_id: str, *, audit_log: AuditLog | None = None) -> None:
+        """Mark running turns and their incomplete messages (streaming/stopped) as interrupted,
+        and expire pending approvals whose turn is not waiting.
+        """
         engine = await self._databases.project(project_id)
         now = now_iso()
         async with engine.begin() as conn:
@@ -102,6 +113,44 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
                     .where(messages.c.status == "streaming")
                     .values(status="interrupted")
                 )
+
+        # Expire pending approvals whose turn is not waiting
+        actual_audit = audit_log or self._audit_log
+        approval_store = ApprovalStore(self._databases)
+        expired_records = await approval_store.expire_non_waiting(project_id)
+        if expired_records:
+            by_msg: dict[tuple[str, str], list[ApprovalRecord]] = {}
+            for rec in expired_records:
+                by_msg.setdefault((rec.session_id, rec.message_id), []).append(rec)
+
+            for (session_id, message_id), recs in by_msg.items():
+                msg = await self.message(project_id, session_id, message_id)
+                if msg is not None:
+                    expired_apr_ids = {r.id for r in recs}
+                    new_parts: list[Part] = []
+                    for part in msg.parts:
+                        if isinstance(part, ApprovalPart) and part.approval_id in expired_apr_ids:
+                            new_parts.append(part.model_copy(update={"status": "expired"}))
+                        else:
+                            new_parts.append(part)
+                    await self.update_message(project_id, message_id, parts=new_parts)
+
+            if actual_audit is not None:
+                try:
+                    level = await get_permission_level(self._databases, project_id)
+                except Exception:
+                    level = "ask"
+                for rec in expired_records:
+                    await actual_audit.record(
+                        project_id,
+                        actor="system",
+                        action="approval",
+                        risk_class=rec.risk_class,
+                        permission_level=level,
+                        decision="expired",
+                        target=rec.tool,
+                        detail={"approval_id": rec.id, "tool": rec.tool},
+                    )
 
     @shielded
     async def set_summary(

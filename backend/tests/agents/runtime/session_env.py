@@ -26,6 +26,7 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
+from mlops_agents.events.contract import AuditLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -68,6 +69,7 @@ async def build_session_env(
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
     gate: Gate | None = None,
+    audit_log: AuditLog | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -96,6 +98,7 @@ async def build_session_env(
         workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
+        audit_log=audit_log,
     )
 
     prov = await providers_svc.create_provider(
