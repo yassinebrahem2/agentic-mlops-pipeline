@@ -14,7 +14,7 @@ from types import MappingProxyType
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import EnvironmentStatus
 from mlops_agents.sandbox.dependencies import read_dependency_files
-from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner
+from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner, DockerTimeoutError
 from mlops_agents.sandbox.environment import (
     DEFAULT_PYTHON_VERSION,
     VALID_PYTHON_VERSION_RE,
@@ -134,11 +134,10 @@ class ImageManager:
             detail = (
                 DOCKER_INSTALL_MESSAGE if exc.filename == "docker" else f"Image build failed: {exc}"
             )
-        except TimeoutError as exc:
+        except DockerTimeoutError as exc:
             detail = f"Image build timed out after {BUILD_TIMEOUT_S}s."
-            stderr = getattr(exc, "stderr", None)
-            if isinstance(stderr, str) and stderr:
-                detail += "\n" + stderr
+            if exc.stderr:
+                detail += "\n" + "\n".join(exc.stderr.splitlines()[-FAIL_DETAIL_LINES:])
         except (OSError, ValueError) as exc:
             detail = f"Image build failed: {exc}"
         return EnvironmentStatus(state="failed", tag=tag, detail=detail)

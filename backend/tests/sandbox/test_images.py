@@ -8,7 +8,12 @@ import pytest
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.containers import build_run_args, container_name, host_container_user
-from mlops_agents.sandbox.docker import CliDockerRunner, DockerResult, DockerRunner
+from mlops_agents.sandbox.docker import (
+    CliDockerRunner,
+    DockerResult,
+    DockerRunner,
+    DockerTimeoutError,
+)
 from mlops_agents.sandbox.environment import DetectedEnvironment
 from mlops_agents.sandbox.images import (
     BUILD_TIMEOUT_S,
@@ -84,7 +89,9 @@ class FakeDocker(DockerRunner):
 
         if cmd[0] == "build":
             if self.raise_timeout:
-                raise TimeoutError("Docker build timed out")
+                raise DockerTimeoutError(
+                    "Docker build timed out", stderr="dependency download stalled"
+                )
             if self.build_fail_output is not None:
                 return DockerResult(stdout="", stderr=self.build_fail_output, exit_code=1)
             # Find the tag in cmd
@@ -291,6 +298,7 @@ async def test_build_timeout_caught_as_failed(tmp_path: Path) -> None:
     assert status.state == "failed"
     assert status.detail is not None
     assert "timed out" in status.detail
+    assert "dependency download stalled" in status.detail
 
 
 def test_load_template_literal_substitution() -> None:

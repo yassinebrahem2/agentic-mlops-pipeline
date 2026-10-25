@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 from dataclasses import dataclass
 from typing import cast
@@ -94,7 +93,10 @@ class ContainerManager:
         """Inspects a container and returns its info, or None if not found."""
         res = await self._runner.run(["inspect", name], timeout_s=15.0)
         if res.exit_code != 0:
-            return None
+            detail = (res.stderr or res.stdout).strip()
+            if "no such container" in detail.lower():
+                return None
+            raise SandboxUnavailable(f"Failed to inspect sandbox container {name}: {detail}")
         try:
             raw_data: object = json.loads(res.stdout)
             if not isinstance(raw_data, list) or not raw_data:
@@ -234,45 +236,33 @@ class ContainerManager:
 
     async def remove_project_containers(self, project_id: str) -> None:
         """Stops and removes all containers belonging to a project."""
-        try:
-            res = await self._runner.run(
-                [
-                    "ps",
-                    "-a",
-                    "--filter",
-                    f"label={APP_NAME}.project={project_id}",
-                    "--format",
-                    "{{.ID}}",
-                ],
-                timeout_s=15.0,
-            )
-        except FileNotFoundError:
-            return
-        if res.exit_code == 0 and res.stdout.strip():
-            for cid in res.stdout.strip().splitlines():
-                cid = cid.strip()
-                if cid:
-                    with contextlib.suppress(SandboxUnavailable):
-                        await self.remove(cid)
+        await self._remove_matching(f"{APP_NAME}.project={project_id}")
 
     async def cleanup_all(self) -> None:
         """Stops and removes all containers created by the app."""
+        await self._remove_matching(f"{APP_NAME}=true")
+
+    async def _remove_matching(self, label: str) -> None:
         try:
             res = await self._runner.run(
-                ["ps", "-a", "--filter", f"label={APP_NAME}=true", "--format", "{{.ID}}"],
+                ["ps", "-a", "--filter", f"label={label}", "--format", "{{.ID}}"],
                 timeout_s=15.0,
             )
         except FileNotFoundError:
             return
-        if res.exit_code == 0 and res.stdout.strip():
-            for cid in res.stdout.strip().splitlines():
-                cid = cid.strip()
-                if cid:
-                    with contextlib.suppress(SandboxUnavailable):
-                        await self.remove(cid)
+        if res.exit_code != 0:
+            detail = (res.stderr or res.stdout).strip()
+            raise SandboxUnavailable(f"Failed to list sandbox containers for {label}: {detail}")
+        for line in res.stdout.splitlines():
+            cid = line.strip()
+            if cid:
+                info = await self.inspect(cid)
+                if info is not None and info.paused:
+                    await self.unpause(cid)
+                await self.remove(cid)
 
     async def cleanup_orphans(self) -> None:
-        """Removes leftover containers at startup. Does not fail if Docker is unavailable."""
+        """Remove leftover containers, recovering a crash during a paused write first."""
         await self.cleanup_all()
 
     async def ensure_container(
@@ -288,6 +278,8 @@ class ContainerManager:
         info = await self.inspect(name)
         if info is not None:
             if info.running and info.image_tag == image_tag and info.network == network:
+                if info.paused:
+                    await self.unpause(name)
                 return name
             await self.remove(name)
 

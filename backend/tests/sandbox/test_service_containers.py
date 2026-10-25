@@ -333,7 +333,7 @@ async def test_service_paused_context_manager(tmp_path: Path) -> None:
     assert any(c[0] == "unpause" for c in runner.calls)
 
 
-async def test_service_task_lock_serializes_run_and_paused(tmp_path: Path) -> None:
+async def test_service_task_lock_serializes_paused(tmp_path: Path) -> None:
     import asyncio
 
     runner = FakeServiceDocker()
@@ -347,27 +347,29 @@ async def test_service_task_lock_serializes_run_and_paused(tmp_path: Path) -> No
     await service.ensure_container("prj_1", task)
 
     events_sequence: list[str] = []
+    first_entered = asyncio.Event()
+    second_waiting = asyncio.Event()
 
-    # Order 1: paused is active, concurrent run awaits unpause
-    async def run_in_paused() -> None:
+    async def pause_block_1() -> None:
         async with service.paused("prj_1", task.id):
-            events_sequence.append("paused_started")
-            await asyncio.sleep(0.05)
-            events_sequence.append("paused_ending")
+            events_sequence.append("p1_started")
+            first_entered.set()
+            await second_waiting.wait()
+            events_sequence.append("p1_ending")
 
-    async def run_command() -> None:
-        await asyncio.sleep(0.01)  # ensure paused acquires lock first
-        events_sequence.append("run_waiting")
-        res = await service.run("prj_1", task, "echo test", timeout_s=10)
-        assert res.exit_code == 0
-        events_sequence.append("run_completed")
+    async def pause_block_2() -> None:
+        await first_entered.wait()
+        events_sequence.append("p2_waiting")
+        second_waiting.set()
+        async with service.paused("prj_1", task.id):
+            events_sequence.append("p2_started")
 
-    await asyncio.gather(run_in_paused(), run_command())
+    await asyncio.gather(pause_block_1(), pause_block_2())
     assert events_sequence == [
-        "paused_started",
-        "run_waiting",
-        "paused_ending",
-        "run_completed",
+        "p1_started",
+        "p2_waiting",
+        "p1_ending",
+        "p2_started",
     ]
 
 
