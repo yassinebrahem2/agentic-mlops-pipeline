@@ -39,3 +39,8 @@ async def get_project_sandbox(project: ProjectDep, services: ServicesDep) -> San
         environment=env_status,
         network=False,
     )
+
+
+@router.post("/projects/{project_id}/sandbox/rebuild", response_model=EnvironmentStatus)
+async def rebuild_project_sandbox(project: ProjectDep, services: ServicesDep) -> EnvironmentStatus:
+    return await services.sandbox.rebuild(project.id)

@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Iterable, Sequence
+from pathlib import Path
+
+from mlops_agents.config import APP_NAME
+from mlops_agents.events.contract import EventLog, EventRecord, EventType
+from mlops_agents.sandbox.docker import DockerResult, DockerRunner
+from mlops_agents.sandbox.service import SandboxService
+
+
+class FakeEventLog(EventLog):
+    def __init__(self) -> None:
+        self.records: list[EventRecord] = []
+
+    async def record(
+        self,
+        project_id: str,
+        *,
+        source: str,
+        type: EventType,
+        payload: dict[str, object],
+        subject_id: str | None = None,
+    ) -> EventRecord:
+        rec = EventRecord(
+            id="evt_test",
+            seq=len(self.records) + 1,
+            ts="2026-10-25T00:00:00Z",
+            source=source,
+            type=type,
+            subject_id=subject_id,
+            payload=payload,
+        )
+        self.records.append(rec)
+        return rec
+
+    def subscribe(self, project_id: str, after_seq: int | None):  # type: ignore[no-untyped-def]
+        raise NotImplementedError
+
+    async def history(
+        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
+    ) -> list[EventRecord]:
+        return []
+
+
+class FakeDockerRunner(DockerRunner):
+    def __init__(self) -> None:
+        self.build_delays: dict[str, float] = {}
+        self.fail_build: bool = False
+        self.build_calls: int = 0
+        self.built_tags: set[str] = set()
+
+    async def run(
+        self,
+        args: Sequence[str],
+        *,
+        timeout_s: float | None = None,
+        secrets: Iterable[str] = (),
+    ) -> DockerResult:
+        cmd = list(args)
+        if cmd[0] == "image" and cmd[1] == "inspect":
+            tag = cmd[2]
+            if tag in self.built_tags:
+                return DockerResult(stdout="{}", stderr="", exit_code=0)
+            return DockerResult(stdout="", stderr="no such image", exit_code=1)
+
+        if cmd[0] == "build":
+            self.build_calls += 1
+            tag_idx = cmd.index("-t") + 1
+            tag = cmd[tag_idx]
+            if self.fail_build:
+                return DockerResult(
+                    stdout="", stderr="Syntax error in requirements\nLine 2 failed", exit_code=1
+                )
+            delay = self.build_delays.get(tag, 0.0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self.built_tags.add(tag)
+            return DockerResult(stdout="Built", stderr="", exit_code=0)
+
+        if cmd[0] == "images":
+            return DockerResult(stdout="", stderr="", exit_code=0)
+
+        if cmd[0] == "ps":
+            return DockerResult(stdout="", stderr="", exit_code=0)
+
+        return DockerResult(stdout="", stderr="", exit_code=0)
+
+
+async def test_service_rebuild_success_and_events(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    runner = FakeDockerRunner()
+    events = FakeEventLog()
+    service = SandboxService(runner, events=events)
+    service.register_project_root("prj_123", repo)
+
+    status = await service.rebuild("prj_123")
+    assert status.state == "ready"
+    assert status.tag is not None
+    assert status.tag.startswith(f"{APP_NAME}-env:prj_123-")
+    assert status.detail is None
+
+    assert len(events.records) == 2
+    started = events.records[0]
+    finished = events.records[1]
+
+    assert started.type == "sandbox.build.started"
+    assert started.source == "system"
+    assert started.payload == {"tag": status.tag, "template": "requirements"}
+
+    assert finished.type == "sandbox.build.finished"
+    assert finished.source == "system"
+    assert finished.payload["tag"] == status.tag
+    assert "duration_s" in finished.payload
+
+
+async def test_service_rebuild_failure_and_events(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    runner = FakeDockerRunner()
+    runner.fail_build = True
+    events = FakeEventLog()
+    service = SandboxService(runner, events=events)
+    service.register_project_root("prj_123", repo)
+
+    status = await service.rebuild("prj_123")
+    assert status.state == "failed"
+    assert status.tag is not None
+    assert "Syntax error" in (status.detail or "")
+
+    assert len(events.records) == 2
+    failed = events.records[1]
+    assert failed.type == "sandbox.build.failed"
+    assert failed.source == "system"
+    assert failed.payload["tag"] == status.tag
+    assert "Syntax error" in str(failed.payload["detail"])
+
+
+async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    runner = FakeDockerRunner()
+    events = FakeEventLog()
+    service = SandboxService(runner, events=events)
+    service.register_project_root("prj_123", repo)
+
+    original_run = runner.run
+
+    async def delayed_run(
+        args: Sequence[str],
+        *,
+        timeout_s: float | None = None,
+        secrets: Iterable[str] = (),
+    ) -> DockerResult:
+        cmd = list(args)
+        if cmd[0] == "build":
+            await asyncio.sleep(0.05)
+        return await original_run(args, timeout_s=timeout_s, secrets=secrets)
+
+    runner.run = delayed_run  # type: ignore[method-assign]
+
+    task1 = asyncio.create_task(service.rebuild("prj_123"))
+    task2 = asyncio.create_task(service.rebuild("prj_123"))
+
+    res1, res2 = await asyncio.gather(task1, task2)
+    assert res1.state == "ready"
+    assert res2.state == "ready"
+    assert res1.tag == res2.tag
+    assert runner.build_calls == 1

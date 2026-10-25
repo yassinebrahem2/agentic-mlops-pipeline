@@ -111,14 +111,14 @@ async def build_services(
     )
     stack.push_async_callback(sessions.close)
 
-    sandbox = SandboxService()
-    stack.push_async_callback(sandbox.close)
-
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+
+    sandbox = SandboxService(workspace=workspace, events=events)
+    stack.push_async_callback(sandbox.close)
 
     return Services(
         settings=settings,

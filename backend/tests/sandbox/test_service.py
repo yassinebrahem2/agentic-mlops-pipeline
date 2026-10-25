@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
+from mlops_agents.errors import DomainError
 from mlops_agents.sandbox.contract import DockerStatus, EnvironmentStatus, Sandbox
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
@@ -35,7 +36,7 @@ async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
     env = await service.environment("prj_123")
     assert env == EnvironmentStatus(state="none", tag=None, detail=None)
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(DomainError):
         await service.rebuild("prj_123")
 
     task = TaskRef(
