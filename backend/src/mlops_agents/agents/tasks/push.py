@@ -80,8 +80,24 @@ async def push_task(
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["push", https_url(repo_ref_val), f"{task.branch}:{task.branch}"],
+        args=[
+            "-c",
+            "remote.origin.fetch=",
+            "push",
+            https_url(repo_ref_val),
+            f"{task.branch}:{task.branch}",
+        ],
         authenticated=True,
+    )
+
+    # Ensure refs/remotes/origin/* is never created or modified by git push
+    await task_git(
+        runner,
+        git_dir=git_dir,
+        worktree=worktree,
+        empty_hooks=empty_hooks,
+        args=["update-ref", "-d", f"refs/remotes/origin/{task.branch}"],
+        check=False,
     )
 
     # Record pushed commit under namespaced ref refs/<app name>/pushed/<branch>
