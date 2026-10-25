@@ -287,4 +287,6 @@ def test_default_registry_registration(
 
     # With tasks
     reg_with_tasks = default_registry(tasks=object())  # pyright: ignore[reportArgumentType]
-    assert reg_with_tasks.names() == frozenset({"Read", "Glob", "Grep", "StartTask", "ResumeTask"})
+    assert reg_with_tasks.names() == frozenset(
+        {"Read", "Glob", "Grep", "StartTask", "ResumeTask", "Write", "Edit"}
+    )

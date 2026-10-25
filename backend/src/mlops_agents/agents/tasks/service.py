@@ -7,6 +7,7 @@ from typing import Literal
 from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.agents.runtime.contract import TaskView
+from mlops_agents.agents.tasks.claims import claim_paths
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tasks.git import git_dir_for_task, task_git
 from mlops_agents.agents.tasks.worktrees import TaskFiles, create_worktree
@@ -303,7 +304,8 @@ class TasksService(Tasks):
             return res.scalar_one_or_none()
 
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None:
-        raise NotImplementedError
+        engine = await self._databases.project(project_id)
+        await claim_paths(engine, task, paths)
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
         if not task.worktree.exists():
