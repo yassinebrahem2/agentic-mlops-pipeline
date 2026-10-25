@@ -99,16 +99,17 @@ class WriteTool(AgentTool[WriteArgs]):
         return Preview(kind="diff", title=f"Write {rel}", body=diff_text)
 
     async def run(self, ctx: ToolContext, args: WriteArgs) -> ToolOutput:
-        (
-            current,
-            candidate,
-            rel,
-            resolved_worktree,
-            new_bytes,
-            diff_text,
-        ) = await self._validate_and_prepare(ctx, args)
-
+        current = await get_current_task(ctx, self._tasks)
         async with pause_task(self._sandbox, ctx.project_id, current.id):
+            (
+                _,
+                candidate,
+                rel,
+                resolved_worktree,
+                new_bytes,
+                diff_text,
+            ) = await self._validate_and_prepare(ctx, args)
+
             try:
                 await self._tasks.claim(ctx.project_id, current, [rel])
             except ClaimConflict as exc:
