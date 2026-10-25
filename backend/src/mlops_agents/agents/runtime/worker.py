@@ -190,9 +190,10 @@ class TurnWorkers:
     ) -> Ending:
         """Run the turn task and decide how it ended; `TurnEnds.end` stores it.
 
-        A cancel of the turn task other than by Stop, or of the worker before the turn task
-        ended, is raised for an interrupted end. A cancel of the worker that comes once the turn
-        task has ended, by itself or by Stop, keeps that end; `_take_turn` raises it after."""
+        A cancel of the turn task by Stop ends it stopped, and by anything else but the worker's
+        own cancel, interrupted. A cancel of the worker before the turn task ended is raised for
+        an interrupted end. A cancel of the worker that comes once the turn task has ended, by
+        itself or by Stop, keeps that end; `_take_turn` raises it after."""
         key = (project_id, session_id)
         if turn_id in self._stopped_turns:
             return Ending("stopped")
@@ -219,9 +220,12 @@ class TurnWorkers:
                     # worker woke: the Stop stands.
                     return Ending("stopped")
                 raise
-            if turn_id not in self._stopped_turns:
-                raise
-            return Ending("stopped")
+            if turn_id in self._stopped_turns:
+                return Ending("stopped")
+            # Neither Stop nor a close: something else cancelled the turn task. The worker is
+            # not being cancelled, so it goes on to the next queued turn.
+            logger.warning("Turn %s was cancelled by neither Stop nor a close", turn_id)
+            return Ending("interrupted")
         except Exception:
             return _ending_of(turn_id, child_task)
         finally:

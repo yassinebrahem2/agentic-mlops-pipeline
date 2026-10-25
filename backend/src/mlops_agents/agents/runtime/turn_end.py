@@ -82,6 +82,7 @@ class TurnEnds:
             await self.settle_trigger(
                 project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
             )
+            await hub.turn_ended(turn_id, status="interrupted")
         else:
             try:
                 ending = await self._write_notice(
