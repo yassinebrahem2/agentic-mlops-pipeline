@@ -76,13 +76,7 @@ class TurnEnds:
         it gets here, and the turn task has finished by then.
         """
         if ending.status == "interrupted":
-            await self._store.set_turn(project_id, turn_id, "interrupted")
-            await self._store.mark_interrupted(project_id, turn_id)
-            # A cancel before the trigger was read would leave it queued for good.
-            await self.settle_trigger(
-                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
-            )
-            await hub.turn_ended(turn_id, status="interrupted")
+            await self._end_interrupted(project_id, session_id, turn_id, trigger_msg_id, hub, lock)
         else:
             try:
                 ending = await self._write_notice(
@@ -125,6 +119,44 @@ class TurnEnds:
                 await hub.message(updated_msg, created=False)
             elif read_by is not None:
                 await self._store.update_message(project_id, trigger_msg_id, read_by_turn=read_by)
+
+    async def _end_interrupted(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        trigger_msg_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> None:
+        """Store an interrupted end and publish it. It never raises: a close is about to raise
+        its cancel, or the worker goes on to the next queued turn."""
+        try:
+            await self._store.set_turn(project_id, turn_id, "interrupted")
+            await self._store.mark_interrupted(project_id, turn_id)
+            # A cancel before the trigger was read would leave it queued for good.
+            await self.settle_trigger(
+                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=False
+            )
+            await hub.turn_ended(turn_id, status="interrupted")
+        except Exception:
+            # As "database is locked" while close_project runs: the end is still recorded once
+            # more, with the one write it needs, and reported.
+            logger.exception("Could not store how turn %s ended; it ends interrupted", turn_id)
+            await self._record_interrupted(project_id, turn_id, hub)
+
+    async def _record_interrupted(self, project_id: str, turn_id: str, hub: SessionHub) -> None:
+        """The fallback of an interrupted end: its status, then its publish, each logged when it
+        fails. A turn whose status cannot be written stays running in the database; the next
+        recovery (at close or at startup) marks it interrupted."""
+        try:
+            await self._store.set_turn(project_id, turn_id, "interrupted")
+        except Exception:
+            logger.exception("Could not record turn %s interrupted", turn_id)
+        try:
+            await hub.turn_ended(turn_id, status="interrupted")
+        except Exception:
+            logger.exception("Could not publish the end of turn %s", turn_id)
 
     async def _write_notice(
         self,
