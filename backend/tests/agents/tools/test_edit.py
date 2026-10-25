@@ -513,7 +513,8 @@ async def test_edit_planted_symlink_after_validation_refused(
         pytest.skip("Symlinks not supported in this environment")
 
     with pytest.raises(
-        ToolFailure, match=r"(Cannot write directly to symlink|File escaped worktree)"
+        ToolFailure,
+        match=r"(outside the worktree|Cannot write directly to symlink|File escaped worktree)",
     ):
         await tool.run(ctx, args)
 

@@ -416,7 +416,8 @@ async def test_write_planted_symlink_after_validation_refused(
 
     # Step 3: Run tool - must refuse and not write through symlink
     with pytest.raises(
-        ToolFailure, match=r"(Cannot write directly to symlink|File escaped worktree)"
+        ToolFailure,
+        match=r"(outside the worktree|Cannot write directly to symlink|File escaped worktree)",
     ):
         await tool.run(ctx, args)
 
