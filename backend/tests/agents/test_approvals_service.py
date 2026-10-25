@@ -219,8 +219,7 @@ async def test_approvals_service_decide_approve(databases: Databases, tmp_path: 
     assert len(events) == 1
     assert events[0].source == "user"
     assert events[0].subject_id == apr.id
-    assert events[0].payload["approve"] is True
-    assert events[0].payload["note"] == "Looks great"
+    assert events[0].payload == {"approval_id": apr.id, "status": "approved"}
 
     # Check turn resumed
     assert fake_sessions.resumed_turns == [(project_id, "ses_1", "trn_1")]
@@ -291,8 +290,7 @@ async def test_approvals_service_decide_reject(databases: Databases, tmp_path: P
 
     events = await event_log.history(project_id, types=["approval.decided"])
     assert len(events) == 1
-    assert events[0].payload["approve"] is False
-    assert events[0].payload["note"] == "Dangerous command"
+    assert events[0].payload == {"approval_id": apr.id, "status": "rejected"}
 
     assert fake_sessions.resumed_turns == [(project_id, "ses_1", "trn_1")]
 
@@ -489,3 +487,43 @@ async def test_approvals_service_concurrent_decisions(databases: Databases, tmp_
 
     # Turn resume was called at least once
     assert len(fake_sessions.resumed_turns) >= 1
+
+
+@pytest.mark.asyncio
+async def test_approval_store_update_and_clear_task_id(
+    databases: Databases, tmp_path: Path
+) -> None:
+    project_id = "prj_taskidclear"
+    await _setup_session_and_turn(databases, project_id)
+
+    store = ApprovalStore(databases)
+    preview = Preview(kind="diff", title="Edit", body="diff")
+
+    apr = await store.create(
+        project_id,
+        id="apr_task_clear",
+        turn_id="trn_1",
+        session_id="ses_1",
+        message_id="msg_1",
+        agent="orchestrator",
+        tool_call_id="call_tc1",
+        tool="edit_file",
+        risk_class=RiskClass.WRITE_CODE,
+        preview=preview,
+    )
+    assert apr.task_id is None
+
+    # Set task_id
+    updated = await store.update_status(project_id, apr.id, "pending", task_id="tsk_100")
+    assert updated is not None
+    assert updated.task_id == "tsk_100"
+
+    # Clear task_id by passing None
+    cleared = await store.update_status(project_id, apr.id, "pending", task_id=None)
+    assert cleared is not None
+    assert cleared.task_id is None
+
+    # Re-set and clear via decide
+    await store.update_status(project_id, apr.id, "pending", task_id="tsk_200")
+    decided = await store.decide(project_id, apr.id, approve=True, task_id=None)
+    assert decided.task_id is None

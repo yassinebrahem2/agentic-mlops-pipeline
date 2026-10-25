@@ -12,11 +12,10 @@ from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.policy.table import decide as policy_decide
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
+from mlops_agents.agents.runtime.tool_step import REJECTED_TEXT
 from mlops_agents.agents.tools.base import RiskClass
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
-
-REJECTED_TEXT = "The user rejected this action."
 
 
 def format_rejection_message(note: str | None) -> str:

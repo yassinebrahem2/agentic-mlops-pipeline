@@ -18,6 +18,8 @@ from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import approvals
 
+_UNSET = object()
+
 
 class ApprovalRecord(ApprovalView):
     """Database representation of an approval request, including its message_id."""
@@ -217,7 +219,7 @@ class ApprovalStore:
         *,
         note: str | None = None,
         decided_at: str | None = None,
-        task_id: str | None = None,
+        task_id: str | object | None = _UNSET,
     ) -> ApprovalRecord | None:
         """Update an approval's status and optional note."""
         engine = await self._databases.project(project_id)
@@ -229,11 +231,14 @@ class ApprovalStore:
         elif status == "pending":
             values["decided_at"] = None
 
-        if task_id is not None:
+        if task_id is not _UNSET:
             rec = await self.get(project_id, approval_id)
             if rec is not None:
                 p_dict = rec.preview.model_dump()
-                p_dict["task_id"] = task_id
+                if task_id is not None:
+                    p_dict["task_id"] = task_id
+                else:
+                    p_dict.pop("task_id", None)
                 values["preview"] = json.dumps(p_dict)
 
         async with engine.begin() as conn:
@@ -249,7 +254,7 @@ class ApprovalStore:
         *,
         approve: bool,
         note: str | None = None,
-        task_id: str | None = None,
+        task_id: str | object | None = _UNSET,
     ) -> ApprovalRecord:
         """Approve or reject an approval with an optional note."""
         status: ApprovalStatus = "approved" if approve else "rejected"

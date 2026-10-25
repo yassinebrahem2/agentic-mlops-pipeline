@@ -228,6 +228,7 @@ async def run_graph(
 ) -> GraphRun:
     """One turn of the graph over a plain directory, with the given hooks (stage 1's elsewhere)."""
     from tests.agents.runtime.graph_env import FixedWorkspaces, RecordingSink, make_agent
+
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)
     agent = replace(

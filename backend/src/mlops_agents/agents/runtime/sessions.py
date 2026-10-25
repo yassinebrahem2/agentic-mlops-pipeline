@@ -292,21 +292,23 @@ class SessionManager(AgentSessions):
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
 
-        status = await self._store.turn_status(project_id, turn_id)
-        if status != "waiting":
-            return
-
         agent = await self._store.session_agent(project_id, session_id)
         if agent is None:
             raise RuntimeError(f"Session {session_id} has no agent")
+
+        worker = self._workers.get((project_id, session_id))
+        if worker is not None and not worker.done():
+            await worker
 
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
 
         async with lock:
-            worker = self._workers.get((project_id, session_id))
-            if worker is not None and not worker.done():
-                await worker
+            status = await self._store.turn_status(project_id, turn_id)
+            if status != "waiting":
+                return
+            if self._workers.running((project_id, session_id)):
+                return
             self._workers.resume(project_id, session_id, agent, turn_id, hub, lock)
 
     async def stop(self, project_id: str, agent: str) -> None:

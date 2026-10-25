@@ -146,12 +146,7 @@ class ApprovalsService(Approvals):
                 subject_id=approval_id,
                 payload={
                     "approval_id": approval_id,
-                    "turn_id": record.turn_id,
-                    "session_id": record.session_id,
-                    "tool_call_id": record.tool_call_id,
-                    "tool": record.tool,
-                    "approve": approve,
-                    "note": note,
+                    "status": status_val,
                 },
             )
 
