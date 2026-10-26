@@ -158,7 +158,8 @@ async def _has_commits_beyond(
 ) -> bool:
     """The one place that asks whether the task branch has commits that `ref` lacks.
 
-    With check=False a failing rev-list (an unreachable ref) answers False instead of raising.
+    With check=False a failing rev-list (an unreachable ref) answers False instead of raising,
+    and the failure is logged.
     """
     res = await task_git(
         runner,
@@ -168,7 +169,16 @@ async def _has_commits_beyond(
         args=["rev-list", f"{ref}..{task.branch}"],
         check=check,
     )
-    return res.code == 0 and bool(res.stdout.strip())
+    if res.code != 0:
+        logger.warning(
+            "rev-list %s..%s failed for task %s: %s",
+            ref,
+            task.branch,
+            task.id,
+            res.stderr.strip(),
+        )
+        return False
+    return bool(res.stdout.strip())
 
 
 async def has_commits_beyond_base_task(

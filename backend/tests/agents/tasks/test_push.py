@@ -425,6 +425,7 @@ async def test_has_commits_beyond_base_is_false_when_the_base_commit_is_gone(
     databases: Databases,
     keystore: MemoryKeyStore,
     git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, _, _, project_id, _ = await setup_service(
         tmp_path, paths, databases, keystore, git_env
@@ -436,4 +437,8 @@ async def test_has_commits_beyond_base_is_false_when_the_base_commit_is_gone(
         await conn.execute(update(tasks).where(tasks.c.id == task.id).values(base_sha="0" * 40))
 
     # The PR tool asks this while recovering from a refused commit; it must not raise.
-    assert await service.has_commits_beyond_base(project_id, task) is False
+    with caplog.at_level("WARNING", logger=push_module.logger.name):
+        assert await service.has_commits_beyond_base(project_id, task) is False
+    # The failure is not swallowed silently: it is logged with the task, the ref and git's reason.
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any(task.id in w and "0" * 40 in w and "Invalid revision range" in w for w in warnings)
