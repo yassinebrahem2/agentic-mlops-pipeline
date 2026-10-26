@@ -22,6 +22,7 @@ from mlops_agents.agents.tools.base import (
 )
 
 if TYPE_CHECKING:
+    from mlops_agents.agents.approvals.store import ApprovalStore
     from mlops_agents.agents.runtime.graph import TurnSink, TurnState
 
 REJECTED_TEXT = "The user rejected this action."
@@ -53,6 +54,7 @@ class ToolStep:
         current_parts: list[Part],
         lock: AbstractAsyncContextManager[Any],
         update_parts: Callable[[], Awaitable[None]],
+        approval_store: ApprovalStore | None = None,
     ) -> None:
         self._agent = agent
         self._tools = {t.name: t for t in agent.tools}
@@ -66,6 +68,7 @@ class ToolStep:
         self._parts = current_parts
         self._lock = lock
         self._update_parts = update_parts
+        self._approval_store = approval_store
         # The builder read the layout through the repository's view; its listing is reused.
         self._files: dict[str | None, FileAccess] = {None: agent.files}
 
@@ -167,11 +170,15 @@ class ToolStep:
             case "approved":
                 ctx = await self.context()
                 current_task_id = ctx.task.id if ctx.task is not None else None
-                if decision.task_id != current_task_id:
-                    return ToolOutput(
-                        "Action rejected: the task was changed since this action was approved.",
-                        is_error=True,
+                if decision.approval_id and self._approval_store is not None:
+                    approval = await self._approval_store.get(
+                        self._project_id, decision.approval_id
                     )
+                    if approval is not None and approval.task_id != current_task_id:
+                        return ToolOutput(
+                            "Action rejected: the task was changed since this action was approved.",
+                            is_error=True,
+                        )
                 return await tool.invoke(ctx, call["args"])
             case "deny":
                 return ToolOutput(decision.message or DENIED_TEXT, is_error=True)

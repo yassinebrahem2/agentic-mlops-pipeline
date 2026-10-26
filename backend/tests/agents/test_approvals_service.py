@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -14,6 +15,8 @@ from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     MessageView,
     Part,
+    SessionView,
+    StreamEvent,
     TextPart,
     ToolCallPart,
 )
@@ -32,7 +35,44 @@ class FakeSessionsForApproval:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self.resumed_turns: list[tuple[str, str, str]] = []
+        self.recovered_projects: list[str] = []
         self._lock = asyncio.Lock()
+
+    async def get(self, project_id: str, agent: str) -> SessionView:
+        raise NotImplementedError
+
+    async def send(self, project_id: str, agent: str, text: str) -> MessageView:
+        raise NotImplementedError
+
+    async def post(
+        self,
+        project_id: str,
+        agent: str,
+        *,
+        author_name: str,
+        from_agent: str,
+        text: str,
+        exchange_id: str | None,
+        hop: int | None,
+    ) -> MessageView:
+        raise NotImplementedError
+
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        return {}
+
+    async def stop(self, project_id: str, agent: str) -> None:
+        pass
+
+    async def close_project(self, project_id: str) -> None:
+        pass
+
+    def subscribe(
+        self, project_id: str, agent: str, after_seq: int | None
+    ) -> AsyncGenerator[StreamEvent, None]:
+        raise NotImplementedError
+
+    async def ensure_recovered(self, project_id: str) -> None:
+        self.recovered_projects.append(project_id)
 
     async def update_message(
         self,
@@ -529,3 +569,107 @@ async def test_approval_store_update_and_clear_task_id(
     await store.update_status(project_id, apr.id, "pending", task_id="tsk_200")
     decided = await store.decide(project_id, apr.id, approve=True, task_id=None)
     assert decided.task_id is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_decisions_on_same_approval_one_wins_other_gets_409(
+    databases: Databases, tmp_path: Path
+) -> None:
+    project_id = "prj_concurrentdecide"
+    await _setup_session_and_turn(databases, project_id)
+
+    session_store = SessionStore(databases)
+    fake_sessions = FakeSessionsForApproval(session_store)
+    audit_log = SqliteAuditLog(databases, secrets=[])
+    event_log = SqliteEventLog(databases)
+
+    service = ApprovalsService(
+        databases=databases,
+        sessions=fake_sessions,
+        audit_log=audit_log,
+        event_log=event_log,
+    )
+
+    store = ApprovalStore(databases)
+    preview = Preview(kind="diff", title="edit main.py", body="- old\n+ new")
+    apr_part = ApprovalPart(
+        type="approval",
+        approval_id="apr_c",
+        tool_call_id="call_c",
+        preview=preview,
+        status="pending",
+        note=None,
+    )
+    agent_msg = await session_store.add_message(
+        project_id,
+        "ses_1",
+        turn_id="trn_1",
+        author_kind="agent",
+        author_name="orchestrator",
+        parts=[apr_part],
+        status="waiting",
+    )
+
+    apr = await store.create(
+        project_id,
+        id="apr_c",
+        turn_id="trn_1",
+        session_id="ses_1",
+        message_id=agent_msg.id,
+        agent="orchestrator",
+        tool_call_id="call_c",
+        tool="edit_file",
+        risk_class=RiskClass.WRITE_CODE,
+        preview=preview,
+    )
+
+    # Launch two concurrent decisions
+    results = await asyncio.gather(
+        service.decide(project_id, apr.id, approve=True, note="approve first"),
+        service.decide(project_id, apr.id, approve=False, note="reject second"),
+        return_exceptions=True,
+    )
+
+    # Exactly one succeeded and one raised DomainError(409)
+    successes = [r for r in results if isinstance(r, ApprovalView)]
+    errors = [r for r in results if isinstance(r, DomainError)]
+
+    assert len(successes) == 1
+    assert len(errors) == 1
+    assert errors[0].code == "approval_not_pending"
+    assert errors[0].status == 409
+
+    # Exactly 1 audit record and 1 approval.decided event
+    events = await event_log.history(project_id, types=["approval.decided"])
+    assert len(events) == 1
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        from mlops_agents.storage.tables import audit
+
+        audit_rows = (await conn.execute(audit.select())).mappings().all()
+    assert len(audit_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_store_decide_not_pending_raises_409(databases: Databases, tmp_path: Path) -> None:
+    project_id = "prj_storenotpending"
+    await _setup_session_and_turn(databases, project_id)
+    store = ApprovalStore(databases)
+    preview = Preview(kind="diff", title="edit main.py", body="- old\n+ new")
+    apr = await store.create(
+        project_id,
+        turn_id="trn_1",
+        session_id="ses_1",
+        message_id="msg_1",
+        agent="orchestrator",
+        tool_call_id="call_x",
+        tool="edit_file",
+        risk_class=RiskClass.WRITE_CODE,
+        preview=preview,
+        status="cancelled",
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await store.decide(project_id, apr.id, approve=True)
+    assert exc_info.value.code == "approval_not_pending"
+    assert exc_info.value.status == 409

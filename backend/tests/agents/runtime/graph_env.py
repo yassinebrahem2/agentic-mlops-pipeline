@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
@@ -17,7 +18,6 @@ from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
-from tests.agents.runtime.hook_fakes import AllowAllGate
 
 
 class FixedWorkspaces:
@@ -34,9 +34,9 @@ class FixedWorkspaces:
 
 
 def stage1_hooks(workspaces: TaskWorkspaces) -> TurnHooks:
-    """Stage 1's behavior: every call allowed, nothing delivered mid-turn, no turn-end note."""
+    """Every call allowed (ApprovalGate defaults to allow for READ tools), nothing delivered mid-turn, no turn-end note."""
     return TurnHooks(
-        gate=AllowAllGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
+        gate=ApprovalGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
     )
 
 

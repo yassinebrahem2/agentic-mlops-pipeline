@@ -11,7 +11,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command, Durability
 
-from mlops_agents.agents.runtime.agent import AgentBuilder, TurnRefused
+from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.compaction import compact_if_needed
 from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
@@ -49,10 +49,6 @@ TurnOutcome = tuple[TurnEnd, str | None] | tuple[Literal["waiting"], None]
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 
-# "async" runs each checkpoint write as a background task that a cancel does not cancel, and the
-# run's exit waits for it: a Stop or close_project never leaves a checkpoint transaction open,
-# which would lock the project file. "sync" awaits the write in the turn's own task, where a
-# cancel lands inside it.
 TURN_DURABILITY: Durability = "async"
 
 
@@ -83,11 +79,7 @@ class TurnExecutor:
         *,
         parts: list[Part] | None = None,
     ) -> None:
-        """Leave a failed turn's visible end state: its message complete, plus a system message.
-
-        The one owner of that state; the worker calls it too when an error escapes `run`.
-        `parts=None` keeps the parts already stored for the message.
-        """
+        """Leave a failed turn's visible end state: its message complete, plus a system message."""
         async with lock:
             for message in await self._store.messages(project_id, session_id):
                 if (
@@ -110,6 +102,94 @@ class TurnExecutor:
             )
             await sink.message(system_message, created=True)
 
+    async def _execute_graph(
+        self,
+        *,
+        built_agent: Agent,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        agent_message_id: str,
+        current_parts: list[Part],
+        graph_input: Any,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+    ) -> TurnOutcome:
+        async def finish_agent_message(status: MessageStatus) -> None:
+            async with lock:
+                message = await self._store.update_message(
+                    project_id, agent_message_id, parts=current_parts, status=status
+                )
+                await sink.message(message, created=False)
+
+        try:
+            is_interrupted = False
+            decisions_to_record: dict[str, GateDecision] | None = None
+
+            async with self._checkpointer(project_id, turn_id) as cp:
+                graph = create_turn_graph(
+                    agent=built_agent,
+                    caller=self._caller,
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    checkpointer=cp.saver,
+                    lock=lock,
+                    hooks=self._hooks,
+                )
+                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+                try:
+                    res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
+                        graph_input, config=config, durability=TURN_DURABILITY
+                    )
+                    if isinstance(res, dict) and bool(res.get("__interrupt__")):  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                        is_interrupted = True
+                    else:
+                        chk_state = await graph.aget_state(config)
+                        if chk_state.tasks and any(t.interrupts for t in chk_state.tasks):
+                            is_interrupted = True
+                except GraphInterrupt:
+                    is_interrupted = True
+
+                if is_interrupted:
+                    cp.preserved = True
+                    try:
+                        chk_state = await graph.aget_state(config)
+                        decisions_to_record = chk_state.values.get("decisions")
+                    except Exception:
+                        logger.debug(
+                            "Could not read graph state decisions for turn %s",
+                            turn_id,
+                            exc_info=True,
+                        )
+
+            if is_interrupted:
+                await handle_turn_waiting(
+                    store=self._store,
+                    sink=sink,
+                    project_id=project_id,
+                    session_id=session_id,
+                    agent=built_agent.definition.name,
+                    turn_id=turn_id,
+                    message_id=agent_message_id,
+                    current_parts=current_parts,
+                    decisions=decisions_to_record,
+                    lock=lock,
+                    observers=self._observers,
+                )
+                return ("waiting", None)
+
+            await finish_agent_message("complete")
+            return ("done", None)
+
+        except asyncio.CancelledError:
+            await finish_agent_message("stopped")
+            raise
+
     async def run(
         self,
         project_id: str,
@@ -119,7 +199,6 @@ class TurnExecutor:
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
     ) -> TurnOutcome:
-        agent_message_id: str | None = None
         current_parts: list[Part] = []
 
         async def add_message(
@@ -128,8 +207,6 @@ class TurnExecutor:
             parts: list[Part],
             status: MessageStatus,
         ) -> MessageView:
-            # The stored write and its publish are one step under the session lock, so a
-            # concurrent get() never returns a message whose event the subscriber gets again.
             async with lock:
                 message = await self._store.add_message(
                     project_id,
@@ -142,21 +219,6 @@ class TurnExecutor:
                 )
                 await sink.message(message, created=True)
             return message
-
-        async def finish_agent_message(status: MessageStatus) -> None:
-            if agent_message_id is None:
-                return
-            async with lock:
-                message = await self._store.update_message(
-                    project_id, agent_message_id, parts=current_parts, status=status
-                )
-                await sink.message(message, created=False)
-
-        async def fail(text: str) -> tuple[TurnEnd, str | None]:
-            await self.record_failure(
-                project_id, session_id, turn_id, sink, lock, text, parts=current_parts
-            )
-            return ("failed", text)
 
         try:
             try:
@@ -209,86 +271,41 @@ class TurnExecutor:
                 status_summary=built_agent.status_summary,
             )
 
-            is_interrupted = False
-            decisions_to_record: dict[str, GateDecision] | None = None
-
-            # The checkpointer connection is closed before any handler below writes the end state,
-            # so once a turn reports how it ended, nothing of it still holds the project file.
-            async with self._checkpointer(project_id, turn_id) as cp:
-                graph = create_turn_graph(
-                    agent=built_agent,
-                    caller=self._caller,
-                    store=self._store,
-                    sink=sink,
-                    project_id=project_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    message_id=agent_message_id,
-                    current_parts=current_parts,
-                    checkpointer=cp.saver,
-                    lock=lock,
-                    hooks=self._hooks,
-                )
-                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
-                initial_state: TurnState = {
-                    "messages": initial_messages,
-                    "step_count": 0,
-                    "stopped_reason": None,
-                }
-                try:
-                    res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
-                        initial_state, config=config, durability=TURN_DURABILITY
-                    )
-                    if isinstance(res, dict) and bool(res.get("__interrupt__")):  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-                        is_interrupted = True
-                    else:
-                        chk_state = await graph.aget_state(config)
-                        if chk_state.tasks and any(t.interrupts for t in chk_state.tasks):
-                            is_interrupted = True
-                except GraphInterrupt:
-                    is_interrupted = True
-
-                if is_interrupted:
-                    cp.preserved = True
-                    try:
-                        chk_state = await graph.aget_state(config)
-                        decisions_to_record = chk_state.values.get("decisions")
-                    except Exception:
-                        logger.debug(
-                            "Could not read graph state decisions for turn %s",
-                            turn_id,
-                            exc_info=True,
-                        )
-
-            if is_interrupted:
-                await handle_turn_waiting(
-                    store=self._store,
-                    sink=sink,
-                    project_id=project_id,
-                    session_id=session_id,
-                    agent=built_agent.definition.name,
-                    turn_id=turn_id,
-                    message_id=agent_message_id,
-                    current_parts=current_parts,
-                    decisions=decisions_to_record,
-                    lock=lock,
-                    observers=self._observers,
-                )
-                return ("waiting", None)
-
-            await finish_agent_message("complete")
-            return ("done", None)
-
+            initial_state: TurnState = {
+                "messages": initial_messages,
+                "step_count": 0,
+                "stopped_reason": None,
+            }
+            return await self._execute_graph(
+                built_agent=built_agent,
+                project_id=project_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                agent_message_id=agent_message_id,
+                current_parts=current_parts,
+                graph_input=initial_state,
+                sink=sink,
+                lock=lock,
+            )
         except asyncio.CancelledError:
-            await finish_agent_message("stopped")
             raise
-
         except TurnFailed as err:
-            return await fail(err.message)
-
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, err.message, parts=current_parts
+            )
+            return ("failed", err.message)
         except Exception:
             logger.exception("Turn %s failed unexpectedly", turn_id)
-            return await fail(UNEXPECTED_FAILURE_TEXT)
+            await self.record_failure(
+                project_id,
+                session_id,
+                turn_id,
+                sink,
+                lock,
+                UNEXPECTED_FAILURE_TEXT,
+                parts=current_parts,
+            )
+            return ("failed", UNEXPECTED_FAILURE_TEXT)
 
     async def resume(
         self,
@@ -299,27 +316,15 @@ class TurnExecutor:
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
     ) -> TurnOutcome:
-        agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
-        if agent_msg is None:
-            raise RuntimeError(f"No agent message found for turn {turn_id}")
-
-        agent_message_id = agent_msg.id
-        current_parts = list(agent_msg.parts)
-
-        async def finish_agent_message(status: MessageStatus) -> None:
-            async with lock:
-                message = await self._store.update_message(
-                    project_id, agent_message_id, parts=current_parts, status=status
-                )
-                await sink.message(message, created=False)
-
-        async def fail(text: str) -> tuple[TurnEnd, str | None]:
-            await self.record_failure(
-                project_id, session_id, turn_id, sink, lock, text, parts=current_parts
-            )
-            return ("failed", text)
-
+        current_parts: list[Part] = []
         try:
+            agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
+            if agent_msg is None:
+                raise RuntimeError(f"No agent message found for turn {turn_id}")
+
+            agent_message_id = agent_msg.id
+            current_parts = list(agent_msg.parts)
+
             async with lock:
                 updated_msg = await self._store.update_message(
                     project_id, agent_message_id, parts=current_parts, status="streaming"
@@ -329,79 +334,36 @@ class TurnExecutor:
 
             built_agent = await self._builder.build(project_id, agent)
 
-            is_interrupted = False
-            decisions_to_record: dict[str, GateDecision] | None = None
-
-            async with self._checkpointer(project_id, turn_id) as cp:
-                graph = create_turn_graph(
-                    agent=built_agent,
-                    caller=self._caller,
-                    store=self._store,
-                    sink=sink,
-                    project_id=project_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    message_id=agent_message_id,
-                    current_parts=current_parts,
-                    checkpointer=cp.saver,
-                    lock=lock,
-                    hooks=self._hooks,
-                )
-                config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
-                try:
-                    res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
-                        Command(resume=True), config=config, durability=TURN_DURABILITY
-                    )
-                    if isinstance(res, dict) and bool(res.get("__interrupt__")):  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-                        is_interrupted = True
-                    else:
-                        chk_state = await graph.aget_state(config)
-                        if chk_state.tasks and any(t.interrupts for t in chk_state.tasks):
-                            is_interrupted = True
-                except GraphInterrupt:
-                    is_interrupted = True
-
-                if is_interrupted:
-                    cp.preserved = True
-                    try:
-                        chk_state = await graph.aget_state(config)
-                        decisions_to_record = chk_state.values.get("decisions")
-                    except Exception:
-                        logger.debug(
-                            "Could not read graph state decisions for turn %s",
-                            turn_id,
-                            exc_info=True,
-                        )
-
-            if is_interrupted:
-                await handle_turn_waiting(
-                    store=self._store,
-                    sink=sink,
-                    project_id=project_id,
-                    session_id=session_id,
-                    agent=built_agent.definition.name,
-                    turn_id=turn_id,
-                    message_id=agent_message_id,
-                    current_parts=current_parts,
-                    decisions=decisions_to_record,
-                    lock=lock,
-                    observers=self._observers,
-                )
-                return ("waiting", None)
-
-            await finish_agent_message("complete")
-            return ("done", None)
-
+            return await self._execute_graph(
+                built_agent=built_agent,
+                project_id=project_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                agent_message_id=agent_message_id,
+                current_parts=current_parts,
+                graph_input=Command(resume=True),
+                sink=sink,
+                lock=lock,
+            )
         except asyncio.CancelledError:
-            await finish_agent_message("stopped")
             raise
-
         except TurnFailed as err:
-            return await fail(err.message)
-
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, err.message, parts=current_parts
+            )
+            return ("failed", err.message)
         except Exception:
             logger.exception("Turn %s resume failed unexpectedly", turn_id)
-            return await fail(UNEXPECTED_FAILURE_TEXT)
+            await self.record_failure(
+                project_id,
+                session_id,
+                turn_id,
+                sink,
+                lock,
+                UNEXPECTED_FAILURE_TEXT,
+                parts=current_parts,
+            )
+            return ("failed", UNEXPECTED_FAILURE_TEXT)
 
     async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
         """Delete a turn's checkpoint thread from the SQLite checkpointer."""
@@ -436,8 +398,6 @@ class TurnExecutor:
                             "Could not delete the checkpointer thread of turn %s", turn_id
                         )
         finally:
-            # Windows keeps the project folder locked until the connection is closed, also
-            # when a second cancel interrupts the thread cleanup.
             await conn.close()
 
 

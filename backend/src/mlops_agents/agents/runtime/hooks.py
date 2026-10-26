@@ -34,7 +34,6 @@ class GateDecision:
     message: str | None = None  # the tool error for deny and rejected
     approval_id: str | None = None  # set for an ask
     preview: Preview | None = None  # set for an ask
-    task_id: str | None = None  # task that was current when decided
 
 
 class Gate(Protocol):

@@ -130,41 +130,26 @@ async def test_approval_store_get(databases: Databases, paths: DataPaths) -> Non
 
 
 @pytest.mark.asyncio
-async def test_approval_store_find_by_tool_call_id(databases: Databases, paths: DataPaths) -> None:
-    project_id = "prj_store3"
-    paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
-    await _setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
-
-    store = ApprovalStore(databases)
-    preview = Preview(kind="text", title="github pr", body="open pr")
-    created = await store.create(
-        project_id,
-        turn_id="trn_1",
-        session_id="ses_1",
-        message_id="msg_1",
-        agent="orchestrator",
-        tool_call_id="call_find_tc",
-        tool="open_pr",
-        risk_class=RiskClass.GITHUB,
-        preview=preview,
-    )
-
-    found = await store.find_by_tool_call_id(project_id, "call_find_tc")
-    assert found is not None
-    assert found.id == created.id
-    assert found.tool_call_id == "call_find_tc"
-
-    missing = await store.find_by_tool_call_id(project_id, "call_unknown")
-    assert missing is None
-
-
-@pytest.mark.asyncio
-async def test_approval_store_idempotency_by_tool_call_id(
+async def test_approval_store_same_tool_call_id_creates_separate_approvals(
     databases: Databases, paths: DataPaths
 ) -> None:
     project_id = "prj_store4"
     paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
     await _setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(turns).values(
+                id="trn_2",
+                session_id="ses_1",
+                trigger_message_id="msg_2",
+                status="running",
+                error=None,
+                created_at=now_iso(),
+                started_at=now_iso(),
+                ended_at=None,
+            )
+        )
 
     store = ApprovalStore(databases)
     preview = Preview(kind="command", title="run", body="ls")
@@ -183,9 +168,9 @@ async def test_approval_store_idempotency_by_tool_call_id(
 
     second = await store.create(
         project_id,
-        turn_id="trn_1",
+        turn_id="trn_2",
         session_id="ses_1",
-        message_id="msg_1",
+        message_id="msg_2",
         agent="orchestrator",
         tool_call_id="call_same_id",
         tool="bash",
@@ -193,16 +178,16 @@ async def test_approval_store_idempotency_by_tool_call_id(
         preview=preview,
     )
 
-    assert second.id == first.id
-    assert second.created_at == first.created_at
+    assert second.id != first.id
+    assert second.tool_call_id == first.tool_call_id == "call_same_id"
 
-    # Ensure only 1 row in database
+    # Both approvals exist in the database
     engine = await databases.project(project_id)
     async with engine.connect() as conn:
         rows = (
             await conn.execute(select(approvals).where(approvals.c.tool_call_id == "call_same_id"))
         ).all()
-        assert len(rows) == 1
+        assert len(rows) == 2
 
 
 @pytest.mark.asyncio

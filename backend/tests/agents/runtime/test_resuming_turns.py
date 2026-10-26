@@ -506,14 +506,12 @@ async def test_resuming_turn_after_rebuilding_manager(
         event_log=event_log,
     )
 
-    new_sub = new_manager.subscribe(project_id, "writer", after_seq=None)
-    await anext(new_sub)
-
-    # Approve using the rebuilt manager
+    # Approve using the rebuilt manager directly, calling decide first without subscribing
     await new_approvals_service.decide(
         project_id, apr_id, approve=True, note="Resumed after restart"
     )
 
+    new_sub = new_manager.subscribe(project_id, "writer", after_seq=None)
     end_events = await collect_until_turn_ended(new_sub)
     turn_ended = next(e for e in end_events if isinstance(e, TurnEnded))
     assert turn_ended.data.status == "done"

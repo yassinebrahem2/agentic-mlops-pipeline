@@ -14,6 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import Part, TextPart
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
@@ -45,19 +46,6 @@ from mlops_agents.storage.databases import Databases
 
 ALLOW = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
 APPROVED = GateDecision(outcome="approved", message=None, approval_id="apr_1", preview=None)
-
-
-class AllowAllGate(Gate):
-    """Test fake gate that allows every call."""
-
-    async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]:
-        allow = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
-        return {call.tool_call_id: allow for call in calls}
-
-    async def wait(
-        self, project_id: str, turn_id: str, decisions: dict[str, GateDecision]
-    ) -> dict[str, GateDecision]:
-        return decisions
 
 
 def ask(approval_id: str) -> GateDecision:
@@ -258,7 +246,7 @@ async def run_graph(
     sink = RecordingSink()
     parts: list[Part] = []
     hooks = TurnHooks(
-        gate=gate or AllowAllGate(),
+        gate=gate or ApprovalGate(),
         inbound=inbound or NoInbound(),
         turn_end=turn_end or NoTurnEndCheck(),
         workspaces=workspaces or FixedWorkspaces(agent.files),

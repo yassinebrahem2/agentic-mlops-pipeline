@@ -357,43 +357,61 @@ async def test_gate_decide_audit_and_event_records(databases: Databases, paths: 
     assert len(events) == 1
     assert events[0].source == "orchestrator"
     assert events[0].subject_id == decisions["c_write"].approval_id
-    assert events[0].payload["tool_call_id"] == "c_write"
-    assert events[0].payload["tool"] == "edit_file"
+    assert events[0].payload == {
+        "approval_id": decisions["c_write"].approval_id,
+        "turn_id": "trn_1",
+        "tool": "edit_file",
+    }
 
 
 @pytest.mark.asyncio
-async def test_gate_decide_idempotency(databases: Databases, paths: DataPaths) -> None:
-    project_id = "prj_gateidemp"
+async def test_same_tool_call_id_in_two_turns_gets_two_separate_approvals(
+    databases: Databases, paths: DataPaths
+) -> None:
+    project_id = "prj_twoturns"
     paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
     await _setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            turns.insert().values(
+                id="trn_2",
+                session_id="ses_1",
+                trigger_message_id="msg_2",
+                status="running",
+                error=None,
+                created_at="2026-10-25T10:00:00Z",
+                started_at="2026-10-25T10:00:00Z",
+                ended_at=None,
+            )
+        )
     await set_permission_level(databases, project_id, "ask")
 
     store = ApprovalStore(databases)
-    audit_log = SqliteAuditLog(databases, secrets=[])
-    event_log = SqliteEventLog(databases)
-    gate = ApprovalGate(databases, store=store, audit_log=audit_log, event_log=event_log)
+    gate = ApprovalGate(databases, store=store)
 
     t_write = WriteTool()
-    call = _make_call(t_write, "call_idemp", project_id)
+    call1 = _make_call(t_write, "call_0", project_id, turn_id="trn_1")
+    dec1 = await gate.decide([call1])
+    assert dec1["call_0"].outcome == "ask"
+    apr_id_1 = dec1["call_0"].approval_id
+    assert apr_id_1 is not None
 
-    dec1 = await gate.decide([call])
-    dec2 = await gate.decide([call])
+    call2 = _make_call(t_write, "call_0", project_id, turn_id="trn_2")
+    dec2 = await gate.decide([call2])
+    assert dec2["call_0"].outcome == "ask"
+    apr_id_2 = dec2["call_0"].approval_id
+    assert apr_id_2 is not None
 
-    assert dec1["call_idemp"].approval_id == dec2["call_idemp"].approval_id
+    # Must be two separate approvals
+    assert apr_id_1 != apr_id_2
 
-    # Check only 1 approval record exists in store
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        from mlops_agents.storage.tables import approvals
-
-        rows = (
-            await conn.execute(approvals.select().where(approvals.c.tool_call_id == "call_idemp"))
-        ).all()
-        assert len(rows) == 1
-
-    # Check only 1 approval.requested event
-    events = await event_log.history(project_id, types=["approval.requested"])
-    assert len(events) == 1
+    # Second asks, and both records exist in store
+    rec1 = await store.get(project_id, apr_id_1)
+    rec2 = await store.get(project_id, apr_id_2)
+    assert rec1 is not None and rec1.turn_id == "trn_1"
+    assert rec2 is not None and rec2.turn_id == "trn_2"
+    assert rec2.status == "pending"
 
 
 @pytest.mark.asyncio

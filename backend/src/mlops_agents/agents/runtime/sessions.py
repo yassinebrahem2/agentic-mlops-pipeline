@@ -33,7 +33,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
-from mlops_agents.events.contract import AuditLog, StatusBoard
+from mlops_agents.events.contract import AuditLog, EventLog, StatusBoard
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import sessions as sessions_table
@@ -66,7 +66,7 @@ class SessionManager(AgentSessions):
         bus: MessageBus | None = None,
         status_board: StatusBoard | None = None,
         audit_log: AuditLog | None = None,
-        audit: AuditLog | None = None,
+        event_log: EventLog | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -75,10 +75,11 @@ class SessionManager(AgentSessions):
         self._settings = settings
         self._providers = providers
         self._http = http
-        self._audit_log = audit if audit is not None else audit_log
+        self._audit_log = audit_log
+        self._event_log = event_log
         self._observers = tuple(observers)
 
-        self._store = SessionStore(databases, audit_log=self._audit_log)
+        self._store = SessionStore(databases, audit_log=self._audit_log, event_log=self._event_log)
         self._caller = ModelCaller(providers=providers, http=http)
         self._builder = AgentBuilder(
             workspace=workspace,
@@ -104,7 +105,6 @@ class SessionManager(AgentSessions):
         self._session_ids: dict[tuple[str, str], str] = {}
         self._session_id_lock = asyncio.Lock()
 
-        # The bus is built first, and the manager binds itself to it once it is complete.
         if bus is not None:
             bus.bind(self)
 
@@ -121,13 +121,19 @@ class SessionManager(AgentSessions):
             self._hubs[key] = SessionHub(session_id, lock=lock)
         return self._hubs[key]
 
+    async def ensure_recovered(self, project_id: str) -> None:
+        """Public method to ensure a project's state is recovered before use."""
+        await self._ensure_recovered(project_id)
+
     async def _ensure_recovered(self, project_id: str) -> None:
         if project_id in self._recovered_projects:
             return
         async with self._recovery_lock:
             if project_id in self._recovered_projects:
                 return
-            await self._store.recover(project_id)
+            await self._store.recover(
+                project_id, audit_log=self._audit_log, event_log=self._event_log
+            )
             self._recovered_projects.add(project_id)
 
     async def _get_session_id(self, project_id: str, agent: str) -> str:
@@ -234,7 +240,6 @@ class SessionManager(AgentSessions):
         exchange_id: str | None,
         hop: int | None,
     ) -> MessageView:
-        """Store an input message and its queued turn; start the worker when the session is idle."""
         await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
@@ -302,14 +307,12 @@ class SessionManager(AgentSessions):
         transform: Callable[[list[Part]], list[Part]],
     ) -> MessageView:
         await self._workspace.get(project_id)
-        # Both are checked before the session gets a lock or a hub, so a bad id keeps no state.
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
         await self._message(project_id, session_id, message_id)
         lock = self._get_lock(project_id, session_id)
         hub = self._get_hub(project_id, session_id)
-        # Read, write and publish are one step under the session lock: a concurrent get() never
-        # returns parts whose event it then receives again, and concurrent updates all land.
+
         async with lock:
             current = await self._message(project_id, session_id, message_id)
             updated = await self._store.update_message(
@@ -326,6 +329,7 @@ class SessionManager(AgentSessions):
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         await self._workspace.get(project_id)
+        await self._ensure_recovered(project_id)
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
 
@@ -352,60 +356,58 @@ class SessionManager(AgentSessions):
         await self._workspace.get(project_id)
         self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
+
         self._workers.stop((project_id, session_id))
 
-        if not self._workers.running((project_id, session_id)):
-            waiting = await self._store.waiting_turn(project_id, session_id)
-            if waiting is not None:
-                turn_id, _ = waiting
-                hub = self._get_hub(project_id, session_id)
-                await stop_waiting_turn(
-                    project_id=project_id,
-                    session_id=session_id,
-                    agent=agent,
-                    turn_id=turn_id,
-                    store=self._store,
-                    hub=hub,
-                    executor=self._executor,
-                    audit_log=self._audit_log,
-                    observers=self._observers,
-                )
-                lock = self._get_lock(project_id, session_id)
-                async with lock:
-                    if not self._workers.running((project_id, session_id)):
-                        next_turn = await self._store.next_queued_turn(project_id, session_id)
-                        if next_turn is not None:
-                            self._workers.start(project_id, session_id, agent, hub, lock)
+        waiting = await self._store.waiting_turn(project_id, session_id)
+        if waiting is not None:
+            worker = self._workers.get((project_id, session_id))
+            if worker is not None and not worker.done():
+                await worker
 
-    async def _subscribe_stream(
+            lock = self._get_lock(project_id, session_id)
+            async with lock:
+                waiting = await self._store.waiting_turn(project_id, session_id)
+                if waiting is not None:
+                    turn_id, _ = waiting
+                    hub = self._get_hub(project_id, session_id)
+                    await stop_waiting_turn(
+                        project_id=project_id,
+                        session_id=session_id,
+                        agent=agent,
+                        turn_id=turn_id,
+                        store=self._store,
+                        hub=hub,
+                        executor=self._executor,
+                        audit_log=self._audit_log,
+                        event_log=self._event_log,
+                        observers=self._observers,
+                    )
+                    next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    if next_turn is not None:
+                        hub = self._get_hub(project_id, session_id)
+                        self._workers.start(project_id, session_id, agent, hub, lock)
+
+    async def subscribe(
         self, project_id: str, agent: str, after_seq: int | None = None
     ) -> AsyncGenerator[StreamEvent, None]:
         await self._workspace.get(project_id)
         self._check_agent(agent)
         session_id = await self._get_session_id(project_id, agent)
         hub = self._get_hub(project_id, session_id)
-        # The hub drops its subscriber in the generator's finally, which runs when the
-        # generator is closed, not when it is garbage collected.
         async with aclosing(hub.subscribe(after_seq)) as events:
             async for event in events:
                 yield event
-
-    def subscribe(
-        self, project_id: str, agent: str, after_seq: int | None = None
-    ) -> AsyncGenerator[StreamEvent, None]:
-        return self._subscribe_stream(project_id, agent, after_seq)
 
     async def close_project(self, project_id: str) -> None:
         await self._workspace.get(project_id)
         await self._workers.cancel(project_id)
 
-        # Close hubs for this project
         for (p, s), hub in list(self._hubs.items()):
             if p == project_id:
                 hub.close()
                 self._hubs.pop((p, s), None)
 
-        # Clear references
         for key in list(self._locks.keys()):
             if key[0] == project_id:
                 self._locks.pop(key, None)
@@ -416,24 +418,24 @@ class SessionManager(AgentSessions):
 
         self._recovered_projects.discard(project_id)
 
-        # Mark any interrupted turns or messages in DB
         try:
-            await self._store.recover(project_id)
+            await self._store.recover(
+                project_id, audit_log=self._audit_log, event_log=self._event_log
+            )
         except Exception as exc:
             logger.exception("Failed to recover project %s on close_project: %s", project_id, exc)
 
-        # Close SQLite database connections so directory can be removed
         await self._databases.close_project(project_id)
 
     async def close(self) -> None:
-        # Recover projects with running turns - capture projects BEFORE cancelling workers
         projects = self._workers.projects() | set(self._recovered_projects)
-
         await self._workers.cancel()
 
         for project_id in projects:
             try:
-                await self._store.recover(project_id)
+                await self._store.recover(
+                    project_id, audit_log=self._audit_log, event_log=self._event_log
+                )
             except Exception as exc:
                 logger.exception("Failed to recover project %s on close: %s", project_id, exc)
 

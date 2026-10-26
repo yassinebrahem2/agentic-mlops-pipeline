@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx2
@@ -9,10 +10,10 @@ import pytest
 from fastapi import FastAPI
 
 from mlops_agents.agents.approvals.store import ApprovalStore
-from mlops_agents.agents.runtime.contract import ApprovalStatus
+from mlops_agents.agents.runtime.contract import ApprovalPart, ApprovalStatus
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.api.services import Services
-from mlops_agents.storage.tables import sessions, turns
+from mlops_agents.storage.tables import messages, sessions, turns
 from tests.api.conftest import add_local_project
 
 
@@ -24,6 +25,15 @@ async def _setup_session_turn_and_approval(
 ) -> str:
     services: Services = app.state.services
     databases = services.databases
+    preview = Preview(kind="diff", title="Edit main.py", body="- old\n+ new")
+    apr_part = ApprovalPart(
+        type="approval",
+        approval_id=approval_id,
+        tool_call_id=f"call_{approval_id}",
+        preview=preview,
+        status=status,
+        note=None,
+    )
     engine = await databases.project(project_id)
     async with engine.begin() as conn:
         await conn.execute(
@@ -47,6 +57,23 @@ async def _setup_session_turn_and_approval(
                 ended_at=None,
             )
         )
+        await conn.execute(
+            messages.insert().values(
+                id="msg_1",
+                session_id="ses_1",
+                turn_id="trn_1",
+                seq=1,
+                author_kind="agent",
+                author_name="orchestrator",
+                parts=json.dumps([apr_part.model_dump()]),
+                status="waiting",
+                read_by_turn=None,
+                from_agent=None,
+                exchange_id=None,
+                hop=None,
+                created_at="2026-10-25T10:00:00Z",
+            )
+        )
 
     store = ApprovalStore(databases)
     await store.create(
@@ -59,7 +86,7 @@ async def _setup_session_turn_and_approval(
         tool_call_id=f"call_{approval_id}",
         tool="edit_file",
         risk_class=RiskClass.WRITE_CODE,
-        preview=Preview(kind="diff", title="Edit main.py", body="- old\n+ new"),
+        preview=preview,
         status=status,
     )
     return approval_id

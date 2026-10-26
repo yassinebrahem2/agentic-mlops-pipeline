@@ -15,6 +15,7 @@ from langgraph.graph.message import add_messages  # pyright: ignore[reportMissin
 from langgraph.graph.state import CompiledStateGraph  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.types import Command
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -238,6 +239,7 @@ def create_turn_graph(
         current_parts=current_parts,
         lock=lock,
         update_parts=_update_parts,
+        approval_store=ApprovalStore(store.databases),
     )
 
     async def turn_end_node(state: TurnState) -> dict[str, Any]:

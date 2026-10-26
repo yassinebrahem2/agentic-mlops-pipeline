@@ -493,3 +493,68 @@ async def test_stop_on_waiting_turn_runs_next_queued_turn(
     assert await store.turn_status(project_id, second_turn_id) in ("running", "waiting", "done")
 
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_decision_racing_with_stop_stop_wins_decision_gets_409(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    """When Stop wins a race with a decision, Stop cancels the approval and stops the turn.
+    The subsequent decision attempt gets 409 (approval_not_pending) and never resumes the turn.
+    """
+    from mlops_agents.agents.approvals.service import ApprovalsService
+    from mlops_agents.errors import DomainError
+
+    gate = StoreAskGate(databases)
+    audit = SqliteAuditLog(databases, secrets=[])
+
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        gate=gate,
+        audit_log=audit,
+    )
+    manager = env.manager
+    project_id = env.project_id
+    store = env.store
+    approval_store = ApprovalStore(databases)
+    approvals_svc = ApprovalsService(databases=databases, sessions=manager, audit_log=audit)
+
+    view = await manager.get(project_id, "orchestrator")
+    sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)
+
+    # 1. Trigger turn -> waiting
+    await manager.send(project_id, "orchestrator", "Run a command")
+    events = await collect_until_turn_waiting(sub)
+    turn_waiting_ev = next(e for e in events if isinstance(e, TurnWaiting))
+    turn_id = turn_waiting_ev.data.turn_id
+
+    pending_aprs = await approval_store.list_for_step(project_id, turn_id)
+    assert len(pending_aprs) >= 1
+    apr_id = pending_aprs[0].id
+
+    # 2. Stop wins
+    await manager.stop(project_id, "orchestrator")
+
+    # 3. Decision attempt after Stop must get 409 (approval_not_pending)
+    with pytest.raises(DomainError) as exc_info:
+        await approvals_svc.decide(project_id, apr_id, approve=True)
+
+    assert exc_info.value.code == "approval_not_pending"
+    assert exc_info.value.status == 409
+
+    # 4. Turn remains stopped and is never resumed
+    assert await store.turn_status(project_id, turn_id) == "stopped"
+
+    await manager.close()

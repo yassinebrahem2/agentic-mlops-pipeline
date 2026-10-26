@@ -15,7 +15,7 @@ from mlops_agents.agents.runtime.store.messages import MessagesStore
 from mlops_agents.agents.runtime.store.turns import TurnsStore
 from mlops_agents.agents.runtime.store.usage import UsageStore
 from mlops_agents.clock import now_iso
-from mlops_agents.events.contract import AuditLog
+from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, sessions, turns
@@ -26,9 +26,15 @@ __all__ = ["SessionStore"]
 class SessionStore(MessagesStore, TurnsStore, UsageStore):
     """The sessions table, and recovery across turns and messages."""
 
-    def __init__(self, databases: Databases, audit_log: AuditLog | None = None) -> None:
+    def __init__(
+        self,
+        databases: Databases,
+        audit_log: AuditLog | None = None,
+        event_log: EventLog | None = None,
+    ) -> None:
         super().__init__(databases)
         self._audit_log = audit_log
+        self._event_log = event_log
 
     def db_path(self, project_id: str) -> Path:
         """Return the filesystem Path to the project database."""
@@ -75,7 +81,13 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
         return None if row is None else str(row[0])
 
     @shielded
-    async def recover(self, project_id: str, *, audit_log: AuditLog | None = None) -> None:
+    async def recover(
+        self,
+        project_id: str,
+        *,
+        audit_log: AuditLog | None = None,
+        event_log: EventLog | None = None,
+    ) -> None:
         """Mark running turns and their incomplete messages (streaming/stopped) as interrupted,
         and expire pending approvals whose turn is not waiting.
         """
@@ -116,6 +128,7 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
 
         # Expire pending approvals whose turn is not waiting
         actual_audit = audit_log or self._audit_log
+        actual_event = event_log or self._event_log
         approval_store = ApprovalStore(self._databases)
         expired_records = await approval_store.expire_non_waiting(project_id)
         if expired_records:
@@ -135,12 +148,9 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
                             new_parts.append(part)
                     await self.update_message(project_id, message_id, parts=new_parts)
 
-            if actual_audit is not None:
-                try:
-                    level = await get_permission_level(self._databases, project_id)
-                except Exception:
-                    level = "ask"
-                for rec in expired_records:
+            level = await get_permission_level(self._databases, project_id)
+            for rec in expired_records:
+                if actual_audit is not None:
                     await actual_audit.record(
                         project_id,
                         actor="system",
@@ -150,6 +160,14 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
                         decision="expired",
                         target=rec.tool,
                         detail={"approval_id": rec.id, "tool": rec.tool},
+                    )
+                if actual_event is not None:
+                    await actual_event.record(
+                        project_id,
+                        source="system",
+                        type="approval.decided",
+                        subject_id=rec.id,
+                        payload={"approval_id": rec.id, "status": "expired"},
                     )
 
     @shielded

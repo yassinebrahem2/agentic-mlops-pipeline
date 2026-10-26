@@ -16,14 +16,13 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     Part,
-    TextPart,
     ToolCallPart,
 )
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.hub import SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.events.contract import AuditLog
+from mlops_agents.events.contract import AuditLog, EventLog
 
 if TYPE_CHECKING:
     from mlops_agents.agents.runtime.executor import TurnExecutor
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 OBSERVER_TIMEOUT_S = 10.0
 
-__all__ = ["handle_turn_waiting", "stop_waiting_turn"]
+__all__ = ["OBSERVER_TIMEOUT_S", "_observed", "handle_turn_waiting", "stop_waiting_turn"]
 
 
 async def _observed(call: Awaitable[None]) -> None:
@@ -117,6 +116,7 @@ async def stop_waiting_turn(
     hub: SessionHub,
     executor: TurnExecutor,
     audit_log: AuditLog | None = None,
+    event_log: EventLog | None = None,
     observers: Sequence[TurnObserver] = (),
 ) -> None:
     """Stop a waiting turn: cancel approvals, mark message and turn stopped, delete checkpoint, notify."""
@@ -124,29 +124,32 @@ async def stop_waiting_turn(
     cancelled = await approval_store.cancel_for_turn(project_id, turn_id)
     cancelled_ids = {a.id for a in cancelled}
 
-    if audit_log is not None and cancelled:
-        try:
+    if cancelled:
+        if audit_log is not None:
             level = await get_permission_level(store.databases, project_id)
-        except Exception:
-            level = "ask"
-        for apr in cancelled:
-            await audit_log.record(
-                project_id,
-                actor="user",
-                action="approval",
-                risk_class=apr.risk_class,
-                permission_level=level,
-                decision="cancelled",
-                target=apr.tool,
-                detail={"approval_id": apr.id, "tool": apr.tool},
-            )
+            for apr in cancelled:
+                await audit_log.record(
+                    project_id,
+                    actor="user",
+                    action="approval",
+                    risk_class=apr.risk_class,
+                    permission_level=level,
+                    decision="cancelled",
+                    target=apr.tool,
+                    detail={"approval_id": apr.id, "tool": apr.tool},
+                )
+        if event_log is not None:
+            for apr in cancelled:
+                await event_log.record(
+                    project_id,
+                    source="user",
+                    type="approval.decided",
+                    subject_id=apr.id,
+                    payload={"approval_id": apr.id, "status": "cancelled"},
+                )
 
     agent_msg = await store.turn_agent_message(project_id, session_id, turn_id)
-    final_text: str | None = None
     if agent_msg is not None:
-        texts = [part.text for part in agent_msg.parts if isinstance(part, TextPart) and part.text]
-        final_text = texts[-1] if texts else None
-
         new_parts: list[Part] = []
         for part in agent_msg.parts:
             if isinstance(part, ApprovalPart) and part.approval_id in cancelled_ids:
@@ -164,4 +167,4 @@ async def stop_waiting_turn(
     await executor.delete_checkpoint(project_id, turn_id)
 
     for observer in observers:
-        await _observed(observer.turn_ended(project_id, agent, turn_id, "stopped", final_text))
+        await _observed(observer.turn_ended(project_id, agent, turn_id, "stopped", None))

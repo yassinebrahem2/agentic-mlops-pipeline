@@ -2,30 +2,14 @@
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Callable
-from typing import Any, Protocol
-
 from mlops_agents.agents.approvals.contract import Approvals, ApprovalView
 from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
-from mlops_agents.agents.runtime.contract import ApprovalPart, MessageView, Part
+from mlops_agents.agents.runtime.contract import AgentSessions, ApprovalPart, Part
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
-
-
-class ResumableSessions(Protocol):
-    async def update_message(
-        self,
-        project_id: str,
-        session_id: str,
-        message_id: str,
-        transform: Callable[[list[Part]], list[Part]],
-    ) -> MessageView: ...
-
-    async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None: ...
 
 
 class ApprovalsService(Approvals):
@@ -34,7 +18,7 @@ class ApprovalsService(Approvals):
     def __init__(
         self,
         databases: Databases,
-        sessions: Any,
+        sessions: AgentSessions,
         *,
         store: ApprovalStore | None = None,
         audit_log: AuditLog | None = None,
@@ -50,6 +34,7 @@ class ApprovalsService(Approvals):
 
     async def pending(self, project_id: str) -> list[ApprovalView]:
         """List all pending approvals for a project."""
+        await self._sessions.ensure_recovered(project_id)
         records = await self._store.pending(project_id)
         return [ApprovalView.model_validate(r) for r in records]
 
@@ -62,6 +47,8 @@ class ApprovalsService(Approvals):
         note: str | None = None,
     ) -> ApprovalView:
         """Decide an approval request (approve or reject), update parts, audit, and resume if done."""
+        await self._sessions.ensure_recovered(project_id)
+
         record = await self._store.get(project_id, approval_id)
         if record is None:
             raise DomainError(
@@ -85,7 +72,7 @@ class ApprovalsService(Approvals):
         )
         task_id = current_task.id if current_task is not None else None
 
-        # Update in store
+        # Atomic update in store
         status_val = "approved" if approve else "rejected"
         updated_rec = await self._store.decide(
             project_id,
@@ -114,18 +101,13 @@ class ApprovalsService(Approvals):
                     res.append(part)
             return res
 
-        with contextlib.suppress(Exception):
-            await self._sessions.update_message(
-                project_id, record.session_id, record.message_id, _update_part
-            )
+        await self._sessions.update_message(
+            project_id, record.session_id, record.message_id, _update_part
+        )
 
         # Audit log entry
         if self._audit_log is not None:
-            try:
-                level = await get_permission_level(self._databases, project_id)
-            except Exception:
-                level = "ask"
-
+            level = await get_permission_level(self._databases, project_id)
             await self._audit_log.record(
                 project_id,
                 actor="user",
@@ -152,9 +134,7 @@ class ApprovalsService(Approvals):
 
         # Check remaining pending approvals for this turn
         step_approvals = await self._store.list_for_step(project_id, record.turn_id)
-        if not any(a.status == "pending" for a in step_approvals) and hasattr(
-            self._sessions, "resume_turn"
-        ):
+        if not any(a.status == "pending" for a in step_approvals):
             await self._sessions.resume_turn(project_id, record.session_id, record.turn_id)
 
         return ApprovalView.model_validate(updated_rec)

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import insert, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_, select, update
+from sqlalchemy.dialects.sqlite import insert
 
 from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.runtime.contract import ApprovalStatus
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.clock import now_iso
+from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import approvals, turns
@@ -30,21 +29,9 @@ class ApprovalRecord(ApprovalView):
 
 def _row_to_record(row: Any) -> ApprovalRecord:
     preview_raw = row["preview"]
-    task_id: str | None = None
     if isinstance(preview_raw, str):
-        with contextlib.suppress(Exception):
-            raw_parsed: object = json.loads(preview_raw)
-            if isinstance(raw_parsed, dict):
-                raw_dict: dict[str, object] = cast(dict[str, object], raw_parsed)
-                raw_val = raw_dict.get("task_id")
-                if raw_val is not None:
-                    task_id = str(raw_val)
         preview_obj = Preview.model_validate_json(preview_raw)
     elif isinstance(preview_raw, dict):
-        raw_dict: dict[str, object] = cast(dict[str, object], preview_raw)
-        raw_val = raw_dict.get("task_id")
-        if raw_val is not None:
-            task_id = str(raw_val)
         preview_obj = Preview.model_validate(preview_raw)
     else:
         preview_obj = cast(Preview, preview_raw)
@@ -53,6 +40,7 @@ def _row_to_record(row: Any) -> ApprovalRecord:
     risk_class_obj = (
         RiskClass(risk_class_raw) if not isinstance(risk_class_raw, RiskClass) else risk_class_raw
     )
+    task_id = str(row["task_id"]) if row["task_id"] is not None else None
 
     return ApprovalRecord(
         id=str(row["id"]),
@@ -89,17 +77,13 @@ class ApprovalStore:
         tool_call_id: str,
         tool: str,
         risk_class: RiskClass | str,
-        preview: Preview | dict[str, Any] | str,
+        preview: Preview,
         status: ApprovalStatus = "pending",
         note: str | None = None,
         id: str | None = None,
         task_id: str | None = None,
     ) -> ApprovalRecord:
-        """Create an approval request. Idempotent by tool_call_id."""
-        existing = await self.find_by_tool_call_id(project_id, tool_call_id)
-        if existing is not None:
-            return existing
-
+        """Create an approval request."""
         apr_id = id if id is not None else new_id("apr")
         created_at = now_iso()
         decided_at = (
@@ -107,44 +91,28 @@ class ApprovalStore:
         )
 
         risk_class_val = risk_class.value if isinstance(risk_class, RiskClass) else str(risk_class)
-        if isinstance(preview, Preview):
-            preview_dict = preview.model_dump()
-        elif isinstance(preview, dict):
-            preview_dict = dict(preview)
-        else:
-            try:
-                preview_dict = json.loads(str(preview))
-            except Exception:
-                preview_dict = {"kind": "text", "title": tool, "body": str(preview)}
-        if task_id is not None:
-            preview_dict["task_id"] = task_id
-        preview_str = json.dumps(preview_dict)
+        preview_str = preview.model_dump_json()
 
         engine = await self._databases.project(project_id)
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(
-                    insert(approvals).values(
-                        id=apr_id,
-                        turn_id=turn_id,
-                        session_id=session_id,
-                        message_id=message_id,
-                        agent=agent,
-                        tool_call_id=tool_call_id,
-                        tool=tool,
-                        risk_class=risk_class_val,
-                        preview=preview_str,
-                        status=status,
-                        note=note,
-                        created_at=created_at,
-                        decided_at=decided_at,
-                    )
+        async with engine.begin() as conn:
+            await conn.execute(
+                insert(approvals).values(
+                    id=apr_id,
+                    turn_id=turn_id,
+                    session_id=session_id,
+                    message_id=message_id,
+                    agent=agent,
+                    tool_call_id=tool_call_id,
+                    tool=tool,
+                    risk_class=risk_class_val,
+                    preview=preview_str,
+                    status=status,
+                    note=note,
+                    created_at=created_at,
+                    decided_at=decided_at,
+                    task_id=task_id,
                 )
-        except IntegrityError:
-            existing_after_race = await self.find_by_tool_call_id(project_id, tool_call_id)
-            if existing_after_race is not None:
-                return existing_after_race
-            raise
+            )
 
         rec = await self.get(project_id, apr_id)
         if rec is None:
@@ -157,25 +125,6 @@ class ApprovalStore:
         async with engine.connect() as conn:
             row = (
                 (await conn.execute(select(approvals).where(approvals.c.id == approval_id)))
-                .mappings()
-                .first()
-            )
-        if row is None:
-            return None
-        return _row_to_record(row)
-
-    async def find_by_tool_call_id(
-        self, project_id: str, tool_call_id: str
-    ) -> ApprovalRecord | None:
-        """Find an approval by tool_call_id."""
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            row = (
-                (
-                    await conn.execute(
-                        select(approvals).where(approvals.c.tool_call_id == tool_call_id)
-                    )
-                )
                 .mappings()
                 .first()
             )
@@ -220,8 +169,8 @@ class ApprovalStore:
         note: str | None = None,
         decided_at: str | None = None,
         task_id: str | object | None = _UNSET,
-    ) -> ApprovalRecord | None:
-        """Update an approval's status and optional note."""
+    ) -> ApprovalRecord:
+        """Update an approval's status conditionally WHERE status = 'pending'."""
         engine = await self._databases.project(project_id)
         values: dict[str, Any] = {"status": status}
         if note is not None:
@@ -232,20 +181,34 @@ class ApprovalStore:
             values["decided_at"] = None
 
         if task_id is not _UNSET:
-            rec = await self.get(project_id, approval_id)
-            if rec is not None:
-                p_dict = rec.preview.model_dump()
-                if task_id is not None:
-                    p_dict["task_id"] = task_id
-                else:
-                    p_dict.pop("task_id", None)
-                values["preview"] = json.dumps(p_dict)
+            values["task_id"] = task_id
 
         async with engine.begin() as conn:
-            await conn.execute(
-                update(approvals).where(approvals.c.id == approval_id).values(**values)
+            result = await conn.execute(
+                update(approvals)
+                .where(approvals.c.id == approval_id, approvals.c.status == "pending")
+                .values(**values)
             )
-        return await self.get(project_id, approval_id)
+            if result.rowcount == 0:
+                existing = await self.get(project_id, approval_id)
+                if existing is None:
+                    raise DomainError(
+                        "approval_not_found",
+                        f"Approval '{approval_id}' does not exist.",
+                        status=404,
+                    )
+                raise DomainError(
+                    "approval_not_pending",
+                    f"Approval '{approval_id}' is not pending (status: {existing.status}).",
+                    status=409,
+                )
+
+        rec = await self.get(project_id, approval_id)
+        if rec is None:
+            raise DomainError(
+                "approval_not_found", f"Approval '{approval_id}' does not exist.", status=404
+            )
+        return rec
 
     async def decide(
         self,
@@ -258,12 +221,7 @@ class ApprovalStore:
     ) -> ApprovalRecord:
         """Approve or reject an approval with an optional note."""
         status: ApprovalStatus = "approved" if approve else "rejected"
-        updated = await self.update_status(
-            project_id, approval_id, status, note=note, task_id=task_id
-        )
-        if updated is None:
-            raise KeyError(f"Approval not found: {approval_id}")
-        return updated
+        return await self.update_status(project_id, approval_id, status, note=note, task_id=task_id)
 
     async def pending(self, project_id: str) -> list[ApprovalRecord]:
         """List all pending approvals for a project."""
@@ -302,7 +260,7 @@ class ApprovalStore:
                 pending_ids = [str(r["id"]) for r in pending_rows]
                 await conn.execute(
                     update(approvals)
-                    .where(approvals.c.id.in_(pending_ids))
+                    .where(approvals.c.id.in_(pending_ids), approvals.c.status == "pending")
                     .values(status="cancelled", decided_at=now)
                 )
         if not pending_rows:
@@ -329,7 +287,7 @@ class ApprovalStore:
                 ids = [str(r["id"]) for r in rows]
                 await conn.execute(
                     update(approvals)
-                    .where(approvals.c.id.in_(ids))
+                    .where(approvals.c.id.in_(ids), approvals.c.status == "pending")
                     .values(status="expired", decided_at=now)
                 )
         if not rows:

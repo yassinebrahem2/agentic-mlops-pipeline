@@ -134,7 +134,8 @@ async def build_services(
         workspaces=workspaces,
         observers=[turn_observer],
         status_board=status_board,
-        audit=audit,
+        audit_log=audit,
+        event_log=events,
     )
     status_board.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
