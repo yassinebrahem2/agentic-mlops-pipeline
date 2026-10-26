@@ -319,9 +319,15 @@ async def test_resume_cleans_leftover_temp_files(
         title="Temp cleanup test",
     )
 
-    tmp_file = task.worktree / ".tmp_file_12345"
-    tmp_file.write_text("temp", encoding="utf-8")
-    assert tmp_file.exists()
+    from mlops_agents.agents.temp_files import make_temp_name
+
+    generated_tmp = task.worktree / make_temp_name("file.txt")
+    generated_tmp.write_text("temp", encoding="utf-8")
+    user_file = task.worktree / ".tmp_notes"
+    user_file.write_text("user notes", encoding="utf-8")
+    assert generated_tmp.exists()
+    assert user_file.exists()
 
     await service.resume(project_id, "ses_coder", "coder", task.id)
-    assert not tmp_file.exists()
+    assert not generated_tmp.exists()
+    assert user_file.exists()

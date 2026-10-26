@@ -485,6 +485,9 @@ async def test_push_to_fake_remote(
         (task.worktree / "pushed.txt").write_text("pushed content\n", encoding="utf-8")
         commit_res = await service.commit(project_id, task, "feat: commit to push")
 
+        # Plant an existing user origin ref to prove push never deletes or mutates user origin refs
+        _cmd(["git", "update-ref", f"refs/remotes/origin/{task.branch}", "HEAD"], cwd=repo)
+
         # Snapshot user repo config and origin refs before push
         config_before = (repo / ".git" / "config").read_bytes()
         refs_before = _cmd(["git", "for-each-ref", "refs/remotes/origin"], cwd=repo).stdout
@@ -496,6 +499,12 @@ async def test_push_to_fake_remote(
         refs_after = _cmd(["git", "for-each-ref", "refs/remotes/origin"], cwd=repo).stdout
         assert config_before == config_after
         assert refs_before == refs_after
+
+        # Verify pushed sha is recorded in refs/mlops-agents/pushed/<branch>
+        pushed_ref_sha = _cmd(
+            ["git", "rev-parse", f"refs/mlops-agents/pushed/{task.branch}"], cwd=repo
+        ).stdout.strip()
+        assert pushed_ref_sha == commit_res.sha
 
         # Verify bare repo has the branch and commit
         pushed_sha = _cmd(
@@ -800,6 +809,7 @@ async def test_temp_files_excluded_from_candidate_paths(
 ) -> None:
     from mlops_agents.agents.tasks.diff import get_candidate_paths
     from mlops_agents.agents.tasks.git import git_dir_for_task
+    from mlops_agents.agents.temp_files import make_temp_name
 
     service, _, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
@@ -808,7 +818,9 @@ async def test_temp_files_excluded_from_candidate_paths(
     task = await service.start(project_id, "ses_1", "coder", "Temp exclusion test")
 
     (task.worktree / "valid.py").write_text("x = 1\n", encoding="utf-8")
-    (task.worktree / ".tmp_valid_abc123").write_text("temp data\n", encoding="utf-8")
+    (task.worktree / ".tmp_notes").write_text("notes\n", encoding="utf-8")
+    gen_tmp = task.worktree / make_temp_name("valid.py")
+    gen_tmp.write_text("temp data\n", encoding="utf-8")
 
     git_dir = git_dir_for_task(repo, task.id)
     runner = GitRunner(paths.bin)
@@ -819,4 +831,122 @@ async def test_temp_files_excluded_from_candidate_paths(
         empty_hooks=paths.empty_hooks,
     )
     assert "valid.py" in candidates
-    assert ".tmp_valid_abc123" not in candidates
+    assert ".tmp_notes" in candidates
+    assert gen_tmp.name not in candidates
+
+
+async def test_commit_cancellation_runner_blocks_inside_commit(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Cancel blocked commit test")
+
+    (task.worktree / "work.py").write_text("a = 1\n", encoding="utf-8")
+
+    orig_task_git = commit_module.task_git
+    in_commit = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "commit" in git_args_raw:
+            in_commit.set()
+            await release_commit.wait()
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", blocking_task_git)
+
+    caller_task = asyncio.create_task(service.commit(project_id, task, "feat: blocked commit"))
+
+    # Wait until git commit is executing/blocked
+    await in_commit.wait()
+
+    # Cancel the caller while runner is blocked inside git commit
+    caller_task.cancel()
+
+    # Release git commit so it finishes successfully
+    release_commit.set()
+
+    # The caller receives CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await caller_task
+
+    # BUT: Because git commit finished successfully, the commit landed!
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        claims = set(
+            (await conn.execute(select(file_claims.c.path).where(file_claims.c.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+    assert "work.py" in claims
+
+    # Check git log: the commit exists on HEAD!
+    log_res = _cmd(["git", "log", "-1", "--format=%s"], cwd=task.worktree)
+    assert log_res.stdout.strip() == "feat: blocked commit"
+
+
+async def test_user_file_tmp_notes_is_committed_and_never_deleted(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    from mlops_agents.agents.temp_files import make_temp_name
+
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "User temp file test")
+
+    (task.worktree / ".tmp_notes").write_text("my notes\n", encoding="utf-8")
+    generated_tmp = task.worktree / make_temp_name("auto.py")
+    generated_tmp.write_text("leftover\n", encoding="utf-8")
+
+    # Commit should commit .tmp_notes and exclude generated_tmp
+    res = await service.commit(project_id, task, "feat: commit user tmp_notes")
+    assert ".tmp_notes" in res.changed
+    assert generated_tmp.name not in res.changed
+
+    # Resume cleans generated temp files but preserves user .tmp_notes
+    await service.resume(project_id, "ses_1", "coder", task.id)
+    assert (task.worktree / ".tmp_notes").exists()
+    assert not generated_tmp.exists()
+
+
+async def test_leftover_generated_temp_file_not_counted_as_unpublished_change(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    from mlops_agents.agents.temp_files import make_temp_name
+
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Unpublished temp test")
+
+    # Initially no unpublished changes
+    assert not await service.has_unpublished_changes(project_id, task)
+
+    # Creating a leftover generated temp file must NOT count as an unpublished change
+    generated_tmp = task.worktree / make_temp_name("file.txt")
+    generated_tmp.write_text("temp", encoding="utf-8")
+    assert not await service.has_unpublished_changes(project_id, task)
+
+    # But creating a real user file DOES count as unpublished change
+    (task.worktree / "real.py").write_text("x = 1\n", encoding="utf-8")
+    assert await service.has_unpublished_changes(project_id, task)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,6 +31,8 @@ __all__ = [
     "push_task",
     "staged_diff_task",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 async def commit_task(
@@ -101,24 +103,39 @@ async def commit_task(
             worktree=worktree,
             empty_hooks=empty_hooks,
             args=["add", "--", *candidate_paths],
+            extra_env={"GIT_LITERAL_PATHSPECS": "1"},
         )
 
-        await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=[
-                "-c",
-                f"user.name={author_name}",
-                "-c",
-                f"user.email={author_email}",
-                "commit",
-                f"--author={author_name} <{author_email}>",
-                "-m",
-                message,
-            ],
+        commit_task_fut = asyncio.create_task(
+            task_git(
+                runner,
+                git_dir=git_dir,
+                worktree=worktree,
+                empty_hooks=empty_hooks,
+                args=[
+                    "-c",
+                    f"user.name={author_name}",
+                    "-c",
+                    f"user.email={author_email}",
+                    "commit",
+                    f"--author={author_name} <{author_email}>",
+                    "-m",
+                    message,
+                ],
+                check=False,
+            )
         )
+        try:
+            commit_res = await asyncio.shield(commit_task_fut)
+        except asyncio.CancelledError:
+            commit_res = await commit_task_fut
+            if commit_res.code == 0:
+                committed = True
+            raise
+
+        if commit_res.code != 0:
+            raise CommitRefused(f"Git commit failed: {commit_res.stderr or commit_res.stdout}")
+        committed = True
 
         sha_res = await task_git(
             runner,
@@ -128,14 +145,13 @@ async def commit_task(
             args=["rev-parse", "HEAD"],
         )
         sha = sha_res.stdout.strip()
-        committed = True
         return CommitResult(sha=sha, changed=tuple(candidate_paths))
 
     finally:
         if not committed:
 
             async def _cleanup() -> None:
-                with suppress(Exception):
+                try:
                     await task_git(
                         runner,
                         git_dir=git_dir,
@@ -144,8 +160,21 @@ async def commit_task(
                         args=["reset"],
                         check=False,
                     )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to reset working tree during commit cleanup: %s",
+                        exc,
+                        exc_info=True,
+                    )
+
                 if newly_claimed_paths:
-                    with suppress(Exception):
+                    try:
                         await release_claims(engine, task.id, newly_claimed_paths)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to release claims during commit cleanup: %s",
+                            exc,
+                            exc_info=True,
+                        )
 
             await asyncio.shield(_cleanup())

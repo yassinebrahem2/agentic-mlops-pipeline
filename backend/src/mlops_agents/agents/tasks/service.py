@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -19,7 +18,11 @@ from mlops_agents.agents.tasks.commit import (
 )
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tasks.git import git_dir_for_task
-from mlops_agents.agents.tasks.worktrees import TaskFiles, create_worktree
+from mlops_agents.agents.tasks.worktrees import (
+    TaskFiles,
+    clean_leftover_temp_files,
+    create_worktree,
+)
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.file_ops import pause_task
 from mlops_agents.agents.tools.files import RepoFiles
@@ -35,14 +38,6 @@ from mlops_agents.workspace.service import WorkspaceService
 
 if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
-
-
-def _clean_leftover_temp_files(worktree_path: Path) -> None:
-    if worktree_path.is_dir():
-        for item in worktree_path.rglob(".tmp_*"):
-            if item.is_file() and ".git" not in item.parts:
-                with suppress(OSError):
-                    item.unlink()
 
 
 class TasksService(Tasks):
@@ -114,16 +109,11 @@ class TasksService(Tasks):
             )
 
         self._current_tasks[(project_id, session_id)] = task_id
-
         await self._events.record(
             project_id,
             source=agent,
             type="task.started",
-            payload={
-                "task_id": task_id,
-                "title": title,
-                "branch": branch,
-            },
+            payload={"task_id": task_id, "title": title, "branch": branch},
             subject_id=task_id,
         )
 
@@ -176,7 +166,7 @@ class TasksService(Tasks):
         self._current_tasks[(project_id, session_id)] = task_id
 
         worktree_path = Path(row["worktree"])
-        await asyncio.to_thread(_clean_leftover_temp_files, worktree_path)
+        await asyncio.to_thread(clean_leftover_temp_files, worktree_path)
 
         return TaskRef(
             id=row["id"],
@@ -211,20 +201,15 @@ class TasksService(Tasks):
             self._current_tasks.pop((project_id, session_id), None)
 
         async with engine.connect() as conn:
-            row = (
-                (
-                    await conn.execute(
-                        select(tasks)
-                        .where(
-                            tasks.c.session_id == session_id,
-                            tasks.c.status.in_(("active", "in_review")),
-                        )
-                        .order_by(tasks.c.created_at.desc())
-                    )
+            stmt = (
+                select(tasks)
+                .where(
+                    tasks.c.session_id == session_id,
+                    tasks.c.status.in_(("active", "in_review")),
                 )
-                .mappings()
-                .first()
+                .order_by(tasks.c.created_at.desc())
             )
+            row = (await conn.execute(stmt)).mappings().first()
 
         if row is None:
             return None
@@ -265,18 +250,12 @@ class TasksService(Tasks):
     async def open_tasks(self, project_id: str) -> list[TaskView]:
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
-            rows = (
-                (
-                    await conn.execute(
-                        select(tasks)
-                        .where(tasks.c.status.in_(("active", "in_review")))
-                        .order_by(tasks.c.created_at.asc())
-                    )
-                )
-                .mappings()
-                .all()
+            stmt = (
+                select(tasks)
+                .where(tasks.c.status.in_(("active", "in_review")))
+                .order_by(tasks.c.created_at.asc())
             )
-
+            rows = (await conn.execute(stmt)).mappings().all()
         return [self._build_task_view(row) for row in rows]
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:

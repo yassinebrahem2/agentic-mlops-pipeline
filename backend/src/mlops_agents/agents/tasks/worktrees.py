@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import os
 import re
 import stat
 from pathlib import Path
 
 from mlops_agents.agents.tasks.git import git_dir_for_task, run_safe_git, task_git
+from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.agents.tools.base import FileAccess, ToolFailure
 from mlops_agents.agents.tools.files import is_secret, norm_path
 from mlops_agents.config import APP_NAME
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.workspace.models import Project
 from mlops_agents.workspace.refs import github_remote, https_url, repo_ref
+
+logger = logging.getLogger(__name__)
 
 _NOT_REGULAR = frozenset({"120000", "160000"})
 
@@ -236,3 +240,22 @@ class TaskFiles(FileAccess):
             return ""
         rel = await asyncio.to_thread(self._relative, user_path)
         return "" if rel == "." else rel.rstrip("/") + "/"
+
+
+def clean_leftover_temp_files(worktree_path: Path) -> None:
+    """Removes leftover atomic write temp files matching .tmp_<name>_<32 hex>."""
+    if not worktree_path.is_dir():
+        return
+    for item in worktree_path.rglob(".tmp_*"):
+        if ".git" in item.parts or not item.is_file():
+            continue
+        if is_generated_temp_file(item):
+            try:
+                item.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to unlink leftover temp file %s: %s",
+                    item,
+                    exc,
+                    exc_info=True,
+                )

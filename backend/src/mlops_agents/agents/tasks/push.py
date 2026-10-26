@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from mlops_agents.agents.tasks.git import task_git
+from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.storage.tables import tasks
@@ -90,16 +91,6 @@ async def push_task(
         authenticated=True,
     )
 
-    # Ensure refs/remotes/origin/* is never created or modified by git push
-    await task_git(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        args=["update-ref", "-d", f"refs/remotes/origin/{task.branch}"],
-        check=False,
-    )
-
     # Record pushed commit under namespaced ref refs/<app name>/pushed/<branch>
     sha_res = await task_git(
         runner,
@@ -131,16 +122,20 @@ async def has_unpublished_changes_task(
     if not task.worktree.exists():
         return False
 
-    # Check worktree cleanliness
+    # Check worktree cleanliness (ignoring any leftover generated atomic write temp files)
     status_res = await task_git(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["status", "--porcelain"],
+        args=["status", "--porcelain=v1", "-uall", "-z"],
     )
-    if bool(status_res.stdout.strip()):
-        return True
+    for token in status_res.stdout.split("\0"):
+        if not token:
+            continue
+        path = token[3:]
+        if not is_generated_temp_file(path):
+            return True
 
     # Read task record from DB
     async with engine.connect() as conn:
