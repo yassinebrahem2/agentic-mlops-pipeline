@@ -1,10 +1,53 @@
 import { Link, NavLink } from "react-router";
+import { Badge } from "@/components/ui/badge";
 import { APP_NAME } from "@/config";
 import { useCurrentProject } from "@/lib/useCurrentProject";
 import { cn } from "@/lib/utils";
 import type { PageRoute } from "../routes";
 import { GearMenu } from "./GearMenu";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+
+function NavItem({
+  route,
+  to,
+  projectId,
+  onNavigate,
+}: {
+  route: PageRoute;
+  to: string;
+  projectId?: string;
+  onNavigate?: () => void;
+}) {
+  const Icon = route.nav?.icon;
+  const count = route.nav?.badge ? route.nav.badge(projectId) : undefined;
+  const showBadge = typeof count === "number" && count > 0;
+
+  return (
+    <NavLink
+      to={to}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-secondary text-secondary-foreground"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        )
+      }
+    >
+      {Icon && <Icon className="size-4 shrink-0" />}
+      <span className="flex-1 truncate">{route.nav?.label}</span>
+      {showBadge && (
+        <Badge
+          variant="secondary"
+          className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-semibold"
+        >
+          {count}
+        </Badge>
+      )}
+    </NavLink>
+  );
+}
 
 export function Sidebar({
   routes,
@@ -43,24 +86,14 @@ export function Sidebar({
             </div>
             {projectRoutes.map((route) => {
               const to = route.path.replaceAll(":projectId", projectId);
-              const Icon = route.nav?.icon;
               return (
-                <NavLink
+                <NavItem
                   key={route.path}
+                  route={route}
                   to={to}
-                  onClick={onNavigate}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-secondary text-secondary-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                    )
-                  }
-                >
-                  {Icon && <Icon className="size-4 shrink-0" />}
-                  <span>{route.nav?.label}</span>
-                </NavLink>
+                  projectId={projectId}
+                  onNavigate={onNavigate}
+                />
               );
             })}
           </div>
@@ -73,27 +106,15 @@ export function Sidebar({
                 App
               </div>
             )}
-            {appRoutes.map((route) => {
-              const Icon = route.nav?.icon;
-              return (
-                <NavLink
-                  key={route.path}
-                  to={route.path}
-                  onClick={onNavigate}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-secondary text-secondary-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                    )
-                  }
-                >
-                  {Icon && <Icon className="size-4 shrink-0" />}
-                  <span>{route.nav?.label}</span>
-                </NavLink>
-              );
-            })}
+            {appRoutes.map((route) => (
+              <NavItem
+                key={route.path}
+                route={route}
+                to={route.path}
+                projectId={projectId}
+                onNavigate={onNavigate}
+              />
+            ))}
           </div>
         )}
       </nav>

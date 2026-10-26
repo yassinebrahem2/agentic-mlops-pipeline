@@ -9,6 +9,7 @@ export type PageRoute = {
     label: string;
     order: number;
     icon?: LucideIcon;
+    badge?: (projectId?: string) => number | undefined | null;
   };
 };
 
