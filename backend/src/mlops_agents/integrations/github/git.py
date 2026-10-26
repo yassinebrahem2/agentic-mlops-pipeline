@@ -51,10 +51,6 @@ class GitRunner:
         self._bin_dir = bin_dir
         self._token_provider = token_provider
 
-    async def token(self) -> str | None:
-        """Returns the authentication token from the token provider."""
-        return await self._token_provider()
-
     def askpass_path(self) -> Path:
         windows = os.name == "nt"
         path = self._bin_dir / ("git-askpass.cmd" if windows else "git-askpass.sh")

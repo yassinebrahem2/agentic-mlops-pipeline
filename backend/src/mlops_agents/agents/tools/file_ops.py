@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
-import uuid
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mlops_agents.agents.constants import MAX_DIFF_CHARS
+from mlops_agents.agents.constants import MAX_DIFF_CHARS, cap_diff
+from mlops_agents.agents.temp_files import make_temp_name
 from mlops_agents.agents.tools.base import TaskRef, ToolContext, ToolFailure
 from mlops_agents.agents.tools.files import is_secret
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
@@ -47,14 +50,6 @@ def compute_sha256(path: Path) -> str:
         while chunk := handle.read(CHUNK_SIZE):
             hasher.update(chunk)
     return hasher.hexdigest()
-
-
-def cap_diff(diff: str, max_chars: int = MAX_DIFF_CHARS) -> str:
-    if len(diff) <= max_chars:
-        return diff
-    half = max_chars // 2
-    cut = len(diff) - max_chars
-    return diff[:half] + f"\n\n[... diff cut: {cut} characters omitted ...]\n\n" + diff[-half:]
 
 
 def resolve_and_validate(worktree_root: Path, file_path: str) -> tuple[Path, str, Path]:
@@ -138,7 +133,7 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
 
     temp_path: Path | None = None
     try:
-        temp_name = f".tmp_{candidate.name}_{uuid.uuid4().hex}"
+        temp_name = make_temp_name(candidate.name)
         temp_path = candidate.parent / temp_name
         try:
             fd = os.open(temp_path, flags, 0o666)
@@ -163,8 +158,12 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
 
         if candidate.exists():
             st_mode = candidate.stat().st_mode
-            with suppress(OSError):
+            try:
                 temp_path.chmod(st_mode)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to preserve file mode on %s: %s", temp_path, exc, exc_info=True
+                )
 
         # Atomic replace replaces symlink without following or truncating target
         try:
@@ -175,5 +174,9 @@ def safe_write_bytes(candidate: Path, resolved_worktree: Path, data: bytes) -> N
             ) from None
     finally:
         if temp_path is not None and temp_path.exists():
-            with suppress(OSError):
+            try:
                 temp_path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to unlink temporary file %s: %s", temp_path, exc, exc_info=True
+                )
