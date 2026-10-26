@@ -92,3 +92,33 @@ class TurnsStore(StoreBase):
         async with engine.connect() as conn:
             row = (await conn.execute(query)).first()
         return row is not None
+
+    async def waiting_turn(self, project_id: str, session_id: str) -> tuple[str, str] | None:
+        """Find the waiting turn for session_id. Returns (turn_id, trigger_message_id) or None."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(turns.c.id, turns.c.trigger_message_id)
+            .where(turns.c.session_id == session_id, turns.c.status == "waiting")
+            .limit(1)
+        )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None:
+            return None
+        return (str(row[0]), str(row[1]))
+
+    async def turn_status(self, project_id: str, turn_id: str) -> str | None:
+        """Return the status of turn_id, or None if not found."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (await conn.execute(select(turns.c.status).where(turns.c.id == turn_id))).first()
+        return None if row is None else str(row[0])
+
+    async def turn_trigger_id(self, project_id: str, turn_id: str) -> str | None:
+        """Return the trigger_message_id of turn_id, or None if not found."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(select(turns.c.trigger_message_id).where(turns.c.id == turn_id))
+            ).first()
+        return None if row is None else str(row[0])

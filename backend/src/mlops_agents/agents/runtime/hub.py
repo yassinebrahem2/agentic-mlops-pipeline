@@ -26,6 +26,8 @@ from mlops_agents.agents.runtime.contract import (
     TurnEnd,
     TurnEnded,
     TurnEndedData,
+    TurnWaiting,
+    TurnWaitingData,
 )
 
 __all__ = ["SLOW_SUBSCRIBER_THRESHOLD", "AsyncRLock", "SessionHub"]
@@ -144,7 +146,7 @@ class SessionHub:
             and self._live_message.id == event.data.message.id
         ):
             self._live_message = event.data.message.model_copy(deep=True)
-        elif isinstance(event, TurnEnded):
+        elif isinstance(event, (TurnEnded, TurnWaiting)):
             self._live_message = None
 
     def _publish_raw(self, event: StreamEvent) -> None:
@@ -226,6 +228,15 @@ class SessionHub:
                 seq=self._next_seq(),
                 type="turn.ended",
                 data=TurnEndedData(turn_id=turn_id, status=status, error=error),
+            )
+            self._publish_raw(ev)
+
+    async def turn_waiting(self, turn_id: str) -> None:
+        async with self._lock:
+            ev = TurnWaiting(
+                seq=self._next_seq(),
+                type="turn.waiting",
+                data=TurnWaitingData(turn_id=turn_id),
             )
             self._publish_raw(ev)
 

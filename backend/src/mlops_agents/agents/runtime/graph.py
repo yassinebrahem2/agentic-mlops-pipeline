@@ -13,7 +13,9 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.graph.message import add_messages  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.graph.state import CompiledStateGraph  # pyright: ignore[reportMissingTypeStubs]
+from langgraph.types import Command
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -35,6 +37,7 @@ class TurnSink(Protocol):
     async def tool_started(self, message_id: str, call: ToolCallPart) -> None: ...
     async def tool_finished(self, message_id: str, result: ToolResultPart) -> None: ...
     async def message(self, message: MessageView, *, created: bool) -> None: ...
+    async def turn_waiting(self, turn_id: str) -> None: ...
 
 
 class TurnState(TypedDict):
@@ -61,7 +64,7 @@ def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
     Only these and LangGraph's safe types are read back as themselves; any other type would come
     back a plain dict. A type added to `TurnState` beyond LangChain's messages is added here.
     """
-    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview)]
+    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview, Command)]
     return AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
 
 
@@ -236,6 +239,7 @@ def create_turn_graph(
         current_parts=current_parts,
         lock=lock,
         update_parts=_update_parts,
+        approval_store=ApprovalStore(store.databases),
     )
 
     async def turn_end_node(state: TurnState) -> dict[str, Any]:

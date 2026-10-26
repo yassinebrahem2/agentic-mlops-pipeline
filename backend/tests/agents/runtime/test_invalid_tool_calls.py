@@ -17,7 +17,6 @@ from mlops_agents.agents.runtime.graph import (
     create_turn_graph,
     format_invalid_tool_call_error,
 )
-from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -35,6 +34,7 @@ from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agen
 from tests.agents.runtime.test_graph_tools import MockModelCaller, ModelReply
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -70,7 +70,7 @@ async def _setup_executor_env(
     workspace = WorkspaceService(
         settings, paths, databases, GitRunner(paths.bin, github.token), github, httpx2.AsyncClient()
     )
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,

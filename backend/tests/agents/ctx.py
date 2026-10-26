@@ -1,13 +1,23 @@
-from mlops_agents.agents.tools.base import FileAccess, ToolContext
+from __future__ import annotations
+
+from mlops_agents.agents.tools.base import FileAccess, TaskRef, ToolContext
 
 
-def tool_context(files: FileAccess) -> ToolContext:
+def tool_context(
+    files: FileAccess,
+    *,
+    project_id: str = "prj_test",
+    agent: str = "tester",
+    session_id: str = "ses_test",
+    turn_id: str = "trn_test",
+    task: TaskRef | None = None,
+) -> ToolContext:
     """A ToolContext for tests that exercise a tool against a given file view."""
     return ToolContext(
-        project_id="prj_test",
-        agent="tester",
-        session_id="ses_test",
-        turn_id="trn_test",
+        project_id=project_id,
+        agent=agent,
+        session_id=session_id,
+        turn_id=turn_id,
         files=files,
-        task=None,
+        task=task,
     )

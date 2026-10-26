@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from tests.agents.runtime.observer_fakes import WorkerCapturingObserver
 from tests.agents.runtime.session_env import SessionEnv, collect_until_turn_ended, opened_stream
@@ -32,7 +32,7 @@ def record_turn_tasks(monkeypatch: pytest.MonkeyPatch) -> list[asyncio.Task[Any]
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         task = asyncio.current_task()
         assert task is not None
         turn_tasks.append(task)

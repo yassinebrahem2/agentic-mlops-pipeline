@@ -222,3 +222,9 @@ class FakeSessions(AgentSessions):
     async def close_project(self, project_id: str) -> None:
         self.closed_projects.append(project_id)
         self.order_log.append(f"close_project:{project_id}")
+
+    async def ensure_recovered(self, project_id: str) -> None:
+        pass
+
+    async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        pass

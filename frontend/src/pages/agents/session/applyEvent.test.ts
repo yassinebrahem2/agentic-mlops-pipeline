@@ -77,6 +77,10 @@ describe("parseEvent", () => {
       status: "done",
       error: null,
     });
+    expect(parseEvent("turn.waiting", JSON.stringify({ turn_id: "turn_1" }))).toEqual({
+      type: "turn.waiting",
+      turn_id: "turn_1",
+    });
     expect(parseEvent("resync", "{}")).toEqual({ type: "resync" });
   });
 
@@ -224,5 +228,37 @@ describe("applyEvent", () => {
       error: null,
     });
     expect(state.busy).toBe(false);
+  });
+
+  it("turn.waiting marks only streaming agent message in the turn as waiting, leaving completed messages unchanged", () => {
+    let state: SessionState = { messages: [], busy: true, lastSeq: 0 };
+    const userMsg = createMessage("u1", "user", [], "complete");
+    const completedAgentMsg = createMessage("a0", "agent", [], "complete");
+    const streamingAgentMsg = createMessage("a1", "agent", [], "streaming");
+    state = applyEvent(state, {
+      seq: 1,
+      type: "message.created",
+      message: userMsg,
+    });
+    state = applyEvent(state, {
+      seq: 2,
+      type: "message.created",
+      message: completedAgentMsg,
+    });
+    state = applyEvent(state, {
+      seq: 3,
+      type: "message.created",
+      message: streamingAgentMsg,
+    });
+
+    state = applyEvent(state, {
+      seq: 4,
+      type: "turn.waiting",
+      turn_id: "turn_1",
+    });
+
+    expect(state.messages[0]?.status).toBe("complete");
+    expect(state.messages[1]?.status).toBe("complete");
+    expect(state.messages[2]?.status).toBe("waiting");
   });
 });

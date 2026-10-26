@@ -6,12 +6,12 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from mlops_agents.agents.runtime.contract import TurnEnd
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.runtime.turn_end import UNEXPECTED_FAILURE, Ending, TurnEnds, observed
+from mlops_agents.agents.runtime.turn_end import TurnEnds
+from mlops_agents.agents.runtime.waiting import _Ending, _ending_of, _observed
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class TurnWorkers:
         self._observers = tuple(observers)
         self._ends = TurnEnds(store=store, executor=executor, observers=self._observers)
         self._workers: dict[SessionKey, asyncio.Task[None]] = {}
-        self._child_tasks: dict[SessionKey, asyncio.Task[tuple[TurnEnd, str | None]]] = {}
+        self._child_tasks: dict[SessionKey, asyncio.Task[TurnOutcome]] = {}
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.
         self._current_turns: dict[SessionKey, str] = {}
         self._stopped_turns: set[str] = set()
@@ -50,6 +50,9 @@ class TurnWorkers:
         worker = self._workers.get(key)
         return worker is not None and not worker.done()
 
+    def get(self, key: SessionKey) -> asyncio.Task[None] | None:
+        return self._workers.get(key)
+
     def running_sessions(self, project_id: str) -> set[str]:
         """Session IDs in project_id with a currently running worker."""
         return {sid for (p, sid) in self._workers if p == project_id and self.running((p, sid))}
@@ -62,6 +65,23 @@ class TurnWorkers:
         self._first_look.add(key)
         self._workers[key] = asyncio.create_task(
             self._loop(project_id, session_id, agent, hub, lock)
+        )
+
+    def resume(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+    ) -> None:
+        """Start the session's worker on a waiting turn to resume, then on its queued turns.
+        The caller holds the session lock and saw none running."""
+        key = (project_id, session_id)
+        self._first_look.add(key)
+        self._workers[key] = asyncio.create_task(
+            self._loop(project_id, session_id, agent, hub, lock, resume_turn_id=turn_id)
         )
 
     def stop(self, key: SessionKey) -> None:
@@ -111,14 +131,27 @@ class TurnWorkers:
             self._stopped_turns.clear()
 
     async def _loop(
-        self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        resume_turn_id: str | None = None,
     ) -> None:
+        """Take the turn to resume, if any, then the queued turns, until none is left or a turn
+        waits for approval (its resume starts a new worker)."""
         key = (project_id, session_id)
+        resuming = resume_turn_id
 
         try:
             while True:
                 async with lock:
-                    next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    if resuming is not None:
+                        trigger_id = await self._store.turn_trigger_id(project_id, resuming)
+                        next_turn: tuple[str, str] | None = (resuming, trigger_id or "")
+                    else:
+                        next_turn = await self._store.next_queued_turn(project_id, session_id)
                     # Taking the turn and claiming an early Stop happen with no await between
                     # them, so a Stop lands either here or on the turn itself.
                     self._first_look.discard(key)
@@ -132,13 +165,17 @@ class TurnWorkers:
                         self._stop_next.discard(key)
                         self._stopped_turns.add(turn_id)
 
+                resume = resuming is not None
+                resuming = None
                 try:
-                    await self._take_turn(
-                        project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock
+                    ended = await self._take_turn(
+                        project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, resume
                     )
                 finally:
                     self._current_turns.pop(key, None)
                     self._stopped_turns.discard(turn_id)
+                if not ended:
+                    break
 
         finally:
             self._first_look.discard(key)
@@ -154,30 +191,38 @@ class TurnWorkers:
         trigger_msg_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
-    ) -> None:
+        resume: bool,
+    ) -> bool:
+        """Run or resume a turn and end it; False when it waits for approval instead. A resumed
+        turn has been reported started and has read its trigger already."""
         try:
             await self._store.set_turn(project_id, turn_id, "running")
-            await self._turn_started(project_id, agent, turn_id)
-            await self._ends.settle_trigger(
-                project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=True
-            )
-            ending = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock)
+            if not resume:
+                await self._turn_started(project_id, agent, turn_id)
+                await self._ends.settle_trigger(
+                    project_id, session_id, turn_id, trigger_msg_id, hub, lock, read=True
+                )
+            ending = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock, resume)
         except asyncio.CancelledError:
             # The turn was taken, so it is reported ended, also when the cancel came first.
-            interrupted = Ending("interrupted")
+            interrupted = _Ending("interrupted")
             await self._ends.end(
                 project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, interrupted
             )
             raise
+        if ending.status == "waiting":
+            # The turn has not ended: the executor stored the wait and told the subscribers and
+            # the observers (`handle_turn_waiting`), and the turn's resume starts a new worker.
+            await self._store.set_turn(project_id, turn_id, "waiting")
+            _raise_worker_cancel()
+            return False
         # Nothing suspends between deciding the end and ending: a cancel from here on lands in
         # the shielded ending, which keeps the decided status and reports it once.
         await self._ends.end(
             project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, ending
         )
-        current = asyncio.current_task()
-        if current is not None and current.cancelling() > 0:
-            # The worker's cancel came in the pass its turn task ended (see `_run_turn`).
-            raise asyncio.CancelledError
+        _raise_worker_cancel()
+        return True
 
     async def _run_turn(
         self,
@@ -187,8 +232,9 @@ class TurnWorkers:
         turn_id: str,
         hub: SessionHub,
         lock: AsyncRLock,
-    ) -> Ending:
-        """Run the turn task and decide how it ended; `TurnEnds.end` stores it.
+        resume: bool,
+    ) -> _Ending:
+        """Run (or resume) the turn task and decide how it ended; `TurnEnds.end` stores it.
 
         A cancel of the turn task by Stop ends it stopped, and by anything else but the worker's
         own cancel, interrupted. A cancel of the worker before the turn task ended is raised for
@@ -196,9 +242,10 @@ class TurnWorkers:
         itself or by Stop, keeps that end; `_take_turn` raises it after."""
         key = (project_id, session_id)
         if turn_id in self._stopped_turns:
-            return Ending("stopped")
+            return _Ending("stopped")
+        runner = self._executor.resume if resume else self._executor.run
         child_task = asyncio.create_task(
-            self._executor.run(project_id, session_id, agent, turn_id, hub, lock=lock)
+            runner(project_id, session_id, agent, turn_id, hub, lock=lock)
         )
         self._child_tasks[key] = child_task
         try:
@@ -218,14 +265,14 @@ class TurnWorkers:
                 if child_task.cancelled() and turn_id in self._stopped_turns:
                     # A Stop was requested and the turn task ended cancelled before the
                     # worker woke: the Stop stands.
-                    return Ending("stopped")
+                    return _Ending("stopped")
                 raise
             if turn_id in self._stopped_turns:
-                return Ending("stopped")
+                return _Ending("stopped")
             # Neither Stop nor a close: something else cancelled the turn task. The worker is
             # not being cancelled, so it goes on to the next queued turn.
             logger.warning("Turn %s was cancelled by neither Stop nor a close", turn_id)
-            return Ending("interrupted")
+            return _Ending("interrupted")
         except Exception:
             return _ending_of(turn_id, child_task)
         finally:
@@ -233,14 +280,11 @@ class TurnWorkers:
 
     async def _turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         for observer in self._observers:
-            await observed(observer.turn_started(project_id, agent, turn_id))
+            await _observed(observer.turn_started(project_id, agent, turn_id))
 
 
-def _ending_of(turn_id: str, child_task: asyncio.Task[tuple[TurnEnd, str | None]]) -> Ending:
-    """How a finished, not cancelled turn task ended; an error that escaped it fails the turn."""
-    error = child_task.exception()
-    if error is not None:
-        logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
-        return UNEXPECTED_FAILURE
-    end_status, end_error = child_task.result()
-    return Ending(end_status, end_error)
+def _raise_worker_cancel() -> None:
+    """Raise the worker's cancel that came in the pass its turn task ended (see `_run_turn`)."""
+    current = asyncio.current_task()
+    if current is not None and current.cancelling() > 0:
+        raise asyncio.CancelledError

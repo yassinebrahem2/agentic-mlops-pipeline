@@ -13,14 +13,13 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.runtime import executor as executor_module
+from mlops_agents.agents.runtime import waiting as waiting_module
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     MessageView,
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
-from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
@@ -40,6 +39,7 @@ from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -125,7 +125,7 @@ async def test_executor_cancellation_during_slow_tool(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
@@ -173,7 +173,7 @@ async def test_executor_cancellation_during_slow_tool(
         monkeypatch.setattr(conn, "close", recording_close)
         return conn
 
-    monkeypatch.setattr(executor_module, "connect_checkpointer", recording_connect)
+    monkeypatch.setattr(waiting_module, "connect_checkpointer", recording_connect)
 
     sink = EndStateSink(log)
     task = asyncio.create_task(
@@ -221,7 +221,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,

@@ -344,6 +344,93 @@
         "title": "ApprovalPart",
         "type": "object"
       },
+      "ApprovalView": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/Preview"
+          },
+          "risk_class": {
+            "$ref": "#/components/schemas/RiskClass"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool": {
+            "title": "Tool",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "session_id",
+          "turn_id",
+          "tool_call_id",
+          "tool",
+          "risk_class",
+          "preview",
+          "status",
+          "note",
+          "created_at",
+          "decided_at"
+        ],
+        "title": "ApprovalView",
+        "type": "object"
+      },
       "AuthStatus": {
         "properties": {
           "mode": {
@@ -379,6 +466,31 @@
         "title": "BackupResult",
         "type": "object"
       },
+      "DecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approve": {
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "approve"
+        ],
+        "title": "DecisionRequest",
+        "type": "object"
+      },
       "DetectedKey": {
         "properties": {
           "base_url": {
@@ -410,6 +522,87 @@
           "provider_exists"
         ],
         "title": "DetectedKey",
+        "type": "object"
+      },
+      "DockerStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "available",
+          "version",
+          "detail"
+        ],
+        "title": "DockerStatus",
+        "type": "object"
+      },
+      "EnvironmentStatus": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "enum": [
+              "none",
+              "building",
+              "ready",
+              "failed",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "state",
+          "tag",
+          "detail"
+        ],
+        "title": "EnvironmentStatus",
         "type": "object"
       },
       "EventRecord": {
@@ -913,6 +1106,26 @@
         "title": "PasswordSignIn",
         "type": "object"
       },
+      "PermissionsSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "enum": [
+              "suggest",
+              "ask",
+              "autonomous",
+              "bypass"
+            ],
+            "title": "Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "title": "PermissionsSettings",
+        "type": "object"
+      },
       "PrRef": {
         "properties": {
           "number": {
@@ -1259,6 +1472,53 @@
         "additionalProperties": false,
         "properties": {},
         "title": "ResyncData",
+        "type": "object"
+      },
+      "RiskClass": {
+        "description": "Tool risk classes from docs/roadmap.md. The permission policy (stage 2) keys on these.",
+        "enum": [
+          "read",
+          "write_code",
+          "run",
+          "message",
+          "github",
+          "deploy"
+        ],
+        "title": "RiskClass",
+        "type": "string"
+      },
+      "SandboxSettings": {
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "title": "SandboxSettings",
+        "type": "object"
+      },
+      "SandboxView": {
+        "properties": {
+          "docker": {
+            "$ref": "#/components/schemas/DockerStatus"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          },
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "docker",
+          "environment",
+          "network"
+        ],
+        "title": "SandboxView",
         "type": "object"
       },
       "SendMessage": {
@@ -3156,6 +3416,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/approvals": {
+      "get": {
+        "operationId": "list_pending_approvals_api_projects__project_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalView"
+                  },
+                  "title": "Response List Pending Approvals Api Projects  Project Id  Approvals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pending Approvals",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/approvals/{approval_id}/decision": {
+      "post": {
+        "operationId": "decide_approval_api_projects__project_id__approvals__approval_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Approval",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
     "/api/projects/{project_id}/events/stream": {
       "get": {
         "operationId": "stream_events_api_projects__project_id__events_stream_get",
@@ -3372,6 +3739,278 @@
         "summary": "Relink Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/sandbox": {
+      "get": {
+        "operationId": "get_project_sandbox_api_projects__project_id__sandbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/sandbox/rebuild": {
+      "post": {
+        "operationId": "rebuild_project_sandbox_api_projects__project_id__sandbox_rebuild_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebuild Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/permissions": {
+      "get": {
+        "operationId": "get_permissions_settings_api_projects__project_id__settings_permissions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Permissions Settings",
+        "tags": [
+          "approvals"
+        ]
+      },
+      "put": {
+        "operationId": "update_permissions_settings_api_projects__project_id__settings_permissions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionsSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Permissions Settings",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/sandbox": {
+      "put": {
+        "operationId": "update_project_sandbox_settings_api_projects__project_id__settings_sandbox_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Sandbox Settings",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tasks/{task_id}/discard": {
+      "post": {
+        "operationId": "discard_project_task_api_projects__project_id__tasks__task_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Project Task",
+        "tags": [
+          "tasks"
         ]
       }
     },
@@ -3620,6 +4259,57 @@
         "summary": "List Remote Models",
         "tags": [
           "providers"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/discard": {
+      "post": {
+        "operationId": "discard_task_api_tasks__task_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Task",
+        "tags": [
+          "tasks"
         ]
       }
     }

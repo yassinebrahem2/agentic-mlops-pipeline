@@ -6,13 +6,13 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -26,6 +26,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 pytestmark = pytest.mark.live
@@ -78,10 +79,10 @@ async def test_live_turn_orchestrator_readme(
             settings=settings_svc,
             providers=providers_svc,
             http=http,
-            gate=AllowAllGate(),
+            gate=ApprovalGate(databases),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
-            workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git),
+            workspaces=FakeWorkspaces(workspace=workspace_svc, git=git),
         )
 
         prov = await providers_svc.create_provider(
@@ -93,6 +94,7 @@ async def test_live_turn_orchestrator_readme(
 
         repo_root = Path(__file__).parents[4]
         project = await workspace_svc.add_local(str(repo_root))
+        await set_permission_level(databases, project.id, "autonomous")
         await settings_svc.set_default_model("orchestrator", live_model)
 
         # Subscribing after the snapshot's last_seq replays what was published before the first read.

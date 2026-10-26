@@ -2,11 +2,13 @@ import os
 import subprocess
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import httpx2
 import pytest
 
 from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.docker import CliDockerRunner
 from mlops_agents.storage.databases import Databases
 from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
 
@@ -99,3 +101,23 @@ def fake_openai(_fake_openai_server: RunningFake) -> Iterator[RunningFake]:
         yield _fake_openai_server
     finally:
         _fake_openai_server.state.release_slow()
+
+
+@pytest.fixture(autouse=True)
+def guard_docker_cli(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    item = cast(pytest.Item, request.node)  # pyright: ignore[reportUnknownMemberType]  # pytest FixtureRequest.node lacks type stubs
+    if item.get_closest_marker("docker") is not None:
+        return
+
+    original_run = CliDockerRunner.run
+
+    async def _guarded_run(self: CliDockerRunner, *args: Any, **kwargs: Any) -> Any:
+        if self.executable == "docker":
+            node_id = str(item.nodeid)
+            pytest.fail(
+                f"Test '{node_id}' attempted to reach the real Docker CLI "
+                "without the @pytest.mark.docker marker. Provide a fake Docker runner instead."
+            )
+        return await original_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(CliDockerRunner, "run", _guarded_run)

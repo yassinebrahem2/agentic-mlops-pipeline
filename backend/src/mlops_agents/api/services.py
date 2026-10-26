@@ -8,16 +8,19 @@ from dataclasses import dataclass
 
 import httpx2
 
+from mlops_agents.agents.approvals.contract import Approvals
+from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
+from mlops_agents.agents.tasks.contract import Tasks
+from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
@@ -32,6 +35,9 @@ from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.docker import DockerRunner
+from mlops_agents.sandbox.projects import DatabaseSandboxProjects
+from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -49,9 +55,12 @@ class Services:
     tools: ToolRegistry
     agent_settings: AgentSettingsService
     sessions: AgentSessions
+    sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
     status_board: StatusBoard
+    tasks: Tasks
+    approvals: Approvals
 
 
 async def _app_secrets(
@@ -81,7 +90,12 @@ async def _app_secrets(
 
 
 async def build_services(
-    stack: AsyncExitStack, settings: Settings, *, keystore: KeyStore | None, gh: GhLike | None
+    stack: AsyncExitStack,
+    settings: Settings,
+    *,
+    keystore: KeyStore | None,
+    gh: GhLike | None,
+    docker_runner: DockerRunner | None = None,
 ) -> Services:
     """Each service registers its cleanup on `stack` where it is built; closing the stack
     undoes them in reverse order."""
@@ -103,15 +117,34 @@ async def build_services(
     git = GitRunner(paths.bin, token_provider=github.token)
     workspace = WorkspaceService(settings, paths, databases, git, github, http)
     providers = ProvidersService(databases, keystore, http)
-    tools = default_registry()
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
-    agent_settings = AgentSettingsService(databases, providers, catalog)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    gate = ApprovalGate(databases, audit_log=audit, event_log=events)
+
+    sandbox = SandboxService(
+        docker_runner,
+        projects=DatabaseSandboxProjects(databases, workspace),
+        events=events,
+    )
+    await sandbox.cleanup_orphans()
+    stack.push_async_callback(sandbox.close)
+
+    tasks = TasksService(
+        databases=databases,
+        paths=paths,
+        git=git,
+        events=events,
+        workspace=workspace,
+        sandbox=sandbox,
+    )
+
+    tools = default_registry(tasks=tasks, sandbox=sandbox)
+    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
 
@@ -123,15 +156,25 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
-        gate=AllowAllGate(),
+        gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace, git=git),
+        workspaces=tasks,
         observers=[turn_observer],
         status_board=status_board,
+        audit_log=audit,
+        event_log=events,
     )
     status_board.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
+
+    approvals = ApprovalsService(
+        databases=databases,
+        sessions=sessions,
+        audit_log=audit,
+        event_log=events,
+        workspaces=tasks,
+    )
 
     return Services(
         settings=settings,
@@ -145,7 +188,10 @@ async def build_services(
         tools=tools,
         agent_settings=agent_settings,
         sessions=sessions,
+        sandbox=sandbox,
         events=events,
         audit=audit,
         status_board=status_board,
+        tasks=tasks,
+        approvals=approvals,
     )

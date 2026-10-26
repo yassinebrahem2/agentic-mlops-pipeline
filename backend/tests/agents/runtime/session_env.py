@@ -10,15 +10,14 @@ from typing import Any
 
 import httpx2
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     Gate,
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
     TurnObserver,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -26,6 +25,7 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
+from mlops_agents.events.contract import AuditLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -35,6 +35,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -68,6 +69,7 @@ async def build_session_env(
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
     gate: Gate | None = None,
+    audit_log: AuditLog | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -90,12 +92,13 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        gate=gate if gate is not None else AllowAllGate(),
+        gate=gate if gate is not None else ApprovalGate(databases),
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
+        audit_log=audit_log,
     )
 
     prov = await providers_svc.create_provider(

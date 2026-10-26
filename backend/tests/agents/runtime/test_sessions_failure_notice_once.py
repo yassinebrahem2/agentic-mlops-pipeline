@@ -11,8 +11,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import MessageView, TextPart, TurnEnd, TurnEnded
-from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.contract import MessageView, TextPart, TurnEnded
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.hub import SessionHub
 from mlops_agents.paths import DataPaths
@@ -67,7 +67,7 @@ def fail_the_first_run(
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         runs.append(turn_id)
         if len(runs) == 1:
             await failing(self, project_id, session_id, turn_id, sink, lock)
