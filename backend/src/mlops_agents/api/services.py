@@ -12,10 +12,11 @@ from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.pr_reminder import PrReminder
+from mlops_agents.agents.pr_sync import PrSyncObserver
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.hooks import (
     NoInbound,
-    NoTurnEndCheck,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -142,11 +143,21 @@ async def build_services(
         sandbox=sandbox,
     )
 
-    tools = default_registry(tasks=tasks, sandbox=sandbox)
+    tools = default_registry(
+        tasks=tasks,
+        sandbox=sandbox,
+        workspace=workspace,
+        github=github,
+        events=events,
+        http=http,
+        databases=databases,
+    )
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
+    pr_sync = PrSyncObserver(tasks, workspace, github, http)
+    stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
         databases=databases,
@@ -158,9 +169,9 @@ async def build_services(
         http=http,
         gate=gate,
         inbound=NoInbound(),
-        turn_end=NoTurnEndCheck(),
+        turn_end=PrReminder(tasks),
         workspaces=tasks,
-        observers=[turn_observer],
+        observers=[turn_observer, pr_sync],
         status_board=status_board,
         audit_log=audit,
         event_log=events,
