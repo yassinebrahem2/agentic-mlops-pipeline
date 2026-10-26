@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncGenerator, Coroutine
-from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -40,8 +40,6 @@ logger = logging.getLogger(__name__)
 
 def _build_failure_detail(exc: BaseException) -> str:
     err = str(exc).strip() or type(exc).__name__
-    if err.startswith("Image build failed:"):
-        return err
     return f"Image build failed: {err}"
 
 
@@ -155,22 +153,31 @@ class SandboxService(Sandbox):
             "tag": status.tag,
             "detail": None if status.state == "ready" else status.detail,
         }
-        try:
-            pending = asyncio.create_task(
-                self._events.record(
-                    project_id,
-                    source="system",
-                    type=event_type,
-                    payload=payload,
-                )
+        pending = asyncio.create_task(
+            self._events.record(
+                project_id,
+                source="system",
+                type=event_type,
+                payload=payload,
             )
-            while not pending.done():
-                with suppress(asyncio.CancelledError):
-                    await asyncio.shield(pending)
-            with suppress(asyncio.CancelledError):
-                pending.result()
+        )
+        cancelled: asyncio.CancelledError | None = None
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+            except Exception:
+                break
+        try:
+            pending.result()
+        except asyncio.CancelledError as exc:
+            cancelled = exc
         except Exception:
             logger.exception("Failed to record %s event for project %s", event_type, project_id)
+
+        if cancelled is not None:
+            raise cancelled
 
     async def _build_project_image(self, project_id: str, worktree: Path) -> EnvironmentStatus:
         """Own the full build lifecycle, including dependency reads and context creation."""
