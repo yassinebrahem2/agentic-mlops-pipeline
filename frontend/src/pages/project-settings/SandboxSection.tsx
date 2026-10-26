@@ -3,6 +3,7 @@ import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { api, errorText, unwrap } from "@/lib/api";
+import { useProjectEvents } from "@/lib/useProjectEvents";
 
 type View = components["schemas"]["SandboxView"];
 type EnvironmentState = components["schemas"]["EnvironmentStatus"]["state"];
@@ -14,8 +15,6 @@ const STATE_LABELS: Record<EnvironmentState, string> = {
   failed: "Failed",
   unavailable: "Unavailable",
 };
-// The status is polled while an image builds so the page learns when it finishes.
-const BUILD_POLL_MS = 2000;
 
 const sandboxKey = (projectId: string) => ["projects", projectId, "sandbox"] as const;
 
@@ -25,8 +24,16 @@ export function SandboxSection({ projectId }: { projectId: string }) {
   const sandbox = useQuery({
     queryKey: sandboxKey(projectId),
     queryFn: async () => unwrap(await api.GET("/api/projects/{project_id}/sandbox", { params })),
-    refetchInterval: (query) =>
-      query.state.data?.environment.state === "building" ? BUILD_POLL_MS : false,
+  });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: sandboxKey(projectId) });
+  };
+  // Builds also start from an agent's Bash call, so the event stream is what keeps the status live.
+  useProjectEvents(projectId, {
+    onEvent: (event) => {
+      if (event.type.startsWith("sandbox.build.")) refresh();
+    },
+    onResync: refresh,
   });
   const update = (change: (view: View) => View) => {
     queryClient.setQueryData<View>(sandboxKey(projectId), (view) => view && change(view));
@@ -36,6 +43,7 @@ export function SandboxSection({ projectId }: { projectId: string }) {
       unwrap(await api.POST("/api/projects/{project_id}/sandbox/rebuild", { params })),
     onSuccess: (environment) => {
       update((view) => ({ ...view, environment }));
+      refresh();
     },
   });
   const network = useMutation({
@@ -51,11 +59,9 @@ export function SandboxSection({ projectId }: { projectId: string }) {
     },
   });
   const view = sandbox.data;
+  const building = view?.environment.state === "building" || rebuild.isPending;
   const cannotRebuild =
-    view !== undefined &&
-    (!view.docker.available ||
-      view.environment.state === "unavailable" ||
-      view.environment.state === "building");
+    view !== undefined && (!view.docker.available || view.environment.state === "unavailable");
   return (
     <section className="space-y-4 rounded-lg border p-4" aria-labelledby="sandbox-title">
       <h2 id="sandbox-title" className="text-lg font-semibold">
@@ -79,7 +85,10 @@ export function SandboxSection({ projectId }: { projectId: string }) {
               </>
             )}
             {view.docker.detail !== null && (
-              <dd className="sm:col-start-2">{view.docker.detail}</dd>
+              <>
+                <dt className="text-muted-foreground">Docker message</dt>
+                <dd>{view.docker.detail}</dd>
+              </>
             )}
             <dt className="text-muted-foreground">Environment image</dt>
             <dd>{STATE_LABELS[view.environment.state]}</dd>
@@ -90,17 +99,20 @@ export function SandboxSection({ projectId }: { projectId: string }) {
               </>
             )}
             {view.environment.detail !== null && (
-              <dd className="sm:col-start-2">{view.environment.detail}</dd>
+              <>
+                <dt className="text-muted-foreground">Image message</dt>
+                <dd>{view.environment.detail}</dd>
+              </>
             )}
           </dl>
           <Button
             variant="outline"
-            disabled={cannotRebuild || rebuild.isPending}
+            disabled={cannotRebuild || building}
             onClick={() => {
               rebuild.mutate();
             }}
           >
-            {rebuild.isPending ? "Starting..." : "Rebuild"}
+            {building ? "Building..." : "Rebuild"}
           </Button>
           <div className="flex items-center gap-2">
             <input

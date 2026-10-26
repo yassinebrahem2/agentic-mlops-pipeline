@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { vi } from "vitest";
+import * as streamModule from "@/lib/stream";
+import { FakeStream } from "@/pages/agents/session/testing";
 
 export interface RecordedRequest {
   path: string;
@@ -10,7 +12,7 @@ export interface RecordedRequest {
 }
 
 /** Answers a stubbed route; the body is the parsed JSON of a PUT or POST, else null. */
-export type RouteHandler = (body: unknown) => Response;
+export type RouteHandler = (body: unknown) => Response | Promise<Response>;
 
 export function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -47,7 +49,7 @@ export function stubRoutes(routes: Record<string, RouteHandler>): RecordedReques
       const body: unknown = text === "" ? null : JSON.parse(text);
       requests.push({ path, method: request.method, body });
       const handler = routes[`${request.method} ${path}`];
-      return handler ? handler(body) : new Response(null, { status: 404 });
+      return handler ? await handler(body) : new Response(null, { status: 404 });
     }),
   );
   return requests;
@@ -58,4 +60,11 @@ export function renderSection(ui: ReactElement): RenderResult {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
+/** Replaces the project event stream with a fake one; restore it with `vi.restoreAllMocks()`. */
+export function stubEventStream(): FakeStream {
+  const stream = new FakeStream("/events");
+  vi.spyOn(streamModule, "openStream").mockImplementation(() => stream);
+  return stream;
 }

@@ -8,6 +8,7 @@ import { resetCurrentProjectStore } from "@/lib/useCurrentProject";
 import { renderPage } from "@/test/render";
 import { route as projectHomeRoute } from "../../pages/project-home/route";
 import { route as projectSettingsRoute } from "../../pages/project-settings/route";
+import { stubEventStream } from "../../pages/project-settings/testing";
 
 type Project = components["schemas"]["Project"];
 
@@ -89,6 +90,7 @@ describe("ProjectSwitcher", () => {
   });
 
   function setupFetch(onOpen?: (projectId: string) => void) {
+    stubEventStream();
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const { url, method } = getUrlAndMethod(input, init);
 

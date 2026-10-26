@@ -5,6 +5,7 @@ import type { components } from "@/api/schema";
 import { renderPage } from "@/test/render";
 import { hostedModelWarning } from "@/lib/models";
 import { route } from "./route";
+import { stubEventStream } from "./testing";
 
 type Project = components["schemas"]["Project"];
 type Agent = components["schemas"]["AgentInfo"];
@@ -76,6 +77,7 @@ function setup(
     failure?: string;
   } = {},
 ) {
+  stubEventStream();
   let current = options.project ?? project;
   let currentAgent = options.agent ?? agent;
   const requests: { path: string; method: string; body: unknown }[] = [];
@@ -166,6 +168,7 @@ function setup(
   return { requests, user: userEvent.setup() };
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 it("shows local repository details and refreshes its status", async () => {

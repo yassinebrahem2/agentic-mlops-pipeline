@@ -7,6 +7,7 @@ import { renderPage } from "@/test/render";
 import { route as projectsRoute } from "./route";
 import { route as projectHomeRoute } from "../project-home/route";
 import { route as projectSettingsRoute } from "../project-settings/route";
+import { stubEventStream } from "../project-settings/testing";
 
 type Project = components["schemas"]["Project"];
 
@@ -247,6 +248,7 @@ describe("ProjectsPage", () => {
     let openCalled = false;
     let openedId = "";
 
+    stubEventStream();
     const fakeFetch = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const { url, method } = getUrlAndMethod(input, init);
 
@@ -260,6 +262,13 @@ describe("ProjectsPage", () => {
         const agents: components["schemas"]["AgentInfo"][] = [];
         const models: components["schemas"]["ModelEntry"][] = [];
         const providers: components["schemas"]["Provider"][] = [];
+        const permissions: components["schemas"]["PermissionsSettings"] = { level: "ask" };
+        const issues: components["schemas"]["IssuesSettings"] = { min_priority: "medium" };
+        const sandbox: components["schemas"]["SandboxView"] = {
+          docker: { available: true, version: "27.1", detail: null },
+          environment: { state: "ready", tag: "env:1", detail: null },
+          network: false,
+        };
         const data: unknown = url.endsWith("/api/app")
           ? app
           : url.endsWith("/agents")
@@ -268,9 +277,15 @@ describe("ProjectsPage", () => {
               ? models
               : url.endsWith("/api/providers")
                 ? providers
-                : url.endsWith("/api/projects/prj_demo")
-                  ? projects[0]
-                  : undefined;
+                : url.endsWith("/settings/permissions")
+                  ? permissions
+                  : url.endsWith("/settings/issues")
+                    ? issues
+                    : url.endsWith("/sandbox")
+                      ? sandbox
+                      : url.endsWith("/api/projects/prj_demo")
+                        ? projects[0]
+                        : undefined;
         if (data !== undefined)
           return Promise.resolve(
             new Response(JSON.stringify(data), {
