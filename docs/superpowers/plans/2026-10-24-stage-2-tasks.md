@@ -117,6 +117,7 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 - Commit as the user: their name and email from git config, else their GitHub login and the noreply address.
 - `staged_diff` stages, diffs against the base, and unstages, capped at 60,000 characters.
 - `push` pushes the branch to the https URL.
+- (Added in the review of #241.) After a push, the pushed sha is recorded in the namespaced ref `refs/<app name>/pushed/<branch>`, which `has_unpublished_changes` compares against; no `refs/remotes/*` ref is ever written or deleted.
 - `has_unpublished_changes` is true when the worktree has changes, or the branch has commits its remote branch lacks. With no `RepoRef`, it is true when the branch is ahead of its base and no local review exists.
 
 **Tests (stop condition):**
@@ -160,3 +161,9 @@ Task 4 gets an early PR, from `plan/stage-2-tasks-task4`: github-work's OpenPull
 - Removing a project prunes its worktrees and branches.
 - Wired: a session turn that calls StartTask then Write (in two steps) writes into the task's worktree, and Read in a later turn sees it.
 - Full suite, checks; CI green on Linux and Windows.
+
+**Review fixes (added in the review of #241):** task 5 also does these, in task 4's files:
+- `test_push_temp_dir_cleaned_up`'s cancel case fails when the post-cancel wait for the running push is removed (the spy records that the temp dir still existed when the real push returned).
+- `test_diff.py`'s cancel-during-add test waits with a timeout, so a broken shield fails instead of hanging.
+- `push.py` shields the `init` of the throwaway repo like the push itself.
+- The per-task lock is not reentrant: nothing task 5 adds (the local merge, `end`, discard, the approval preview) calls a locked `Tasks` method while holding the lock; a test covers `end` and discard waiting for a running `commit`.
