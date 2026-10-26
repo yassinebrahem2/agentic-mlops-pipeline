@@ -33,6 +33,7 @@ from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
@@ -86,7 +87,12 @@ async def _app_secrets(
 
 
 async def build_services(
-    stack: AsyncExitStack, settings: Settings, *, keystore: KeyStore | None, gh: GhLike | None
+    stack: AsyncExitStack,
+    settings: Settings,
+    *,
+    keystore: KeyStore | None,
+    gh: GhLike | None,
+    docker_runner: DockerRunner | None = None,
 ) -> Services:
     """Each service registers its cleanup on `stack` where it is built; closing the stack
     undoes them in reverse order."""
@@ -115,7 +121,11 @@ async def build_services(
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
 
-    sandbox = SandboxService(projects=DatabaseSandboxProjects(databases, workspace), events=events)
+    sandbox = SandboxService(
+        docker_runner,
+        projects=DatabaseSandboxProjects(databases, workspace),
+        events=events,
+    )
     await sandbox.cleanup_orphans()
     stack.push_async_callback(sandbox.close)
 

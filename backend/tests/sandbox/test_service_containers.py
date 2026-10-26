@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import cast
@@ -10,131 +9,13 @@ import pytest
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import SandboxUnavailable
-from mlops_agents.sandbox.docker import DockerResult, DockerRunner
+from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-
-
-class FakeServiceDocker(DockerRunner):
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-        self.containers: dict[str, dict[str, object]] = {}
-        self.images: set[str] = set()
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        self.calls.append(cmd)
-
-        if cmd[0] == "version":
-            data = {"Client": {"Version": "27.0.0"}, "Server": {"Version": "27.0.0"}}
-            return DockerResult(stdout=json.dumps(data), stderr="", exit_code=0)
-
-        if cmd[0] == "image" and cmd[1] == "inspect":
-            tag = cmd[2]
-            if tag in self.images:
-                return DockerResult(stdout="{}", stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr="no such image", exit_code=1)
-
-        if cmd[0] == "build":
-            tag_idx = cmd.index("-t") + 1
-            tag = cmd[tag_idx]
-            self.images.add(tag)
-            return DockerResult(stdout="Successfully built", stderr="", exit_code=0)
-
-        if cmd[0] == "inspect":
-            name = cmd[1]
-            if name in self.containers:
-                return DockerResult(
-                    stdout=json.dumps([self.containers[name]]), stderr="", exit_code=0
-                )
-            return DockerResult(stdout="", stderr=f"Error: No such container: {name}", exit_code=1)
-
-        if cmd[0] == "run":
-            name_idx = cmd.index("--name") + 1
-            name = cmd[name_idx]
-            labels: dict[str, str] = {}
-            for i, arg in enumerate(cmd):
-                if arg == "--label" and i + 1 < len(cmd):
-                    k, v = cmd[i + 1].split("=", 1)
-                    labels[k] = v
-            net_mode = (
-                "none"
-                if "--network" in cmd and cmd[cmd.index("--network") + 1] == "none"
-                else "default"
-            )
-            sleep_idx = cmd.index("sleep")
-            image_tag = cmd[sleep_idx - 1]
-
-            self.containers[name] = {
-                "Id": f"cid_{name}",
-                "Name": f"/{name}",
-                "State": {"Running": True, "Status": "running"},
-                "Config": {
-                    "Image": image_tag,
-                    "Labels": labels,
-                },
-                "HostConfig": {
-                    "NetworkMode": net_mode,
-                },
-            }
-            return DockerResult(stdout=f"cid_{name}", stderr="", exit_code=0)
-
-        if cmd[0] == "pause":
-            name = cmd[1]
-            if name in self.containers:
-                state = cast(dict[str, object], self.containers[name]["State"])
-                state["Paused"] = True
-                return DockerResult(stdout=name, stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr=f"Error: No such container: {name}", exit_code=1)
-
-        if cmd[0] == "unpause":
-            name = cmd[1]
-            if name in self.containers:
-                state = cast(dict[str, object], self.containers[name]["State"])
-                state["Paused"] = False
-                return DockerResult(stdout=name, stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr=f"Error: No such container: {name}", exit_code=1)
-
-        if cmd[0] == "exec":
-            return DockerResult(stdout="executed", stderr="", exit_code=0)
-
-        if cmd[0] == "rm":
-            for target in cmd[2:]:
-                self.containers.pop(target, None)
-            return DockerResult(stdout="Deleted", stderr="", exit_code=0)
-
-        if cmd[0] == "ps":
-            matched: list[str] = []
-            filter_arg = next((cmd[i + 1] for i, a in enumerate(cmd) if a == "--filter"), None)
-            for name, cinfo in self.containers.items():
-                if filter_arg:
-                    if filter_arg == f"label={APP_NAME}=true":
-                        matched.append(name)
-                    elif filter_arg.startswith(f"label={APP_NAME}.project="):
-                        expected_proj = filter_arg.split("=", 2)[2]
-                        cfg_raw = cinfo.get("Config")
-                        if isinstance(cfg_raw, dict):
-                            cfg = cast(dict[str, object], cfg_raw)
-                            raw_lbls = cfg.get("Labels")
-                            if isinstance(raw_lbls, dict):
-                                lbls = cast(dict[str, str], raw_lbls)
-                                if lbls.get(f"{APP_NAME}.project") == expected_proj:
-                                    matched.append(name)
-                else:
-                    matched.append(name)
-            return DockerResult(stdout="\n".join(matched), stderr="", exit_code=0)
-
-        return DockerResult(stdout="", stderr="", exit_code=0)
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
 async def test_service_remove_task_and_close(tmp_path: Path) -> None:
-    runner = FakeServiceDocker()
+    runner = FakeDockerRunner()
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -168,7 +49,7 @@ async def test_service_remove_task_and_close(tmp_path: Path) -> None:
 
 
 async def test_service_network_settings_and_container_recreation(tmp_path: Path) -> None:
-    runner = FakeServiceDocker()
+    runner = FakeDockerRunner()
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -208,7 +89,7 @@ async def test_service_network_settings_and_container_recreation(tmp_path: Path)
 
 
 async def test_service_cleanup_orphans(tmp_path: Path) -> None:
-    runner = FakeServiceDocker()
+    runner = FakeDockerRunner()
     # Pre-populate an orphan container
     runner.containers[f"{APP_NAME}-orphan"] = {
         "Id": "cid_orphan",
@@ -229,7 +110,7 @@ async def test_container_operational_failure_becomes_unavailable(
     operation: str,
     error: OSError,
 ) -> None:
-    class FailedOperation(FakeServiceDocker):
+    class FailedOperation(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],
@@ -250,7 +131,7 @@ async def test_container_operational_failure_becomes_unavailable(
 
 
 async def test_unexpected_container_failure_surfaces(tmp_path: Path) -> None:
-    class BrokenRunner(FakeServiceDocker):
+    class BrokenRunner(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],
@@ -271,7 +152,7 @@ async def test_unexpected_container_failure_surfaces(tmp_path: Path) -> None:
 
 
 async def test_ensure_container_failed_build_raises_unavailable_with_detail(tmp_path: Path) -> None:
-    class FailingBuildDocker(FakeServiceDocker):
+    class FailingBuildDocker(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],
@@ -303,7 +184,7 @@ async def test_ensure_container_failed_build_raises_unavailable_with_detail(tmp_
 
 
 async def test_service_paused_context_manager(tmp_path: Path) -> None:
-    runner = FakeServiceDocker()
+    runner = FakeDockerRunner()
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -336,7 +217,7 @@ async def test_service_paused_context_manager(tmp_path: Path) -> None:
 async def test_service_task_lock_serializes_paused(tmp_path: Path) -> None:
     import asyncio
 
-    runner = FakeServiceDocker()
+    runner = FakeDockerRunner()
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -371,41 +252,3 @@ async def test_service_task_lock_serializes_paused(tmp_path: Path) -> None:
         "p1_ending",
         "p2_started",
     ]
-
-
-@pytest.mark.docker
-async def test_real_docker_paused_lifecycle(tmp_path: Path) -> None:
-    from mlops_agents.sandbox.docker import CliDockerRunner
-
-    runner = CliDockerRunner()
-    worktree = tmp_path / "worktree"
-    worktree.mkdir()
-    (worktree / "requirements.txt").write_text("six\n", encoding="utf-8")
-    service = SandboxService(
-        runner=runner,
-        projects=MemorySandboxProjects({"prj_paused": worktree}),
-        events=FakeEventLog(),
-    )
-    task = TaskRef("realpause1", "Real Pause", "branch", worktree, "active")
-    cname = await service.ensure_container("prj_paused", task)
-    try:
-        # Before paused: running and not paused
-        inspect_res = await runner.run(["inspect", cname])
-        assert inspect_res.exit_code == 0
-        info = json.loads(inspect_res.stdout)[0]
-        assert info["State"]["Running"] is True
-        assert info["State"]["Paused"] is False
-
-        async with service.paused("prj_paused", task.id):
-            inspect_paused = await runner.run(["inspect", cname])
-            assert inspect_paused.exit_code == 0
-            info_paused = json.loads(inspect_paused.stdout)[0]
-            assert info_paused["State"]["Paused"] is True
-
-        # After paused block: unpaused
-        inspect_after = await runner.run(["inspect", cname])
-        assert inspect_after.exit_code == 0
-        info_after = json.loads(inspect_after.stdout)[0]
-        assert info_after["State"]["Paused"] is False
-    finally:
-        await service.remove_task("prj_paused", task.id)

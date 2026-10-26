@@ -11,11 +11,10 @@ from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-from tests.sandbox.test_service_containers import FakeServiceDocker
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
-class ControlledDocker(FakeServiceDocker):
+class ControlledDocker(FakeDockerRunner):
     def __init__(self) -> None:
         super().__init__()
         self.block_operation: str | None = None

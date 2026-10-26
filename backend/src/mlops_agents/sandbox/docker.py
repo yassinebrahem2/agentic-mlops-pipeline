@@ -6,12 +6,12 @@ import asyncio
 import codecs
 import contextlib
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast, runtime_checkable
 
 from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
-from mlops_agents.sandbox.contract import DockerStatus
+from mlops_agents.sandbox.contract import DockerStatus, SandboxUnavailable
 
 DOCKER_INSTALL_MESSAGE = (
     "Docker is not installed or not on PATH. Install Docker Desktop "
@@ -20,6 +20,26 @@ DOCKER_INSTALL_MESSAGE = (
 
 HEAD_CAPTURE_CHARS = 15_000
 TAIL_CAPTURE_CHARS = 15_000
+
+
+@contextlib.asynccontextmanager
+async def docker_error_boundary(
+    action: str, *, gerund: str | None = None, reraise_docker_timeout: bool = False
+) -> AsyncGenerator[None]:
+    try:
+        yield
+    except FileNotFoundError as err:
+        raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+    except DockerTimeoutError as err:
+        if reraise_docker_timeout:
+            raise
+        timing = gerund or action
+        raise SandboxUnavailable(f"Timed out {timing}.") from err
+    except TimeoutError as err:
+        timing = gerund or action
+        raise SandboxUnavailable(f"Timed out {timing}.") from err
+    except OSError as err:
+        raise SandboxUnavailable(f"Failed to {action}: {err}") from err
 
 
 class DockerTimeoutError(TimeoutError):
@@ -134,6 +154,10 @@ class CliDockerRunner:
 
     def __init__(self, executable: str = "docker") -> None:
         self._executable = executable
+
+    @property
+    def executable(self) -> str:
+        return self._executable
 
     async def run(
         self,
