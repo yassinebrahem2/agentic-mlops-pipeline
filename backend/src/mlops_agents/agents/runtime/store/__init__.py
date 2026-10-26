@@ -11,6 +11,7 @@ from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.runtime.contract import ApprovalPart, Part
 from mlops_agents.agents.runtime.shielded import shielded
+from mlops_agents.agents.runtime.store.inbound import InboundStore
 from mlops_agents.agents.runtime.store.messages import MessagesStore
 from mlops_agents.agents.runtime.store.turns import TurnsStore
 from mlops_agents.agents.runtime.store.usage import UsageStore
@@ -20,10 +21,10 @@ from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import messages, sessions, turns
 
-__all__ = ["SessionStore"]
+__all__ = ["InboundStore", "SessionStore"]
 
 
-class SessionStore(MessagesStore, TurnsStore, UsageStore):
+class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
     """The sessions table, and recovery across turns and messages."""
 
     def __init__(

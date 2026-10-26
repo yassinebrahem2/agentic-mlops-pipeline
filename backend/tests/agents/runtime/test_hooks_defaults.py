@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 from mlops_agents.agents.runtime.hooks import (
-    NoInbound,
     NoTurnEndCheck,
 )
+from tests.agents.runtime.hook_fakes import NoInbound
 
 
 async def test_no_inbound_and_no_turn_end_check_add_nothing() -> None:

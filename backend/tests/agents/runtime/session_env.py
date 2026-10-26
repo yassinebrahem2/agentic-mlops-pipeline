@@ -16,7 +16,7 @@ from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
     Gate,
-    NoInbound,
+    InboundSource,
     NoTurnEndCheck,
     TurnObserver,
 )
@@ -33,6 +33,7 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.hook_fakes import NoInbound
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
@@ -69,6 +70,7 @@ async def build_session_env(
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
     gate: Gate | None = None,
+    inbound: InboundSource | None = None,
     audit_log: AuditLog | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
@@ -93,7 +95,7 @@ async def build_session_env(
         providers=providers_svc,
         http=model_http,
         gate=gate if gate is not None else ApprovalGate(databases),
-        inbound=NoInbound(),
+        inbound=inbound if inbound is not None else NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
