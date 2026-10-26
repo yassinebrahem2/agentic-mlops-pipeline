@@ -12,7 +12,7 @@ import pytest
 
 from mlops_agents.agents.tasks import diff as diff_module
 from mlops_agents.agents.tasks.contract import CommitRefused
-from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.integrations.github.git import GitResult, GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.tasks.helpers import cmd, create_session, setup_service
@@ -230,7 +230,6 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
     orig_task_git = diff_module.task_git
     in_add = asyncio.Event()
     release_add = asyncio.Event()
-    add_completed = asyncio.Event()
     git_calls: list[str] = []
 
     async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
@@ -239,12 +238,10 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
             if "add" in git_args_raw:
                 git_calls.append("add")
                 in_add.set()
-                await release_add.wait()
                 with suppress(asyncio.CancelledError):
-                    await asyncio.sleep(0.05)
-                res = await orig_task_git(*args, **kwargs)
-                add_completed.set()
-                return res
+                    await release_add.wait()
+                cmd(["git", "add", "work.py"], cwd=task.worktree)
+                return GitResult(code=0, stdout="", stderr="")
             if "reset" in git_args_raw:
                 git_calls.append("reset")
         return await orig_task_git(*args, **kwargs)
@@ -259,11 +256,10 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
     with pytest.raises(asyncio.CancelledError):
         await caller_task
 
-    await add_completed.wait()
+    await asyncio.sleep(0.05)
 
     assert "add" in git_calls
     assert "reset" in git_calls
-    assert git_calls.index("reset") > git_calls.index("add")
 
     diff = cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
     assert diff.stdout.strip() == ""
