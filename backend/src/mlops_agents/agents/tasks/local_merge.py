@@ -108,6 +108,14 @@ async def local_merge(
 
     try:
         # Step 1: Create detached temp worktree on default_branch
+        old_sha_res = await run_safe_git(
+            runner,
+            args=["rev-parse", f"refs/heads/{default_branch}"],
+            cwd=repo_root,
+            empty_hooks=empty_hooks,
+        )
+        old_sha = old_sha_res.stdout.strip()
+
         await run_safe_git(
             runner,
             args=["worktree", "add", "--detach", str(temp_worktree), default_branch],
@@ -167,12 +175,17 @@ async def local_merge(
                 err_msg = ff_res.stderr.strip() or ff_res.stdout.strip() or "Fast-forward refused."
                 raise CommitRefused(err_msg)
         else:
-            await run_safe_git(
+            ref_res = await run_safe_git(
                 runner,
-                args=["update-ref", f"refs/heads/{default_branch}", merge_sha],
+                args=["update-ref", f"refs/heads/{default_branch}", merge_sha, old_sha],
                 cwd=repo_root,
                 empty_hooks=empty_hooks,
+                check=False,
             )
+            if ref_res.code != 0:
+                raise CommitRefused(
+                    f"Fast-forward refused: default branch {default_branch} changed concurrently."
+                )
 
     finally:
         # Step 3: Clean up temporary worktree

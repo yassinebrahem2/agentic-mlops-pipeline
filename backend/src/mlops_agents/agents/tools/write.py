@@ -22,6 +22,7 @@ from mlops_agents.agents.tools.file_ops import (
     compute_sha256,
     get_current_task,
     pause_task,
+    pop_pending_note,
     resolve_and_validate,
     safe_write_bytes,
 )
@@ -100,11 +101,7 @@ class WriteTool(AgentTool[WriteArgs]):
 
     async def run(self, ctx: ToolContext, args: WriteArgs) -> ToolOutput:
         current = await get_current_task(ctx, self._tasks)
-        note = (
-            self._tasks.pop_pending_note(ctx.project_id, current.id)
-            if hasattr(self._tasks, "pop_pending_note")
-            else None
-        )
+        note = pop_pending_note(self._tasks, ctx.project_id, current.id)
         async with pause_task(self._sandbox, ctx.project_id, current.id):
             (
                 candidate,

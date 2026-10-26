@@ -357,14 +357,9 @@ class SessionManager(AgentSessions):
                 hub.close()
                 self._hubs.pop((p, s), None)
 
-        # Clear references
-        for key in list(self._locks.keys()):
-            if key[0] == project_id:
-                self._locks.pop(key, None)
+        self._locks = {k: v for k, v in self._locks.items() if k[0] != project_id}
+        self._session_ids = {k: v for k, v in self._session_ids.items() if k[0] != project_id}
         self._workers.forget(project_id)
-        for key in list(self._session_ids.keys()):
-            if key[0] == project_id:
-                self._session_ids.pop(key, None)
 
         self._recovered_projects.discard(project_id)
 

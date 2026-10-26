@@ -14,6 +14,7 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+from mlops_agents.agents.tools.file_ops import pop_pending_note
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
@@ -113,10 +114,8 @@ class ReadTool(AgentTool[ReadArgs]):
             await self._tasks.record_read(ctx.project_id, ctx.task, rel, sha256)
 
         note = (
-            self._tasks.pop_pending_note(ctx.project_id, ctx.task.id)
+            pop_pending_note(self._tasks, ctx.project_id, ctx.task.id)
             if ctx.task is not None
-            and self._tasks is not None
-            and hasattr(self._tasks, "pop_pending_note")
             else None
         )
 

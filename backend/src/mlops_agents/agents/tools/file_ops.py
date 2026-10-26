@@ -6,7 +6,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from mlops_agents.agents.temp_files import make_temp_name
 from mlops_agents.agents.tools.base import TaskRef, ToolContext, ToolFailure
@@ -18,10 +18,24 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.sandbox.contract import Sandbox
 
+
+@runtime_checkable
+class HasPendingNote(Protocol):
+    def pop_pending_note(self, project_id: str, task_id: str) -> str | None: ...
+
+
+def pop_pending_note(tasks: object | None, project_id: str, task_id: str) -> str | None:
+    if isinstance(tasks, HasPendingNote):
+        return tasks.pop_pending_note(project_id, task_id)
+    return None
+
+
 __all__ = [
+    "HasPendingNote",
     "compute_sha256",
     "get_current_task",
     "pause_task",
+    "pop_pending_note",
     "resolve_and_validate",
     "safe_write_bytes",
 ]
