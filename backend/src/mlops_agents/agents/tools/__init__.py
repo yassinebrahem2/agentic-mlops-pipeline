@@ -8,13 +8,16 @@ from mlops_agents.agents.tools.bash import BashTool
 from mlops_agents.agents.tools.edit import EditTool
 from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
+from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.write import WriteTool
 
 if TYPE_CHECKING:
+    from mlops_agents.agents.catalog import AgentCatalog
     from mlops_agents.agents.messaging.bus import SqliteMessageBus
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.events.contract import StatusBoard
     from mlops_agents.sandbox.contract import Sandbox
 
 __all__ = [
@@ -22,6 +25,7 @@ __all__ = [
     "EditTool",
     "GlobTool",
     "GrepTool",
+    "ListAgentsTool",
     "ReadTool",
     "ResumeTaskTool",
     "StartTaskTool",
@@ -36,6 +40,8 @@ def default_registry(
     tasks: Tasks | None = None,
     sandbox: Sandbox | None = None,
     bus: SqliteMessageBus | None = None,
+    status_board: StatusBoard | None = None,
+    catalog: AgentCatalog | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -59,4 +65,10 @@ def default_registry(
         from mlops_agents.agents.tools.send_message import SendMessageTool
 
         registry.register(SendMessageTool(bus))
+    if status_board is not None:
+        effective_catalog = (
+            catalog if catalog is not None else getattr(status_board, "_catalog", None)
+        )
+        if effective_catalog is not None:
+            registry.register(ListAgentsTool(catalog=effective_catalog, status_board=status_board))
     return registry
