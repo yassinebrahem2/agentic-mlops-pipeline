@@ -1,8 +1,10 @@
-"""The cached secret values never miss a key, also after a key change during a read."""
+"""The cached secret values never miss a key: not after a key change during a read, nor after a
+keystore delete that failed."""
 
 import asyncio
 import threading
 
+import pytest
 from sqlalchemy import insert
 
 from mlops_agents.providers.keys import StoredKeys
@@ -27,6 +29,22 @@ class HeldKeyStore(MemoryKeyStore):
             self._loop.call_soon_threadsafe(self.entered.set)
             self.release.wait(timeout=10)
         return super().get(ref)
+
+
+class FailingDeleteKeyStore(MemoryKeyStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_deletes = False
+        self.reads = 0
+
+    def get(self, ref: str) -> str | None:
+        self.reads += 1
+        return super().get(ref)
+
+    def delete(self, ref: str) -> None:
+        if self.fail_deletes:
+            raise OSError("key store unavailable")
+        super().delete(ref)
 
 
 async def _insert_provider(databases: Databases, provider_id: str) -> None:
@@ -60,3 +78,42 @@ async def test_a_key_added_during_a_read_is_in_the_next_values(databases: Databa
     # The read in flight returns what it read, and is not cached over the change.
     assert await asyncio.wait_for(read, timeout=5) == ["key-1"]
     assert await stored.all_values() == ["key-1", "key-2"]
+
+
+async def test_a_failed_keystore_delete_on_remove_still_clears_the_cache(
+    databases: Databases,
+) -> None:
+    keystore = FailingDeleteKeyStore()
+    stored = StoredKeys(databases, keystore)
+    await _insert_provider(databases, "prv_a")
+    await stored.add("prv_a", "key-1")
+    await stored.add("prv_a", "key-2")
+    assert await stored.all_values() == ["key-1", "key-2"]
+
+    keystore.fail_deletes = True
+    with pytest.raises(OSError, match="key store unavailable"):
+        await stored.remove("prv_a", 1)
+
+    keystore.reads = 0
+    assert await stored.all_values() == ["key-2"]
+    assert keystore.reads == 1
+
+
+async def test_a_failed_keystore_delete_on_delete_provider_still_clears_the_cache(
+    databases: Databases,
+) -> None:
+    keystore = FailingDeleteKeyStore()
+    stored = StoredKeys(databases, keystore)
+    await _insert_provider(databases, "prv_a")
+    await _insert_provider(databases, "prv_b")
+    await stored.add("prv_a", "key-a1")
+    await stored.add("prv_b", "key-b1")
+    assert await stored.all_values() == ["key-a1", "key-b1"]
+
+    keystore.fail_deletes = True
+    with pytest.raises(OSError, match="key store unavailable"):
+        await stored.delete_provider("prv_a")
+
+    keystore.reads = 0
+    assert await stored.all_values() == ["key-b1"]
+    assert keystore.reads == 1

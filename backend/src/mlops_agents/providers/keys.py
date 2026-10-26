@@ -86,7 +86,8 @@ class StoredKeys:
         self.invalidate()
 
     async def remove(self, provider_id: str, position: int) -> None:
-        """Delete the key's row, then its keystore entry."""
+        """Delete the key's row, then its keystore entry. Once the row is gone the cache is
+        dropped, also when the keystore delete fails."""
         engine = await self._dbs.app()
         where = (provider_keys.c.provider_id == provider_id) & (
             provider_keys.c.position == position
@@ -96,12 +97,15 @@ class StoredKeys:
             if ref is None:
                 raise DomainError("key_not_found", "That key is not saved.", status=404)
             await conn.execute(delete(provider_keys).where(where))
-        await asyncio.to_thread(self._keystore.delete, ref)
-        self.invalidate()
+        try:
+            await asyncio.to_thread(self._keystore.delete, ref)
+        finally:
+            self.invalidate()
 
     async def delete_provider(self, provider_id: str) -> None:
         """Delete the provider row (its key rows go with it), then every keystore entry it had.
-        The refs are read in the same transaction, so a key added meanwhile is not orphaned."""
+        The refs are read in the same transaction, so a key added meanwhile is not orphaned.
+        Once the rows are gone the cache is dropped, also when a keystore delete fails."""
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             refs = list(
@@ -112,9 +116,11 @@ class StoredKeys:
                 )
             )
             await conn.execute(delete(providers).where(providers.c.id == provider_id))
-        for ref in refs:
-            await asyncio.to_thread(self._keystore.delete, ref)
-        self.invalidate()
+        try:
+            for ref in refs:
+                await asyncio.to_thread(self._keystore.delete, ref)
+        finally:
+            self.invalidate()
 
     async def _read(self, provider_id: str | None) -> list[str]:
         """The one reader of values, for one provider or for all: each ref is read once and
