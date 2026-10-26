@@ -122,6 +122,25 @@ async def create_worktree(
         empty_hooks=empty_hooks,
     )
 
+    await strip_secret_files(
+        runner=runner,
+        repo_root=repo_root,
+        task_id=task_id,
+        worktree_path=worktree_path,
+        empty_hooks=empty_hooks,
+    )
+
+    return branch, base_ref, base_sha
+
+
+async def strip_secret_files(
+    *,
+    runner: GitRunner,
+    repo_root: Path,
+    task_id: str,
+    worktree_path: Path,
+    empty_hooks: Path,
+) -> None:
     git_dir = git_dir_for_task(repo_root, task_id)
     ls_res = await task_git(
         runner,
@@ -147,7 +166,37 @@ async def create_worktree(
                 _make_writable(file_on_disk)
                 file_on_disk.unlink()
 
-    return branch, base_ref, base_sha
+
+async def recreate_worktree(
+    *,
+    runner: GitRunner,
+    repo_root: Path,
+    worktree_path: Path,
+    empty_hooks: Path,
+    task_id: str,
+    branch: str,
+) -> None:
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    await run_safe_git(
+        runner,
+        args=["worktree", "prune"],
+        cwd=repo_root,
+        empty_hooks=empty_hooks,
+        check=False,
+    )
+    await run_safe_git(
+        runner,
+        args=["worktree", "add", "--force", str(worktree_path), branch],
+        cwd=repo_root,
+        empty_hooks=empty_hooks,
+    )
+    await strip_secret_files(
+        runner=runner,
+        repo_root=repo_root,
+        task_id=task_id,
+        worktree_path=worktree_path,
+        empty_hooks=empty_hooks,
+    )
 
 
 class TaskFiles(FileAccess):

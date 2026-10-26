@@ -22,6 +22,7 @@ from mlops_agents.agents.tools.file_ops import (
     compute_sha256,
     get_current_task,
     pause_task,
+    pop_pending_note,
     resolve_and_validate,
     safe_write_bytes,
 )
@@ -135,6 +136,7 @@ class EditTool(AgentTool[EditArgs]):
 
     async def run(self, ctx: ToolContext, args: EditArgs) -> ToolOutput:
         current = await get_current_task(ctx, self._tasks)
+        note = pop_pending_note(self._tasks, ctx.project_id, current.id)
         async with pause_task(self._sandbox, ctx.project_id, current.id):
             (
                 candidate,
@@ -151,4 +153,7 @@ class EditTool(AgentTool[EditArgs]):
 
             safe_write_bytes(candidate, resolved_worktree, new_bytes)
             ctx.files.invalidate()
-            return ToolOutput(content=cap_diff(diff_text))
+            content = cap_diff(diff_text)
+            if note:
+                content = f"{content}\n\n{note}"
+            return ToolOutput(content=content)

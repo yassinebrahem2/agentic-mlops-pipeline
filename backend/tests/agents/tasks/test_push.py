@@ -287,6 +287,7 @@ async def test_push_temp_dir_cleaned_up(
         await service.commit(project_id, task, "feat: commit")
 
         captured_temp_dirs: list[Path] = []
+        temp_dir_existed_on_push_return: list[bool] = []
         orig_run_safe_git = push_module.run_safe_git
         in_push = asyncio.Event()
         release_push = asyncio.Event()
@@ -303,6 +304,9 @@ async def test_push_temp_dir_cleaned_up(
                     if scenario == "cancellation":
                         in_push.set()
                         await release_push.wait()
+                        res = await orig_run_safe_git(*args, **kwargs)
+                        temp_dir_existed_on_push_return.append(captured_temp_dirs[0].exists())
+                        return res
             return await orig_run_safe_git(*args, **kwargs)
 
         monkeypatch.setattr(push_module, "run_safe_git", spy_run_safe_git)
@@ -319,6 +323,7 @@ async def test_push_temp_dir_cleaned_up(
             release_push.set()
             with pytest.raises(asyncio.CancelledError):
                 await push_job
+            assert temp_dir_existed_on_push_return == [True]
 
         assert len(captured_temp_dirs) == 1
         assert not captured_temp_dirs[0].exists()

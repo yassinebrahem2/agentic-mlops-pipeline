@@ -10,7 +10,6 @@ from sqlalchemy import update
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.context import build_messages
-from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import TaskRef
@@ -28,6 +27,7 @@ from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -74,7 +74,7 @@ async def _setup_services(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
 
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=git)
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
@@ -207,7 +207,7 @@ async def test_agent_builder_keystore_error_refusal(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
 
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=git)
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
@@ -287,7 +287,7 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
@@ -321,7 +321,7 @@ async def test_repository_only_workspaces_has_no_task_and_the_repository_files(
     workspace = _workspace_svc(paths, databases, keystore)
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hi\n"}, git_env)
     project = await workspace.add_local(str(repo_dir))
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
 
     assert await workspaces.current(project.id, "ses_1") is None
     files = await workspaces.files(project.id, None)
@@ -386,7 +386,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     fake_board = _FakeStatusBoard(summary_text="- Orchestrator: idle\n- Retraining: running")
 
     builder = AgentBuilder(
