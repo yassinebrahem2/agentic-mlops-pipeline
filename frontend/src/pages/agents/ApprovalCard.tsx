@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useParams } from "react-router";
-import type { Client } from "openapi-fetch";
 import type { components } from "@/api/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api, errorText, unwrap, type paths as GeneratedPaths } from "@/lib/api";
+import { api, errorText, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
@@ -46,34 +45,6 @@ const APPROVAL_STATUS_CONFIG: Record<
     variant: "outline",
     className: "text-[10px] px-1.5 py-0",
   },
-};
-
-export type ApprovalsDecisionPaths = GeneratedPaths & {
-  "/api/projects/{project_id}/approvals/{approval_id}/decision": {
-    post: {
-      parameters: {
-        path: {
-          project_id: string;
-          approval_id: string;
-        };
-      };
-      requestBody: {
-        content: {
-          "application/json": {
-            approve: boolean;
-            note?: string | null;
-          };
-        };
-      };
-      responses: {
-        200: {
-          content: {
-            "application/json": unknown;
-          };
-        };
-      };
-    };
-  };
 };
 
 function DiffView({ diff }: { diff: string }) {
@@ -156,22 +127,18 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
     setSubmitting(true);
     setError(null);
     try {
-      const client = api as unknown as Client<ApprovalsDecisionPaths>;
-      const result = await client.POST(
-        "/api/projects/{project_id}/approvals/{approval_id}/decision",
-        {
-          params: {
-            path: {
-              project_id: activeProjectId,
-              approval_id: approval.approval_id,
-            },
-          },
-          body: {
-            approve,
-            note: note.trim() ? note.trim() : null,
+      const result = await api.POST("/api/projects/{project_id}/approvals/{approval_id}/decision", {
+        params: {
+          path: {
+            project_id: activeProjectId,
+            approval_id: approval.approval_id,
           },
         },
-      );
+        body: {
+          approve,
+          note: note.trim() ? note.trim() : null,
+        },
+      });
       unwrap(result);
     } catch (err) {
       setError(errorText(err));
