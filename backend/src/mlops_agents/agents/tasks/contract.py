@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -95,3 +95,15 @@ class Tasks(TaskWorkspaces, Protocol):
     async def end(
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None: ...
+
+    async def decide_review(
+        self,
+        project_id: str,
+        task_id: str,
+        step: Callable[[TaskRef], Awaitable[None]],
+        status: Literal["merged", "closed"],
+    ) -> TaskView:
+        """Under one acquisition of the task lock: raises a 409 DomainError unless the task is in
+        local review, runs step (local_merge to approve, the system message to reject), then ends
+        the task with status. If step raises, the task is not ended and stays in review."""
+        ...

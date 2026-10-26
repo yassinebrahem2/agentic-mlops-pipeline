@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import insert
 
 from mlops_agents.agents.pr_sync import PrSyncObserver
+from mlops_agents.agents.reviews import get_github_activity
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.clock import now_iso
 from mlops_agents.integrations.github import api
@@ -40,6 +41,7 @@ def fake_github() -> Iterator[RunningFakeGitHub]:
 async def setup_sync_test(
     tmp_path: Path,
     git_env: dict[str, str],
+    events: FakeEventLog | None = None,
 ) -> tuple[PrSyncObserver, TasksService, str, Path, httpx2.AsyncClient]:
     paths = DataPaths(tmp_path / "home")
     databases = Databases(paths)
@@ -67,7 +69,7 @@ async def setup_sync_test(
     runner = GitRunner(paths.bin, github.token)
     workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
     project = await workspace.add_local(str(repo))
-    events = FakeEventLog()
+    events = events or FakeEventLog()
 
     tasks = TasksService(
         databases=databases,
@@ -77,7 +79,7 @@ async def setup_sync_test(
         workspace=workspace,
     )
 
-    observer = PrSyncObserver(tasks, github, http)
+    observer = PrSyncObserver(tasks, github, http, events)
     return observer, tasks, project.id, repo, http
 
 
@@ -264,3 +266,58 @@ async def test_pr_sync_github_error_resilience(
             assert view.status == "in_review"
         finally:
             await http.aclose()
+
+
+async def test_pr_sync_records_issue_updated_when_an_issue_closes_on_github(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    events = FakeEventLog()
+    observer, tasks, project_id, _, http = await setup_sync_test(tmp_path, git_env, events)
+    try:
+        repo = "test-owner/test-repo"
+        for number in (5, 6):
+            await events.record(
+                project_id,
+                source="coder",
+                type="issue.opened",
+                payload={
+                    "number": number,
+                    "url": f"https://github.com/{repo}/issues/{number}",
+                    "title": f"Issue {number}",
+                    "state": "open",
+                },
+                subject_id=str(number),
+            )
+        # Issue 5 was closed on GitHub (by hand or by a merged PR); issue 6 no longer exists.
+        fake_github.state.issues[(repo, 5)] = {
+            "number": 5,
+            "title": "Issue 5",
+            "body": None,
+            "html_url": f"https://github.com/{repo}/issues/5",
+            "state": "closed",
+            "labels": [],
+        }
+
+        await observer.sync_now(project_id)
+
+        updates = await events.history(project_id, types=["issue.updated"])
+        assert len(updates) == 1
+        assert updates[0].payload == {
+            "number": 5,
+            "url": f"https://github.com/{repo}/issues/5",
+            "title": "Issue 5",
+            "state": "closed",
+        }
+        activity = await get_github_activity(events, tasks, project_id)
+        states = {item.number: item.state for item in activity if item.kind == "issue"}
+        assert states == {5: "closed", 6: "open"}
+        # The item still belongs to the agent that opened the issue, not to the sync.
+        assert {i.agent for i in activity if i.kind == "issue"} == {"coder"}
+
+        # Nothing changed on GitHub, so the next sync records nothing.
+        await observer.sync_now(project_id)
+        assert len(await events.history(project_id, types=["issue.updated"])) == 1
+    finally:
+        await http.aclose()

@@ -417,3 +417,23 @@ async def test_has_commits_beyond_base_with_a_remote(
         (task.worktree / "b.txt").write_text("b\n", encoding="utf-8")
         await service.commit(project_id, task, "feat: b")
         assert await service.has_commits_beyond_base(project_id, task) is True
+
+
+async def test_has_commits_beyond_base_is_false_when_the_base_commit_is_gone(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Gone base")
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(update(tasks).where(tasks.c.id == task.id).values(base_sha="0" * 40))
+
+    # The PR tool asks this while recovering from a refused commit; it must not raise.
+    assert await service.has_commits_beyond_base(project_id, task) is False

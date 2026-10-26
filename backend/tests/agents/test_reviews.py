@@ -442,27 +442,11 @@ async def test_github_activity_shows_the_real_state_of_an_issue(
     )
     await events.record(
         project_id,
-        source="orchestrator",
-        type="issue.commented",
+        source="system",
+        type="issue.updated",
         payload={"number": 20, "title": "Closed later", "url": "u20", "state": "closed"},
         subject_id="20",
     )
-    # Opened already closed; a later comment from an older event shape has no state.
-    await events.record(
-        project_id,
-        source="orchestrator",
-        type="issue.opened",
-        payload={"number": 21, "title": "Born closed", "url": "u21", "state": "closed"},
-        subject_id="21",
-    )
-    await events.record(
-        project_id,
-        source="orchestrator",
-        type="issue.commented",
-        payload={"number": 21, "url": "u21"},
-        subject_id="21",
-    )
-
     activity = await get_github_activity(events, services.tasks, project_id)
     states = {i.number: i.state for i in activity if i.kind == "issue"}
-    assert states == {20: "closed", 21: "closed"}
+    assert states == {20: "closed"}

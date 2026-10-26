@@ -7,6 +7,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from mlops_agents.errors import DomainError
+from mlops_agents.integrations.github.issues import get_issue
 from mlops_agents.integrations.github.pulls import get_pull
 
 if TYPE_CHECKING:
@@ -14,6 +16,7 @@ if TYPE_CHECKING:
 
     from mlops_agents.agents.runtime.contract import TurnEnd
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
 
 logger = logging.getLogger(__name__)
@@ -27,7 +30,9 @@ class PrSyncObserver:
         tasks: Tasks,
         github: GitHubAuth,
         http: httpx2.AsyncClient,
+        events: EventLog,
     ) -> None:
+        self._events = events
         self._tasks = tasks
         self._github = github
         self._http = http
@@ -80,13 +85,13 @@ class PrSyncObserver:
         if ref is None:
             return
 
+        repo_slug = f"{ref.owner}/{ref.repo}"
         try:
             open_tasks = await self._tasks.open_tasks(project_id)
         except Exception as exc:
             logger.warning("PR sync could not load open tasks for project %s: %s", project_id, exc)
             return
 
-        repo_slug = f"{ref.owner}/{ref.repo}"
         for task in open_tasks:
             if task.pr_number is None:
                 continue
@@ -115,6 +120,41 @@ class PrSyncObserver:
                     await self._tasks.end(project_id, task.id, status="closed")
                 except Exception as exc:
                     logger.warning("PR sync could not end task %s as closed: %s", task.id, exc)
+
+        # After the PRs, so a failing issue refresh never keeps a merged PR from ending its task.
+        try:
+            await self._refresh_issues(project_id, token, repo_slug)
+        except Exception as exc:
+            logger.warning("PR sync could not refresh issues for project %s: %s", project_id, exc)
+
+    async def _refresh_issues(self, project_id: str, token: str, repo_slug: str) -> None:
+        """Records issue.updated for every issue the agents touched whose state changed on GitHub,
+        so the activity feed shows an issue closed by hand or by a merged PR as closed."""
+        recorded = await self._events.history(
+            project_id, types=["issue.opened", "issue.commented", "issue.updated"], limit=200
+        )
+        last_state: dict[int, str] = {}
+        for record in reversed(recorded):  # oldest first, so the newest record wins
+            number = record.payload.get("number")
+            if isinstance(number, int):
+                last_state[number] = str(record.payload.get("state") or "open")
+
+        for number, state in last_state.items():
+            try:
+                issue = await get_issue(self._http, token, repo_slug, number)
+            except DomainError as exc:
+                logger.warning(
+                    "PR sync could not check issue #%s in %s: %s", number, repo_slug, exc
+                )
+                continue
+            if issue.state != state:
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="issue.updated",
+                    payload=issue.event_payload(),
+                    subject_id=str(number),
+                )
 
     async def sync_now(self, project_id: str) -> None:
         """Manually run sync for a project, awaiting its completion."""

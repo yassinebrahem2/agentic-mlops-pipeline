@@ -154,16 +154,21 @@ async def _has_commits_beyond(
     empty_hooks: Path,
     ref: str,
     task: TaskRef,
+    check: bool = True,
 ) -> bool:
-    """The one place that asks whether the task branch has commits that `ref` lacks."""
+    """The one place that asks whether the task branch has commits that `ref` lacks.
+
+    With check=False a failing rev-list (an unreachable ref) answers False instead of raising.
+    """
     res = await task_git(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
         args=["rev-list", f"{ref}..{task.branch}"],
+        check=check,
     )
-    return bool(res.stdout.strip())
+    return res.code == 0 and bool(res.stdout.strip())
 
 
 async def has_commits_beyond_base_task(
@@ -188,6 +193,8 @@ async def has_commits_beyond_base_task(
         empty_hooks=empty_hooks,
         ref=base_sha,
         task=task,
+        # The PR tool asks this while recovering from a refused commit and must not fail on it.
+        check=False,
     )
 
 

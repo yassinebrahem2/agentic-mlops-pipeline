@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -94,18 +93,6 @@ async def list_local_reviews(
     return reviews
 
 
-_review_locks: dict[tuple[str, str], asyncio.Lock] = {}
-
-
-def _get_review_lock(project_id: str, task_id: str) -> asyncio.Lock:
-    key = (project_id, task_id)
-    lock = _review_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _review_locks[key] = lock
-    return lock
-
-
 async def decide_local_review(
     tasks: Tasks,
     sessions: AgentSessions,
@@ -116,50 +103,36 @@ async def decide_local_review(
     note: str | None = None,
 ) -> TaskView:
     """Approves (merges) or rejects (closes) a task in local review."""
-    lock = _get_review_lock(project_id, task_id)
-    async with lock:
-        task = await tasks.view(project_id, task_id)
-        if task.status != "in_review" or task.review_kind != "local":
-            raise DomainError(
-                "not_in_review",
-                f"Task '{task_id}' is not awaiting local review.",
-                status=409,
-            )
+    if approve:
 
-        task_ref = TaskRef(
-            id=task.id,
-            title=task.title,
-            branch=task.branch,
-            worktree=Path(),
-            status=task.status,
-        )
-
-        if approve:
+        async def merge(task: TaskRef) -> None:
             try:
-                await tasks.local_merge(project_id, task_ref)
+                await tasks.local_merge(project_id, task)
             except CommitRefused as err:
                 raise DomainError("conflict", str(err), status=409) from err
-            await tasks.end(project_id, task_id, status="merged")
-        else:
-            rejection_text = (
-                f"Local review rejected for task '{task.title}': {note}"
-                if note
-                else f"Local review rejected for task '{task.title}'."
-            )
-            # Tell the agent first (spec section 6): when the post fails the task stays in
-            # review, so the caller gets the error and can decide again.
-            await sessions.post(
-                project_id,
-                task.agent,
-                author_name=SYSTEM_AUTHOR,
-                from_agent=SYSTEM_AUTHOR,
-                text=rejection_text,
-                exchange_id=None,
-                hop=None,
-            )
-            await tasks.end(project_id, task_id, status="closed")
 
-        return await tasks.view(project_id, task_id)
+        return await tasks.decide_review(project_id, task_id, merge, "merged")
+
+    async def tell_agent(task: TaskRef) -> None:
+        view = await tasks.view(project_id, task.id)
+        text = (
+            f"Local review rejected for task '{view.title}': {note}"
+            if note
+            else f"Local review rejected for task '{view.title}'."
+        )
+        await sessions.post(
+            project_id,
+            view.agent,
+            author_name=SYSTEM_AUTHOR,
+            from_agent=SYSTEM_AUTHOR,
+            text=text,
+            exchange_id=None,
+            hop=None,
+        )
+
+    # The agent is told before the task closes: when the post fails the task stays in review,
+    # so the caller gets the error and can decide again (spec section 6).
+    return await tasks.decide_review(project_id, task_id, tell_agent, "closed")
 
 
 async def get_github_activity(
@@ -170,7 +143,7 @@ async def get_github_activity(
     """Aggregates PR and issue activity from the event log and open tasks."""
     records = await events.history(
         project_id,
-        types=["pr.opened", "pr.updated", "issue.opened", "issue.commented"],
+        types=["pr.opened", "pr.updated", "issue.opened", "issue.commented", "issue.updated"],
         limit=200,
     )
     open_tasks = await tasks.open_tasks(project_id)
@@ -179,16 +152,17 @@ async def get_github_activity(
     }
 
     items_by_key: dict[tuple[Literal["pr", "issue"], int], GitHubItem] = {}
-    # Issues whose state came from an event; records are newest first, so the first one that
-    # carries a state is the issue's latest known state.
-    issue_state_known: set[int] = set()
+    # Records are newest first, so the first state seen for an issue is its latest. The sync's
+    # issue.updated records only move the state: the agent and time stay those of the agent's
+    # own issue.opened / issue.commented record.
+    issue_state: dict[int, str] = {}
 
     for record in records:
         event_type = record.type
         kind: Literal["pr", "issue"]
         if event_type in ("pr.opened", "pr.updated"):
             kind = "pr"
-        elif event_type in ("issue.opened", "issue.commented"):
+        elif event_type in ("issue.opened", "issue.commented", "issue.updated"):
             kind = "issue"
         else:
             continue
@@ -200,6 +174,11 @@ async def get_github_activity(
             num = int(raw_num)
         except (ValueError, TypeError):
             continue
+
+        if kind == "issue":
+            issue_state.setdefault(num, str(record.payload.get("state") or "open"))
+            if event_type == "issue.updated":
+                continue
 
         url = str(record.payload.get("url") or "")
         title = str(record.payload.get("title") or "")
@@ -213,14 +192,12 @@ async def get_github_activity(
             if not title:
                 title = f"PR #{num}"
         else:
-            state = str(record.payload.get("state") or "open")
+            state = issue_state[num]
             if not title:
                 title = f"Issue #{num}"
 
         key = (kind, num)
         if key not in items_by_key:
-            if kind == "issue" and record.payload.get("state"):
-                issue_state_known.add(num)
             items_by_key[key] = GitHubItem(
                 kind=kind,
                 number=num,
@@ -239,17 +216,9 @@ async def get_github_activity(
                 updated_title = title
 
             updated_url = existing.url or url
-            updated_state = existing.state
-            if kind == "issue" and num not in issue_state_known and record.payload.get("state"):
-                updated_state = str(record.payload["state"])
-                issue_state_known.add(num)
-            if (
-                updated_title != existing.title
-                or updated_url != existing.url
-                or updated_state != existing.state
-            ):
+            if updated_title != existing.title or updated_url != existing.url:
                 items_by_key[key] = existing.model_copy(
-                    update={"title": updated_title, "url": updated_url, "state": updated_state}
+                    update={"title": updated_title, "url": updated_url}
                 )
 
     result = list(items_by_key.values())

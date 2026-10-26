@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -370,19 +370,50 @@ class TasksService(Tasks):
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None:
         async with self._task_lock(project_id, task_id):
-            p = await self._workspace.get(project_id)
-            await end_task(
-                runner=self._git,
-                repo_root=self._workspace.repo_root(p),
-                empty_hooks=self._paths.empty_hooks,
-                databases=self._databases,
-                project_id=project_id,
-                task_id=task_id,
-                status=status,
-                sandbox=self._sandbox,
-                events=self._events,
+            await self._end_locked(project_id, task_id, status)
+
+    async def decide_review(
+        self,
+        project_id: str,
+        task_id: str,
+        step: Callable[[TaskRef], Awaitable[None]],
+        status: Literal["merged", "closed"],
+    ) -> TaskView:
+        async with self._task_lock(project_id, task_id):
+            task = await self.view(project_id, task_id)
+            if task.status != "in_review" or task.review_kind != "local":
+                raise DomainError(
+                    "not_in_review", f"Task '{task_id}' is not awaiting local review.", status=409
+                )
+            # Only the id, title and branch matter to a step; the worktree is not touched.
+            await step(
+                TaskRef(
+                    id=task.id,
+                    title=task.title,
+                    branch=task.branch,
+                    worktree=Path(),
+                    status=task.status,
+                )
             )
-            for (pid, sid), tid in list(self._current_tasks.items()):
-                if pid == project_id and tid == task_id:
-                    self._current_tasks.pop((pid, sid), None)
-            self._pending_notes.pop((project_id, task_id), None)
+            await self._end_locked(project_id, task_id, status)
+            return await self.view(project_id, task_id)
+
+    async def _end_locked(
+        self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
+    ) -> None:
+        p = await self._workspace.get(project_id)
+        await end_task(
+            runner=self._git,
+            repo_root=self._workspace.repo_root(p),
+            empty_hooks=self._paths.empty_hooks,
+            databases=self._databases,
+            project_id=project_id,
+            task_id=task_id,
+            status=status,
+            sandbox=self._sandbox,
+            events=self._events,
+        )
+        for (pid, sid), tid in list(self._current_tasks.items()):
+            if pid == project_id and tid == task_id:
+                self._current_tasks.pop((pid, sid), None)
+        self._pending_notes.pop((project_id, task_id), None)

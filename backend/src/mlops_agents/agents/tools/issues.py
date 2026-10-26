@@ -185,10 +185,7 @@ class OpenIssueTool(AgentTool[OpenIssueArgs]):
             source=ctx.agent,
             type="issue.opened",
             payload={
-                "number": issue.number,
-                "title": issue.title,
-                "url": issue.html_url,
-                "state": issue.state,
+                **issue.event_payload(),
                 "category": args.category,
                 "priority": args.priority,
             },
@@ -244,12 +241,7 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
             ctx.project_id,
             source=ctx.agent,
             type="issue.commented",
-            payload={
-                "number": args.number,
-                "url": issue.html_url,
-                "title": issue.title,
-                "state": issue.state,
-            },
+            payload=issue.event_payload(),
             subject_id=str(args.number),
         )
 
