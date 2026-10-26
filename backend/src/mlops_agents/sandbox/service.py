@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, Coroutine
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import NoReturn
 
@@ -33,6 +34,15 @@ from mlops_agents.sandbox.docker import (
 )
 from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
+
+logger = logging.getLogger(__name__)
+
+
+def _build_failure_detail(exc: BaseException) -> str:
+    err = str(exc).strip() or type(exc).__name__
+    if err.startswith("Image build failed:"):
+        return err
+    return f"Image build failed: {err}"
 
 
 async def _finish_operation[T](operation: Coroutine[object, object, T]) -> T:
@@ -139,6 +149,29 @@ class SandboxService(Sandbox):
         self._status[project_id] = status
         return status
 
+    async def _record_build_end(self, project_id: str, status: EnvironmentStatus) -> None:
+        event_type = "sandbox.build.finished" if status.state == "ready" else "sandbox.build.failed"
+        payload = {
+            "tag": status.tag,
+            "detail": None if status.state == "ready" else status.detail,
+        }
+        try:
+            pending = asyncio.create_task(
+                self._events.record(
+                    project_id,
+                    source="system",
+                    type=event_type,
+                    payload=payload,
+                )
+            )
+            while not pending.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(pending)
+            with suppress(asyncio.CancelledError):
+                pending.result()
+        except Exception:
+            logger.exception("Failed to record %s event for project %s", event_type, project_id)
+
     async def _build_project_image(self, project_id: str, worktree: Path) -> EnvironmentStatus:
         """Own the full build lifecycle, including dependency reads and context creation."""
         lock = self._build_locks.setdefault(project_id, asyncio.Lock())
@@ -162,26 +195,24 @@ class SandboxService(Sandbox):
                     status = await self._image_manager.build_image(
                         project_id, worktree, inputs=inputs
                     )
+                except asyncio.CancelledError as exc:
+                    detail = _build_failure_detail(exc)
+                    logger.exception("Image build cancelled for project %s", project_id)
+                    status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
+                    self._status[project_id] = status
+                    await self._record_build_end(project_id, status)
+                    raise
                 except Exception as exc:
-                    status = EnvironmentStatus(
-                        state="failed", tag=tag, detail=str(exc) or "Image build failed"
-                    )
+                    detail = _build_failure_detail(exc)
+                    logger.exception("Image build failed for project %s", project_id)
+                    status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
             except (OSError, ValueError) as exc:
-                status = EnvironmentStatus(
-                    state="failed", tag=tag, detail=f"Image build failed: {exc}"
-                )
+                detail = _build_failure_detail(exc)
+                logger.exception("Image build failed for project %s", project_id)
+                status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
+
             self._status[project_id] = status
-            await self._events.record(
-                project_id,
-                source="system",
-                type="sandbox.build.finished"
-                if status.state == "ready"
-                else "sandbox.build.failed",
-                payload={
-                    "tag": status.tag,
-                    "detail": None if status.state == "ready" else status.detail,
-                },
-            )
+            await self._record_build_end(project_id, status)
             return status
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus:

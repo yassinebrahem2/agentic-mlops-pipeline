@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from mlops_agents.config import APP_NAME
+from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
 from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
@@ -232,3 +234,160 @@ async def test_environment_returns_failed_on_value_error_python_version(
     status = await service.environment("prj_val")
     assert status.state == "failed"
     assert "invalid python version format" in (status.detail or "")
+
+
+async def test_cancelled_rebuild_after_started_sets_failed_and_propagates(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    build_started = asyncio.Event()
+    build_cancelled = asyncio.Event()
+
+    class BlockingRunner(FakeDockerRunner):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args and args[0] == "build":
+                build_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    build_cancelled.set()
+                    raise
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    runner = BlockingRunner()
+    events = FakeEventLog()
+    service = SandboxService(
+        runner, events=events, projects=MemorySandboxProjects({"prj_cancel": repo})
+    )
+
+    task = asyncio.create_task(service.rebuild("prj_cancel"))
+    await build_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert build_cancelled.is_set()
+    status = await service.environment("prj_cancel")
+    assert status.state == "failed"
+    assert status.detail == "Image build failed: CancelledError"
+
+    assert [record.type for record in events.records] == [
+        "sandbox.build.started",
+        "sandbox.build.failed",
+    ]
+    assert events.records[0].payload == {"tag": status.tag, "detail": None}
+    assert events.records[1].payload == {"tag": status.tag, "detail": status.detail}
+
+
+async def test_cancelled_rebuild_resilient_to_event_recording_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    build_started = asyncio.Event()
+
+    class BlockingRunner(FakeDockerRunner):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            if args and args[0] == "build":
+                build_started.set()
+                await asyncio.Event().wait()
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    class FailingRecordEventLog(FakeEventLog):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_on_failed: bool = False
+
+        async def record(
+            self,
+            project_id: str,
+            *,
+            source: str,
+            type: EventType,
+            payload: dict[str, Any],
+            subject_id: str | None = None,
+        ) -> EventRecord:
+            if self.fail_on_failed and type == "sandbox.build.failed":
+                raise RuntimeError("event log store unreachable")
+            return await super().record(
+                project_id,
+                source=source,
+                type=type,
+                payload=payload,
+                subject_id=subject_id,
+            )
+
+    events = FailingRecordEventLog()
+    runner = BlockingRunner()
+    service = SandboxService(
+        runner, events=events, projects=MemorySandboxProjects({"prj_err": repo})
+    )
+
+    task = asyncio.create_task(service.rebuild("prj_err"))
+    await build_started.wait()
+    events.fail_on_failed = True
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    status = await service.environment("prj_err")
+    assert status.state == "failed"
+    assert status.detail == "Image build failed: CancelledError"
+
+    assert any(
+        "Failed to record sandbox.build.failed event" in record.message
+        and record.exc_info is not None
+        for record in caplog.records
+    )
+
+
+async def test_build_image_error_and_prior_oserror_have_same_detail_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import images
+    from mlops_agents.sandbox import service as service_module
+
+    def fail_snapshot(*args: object, **kwargs: object) -> None:
+        raise OSError("failed to read requirements.txt")
+
+    monkeypatch.setattr(service_module, "snapshot_image", fail_snapshot)
+    service_os = SandboxService(
+        FakeDockerRunner(),
+        events=FakeEventLog(),
+        projects=MemorySandboxProjects({"prj_os": tmp_path}),
+    )
+    status_os = await service_os.rebuild("prj_os")
+    assert status_os.state == "failed"
+    assert status_os.detail == "Image build failed: failed to read requirements.txt"
+
+    monkeypatch.undo()
+
+    async def fail_build(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("docker builder crashed")
+
+    monkeypatch.setattr(images.ImageManager, "build_image", fail_build)
+    service_build = SandboxService(
+        FakeDockerRunner(),
+        events=FakeEventLog(),
+        projects=MemorySandboxProjects({"prj_build": tmp_path}),
+    )
+    status_build = await service_build.rebuild("prj_build")
+    assert status_build.state == "failed"
+    assert status_build.detail == "Image build failed: docker builder crashed"
