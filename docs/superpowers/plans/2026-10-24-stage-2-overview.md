@@ -290,6 +290,8 @@ class Tasks(TaskWorkspaces, Protocol):
 
 ```python
 class SandboxUnavailable(Exception): ...   # its message is written for the model and the user
+# Added in the review of #240: a route that hits SandboxUnavailable answers 503 with code
+# "sandbox_unavailable" and the message (one mapping in api/errors.py).
 
 class DockerStatus(BaseModel):
     available: bool
@@ -297,7 +299,9 @@ class DockerStatus(BaseModel):
     detail: str | None
 
 class EnvironmentStatus(BaseModel):
-    state: Literal["none", "building", "ready", "failed"]
+    state: Literal["none", "building", "ready", "failed", "unavailable"]
+    # "unavailable" added in the review of #240: Docker is not reachable, so the image state is
+    # unknown; detail carries the SandboxUnavailable message. Never reported as "none".
     tag: str | None
     detail: str | None
 
