@@ -138,7 +138,7 @@ async def local_merge(
     temp_worktree = Path(
         await asyncio.to_thread(tempfile.mkdtemp, prefix=f"merge_{task_id}_", dir=temp_base_dir)
     )
-    added = False
+    add_started = False
 
     try:
         # Step 1: Create detached temp worktree on default_branch
@@ -150,13 +150,14 @@ async def local_merge(
         )
         old_sha = old_sha_res.stdout.strip()
 
+        # Set before the add: a cancel or failure during it may still leave it registered.
+        add_started = True
         await _git_to_end(
             runner,
             args=["worktree", "add", "--detach", str(temp_worktree), default_branch],
             cwd=repo_root,
             empty_hooks=empty_hooks,
         )
-        added = True
 
         merge_msg = f"Merge task {task_id} into {default_branch}"
         merge_res = await _git_to_end(
@@ -235,15 +236,17 @@ async def local_merge(
                 )
 
     finally:
-        await _remove_temp_worktree(runner, repo_root, empty_hooks, temp_worktree, added=added)
+        await _remove_temp_worktree(
+            runner, repo_root, empty_hooks, temp_worktree, add_started=add_started
+        )
 
 
 async def _remove_temp_worktree(
-    runner: GitRunner, repo_root: Path, empty_hooks: Path, temp_worktree: Path, *, added: bool
+    runner: GitRunner, repo_root: Path, empty_hooks: Path, temp_worktree: Path, *, add_started: bool
 ) -> None:
     """Removes the merge's temporary worktree; a failure is logged, never raised, so it cannot
     replace the merge's own outcome."""
-    if added:
+    if add_started:
         try:
             res = await _git_to_end(
                 runner,
