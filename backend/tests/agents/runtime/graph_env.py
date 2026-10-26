@@ -1,19 +1,48 @@
-"""The agent and the recording sink the runtime tests build their graph and executor runs with."""
+"""The agent, the hooks and the recording sink the runtime tests build graph and executor runs with."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
+from mlops_agents.agents.runtime.graph import TurnHooks
+from mlops_agents.agents.runtime.hooks import NoInbound, NoTurnEndCheck
+from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
-from tests.agents.ctx import tool_context
+
+
+class FixedWorkspaces:
+    """No task, and one given view of the repository: for graphs run without a workspace service."""
+
+    def __init__(self, files: FileAccess) -> None:
+        self._files = files
+
+    async def current(self, project_id: str, session_id: str) -> TaskRef | None:
+        return None
+
+    async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
+        return self._files
+
+
+def stage1_hooks(workspaces: TaskWorkspaces) -> TurnHooks:
+    """Every call allowed (ApprovalGate defaults to allow for READ tools), nothing delivered mid-turn, no turn-end note."""
+    return TurnHooks(
+        gate=ApprovalGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
+    )
+
+
+def graph_hooks(agent: Agent) -> TurnHooks:
+    """Stage 1's hooks for a graph run over `make_agent`'s repository."""
+    return stage1_hooks(FixedWorkspaces(agent.files))
 
 
 class RecordingSink:
@@ -22,6 +51,7 @@ class RecordingSink:
         self.tools_started: list[ToolCallPart] = []
         self.tools_finished: list[ToolResultPart] = []
         self.messages: list[tuple[MessageView, bool]] = []
+        self.waiting_turns: list[str] = []
 
     async def text(self, message_id: str, text: str) -> None:
         self.texts.append(text)
@@ -34,6 +64,9 @@ class RecordingSink:
 
     async def message(self, message: MessageView, *, created: bool) -> None:
         self.messages.append((message, created))
+
+    async def turn_waiting(self, turn_id: str) -> None:
+        self.waiting_turns.append(turn_id)
 
 
 def make_agent(
@@ -69,7 +102,6 @@ def make_agent(
         keys=(),
     )
     repo_files = RepoFiles(repo_dir, GitRunner(bin_dir))
-    tool_ctx = tool_context(repo_files)
     agent_tools: list[Any] = []
     for name in tool_names if tool_names is not None else definition.tools:
         t = tools.get(name)
@@ -83,5 +115,5 @@ def make_agent(
         model=model,
         max_steps=max_steps,
         tools=tuple(agent_tools),
-        tool_context=tool_ctx,
+        files=repo_files,
     )

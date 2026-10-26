@@ -31,9 +31,10 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.graph_env import RecordingSink
+from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -93,14 +94,17 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
-    executor = TurnExecutor(store=store, caller=caller, builder=builder)
+    executor = TurnExecutor(
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+    )
 
     repo_dir = make_repo(tmp_path / "repo_err", {"README.md": "Hi"}, git_env)
     project = await workspace_svc.add_local(str(repo_dir))
@@ -160,14 +164,17 @@ async def test_executor_turn_failed_from_caller(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
-    executor = TurnExecutor(store=store, caller=caller, builder=builder)
+    executor = TurnExecutor(
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+    )
 
     prov = await providers_svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)

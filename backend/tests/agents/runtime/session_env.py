@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import httpx2
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
-from mlops_agents.agents.runtime.contract import TurnEnded
-from mlops_agents.agents.runtime.hooks import TurnObserver
+from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
+from mlops_agents.agents.runtime.hooks import (
+    Gate,
+    NoInbound,
+    NoTurnEndCheck,
+    TurnObserver,
+)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
+from mlops_agents.events.contract import AuditLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -28,6 +35,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -60,6 +68,8 @@ async def build_session_env(
     tools: ToolRegistry | None = None,
     observers: Sequence[TurnObserver] = (),
     bus: MessageBus | None = None,
+    gate: Gate | None = None,
+    audit_log: AuditLog | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -82,9 +92,13 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        git=GitRunner(paths.bin),
+        gate=gate if gate is not None else ApprovalGate(databases),
+        inbound=NoInbound(),
+        turn_end=NoTurnEndCheck(),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
+        audit_log=audit_log,
     )
 
     prov = await providers_svc.create_provider(
@@ -121,3 +135,32 @@ async def collect_until_turn_ended(
 
     await asyncio.wait_for(collector(), timeout=timeout)
     return events
+
+
+async def opened_stream(
+    env: SessionEnv, agent: str = "orchestrator"
+) -> AsyncGenerator[StreamEvent, None]:
+    """The session's live stream, subscribed before the turn so it sees every event."""
+    sub = env.manager.subscribe(env.project_id, agent, after_seq=None)
+    await anext(sub)  # the opening resync
+    return sub
+
+
+async def turn_ended_statuses(sub: AsyncGenerator[StreamEvent, None]) -> list[str]:
+    """The turn.ended events of a stream the manager's close() has ended."""
+
+    async def drain() -> list[StreamEvent]:
+        return [event async for event in sub]
+
+    events = await asyncio.wait_for(drain(), timeout=10)
+    return [e.data.status for e in events if isinstance(e, TurnEnded)]
+
+
+async def agent_message_statuses(env: SessionEnv, agent: str = "orchestrator") -> list[str]:
+    """The statuses of the agent's messages, oldest first."""
+    session_id = await env.store.session_id(env.project_id, agent)
+    return [
+        m.status
+        for m in await env.store.messages(env.project_id, session_id)
+        if m.author_kind == "agent"
+    ]

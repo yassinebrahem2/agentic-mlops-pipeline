@@ -1,7 +1,7 @@
 import json
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -302,6 +302,15 @@ class DummySessions:
     ) -> AsyncGenerator[StreamEvent, None]:
         yield Resync(seq=1, type="resync", data=ResyncData())
 
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        return {}
+
+    async def ensure_recovered(self, project_id: str) -> None:
+        pass
+
+    async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        pass
+
     async def close_project(self, project_id: str) -> None:
         """Before a project is removed: ends its running turns (interrupted), drops its hubs and
         subscribers, closes its database handles; later calls for that project start fresh."""
@@ -357,6 +366,7 @@ def test_a_waiting_message_with_an_approval_part_round_trips() -> None:
 def test_session_view_carries_the_current_task() -> None:
     task = TaskView(
         id="tsk_01",
+        agent="orchestrator",
         title="Fix the loader",
         branch="agent/tsk_01",
         status="in_review",

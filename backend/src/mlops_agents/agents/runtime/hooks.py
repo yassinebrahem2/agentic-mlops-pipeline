@@ -1,4 +1,7 @@
-"""The turn hooks the graph and the session manager call (I12). Protocols and dataclasses only."""
+"""The turn hooks the graph and the session manager call (I12), and their stage 1 defaults.
+
+Each default keeps stage 1's behavior until the plan that wires the real hook deletes it.
+"""
 
 from __future__ import annotations
 
@@ -25,9 +28,9 @@ class GateCall:
 @dataclass(frozen=True)
 class GateDecision:
     outcome: Literal["allow", "deny", "ask", "approved", "rejected"]
-    message: str | None  # the tool error for deny and rejected
-    approval_id: str | None  # set for an ask
-    preview: Preview | None  # set for an ask
+    message: str | None = None  # the tool error for deny and rejected
+    approval_id: str | None = None  # set for an ask
+    preview: Preview | None = None  # set for an ask
 
 
 class Gate(Protocol):
@@ -48,6 +51,20 @@ class InboundSource(Protocol):
 
 class TurnEndCheck(Protocol):
     async def note(self, project_id: str, session_id: str, turn_id: str) -> str | None: ...
+
+
+class NoInbound:
+    """Stage 1: nothing reaches a running turn. The messaging plan replaces it."""
+
+    async def take(self, project_id: str, session_id: str, turn_id: str) -> list[BaseMessage]:
+        return []
+
+
+class NoTurnEndCheck:
+    """Stage 1: a turn ends when the model ends it. The github-work plan replaces it."""
+
+    async def note(self, project_id: str, session_id: str, turn_id: str) -> str | None:
+        return None
 
 
 class TurnObserver(Protocol):

@@ -79,6 +79,7 @@ class MessageView(BaseModel):
 
 class TaskView(BaseModel):
     id: str
+    agent: str
     title: str
     branch: str
     status: TaskStatus
@@ -219,6 +220,10 @@ class AgentSessions(Protocol):
         from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send."""
         ...
 
+    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
+        """Each agent whose session has a running or waiting turn now."""
+        ...
+
     async def update_message(
         self,
         project_id: str,
@@ -232,6 +237,10 @@ class AgentSessions(Protocol):
         ...
 
     async def stop(self, project_id: str, agent: str) -> None: ...
+
+    async def ensure_recovered(self, project_id: str) -> None: ...
+
+    async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None: ...
 
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None

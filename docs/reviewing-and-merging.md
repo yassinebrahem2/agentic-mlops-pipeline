@@ -13,7 +13,8 @@ How the lead's Claude Code session reviews and merges PRs, locally or in a cloud
 Start one background subagent per PR, all at once, on model `sonnet`, each told to call the advisor before it reports and to post nothing to GitHub. Its prompt names:
 - the plan and task (`docs/superpowers/plans/...`, the task issue numbers) and the interfaces it produces or consumes (`docs/superpowers/plans/2026-10-16-stage-1-overview.md`, I1 to I7);
 - the diff to review: `git diff origin/main...origin/<head branch>` (only the new task's commits if earlier tasks are already on main);
-- for a re-review: "read the lead's last review and verify each point";
+- for a re-review: "verify each point of the lead's last review and review only the commits since that head; no new hunt for Minors";
+- the merge gate (below), so its verdict follows it; a removed-fix check (revert the fix, the test must fail) only for Important fixes;
 - the checks: AGENTS.md Code quality (DRY and separation of concerns, no swallowed errors, no workarounds, no test-only code in production, comments say why, files under ~400 lines), the plan's full test list, no secrets anywhere, PR body (template, `Closes #<plan issue>`, honest "Not done", no AI attribution, no control characters);
 - to run backend (`uv sync`, `uv run pytest`, `ruff check`, `ruff format --check`, `pyright`, `python -m mlops_agents.api.openapi_export --check`) and/or frontend (`npm ci`, `npm test`, `npm run lint`, `npm run format:check`, `npm run build`) in a new `git worktree` under the scratchpad, never switching the main checkout, and to remove that worktree afterwards;
 - to return Critical / Important / Minor with `file:line`, a verdict (merge / changes) and the head SHA.
@@ -25,7 +26,7 @@ Verify a Critical finding in the code yourself before acting on it. Reviewers ca
 - Changes: `gh pr review <n> --request-changes --body-file <file>`, short: the Important items, then Minor. The board moves the PR and its open issues to In progress.
 - Your own PR (`yassinebrahem2` is the author): GitHub refuses approve and request-changes, so `gh pr comment <n> --body-file <file>` and move the cards yourself (`scripts/board-status.sh <n> "In progress"` for the PR and its open issues).
 - Write review bodies to a file and pass `--body-file`; inline backslashes become control characters.
-- Minor findings that block nothing but break a rule go to a Bug issue (template Bug, label `bug`, milestone Stage 1, assigned to `yassinebrahem2`) instead of holding the merge; say so in the approval.
+- **Merge gate.** Only Critical and Important findings hold a merge. They are, however rare: red CI, a broken spec or interface contract, touching the user's repo, refs or config, a secret leak, data loss, a crash at startup or shutdown, a 500 or wrong answer on a normal path. Everything else is Minor (a self-healing race, a rare path that fails loudly, a file a little over 400 lines, a weak test of correct code, duplication, PR description accuracy): approve and merge, and in the same step put the Minors in a Bug issue (template Bug, label `bug`, the stage's milestone, assigned to `yassinebrahem2`) or in the owner's next task's "Review fixes"; say which in the approval. Nothing is dropped, only moved out of the merge.
 
 ## 4. Merge
 

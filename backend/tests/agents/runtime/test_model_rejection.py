@@ -25,9 +25,10 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.graph_env import RecordingSink
+from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 TOOLS: list[dict[str, Any]] = [
@@ -82,16 +83,19 @@ async def _setup_rejection_env(
     workspace = WorkspaceService(
         settings, paths, databases, GitRunner(paths.bin, github.token), github, httpx2.AsyncClient()
     )
+    workspaces = FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=agent_settings,
         workspace=workspace,
-        git=GitRunner(paths.bin),
+        workspaces=workspaces,
     )
     store = SessionStore(databases)
     caller = ModelCaller(providers, model_http)
-    executor = TurnExecutor(store=store, caller=caller, builder=builder)
+    executor = TurnExecutor(
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+    )
 
     prov = await providers.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
