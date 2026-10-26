@@ -8,7 +8,6 @@ import time
 from typing import TYPE_CHECKING
 
 from mlops_agents.integrations.github.pulls import get_pull
-from mlops_agents.workspace.refs import RepoRef, github_remote, repo_ref
 
 if TYPE_CHECKING:
     import httpx2
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     from mlops_agents.agents.runtime.contract import TurnEnd
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.integrations.github.auth import GitHubAuth
-    from mlops_agents.workspace.models import Project
-    from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +25,10 @@ class PrSyncObserver:
     def __init__(
         self,
         tasks: Tasks,
-        workspace: WorkspaceService,
         github: GitHubAuth,
         http: httpx2.AsyncClient,
     ) -> None:
         self._tasks = tasks
-        self._workspace = workspace
         self._github = github
         self._http = http
         self._last_sync: dict[str, float] = {}
@@ -62,28 +57,6 @@ class PrSyncObserver:
     ) -> None:
         pass
 
-    async def _resolve_repo_ref(self, project: Project) -> RepoRef | None:
-        if project.github_full_name:
-            return repo_ref(project.github_full_name)
-
-        git = getattr(self._workspace, "_git", None)
-        if git is not None:
-            try:
-                repo_root = self._workspace.repo_root(project)
-            except Exception:
-                repo_root = None
-            if repo_root is not None:
-                res = await git.run(
-                    ["config", "--get", "remote.origin.url"], cwd=repo_root, check=False
-                )
-                origin_url = res.stdout.strip() if res.code == 0 else None
-                if not origin_url:
-                    res = await git.run(["remote", "get-url", "origin"], cwd=repo_root, check=False)
-                    origin_url = res.stdout.strip() if res.code == 0 else None
-                return github_remote(project, origin_url)
-
-        return github_remote(project, None)
-
     async def _sync_safely(self, project_id: str) -> None:
         try:
             await self._do_sync(project_id)
@@ -103,13 +76,7 @@ class PrSyncObserver:
         if not token:
             return
 
-        try:
-            project = await self._workspace.get(project_id)
-        except Exception as exc:
-            logger.warning("PR sync could not load project %s: %s", project_id, exc)
-            return
-
-        ref = await self._resolve_repo_ref(project)
+        ref = await self._tasks.repo_ref(project_id)
         if ref is None:
             return
 

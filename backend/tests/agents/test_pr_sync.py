@@ -77,7 +77,7 @@ async def setup_sync_test(
         workspace=workspace,
     )
 
-    observer = PrSyncObserver(tasks, workspace, github, http)
+    observer = PrSyncObserver(tasks, github, http)
     return observer, tasks, project.id, repo, http
 
 

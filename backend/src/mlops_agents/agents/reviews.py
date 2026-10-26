@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from mlops_agents.workspace.service import WorkspaceService
 
 
+SYSTEM_AUTHOR = "system"
+
+
 class LocalReview(BaseModel):
     task: TaskView
     agent: str
@@ -120,7 +123,7 @@ async def decide_local_review(
             raise DomainError(
                 "not_in_review",
                 f"Task '{task_id}' is not awaiting local review.",
-                status=400,
+                status=409,
             )
 
         task_ref = TaskRef(
@@ -138,21 +141,23 @@ async def decide_local_review(
                 raise DomainError("conflict", str(err), status=409) from err
             await tasks.end(project_id, task_id, status="merged")
         else:
-            await tasks.end(project_id, task_id, status="closed")
             rejection_text = (
                 f"Local review rejected for task '{task.title}': {note}"
                 if note
                 else f"Local review rejected for task '{task.title}'."
             )
+            # Tell the agent first (spec section 6): when the post fails the task stays in
+            # review, so the caller gets the error and can decide again.
             await sessions.post(
                 project_id,
                 task.agent,
-                author_name="Review",
-                from_agent=task.agent,
+                author_name=SYSTEM_AUTHOR,
+                from_agent=SYSTEM_AUTHOR,
                 text=rejection_text,
                 exchange_id=None,
                 hop=None,
             )
+            await tasks.end(project_id, task_id, status="closed")
 
         return await tasks.view(project_id, task_id)
 
@@ -174,6 +179,9 @@ async def get_github_activity(
     }
 
     items_by_key: dict[tuple[Literal["pr", "issue"], int], GitHubItem] = {}
+    # Issues whose state came from an event; records are newest first, so the first one that
+    # carries a state is the issue's latest known state.
+    issue_state_known: set[int] = set()
 
     for record in records:
         event_type = record.type
@@ -211,6 +219,8 @@ async def get_github_activity(
 
         key = (kind, num)
         if key not in items_by_key:
+            if kind == "issue" and record.payload.get("state"):
+                issue_state_known.add(num)
             items_by_key[key] = GitHubItem(
                 kind=kind,
                 number=num,
@@ -229,9 +239,17 @@ async def get_github_activity(
                 updated_title = title
 
             updated_url = existing.url or url
-            if updated_title != existing.title or updated_url != existing.url:
+            updated_state = existing.state
+            if kind == "issue" and num not in issue_state_known and record.payload.get("state"):
+                updated_state = str(record.payload["state"])
+                issue_state_known.add(num)
+            if (
+                updated_title != existing.title
+                or updated_url != existing.url
+                or updated_state != existing.state
+            ):
                 items_by_key[key] = existing.model_copy(
-                    update={"title": updated_title, "url": updated_url}
+                    update={"title": updated_title, "url": updated_url, "state": updated_state}
                 )
 
     result = list(items_by_key.values())

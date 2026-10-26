@@ -22,18 +22,14 @@ from mlops_agents.integrations.github.issues import (
     search_issues,
 )
 from mlops_agents.storage.tables import project_settings
-from mlops_agents.workspace.refs import github_remote, repo_ref
 
 if TYPE_CHECKING:
     import httpx2
 
-    from mlops_agents.agents.tools.base import TaskRef
+    from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.storage.databases import Databases
-    from mlops_agents.workspace.models import Project
-    from mlops_agents.workspace.refs import RepoRef
-    from mlops_agents.workspace.service import WorkspaceService
 
 IssuePriority = Literal["low", "medium", "high", "critical"]
 
@@ -72,31 +68,6 @@ async def set_issue_min_priority(
     return priority
 
 
-async def _resolve_repo_ref(
-    workspace: WorkspaceService, project: Project, task: TaskRef | None = None
-) -> RepoRef | None:
-    if project.github_full_name:
-        return repo_ref(project.github_full_name)
-
-    git = getattr(workspace, "_git", None)
-    if git is not None:
-        try:
-            repo_root = workspace.repo_root(project)
-        except Exception:
-            repo_root = task.worktree if task is not None else None
-        if repo_root is not None:
-            res = await git.run(
-                ["config", "--get", "remote.origin.url"], cwd=repo_root, check=False
-            )
-            origin_url = res.stdout.strip() if res.code == 0 else None
-            if not origin_url:
-                res = await git.run(["remote", "get-url", "origin"], cwd=repo_root, check=False)
-                origin_url = res.stdout.strip() if res.code == 0 else None
-            return github_remote(project, origin_url)
-
-    return github_remote(project, None)
-
-
 class SearchIssuesArgs(BaseModel):
     query: str = Field(default="", description="Search query string.")
 
@@ -109,17 +80,16 @@ class SearchIssuesTool(AgentTool[SearchIssuesArgs]):
 
     def __init__(
         self,
-        workspace: WorkspaceService,
+        tasks: Tasks,
         github: GitHubAuth,
         http: httpx2.AsyncClient,
     ) -> None:
-        self._workspace = workspace
+        self._tasks = tasks
         self._github = github
         self._http = http
 
     async def run(self, ctx: ToolContext, args: SearchIssuesArgs) -> ToolOutput:
-        project = await self._workspace.get(ctx.project_id)
-        ref = await _resolve_repo_ref(self._workspace, project, ctx.task)
+        ref = await self._tasks.repo_ref(ctx.project_id)
         if ref is None:
             return ToolOutput(content="Project has no GitHub link.", is_error=True)
 
@@ -160,13 +130,13 @@ class OpenIssueTool(AgentTool[OpenIssueArgs]):
 
     def __init__(
         self,
-        workspace: WorkspaceService,
+        tasks: Tasks,
         github: GitHubAuth,
         events: EventLog,
         http: httpx2.AsyncClient,
         databases: Databases,
     ) -> None:
-        self._workspace = workspace
+        self._tasks = tasks
         self._github = github
         self._events = events
         self._http = http
@@ -176,8 +146,7 @@ class OpenIssueTool(AgentTool[OpenIssueArgs]):
         return Preview(kind="text", title=args.title, body=args.body)
 
     async def run(self, ctx: ToolContext, args: OpenIssueArgs) -> ToolOutput:
-        project = await self._workspace.get(ctx.project_id)
-        ref = await _resolve_repo_ref(self._workspace, project, ctx.task)
+        ref = await self._tasks.repo_ref(ctx.project_id)
         if ref is None:
             return ToolOutput(content="Project has no GitHub link.", is_error=True)
 
@@ -242,12 +211,12 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
 
     def __init__(
         self,
-        workspace: WorkspaceService,
+        tasks: Tasks,
         github: GitHubAuth,
         events: EventLog,
         http: httpx2.AsyncClient,
     ) -> None:
-        self._workspace = workspace
+        self._tasks = tasks
         self._github = github
         self._events = events
         self._http = http
@@ -256,8 +225,7 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
         return Preview(kind="text", title=f"Comment on #{args.number}", body=args.body)
 
     async def run(self, ctx: ToolContext, args: CommentOnIssueArgs) -> ToolOutput:
-        project = await self._workspace.get(ctx.project_id)
-        ref = await _resolve_repo_ref(self._workspace, project, ctx.task)
+        ref = await self._tasks.repo_ref(ctx.project_id)
         if ref is None:
             return ToolOutput(content="Project has no GitHub link.", is_error=True)
 
@@ -280,6 +248,7 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
                 "number": args.number,
                 "url": issue.html_url,
                 "title": issue.title,
+                "state": issue.state,
             },
             subject_id=str(args.number),
         )

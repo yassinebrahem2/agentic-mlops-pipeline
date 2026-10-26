@@ -356,3 +356,64 @@ async def test_has_unpublished_changes_when_worktree_deleted(
 
         await service.push(project_id, task)
         assert await service.has_unpublished_changes(project_id, task) is False
+
+
+async def test_repo_ref_reads_origin_and_is_none_without_a_remote(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, repo = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    assert await service.repo_ref(project_id) is None
+
+    cmd(["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"], cwd=repo)
+    ref = await service.repo_ref(project_id)
+    assert ref is not None
+    assert (ref.owner, ref.repo) == ("test-owner", "test-repo")
+
+
+async def test_has_commits_beyond_base_without_a_remote(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Beyond base")
+    assert await service.has_commits_beyond_base(project_id, task) is False
+
+    (task.worktree / "a.txt").write_text("a\n", encoding="utf-8")
+    assert await service.has_commits_beyond_base(project_id, task) is False
+
+    await service.commit(project_id, task, "feat: a")
+    assert await service.has_commits_beyond_base(project_id, task) is True
+
+
+async def test_has_commits_beyond_base_with_a_remote(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, _, project_id, repo = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    cmd(["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"], cwd=repo)
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Remote beyond base")
+        assert await service.has_commits_beyond_base(project_id, task) is False
+
+        (task.worktree / "b.txt").write_text("b\n", encoding="utf-8")
+        await service.commit(project_id, task, "feat: b")
+        assert await service.has_commits_beyond_base(project_id, task) is True

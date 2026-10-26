@@ -8,6 +8,7 @@ import httpx2
 import pytest
 from sqlalchemy import insert
 
+from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolContext
 from mlops_agents.agents.tools.files import RepoFiles
@@ -50,7 +51,7 @@ def fake_github() -> Iterator[RunningFakeGitHub]:
 @dataclass
 class TestEnv:
     __test__ = False
-    workspace: WorkspaceService
+    tasks: TasksService
     github: GitHubAuth
     events: FakeEventLog
     http: httpx2.AsyncClient
@@ -95,7 +96,10 @@ async def setup_test_env(
     events = FakeEventLog()
     files = RepoFiles(repo, GitRunner(paths.bin))
     ctx = tool_context(files, project_id=project.id, agent=agent)
-    return TestEnv(workspace, github, events, http, project.id, repo, ctx)
+    tasks = TasksService(
+        databases=databases, paths=paths, git=runner, events=events, workspace=workspace
+    )
+    return TestEnv(tasks, github, events, http, project.id, repo, ctx)
 
 
 async def test_search_issues_no_github_link(
@@ -106,7 +110,7 @@ async def test_search_issues_no_github_link(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, remote_url=None)
-    tool = SearchIssuesTool(env.workspace, env.github, env.http)
+    tool = SearchIssuesTool(env.tasks, env.github, env.http)
     res = await tool.invoke(env.ctx, {"query": ""})
     assert res.is_error is True
     assert res.content == "Project has no GitHub link."
@@ -120,7 +124,7 @@ async def test_search_issues_no_token(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, with_token=False)
-    tool = SearchIssuesTool(env.workspace, env.github, env.http)
+    tool = SearchIssuesTool(env.tasks, env.github, env.http)
     res = await tool.invoke(env.ctx, {"query": ""})
     assert res.is_error is True
     assert res.content == "GitHub integration is not configured."
@@ -153,7 +157,7 @@ async def test_search_issues_matching_and_empty(
         labels=["category:data"],
     )
 
-    tool = SearchIssuesTool(env.workspace, env.github, env.http)
+    tool = SearchIssuesTool(env.tasks, env.github, env.http)
     res_all = await tool.invoke(env.ctx, {"query": ""})
     assert res_all.is_error is False
     assert "#1" in res_all.content and "Fix model performance drop" in res_all.content
@@ -176,7 +180,7 @@ async def test_open_issue_no_github_link(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, remote_url=None)
-    tool = OpenIssueTool(env.workspace, env.github, env.events, env.http, databases)
+    tool = OpenIssueTool(env.tasks, env.github, env.events, env.http, databases)
     res = await tool.invoke(
         env.ctx,
         {"title": "Bug", "body": "Details", "category": "model", "priority": "high"},
@@ -193,7 +197,7 @@ async def test_open_issue_no_token(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, with_token=False)
-    tool = OpenIssueTool(env.workspace, env.github, env.events, env.http, databases)
+    tool = OpenIssueTool(env.tasks, env.github, env.events, env.http, databases)
     res = await tool.invoke(
         env.ctx,
         {"title": "Bug", "body": "Details", "category": "model", "priority": "high"},
@@ -211,7 +215,7 @@ async def test_open_issue_refused_below_minimum_priority(
     fake_github: RunningFakeGitHub,
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env)
-    tool = OpenIssueTool(env.workspace, env.github, env.events, env.http, databases)
+    tool = OpenIssueTool(env.tasks, env.github, env.events, env.http, databases)
     res = await tool.invoke(
         env.ctx,
         {"title": "Tweak", "body": "Body", "category": "ui", "priority": "low"},
@@ -233,7 +237,7 @@ async def test_open_issue_success_with_labels_and_event(
     fake_github: RunningFakeGitHub,
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, agent="evaluator")
-    tool = OpenIssueTool(env.workspace, env.github, env.events, env.http, databases)
+    tool = OpenIssueTool(env.tasks, env.github, env.events, env.http, databases)
 
     # 1. Open first issue: labels created once
     res1 = await tool.invoke(
@@ -288,7 +292,7 @@ async def test_comment_on_issue_no_github_link(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, remote_url=None)
-    tool = CommentOnIssueTool(env.workspace, env.github, env.events, env.http)
+    tool = CommentOnIssueTool(env.tasks, env.github, env.events, env.http)
     res = await tool.invoke(env.ctx, {"number": 1, "body": "Hello"})
     assert res.is_error is True
     assert res.content == "Project has no GitHub link."
@@ -302,7 +306,7 @@ async def test_comment_on_issue_no_token(
     git_env: dict[str, str],
 ) -> None:
     env = await setup_test_env(tmp_path, paths, databases, keystore, git_env, with_token=False)
-    tool = CommentOnIssueTool(env.workspace, env.github, env.events, env.http)
+    tool = CommentOnIssueTool(env.tasks, env.github, env.events, env.http)
     res = await tool.invoke(env.ctx, {"number": 1, "body": "Hello"})
     assert res.is_error is True
     assert res.content == "GitHub integration is not configured."
@@ -326,7 +330,7 @@ async def test_comment_on_issue_success_and_event(
         body="Initial body",
     )
 
-    tool = CommentOnIssueTool(env.workspace, env.github, env.events, env.http)
+    tool = CommentOnIssueTool(env.tasks, env.github, env.events, env.http)
     res = await tool.invoke(
         env.ctx, {"number": 1, "body": "Root cause identified in preprocessor."}
     )
@@ -345,6 +349,7 @@ async def test_comment_on_issue_success_and_event(
         "number": 1,
         "url": "https://github.com/test-owner/test-repo/issues/1",
         "title": "Initial issue",
+        "state": "open",
     }
 
 
@@ -366,7 +371,7 @@ async def test_default_registry_wiring(
 
     # With issue tool deps
     reg_full = default_registry(
-        workspace=env.workspace,
+        tasks=env.tasks,
         github=env.github,
         events=env.events,
         http=env.http,

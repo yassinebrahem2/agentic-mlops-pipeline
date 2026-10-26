@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +15,7 @@ from mlops_agents.agents.reviews import (
     get_github_activity,
     list_local_reviews,
 )
+from mlops_agents.agents.runtime.contract import AgentSessions, MessageView
 from mlops_agents.agents.tasks.git import run_safe_git
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
@@ -209,14 +210,81 @@ async def test_decide_local_review_reject(
 
     assert updated_task.status == "closed"
 
-    # Verify agent session received a system-labeled message from Review
+    # The rejection reaches the agent from the system, not from the task's own agent
     session_view = await services.sessions.get(project_id, "orchestrator")
-    assert len(session_view.messages) > 0
-    last_msg = session_view.messages[-1]
-    assert last_msg.author_name == "Review"
-    assert last_msg.from_agent == "orchestrator"
-    msg_text = "".join(getattr(p, "text", "") for p in last_msg.parts)
-    assert "Needs better formatting" in msg_text
+    # The agent's own turn may add replies after it, so find the rejection by its text.
+    rejections = [
+        m
+        for m in session_view.messages
+        if any("Needs better formatting" in getattr(p, "text", "") for p in m.parts)
+    ]
+    assert len(rejections) == 1
+    assert rejections[0].author_name == "system"
+    assert rejections[0].from_agent == "system"
+
+
+def _rejection_count(messages: list[MessageView]) -> int:
+    return sum(
+        1
+        for m in messages
+        if m.author_name == "system"
+        and any("Local review rejected" in getattr(p, "text", "") for p in m.parts)
+    )
+
+
+class _FailingSessions:
+    """Sessions whose post fails, like an agent session that cannot take a message."""
+
+    async def post(self, *args: Any, **kwargs: Any) -> None:
+        raise DomainError("session_unavailable", "The agent session is unavailable.", status=503)
+
+
+async def test_decide_local_review_reject_with_failing_post_keeps_task_in_review(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    services = app.state.services
+    project_id = await _setup_project(app, tmp_path, git_env)
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Reject fails")
+    await services.tasks.set_review(project_id, task.id, kind="local")
+
+    with pytest.raises(DomainError) as exc_info:
+        await decide_local_review(
+            services.tasks,
+            cast(AgentSessions, _FailingSessions()),
+            project_id,
+            task.id,
+            approve=False,
+        )
+    assert exc_info.value.code == "session_unavailable"
+    assert (await services.tasks.view(project_id, task.id)).status == "in_review"
+
+    # The retry closes the task and tells the agent once.
+    closed = await decide_local_review(
+        services.tasks, services.sessions, project_id, task.id, approve=False
+    )
+    assert closed.status == "closed"
+    session_view = await services.sessions.get(project_id, "orchestrator")
+    assert _rejection_count(session_view.messages) == 1
+
+
+async def test_decide_local_review_on_a_closed_task_answers_409(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    services = app.state.services
+    project_id = await _setup_project(app, tmp_path, git_env)
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Decide twice")
+    await services.tasks.set_review(project_id, task.id, kind="local")
+    await decide_local_review(services.tasks, services.sessions, project_id, task.id, approve=False)
+
+    with pytest.raises(DomainError) as exc_info:
+        await decide_local_review(
+            services.tasks, services.sessions, project_id, task.id, approve=False
+        )
+    assert exc_info.value.status == 409
+    session_view = await services.sessions.get(project_id, "orchestrator")
+    assert _rejection_count(session_view.messages) == 1
 
 
 async def test_decide_local_review_invalid_state(
@@ -237,7 +305,7 @@ async def test_decide_local_review_invalid_state(
             task_id=task.id,
             approve=True,
         )
-    assert exc_info.value.status == 400
+    assert exc_info.value.status == 409
 
 
 async def test_decide_local_review_concurrent_approvals(
@@ -260,7 +328,7 @@ async def test_decide_local_review_concurrent_approvals(
     failures = [r for r in results if isinstance(r, DomainError)]
     assert len(successes) == 1
     assert len(failures) == 1
-    assert failures[0].status == 400
+    assert failures[0].status == 409
 
 
 async def test_get_github_activity(app: FastAPI, tmp_path: Path, git_env: dict[str, str]) -> None:
@@ -356,3 +424,45 @@ async def test_get_github_activity(app: FastAPI, tmp_path: Path, git_env: dict[s
     # Ensure sorted by created_at descending
     created_ats = [i.created_at for i in activity]
     assert created_ats == sorted(created_ats, reverse=True)
+
+
+async def test_github_activity_shows_the_real_state_of_an_issue(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    services = app.state.services
+    project_id = await _setup_project(app, tmp_path, git_env)
+    events: EventLog = services.events
+
+    await events.record(
+        project_id,
+        source="orchestrator",
+        type="issue.opened",
+        payload={"number": 20, "title": "Closed later", "url": "u20", "state": "open"},
+        subject_id="20",
+    )
+    await events.record(
+        project_id,
+        source="orchestrator",
+        type="issue.commented",
+        payload={"number": 20, "title": "Closed later", "url": "u20", "state": "closed"},
+        subject_id="20",
+    )
+    # Opened already closed; a later comment from an older event shape has no state.
+    await events.record(
+        project_id,
+        source="orchestrator",
+        type="issue.opened",
+        payload={"number": 21, "title": "Born closed", "url": "u21", "state": "closed"},
+        subject_id="21",
+    )
+    await events.record(
+        project_id,
+        source="orchestrator",
+        type="issue.commented",
+        payload={"number": 21, "url": "u21"},
+        subject_id="21",
+    )
+
+    activity = await get_github_activity(events, services.tasks, project_id)
+    states = {i.number: i.state for i in activity if i.kind == "issue"}
+    assert states == {20: "closed", 21: "closed"}

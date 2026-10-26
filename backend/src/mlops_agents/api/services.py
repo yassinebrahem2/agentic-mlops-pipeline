@@ -156,7 +156,7 @@ async def build_services(
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
-    pr_sync = PrSyncObserver(tasks, workspace, github, http)
+    pr_sync = PrSyncObserver(tasks, github, http)
     stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(

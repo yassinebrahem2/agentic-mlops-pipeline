@@ -12,6 +12,7 @@ from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.claims import claim_paths, get_task_read_hash, record_task_read
 from mlops_agents.agents.tasks.commit import (
     commit_task,
+    has_commits_beyond_base_task,
     has_unpublished_changes_task,
     push_task,
     staged_diff_task,
@@ -25,6 +26,7 @@ from mlops_agents.agents.tasks.lifecycle import (
     start_task,
 )
 from mlops_agents.agents.tasks.local_merge import local_merge, local_merge_preview
+from mlops_agents.agents.tasks.remote import resolve_repo_ref
 from mlops_agents.agents.tasks.worktrees import (
     TaskFiles,
     clean_leftover_temp_files,
@@ -46,7 +48,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from mlops_agents.sandbox.contract import Sandbox
-    from mlops_agents.workspace.models import Project
+    from mlops_agents.workspace.refs import RepoRef
 
 
 class TasksService(Tasks):
@@ -243,29 +245,49 @@ class TasksService(Tasks):
             runner=self._git,
         )
 
-    async def _task_env(self, project_id: str, task_id: str) -> tuple[Project, Path, AsyncEngine]:
+    async def _task_env(self, project_id: str, task_id: str) -> tuple[Path, AsyncEngine]:
         project = await self._workspace.get(project_id)
         repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task_id)
         engine = await self._databases.project(project_id)
-        return project, git_dir, engine
+        return git_dir_for_task(repo_root, task_id), engine
+
+    async def repo_ref(self, project_id: str) -> RepoRef | None:
+        project = await self._workspace.get(project_id)
+        return await resolve_repo_ref(
+            self._git,
+            project=project,
+            repo_root=self._workspace.repo_root(project),
+            empty_hooks=self._paths.empty_hooks,
+        )
+
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
+        async with self._task_lock(project_id, task.id):
+            git_dir, engine = await self._task_env(project_id, task.id)
+            return await has_commits_beyond_base_task(
+                runner=self._git,
+                git_dir=git_dir,
+                worktree=task.worktree,
+                empty_hooks=self._paths.empty_hooks,
+                engine=engine,
+                task=task,
+            )
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
         async with self._task_lock(project_id, task.id):
-            project, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             return await has_unpublished_changes_task(
                 runner=self._git,
                 git_dir=git_dir,
                 worktree=task.worktree,
                 empty_hooks=self._paths.empty_hooks,
                 engine=engine,
-                project=project,
+                remote=await self.repo_ref(project_id),
                 task=task,
             )
 
     async def staged_diff(self, project_id: str, task: TaskRef) -> str:
         async with self._task_lock(project_id, task.id):
-            _, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             async with pause_task(self._sandbox, project_id, task.id):
                 return await staged_diff_task(
                     runner=self._git,
@@ -278,7 +300,7 @@ class TasksService(Tasks):
 
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult:
         async with self._task_lock(project_id, task.id):
-            _, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             async with pause_task(self._sandbox, project_id, task.id):
                 return await commit_task(
                     runner=self._git,
@@ -293,13 +315,13 @@ class TasksService(Tasks):
 
     async def push(self, project_id: str, task: TaskRef) -> None:
         async with self._task_lock(project_id, task.id):
-            project, git_dir, _ = await self._task_env(project_id, task.id)
+            git_dir, _ = await self._task_env(project_id, task.id)
             await push_task(
                 runner=self._git,
                 git_dir=git_dir,
                 worktree=task.worktree,
                 empty_hooks=self._paths.empty_hooks,
-                project=project,
+                remote=await self.repo_ref(project_id),
                 task=task,
             )
 

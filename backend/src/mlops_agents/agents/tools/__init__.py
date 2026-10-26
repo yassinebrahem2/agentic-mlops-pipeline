@@ -80,7 +80,7 @@ def default_registry(
     ):
         tools.append(OpenPullRequestTool(tasks, workspace, github, events, http))
     if (
-        workspace is not None
+        tasks is not None
         and github is not None
         and events is not None
         and http is not None
@@ -88,9 +88,9 @@ def default_registry(
     ):
         tools.extend(
             [
-                SearchIssuesTool(workspace, github, http),
-                OpenIssueTool(workspace, github, events, http, databases),
-                CommentOnIssueTool(workspace, github, events, http),
+                SearchIssuesTool(tasks, github, http),
+                OpenIssueTool(tasks, github, events, http, databases),
+                CommentOnIssueTool(tasks, github, events, http),
             ]
         )
     return ToolRegistry(tools)

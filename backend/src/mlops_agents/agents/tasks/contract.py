@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 if TYPE_CHECKING:
     from mlops_agents.agents.runtime.contract import TaskView
     from mlops_agents.agents.tools.base import FileAccess, TaskRef
+    from mlops_agents.workspace.refs import RepoRef
 
 
 class ClaimConflict(Exception):
@@ -54,6 +55,12 @@ class Tasks(TaskWorkspaces, Protocol):
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None:
         """Raises ClaimConflict."""
         ...
+
+    async def repo_ref(self, project_id: str) -> RepoRef | None:
+        """The GitHub repository the project pushes to, or None when it has none."""
+        ...
+
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool: ...
 
