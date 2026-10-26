@@ -10,8 +10,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import type { MessageView as MessageViewType, ToolResultPart } from "./session/events";
+import { ApprovalCard } from "./ApprovalCard";
 import { ToolStep } from "./ToolStep";
+import type {
+  MessageView as MessageViewType,
+  ToolCallPart,
+  ToolResultPart,
+} from "./session/events";
 
 export interface MessageViewProps {
   message: MessageViewType;
@@ -88,12 +93,25 @@ export function MessageView({ message, className }: MessageViewProps) {
             const result = message.parts.find(
               (p): p is ToolResultPart => p.type === "tool_result" && p.tool_call_id === part.id,
             );
-            return <ToolStep key={part.id} call={part} result={result} />;
+            return (
+              <div key={part.id} className="space-y-2">
+                <ToolStep call={part} result={result} />
+              </div>
+            );
           }
           if (part.type === "tool_result") {
             return null;
           }
-          if (part.type === "approval") return null;
+          if (part.type === "approval") {
+            const matchingTool = message.parts.find(
+              (p): p is ToolCallPart => p.type === "tool_call" && p.id === part.tool_call_id,
+            );
+            return (
+              <div key={part.approval_id} className="space-y-2">
+                <ApprovalCard toolName={matchingTool?.name} approval={part} />
+              </div>
+            );
+          }
           return (
             <div key={idx} className="text-sm leading-relaxed text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
@@ -112,6 +130,11 @@ export function MessageView({ message, className }: MessageViewProps) {
             <span className="size-1.5 animate-pulse rounded-full bg-current [animation-delay:200ms]" />
             <span className="size-1.5 animate-pulse rounded-full bg-current [animation-delay:400ms]" />
           </span>
+        )}
+        {message.status === "waiting" && (
+          <div role="status" className="text-xs text-muted-foreground">
+            Waiting for your approval
+          </div>
         )}
         {message.status === "stopped" && (
           <div>
