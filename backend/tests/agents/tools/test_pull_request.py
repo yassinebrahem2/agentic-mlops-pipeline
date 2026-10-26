@@ -370,6 +370,99 @@ async def test_open_pull_request_clean_tree_update(
         assert "Updated Body" in pr_item["body"]
 
 
+async def test_open_pull_request_create_pull_failure_recovery_on_clean_tree(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, events, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Retry create_pull task")
+        (task.worktree / "work.py").write_text("print('create_pull retry')\n", encoding="utf-8")
+        ctx = await make_ctx(service, project_id, task)
+
+        # Simulate permission error on first create_pull call
+        fake_github.state.simulate_permission_error["pull requests: write"] = 403
+
+        out1 = await tool.invoke(ctx, {"title": "Retry PR", "body": "Initial body"})
+        assert out1.is_error is True
+        assert "403" in out1.content or "permission" in out1.content.lower()
+        assert len([r for r in events.records if r["type"].startswith("pr.")]) == 0
+
+        task_view = await service.view(project_id, task.id)
+        assert task_view.pr_number is None
+
+        # Tree is clean and push already succeeded on first call, but branch has commits beyond base
+        fake_github.state.simulate_permission_error.clear()
+        out2 = await tool.invoke(ctx, {"title": "Retry PR", "body": "Initial body"})
+        assert out2.is_error is False
+        assert "Pull request #1 opened:" in out2.content
+        assert len([r for r in events.records if r["type"].startswith("pr.")]) == 1
+
+        task_view = await service.view(project_id, task.id)
+        assert task_view.status == "in_review"
+        assert task_view.pr_number == 1
+
+
+async def test_open_pull_request_zero_commits_no_pr_errors(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, events, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Zero commits task")
+        ctx = await make_ctx(service, project_id, task)
+
+        # Tree is clean, no commits beyond base, no PR
+        out = await tool.invoke(ctx, {"title": "Empty PR", "body": "Empty body"})
+        assert out.is_error is True
+        assert "Nothing to commit" in out.content
+
+        task_view = await service.view(project_id, task.id)
+        assert task_view.pr_number is None
+        assert len(fake_github.state.prs) == 0
+        assert len([r for r in events.records if r["type"].startswith("pr.")]) == 0
+
+
+async def test_open_pull_request_zero_commits_local_review_errors(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, events, tool, project_id, _repo = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Zero commits local task")
+    ctx = await make_ctx(service, project_id, task)
+
+    # Tree is clean, no commits beyond base
+    out = await tool.invoke(ctx, {"title": "Empty local PR", "body": "Empty body"})
+    assert out.is_error is True
+    assert "Nothing to commit" in out.content
+
+    task_view = await service.view(project_id, task.id)
+    assert task_view.status != "in_review"
+    assert len([r for r in events.records if r["type"].startswith("pr.")]) == 0
+
+
 def test_default_registry_wiring(
     databases: Databases,
     paths: DataPaths,
