@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from typing import NoReturn
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.events.contract import EventLog
@@ -47,6 +48,14 @@ async def _finish_operation[T](operation: Coroutine[object, object, T]) -> T:
     if cancelled is not None:
         raise cancelled
     return result
+
+
+def _raise_with_cleanup(body_error: BaseException, cleanup_error: BaseException) -> NoReturn:
+    """Re-raise body_error while preserving cleanup_error details via add_note and chaining."""
+    body_error.add_note(f"Cleanup failed: {cleanup_error}")
+    if body_error.__cause__ is None:
+        raise body_error from cleanup_error
+    raise body_error
 
 
 class SandboxService(Sandbox):
@@ -109,12 +118,17 @@ class SandboxService(Sandbox):
         current = self._status.get(project_id)
         if current is not None and current.state == "building":
             return current
+        docker_status = await self.docker()
+        if not docker_status.available:
+            return EnvironmentStatus(state="unavailable", tag=None, detail=docker_status.detail)
         root = await self._projects.root(project_id)
         try:
             inputs = snapshot_image(project_id, root)
             if current is not None and current.state == "failed" and current.tag == inputs.tag:
                 return current
             exists = await self._image_manager.image_exists(inputs.tag)
+        except SandboxUnavailable as exc:
+            return EnvironmentStatus(state="unavailable", tag=None, detail=str(exc))
         except (ValueError, OSError) as exc:
             status = EnvironmentStatus(state="failed", tag=None, detail=str(exc))
             self._status[project_id] = status
@@ -164,6 +178,9 @@ class SandboxService(Sandbox):
             return status
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
         root = await self._projects.root(project_id)
         return await self._build_project_image(project_id, root)
 
@@ -171,6 +188,9 @@ class SandboxService(Sandbox):
         return await self._projects.get_network(project_id)
 
     async def set_network(self, project_id: str, enabled: bool) -> bool:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
         async with self._exclusive_tasks(project_id):
             old = await self.get_network(project_id)
             if old != enabled:
@@ -227,9 +247,7 @@ class SandboxService(Sandbox):
                 try:
                     await _finish_operation(self._restart_container(cname))
                 except BaseException as cleanup_error:
-                    if exc.__cause__ is None:
-                        raise exc from cleanup_error
-                    raise exc from exc.__cause__
+                    _raise_with_cleanup(exc, cleanup_error)
                 raise
             except DockerTimeoutError as exc:
                 await _finish_operation(self._restart_container(cname))
@@ -300,9 +318,7 @@ class SandboxService(Sandbox):
                         await _finish_operation(self._container_manager.unpause(cname))
                     except BaseException as cleanup_error:
                         if body_error is not None:
-                            if body_error.__cause__ is None:
-                                raise body_error from cleanup_error
-                            raise body_error from body_error.__cause__
+                            _raise_with_cleanup(body_error, cleanup_error)
                         raise
 
     async def remove_task(self, project_id: str, task_id: str) -> None:

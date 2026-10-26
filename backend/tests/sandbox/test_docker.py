@@ -234,7 +234,7 @@ async def test_incremental_reader_never_retains_more_than_head_plus_tail(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(docker, "StreamCapture", ObservedCapture)
-    result = await CliDockerRunner().run(["exec", "container", "produce"])
+    result = await CliDockerRunner(executable="mock-docker").run(["exec", "container", "produce"])
     assert len(fed) > 100
     assert max(fed) <= 8192
     assert max(retained) == 30_000

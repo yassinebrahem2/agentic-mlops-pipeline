@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.config import APP_NAME
-from mlops_agents.sandbox.docker import DockerResult, DockerRunner
+from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
 async def test_context_failure_sets_failed_status_and_event(
@@ -88,51 +88,6 @@ async def test_environment_does_not_hide_unexpected_failures(tmp_path: Path) -> 
     )
     with pytest.raises(RuntimeError, match="unexpected runner defect"):
         await service.environment("prj_123")
-
-
-class FakeDockerRunner(DockerRunner):
-    def __init__(self) -> None:
-        self.build_delays: dict[str, float] = {}
-        self.default_build_delay: float = 0.0
-        self.fail_build: bool = False
-        self.build_calls: int = 0
-        self.built_tags: set[str] = set()
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        if cmd[0] == "image" and cmd[1] == "inspect":
-            tag = cmd[2]
-            if tag in self.built_tags:
-                return DockerResult(stdout="{}", stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr="no such image", exit_code=1)
-
-        if cmd[0] == "build":
-            self.build_calls += 1
-            tag_idx = cmd.index("-t") + 1
-            tag = cmd[tag_idx]
-            if self.fail_build:
-                return DockerResult(
-                    stdout="", stderr="Syntax error in requirements\nLine 2 failed", exit_code=1
-                )
-            delay = self.build_delays.get(tag, self.default_build_delay)
-            if delay > 0:
-                await asyncio.sleep(delay)
-            self.built_tags.add(tag)
-            return DockerResult(stdout="Built", stderr="", exit_code=0)
-
-        if cmd[0] == "images":
-            return DockerResult(stdout="", stderr="", exit_code=0)
-
-        if cmd[0] == "ps":
-            return DockerResult(stdout="", stderr="", exit_code=0)
-
-        return DockerResult(stdout="", stderr="", exit_code=0)
 
 
 async def test_service_rebuild_success_and_events(tmp_path: Path) -> None:

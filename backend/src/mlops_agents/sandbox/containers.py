@@ -9,7 +9,11 @@ from typing import cast
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import SandboxUnavailable
-from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner
+from mlops_agents.sandbox.docker import (
+    DOCKER_INSTALL_MESSAGE,
+    DockerRunner,
+    docker_error_boundary,
+)
 
 
 def container_name(task_id: str) -> str:
@@ -91,14 +95,11 @@ class ContainerManager:
 
     async def inspect(self, name: str) -> ContainerInfo | None:
         """Inspects a container and returns its info, or None if not found."""
-        try:
+        async with docker_error_boundary(
+            f"inspect sandbox container {name}",
+            gerund=f"inspecting sandbox container {name}",
+        ):
             res = await self._runner.run(["inspect", name, "--type", "container"], timeout_s=15.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable(f"Timed out inspecting sandbox container {name}.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Failed to inspect sandbox container {name}: {err}") from err
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             if "no such container" in detail.lower():
@@ -180,12 +181,11 @@ class ContainerManager:
             network=network,
             user=self._user,
         )
-        try:
+        async with docker_error_boundary(
+            "start sandbox container",
+            gerund="starting sandbox container",
+        ):
             res = await self._runner.run(args, timeout_s=30.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable("Timed out starting sandbox container.") from err
         if res.exit_code != 0:
             detail = res.stderr.strip() or res.stdout.strip() or "docker run failed"
             raise SandboxUnavailable(f"Failed to start sandbox container: {detail}")
@@ -193,28 +193,22 @@ class ContainerManager:
 
     async def pause(self, name: str) -> None:
         """Pauses a running container."""
-        try:
+        async with docker_error_boundary(
+            f"pause container {name}",
+            gerund=f"pausing container {name}",
+        ):
             res = await self._runner.run(["pause", name], timeout_s=15.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable(f"Timed out pausing container {name}.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Failed to pause container {name}: {err}") from err
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             raise SandboxUnavailable(f"Failed to pause sandbox container {name}: {detail}")
 
     async def unpause(self, name: str) -> None:
         """Unpauses a paused container."""
-        try:
+        async with docker_error_boundary(
+            f"unpause sandbox container {name}",
+            gerund=f"unpausing sandbox container {name}",
+        ):
             res = await self._runner.run(["unpause", name], timeout_s=15.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable(f"Timed out unpausing sandbox container {name}.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Failed to unpause sandbox container {name}: {err}") from err
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             raise SandboxUnavailable(f"Failed to unpause sandbox container {name}: {detail}")
@@ -222,14 +216,16 @@ class ContainerManager:
     async def remove(self, name: str) -> None:
         """Removes a container by name if it exists."""
         try:
-            res = await self._runner.run(["rm", "-f", name], timeout_s=30.0)
-        except FileNotFoundError:
-            # Removal is already satisfied if Docker has been uninstalled.
-            return
-        except TimeoutError as err:
-            raise SandboxUnavailable(f"Timed out removing sandbox container {name}.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Failed to remove sandbox container {name}: {err}") from err
+            async with docker_error_boundary(
+                f"remove sandbox container {name}",
+                gerund=f"removing sandbox container {name}",
+            ):
+                res = await self._runner.run(["rm", "-f", name], timeout_s=30.0)
+        except SandboxUnavailable as err:
+            if str(err) == DOCKER_INSTALL_MESSAGE:
+                # Removal is already satisfied if Docker has been uninstalled.
+                return
+            raise
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             if "no such container" in detail.lower():

@@ -467,7 +467,8 @@
               "none",
               "building",
               "ready",
-              "failed"
+              "failed",
+              "unavailable"
             ],
             "title": "State",
             "type": "string"

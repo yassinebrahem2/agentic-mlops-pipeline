@@ -14,7 +14,12 @@ from types import MappingProxyType
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import EnvironmentStatus, SandboxUnavailable
 from mlops_agents.sandbox.dependencies import read_dependency_files
-from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner, DockerTimeoutError
+from mlops_agents.sandbox.docker import (
+    DOCKER_INSTALL_MESSAGE,
+    DockerRunner,
+    DockerTimeoutError,
+    docker_error_boundary,
+)
 from mlops_agents.sandbox.environment import (
     DEFAULT_PYTHON_VERSION,
     VALID_PYTHON_VERSION_RE,
@@ -100,14 +105,8 @@ class ImageManager:
         self._runner = runner
 
     async def image_exists(self, tag: str) -> bool:
-        try:
+        async with docker_error_boundary(f"inspect image {tag}", gerund=f"inspecting image {tag}"):
             res = await self._runner.run(["image", "inspect", tag], timeout_s=15.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable(f"Timed out inspecting image {tag}.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Failed to inspect image {tag}: {err}") from err
         if res.exit_code == 0:
             return True
         err = (res.stderr or res.stdout).strip()
@@ -123,34 +122,35 @@ class ImageManager:
         *,
         inputs: ImageInputs | None = None,
     ) -> EnvironmentStatus:
-        tag: str | None = None
-        try:
-            inputs = inputs or snapshot_image(project_id, worktree, detected)
-            tag = inputs.tag
-            if await self.image_exists(tag):
-                return EnvironmentStatus(state="ready", tag=tag, detail=None)
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                context_path = create_build_context(inputs, Path(tmp_dir))
+        inputs = inputs or snapshot_image(project_id, worktree, detected)
+        tag = inputs.tag
+        if await self.image_exists(tag):
+            return EnvironmentStatus(state="ready", tag=tag, detail=None)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            context_path = create_build_context(inputs, Path(tmp_dir))
+            try:
                 res = await self._runner.run(
                     ["build", "-t", tag, str(context_path)],
                     timeout_s=BUILD_TIMEOUT_S,
                 )
-            if res.exit_code != 0:
-                detail = "\n".join(
-                    (res.stdout + "\n" + res.stderr).strip().splitlines()[-FAIL_DETAIL_LINES:]
-                )
+            except FileNotFoundError:
+                return EnvironmentStatus(state="failed", tag=tag, detail=DOCKER_INSTALL_MESSAGE)
+            except DockerTimeoutError as exc:
+                detail = f"Image build timed out after {BUILD_TIMEOUT_S}s."
+                if exc.stderr:
+                    detail += "\n" + "\n".join(exc.stderr.splitlines()[-FAIL_DETAIL_LINES:])
                 return EnvironmentStatus(state="failed", tag=tag, detail=detail)
-            await self.prune_project_tags(project_id, keep_tag=tag)
-            return EnvironmentStatus(state="ready", tag=tag, detail=None)
-        except FileNotFoundError:
-            detail = DOCKER_INSTALL_MESSAGE
-        except DockerTimeoutError as exc:
-            detail = f"Image build timed out after {BUILD_TIMEOUT_S}s."
-            if exc.stderr:
-                detail += "\n" + "\n".join(exc.stderr.splitlines()[-FAIL_DETAIL_LINES:])
-        except (OSError, ValueError) as exc:
-            detail = f"Image build failed: {exc}"
-        return EnvironmentStatus(state="failed", tag=tag, detail=detail)
+            except OSError as exc:
+                return EnvironmentStatus(
+                    state="failed", tag=tag, detail=f"Image build failed: {exc}"
+                )
+        if res.exit_code != 0:
+            detail = "\n".join(
+                (res.stdout + "\n" + res.stderr).strip().splitlines()[-FAIL_DETAIL_LINES:]
+            )
+            return EnvironmentStatus(state="failed", tag=tag, detail=detail)
+        await self.prune_project_tags(project_id, keep_tag=tag)
+        return EnvironmentStatus(state="ready", tag=tag, detail=None)
 
     async def prune_project_tags(self, project_id: str, keep_tag: str) -> None:
         res = await self._runner.run(

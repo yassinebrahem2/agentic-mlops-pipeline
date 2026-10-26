@@ -1,7 +1,7 @@
 import asyncio
 import socket
 import tempfile
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,8 +16,9 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, SessionSigner
 from mlops_agents.config import DEFAULT_PORT, RunMode, load_settings
 from mlops_agents.errors import DomainError
-from mlops_agents.sandbox.docker import DockerResult, DockerRunner
+from mlops_agents.sandbox.docker import DockerRunner
 from tests.conftest import MemoryKeyStore, make_repo
+from tests.sandbox.fakes import FakeDockerRunner
 
 LOCAL_URL = "http://127.0.0.1:8765"
 SERVER_URL = "https://app.example.com"
@@ -45,40 +46,7 @@ class NoGh:
         )
 
 
-class ApiFakeDockerRunner(DockerRunner):
-    """A fake Docker runner for API tests so they never touch real Docker."""
-
-    def __init__(self) -> None:
-        self.built_tags: set[str] = set()
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        if not cmd:
-            return DockerResult(stdout="", stderr="", exit_code=0)
-        if cmd[0] == "version":
-            import json
-
-            data = {"Client": {"Version": "27.0.0"}, "Server": {"Version": "27.0.0"}}
-            return DockerResult(stdout=json.dumps(data), stderr="", exit_code=0)
-        if cmd[0] == "image" and len(cmd) > 1 and cmd[1] == "inspect":
-            tag = cmd[2] if len(cmd) > 2 else ""
-            if tag in self.built_tags:
-                return DockerResult(stdout="{}", stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr="no such image", exit_code=1)
-        if cmd[0] == "build":
-            if "-t" in cmd:
-                tag = cmd[cmd.index("-t") + 1]
-                self.built_tags.add(tag)
-            return DockerResult(stdout="Successfully built", stderr="", exit_code=0)
-        if cmd[0] == "inspect":
-            return DockerResult(stdout="", stderr="no such container", exit_code=1)
-        return DockerResult(stdout="", stderr="", exit_code=0)
+ApiFakeDockerRunner = FakeDockerRunner
 
 
 def build_app(
@@ -92,16 +60,19 @@ def build_app(
     """The app every fixture tests: data folder `home`, a memory key store, no `gh`."""
     env = {"MLOPS_AGENTS_HOME": str(home), **(settings_env or {})}
     settings = load_settings(mode, port=port, env=env)
-    runner = docker_runner if docker_runner is not None else ApiFakeDockerRunner()
+    runner = docker_runner if docker_runner is not None else FakeDockerRunner()
     return create_app(settings, keystore=MemoryKeyStore(), gh=NoGh(), docker_runner=runner)
 
 
 @asynccontextmanager
 async def started_app(
-    home: Path, mode: RunMode = RunMode.LOCAL, settings_env: Mapping[str, str] | None = None
+    home: Path,
+    mode: RunMode = RunMode.LOCAL,
+    settings_env: Mapping[str, str] | None = None,
+    docker_runner: DockerRunner | None = None,
 ) -> AsyncGenerator[FastAPI]:
     """`build_app` with its lifespan running, called in process."""
-    app = build_app(home, mode, settings_env=settings_env)
+    app = build_app(home, mode, settings_env=settings_env, docker_runner=docker_runner)
     async with app.router.lifespan_context(app):
         yield app
 

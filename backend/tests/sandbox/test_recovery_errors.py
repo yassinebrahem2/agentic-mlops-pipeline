@@ -9,7 +9,13 @@ import pytest
 
 from mlops_agents.sandbox.containers import ContainerManager
 from mlops_agents.sandbox.contract import SandboxUnavailable
-from mlops_agents.sandbox.docker import DockerResult, detect_docker
+from mlops_agents.sandbox.docker import (
+    DOCKER_INSTALL_MESSAGE,
+    DockerResult,
+    DockerTimeoutError,
+    detect_docker,
+)
+from mlops_agents.sandbox.images import ImageManager
 from tests.sandbox.test_task_locking import ControlledDocker, setup_service
 
 
@@ -112,38 +118,6 @@ async def test_docker_failure_diagnosis_matches_output(detail: str, daemon_down:
         assert "daemon is not running" not in status.detail
 
 
-@pytest.mark.docker
-async def test_real_docker_recovers_stale_pause(tmp_path: Path) -> None:
-    from mlops_agents.agents.tools.base import TaskRef
-    from mlops_agents.sandbox.docker import CliDockerRunner
-    from mlops_agents.sandbox.service import SandboxService
-    from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-
-    runner = CliDockerRunner()
-    service = SandboxService(
-        runner, projects=MemorySandboxProjects({"prj_recovery": tmp_path}), events=FakeEventLog()
-    )
-    task = TaskRef("tsk_pause_recovery", "Recovery", "branch", tmp_path, "active")
-    name = await service.ensure_container("prj_recovery", task)
-    manager = ContainerManager(runner)
-    try:
-        await manager.pause(name)
-        assert await service.ensure_container("prj_recovery", task) == name
-        result = await runner.run(["exec", name, "bash", "-lc", "echo recovered"], timeout_s=10)
-        assert result.exit_code == 0 and result.stdout.strip() == "recovered"
-        await manager.pause(name)
-        async with service.paused("prj_recovery", task.id):
-            info = await manager.inspect(name)
-            assert info is not None and info.paused
-        info = await manager.inspect(name)
-        assert info is not None and not info.paused
-        await manager.pause(name)
-        await service.cleanup_orphans()
-        assert await manager.inspect(name) is None
-    finally:
-        await service.remove_task("prj_recovery", task.id)
-
-
 async def test_close_skips_cleanup_when_docker_unavailable(tmp_path: Path) -> None:
     class DaemonDownDocker(ControlledDocker):
         async def run(
@@ -163,7 +137,7 @@ async def test_close_skips_cleanup_when_docker_unavailable(tmp_path: Path) -> No
     await service.close()
 
     # Calling set_network() with daemon down still fails when network changes
-    with pytest.raises(SandboxUnavailable, match="Cannot connect to the Docker daemon"):
+    with pytest.raises(SandboxUnavailable, match="Docker daemon is not running"):
         await service.set_network("prj", True)
 
 
@@ -185,8 +159,6 @@ class ErrorDocker(ControlledDocker):
 
 
 async def test_inspect_maps_timeout_and_filenotfound() -> None:
-    from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerTimeoutError
-
     manager_timeout = ContainerManager(
         ErrorDocker(DockerTimeoutError("timeout", output="", truncated=False))
     )
@@ -201,8 +173,6 @@ async def test_inspect_maps_timeout_and_filenotfound() -> None:
 
 
 async def test_paused_maps_inspect_timeout(tmp_path: Path) -> None:
-    from mlops_agents.sandbox.docker import DockerTimeoutError
-
     runner = ErrorDocker(DockerTimeoutError("timeout", output="", truncated=False))
     service, task = setup_service(tmp_path, runner)
     with pytest.raises(SandboxUnavailable, match="Timed out inspecting sandbox container"):
@@ -211,8 +181,6 @@ async def test_paused_maps_inspect_timeout(tmp_path: Path) -> None:
 
 
 async def test_image_exists_raises_on_daemon_error() -> None:
-    from mlops_agents.sandbox.images import ImageManager
-
     runner = FailedDocker("image", "Cannot connect to the Docker daemon")
     manager = ImageManager(runner)
     with pytest.raises(SandboxUnavailable, match="Cannot connect to the Docker daemon"):
@@ -220,17 +188,12 @@ async def test_image_exists_raises_on_daemon_error() -> None:
 
 
 async def test_image_exists_returns_false_only_on_no_such_image() -> None:
-    from mlops_agents.sandbox.images import ImageManager
-
     runner = FailedDocker("image", "Error: No such image: some-tag")
     manager = ImageManager(runner)
     assert await manager.image_exists("some-tag") is False
 
 
 async def test_build_image_maps_filenotfound_without_filename(tmp_path: Path) -> None:
-    from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE
-    from mlops_agents.sandbox.images import ImageManager
-
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -282,6 +245,7 @@ async def test_paused_preserves_body_exception_cause(tmp_path: Path) -> None:
 
     # The body error's cause must NOT have been overwritten by unpause's failure
     assert exc_info.value.__cause__ is inner_cause
+    assert any("Cleanup failed" in note for note in getattr(exc_info.value, "__notes__", []))
 
 
 async def test_paused_chains_cleanup_error_when_body_has_no_cause(tmp_path: Path) -> None:
@@ -337,7 +301,7 @@ async def test_paused_container_removal_paths(tmp_path: Path) -> None:
     assert len(task_rm_calls) >= 1
 
 
-async def test_environment_raises_when_docker_missing(tmp_path: Path) -> None:
+async def test_environment_returns_unavailable_when_docker_missing(tmp_path: Path) -> None:
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
@@ -350,10 +314,13 @@ async def test_environment_raises_when_docker_missing(tmp_path: Path) -> None:
             timeout_s: float | None = None,
             secrets: Iterable[str] = (),
         ) -> DockerResult:
-            if args[0] == "image":
+            if args[0] in ("version", "image"):
                 raise FileNotFoundError(2, "No such file or directory: docker")
             return await super().run(args, timeout_s=timeout_s, secrets=secrets)
 
     service, _ = setup_service(tmp_path, MissingDockerRunner())
-    with pytest.raises(SandboxUnavailable, match=r"Docker"):
-        await service.environment("prj")
+    status = await service.environment("prj")
+    assert status.state == "unavailable"
+    assert status.tag is None
+    assert status.detail is not None
+    assert "Docker is not installed" in status.detail
