@@ -105,7 +105,7 @@ def fake_openai(_fake_openai_server: RunningFake) -> Iterator[RunningFake]:
 
 @pytest.fixture(autouse=True)
 def guard_docker_cli(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    item = cast(pytest.Item, request.node)  # pyright: ignore[reportUnknownMemberType]
+    item = cast(pytest.Item, request.node)  # pyright: ignore[reportUnknownMemberType]  # pytest FixtureRequest.node lacks type stubs
     if item.get_closest_marker("docker") is not None:
         return
 
