@@ -104,11 +104,6 @@ class _Ending:
     error: str | None = None
     failure_notice: str | None = None
 
-    @property
-    def notice_recorded(self) -> bool:
-        """Whether this is a failed end whose failure notice is stored."""
-        return self.status == "failed" and self.failure_notice is None
-
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 # A failure no part of the turn recorded: its system message is written with the end.

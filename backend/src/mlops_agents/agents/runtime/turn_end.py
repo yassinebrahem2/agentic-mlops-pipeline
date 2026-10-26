@@ -12,7 +12,7 @@ from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.runtime.waiting import _UNEXPECTED_FAILURE, _Ending, _observed
+from mlops_agents.agents.runtime.waiting import _Ending, _observed
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +66,10 @@ class TurnEnds:
                 )
                 await self._store_end(project_id, turn_id, hub, status, ending.error)
             except Exception:
-                # As any other unexpected failure of the turn: it ends failed and the queue goes
-                # on, with one failure notice. A failed end whose notice is stored keeps its
-                # error. A failure of this fallback too is raised.
-                logger.exception("Could not store how turn %s ended; it ends failed", turn_id)
-                if not ending.notice_recorded:
-                    ending = await self._write_notice(
-                        project_id, session_id, turn_id, hub, lock, _UNEXPECTED_FAILURE
-                    )
-                    status = "failed"
-                await self._store_end(project_id, turn_id, hub, status, ending.error)
+                # As "disk full": the end is still recorded once more, with the writes it needs,
+                # and reported. It keeps its own status.
+                logger.exception("Could not store how turn %s ended; it ends %s", turn_id, status)
+                await self._record_end(project_id, session_id, turn_id, hub, lock, status, ending)
         await self._turn_ended(project_id, session_id, agent, turn_id, status)
 
     async def settle_trigger(
@@ -126,18 +120,37 @@ class TurnEnds:
             # As "database is locked" while close_project runs: the end is still recorded once
             # more, with the one write it needs, and reported.
             logger.exception("Could not store how turn %s ended; it ends interrupted", turn_id)
-            await self._record_interrupted(project_id, turn_id, hub)
+            interrupted = _Ending("interrupted")
+            await self._record_end(
+                project_id, session_id, turn_id, hub, lock, "interrupted", interrupted
+            )
 
-    async def _record_interrupted(self, project_id: str, turn_id: str, hub: SessionHub) -> None:
-        """The fallback of an interrupted end: its status, then its publish, each logged when it
-        fails. A turn whose status cannot be written stays running in the database; the next
-        recovery (at close or at startup) marks it interrupted."""
+    async def _record_end(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        status: TurnEnd,
+        ending: _Ending,
+    ) -> None:
+        """The fallback of every end: the failure notice still to be written, the status, then
+        its publish, each logged when it fails, so it never raises: a close is about to raise
+        its cancel, or the worker goes on to the next queued turn. A turn has one failure notice
+        (`record_failure` writes no second one). A turn whose status cannot be written stays
+        running in the database; the next recovery (at close or at startup) marks it
+        interrupted."""
         try:
-            await self._store.set_turn(project_id, turn_id, "interrupted")
+            ending = await self._write_notice(project_id, session_id, turn_id, hub, lock, ending)
         except Exception:
-            logger.exception("Could not record turn %s interrupted", turn_id)
+            logger.exception("Could not write the failure notice of turn %s", turn_id)
         try:
-            await hub.turn_ended(turn_id, status="interrupted")
+            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
+        except Exception:
+            logger.exception("Could not record turn %s %s", turn_id, status)
+        try:
+            await hub.turn_ended(turn_id, status=status, error=ending.error)
         except Exception:
             logger.exception("Could not publish the end of turn %s", turn_id)
 
