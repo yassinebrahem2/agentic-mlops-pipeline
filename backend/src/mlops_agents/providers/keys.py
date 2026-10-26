@@ -22,18 +22,28 @@ class StoredKeys:
         self._dbs = databases
         self._keystore = keystore
         self._cached_secrets: list[str] | None = None
+        # Counts the invalidations, so a read that one overtook is not cached.
+        self._generation = 0
 
     async def values_for(self, provider_id: str) -> list[str]:
         """The provider's key values in position order."""
         return await self._read(provider_id)
 
     async def all_values(self) -> list[str]:
-        """Every stored value, cached until a key changes. The caller gets its own copy."""
-        if self._cached_secrets is None:
-            self._cached_secrets = await self._read(None)
-        return list(self._cached_secrets)
+        """Every stored value, cached until a key changes. The caller gets its own copy. A read
+        that a key change overtook returns what it read but is not cached, so the next call
+        reads the new key too."""
+        values = self._cached_secrets
+        if values is None:
+            generation = self._generation
+            values = await self._read(None)
+            if generation == self._generation:
+                self._cached_secrets = values
+        return list(values)
 
     def invalidate(self) -> None:
+        """Drop the cached values, and the result of any read in flight."""
+        self._generation += 1
         self._cached_secrets = None
 
     async def add(self, provider_id: str, value: str) -> None:
