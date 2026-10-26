@@ -18,6 +18,7 @@ from mlops_agents.integrations.github.issues import (
     comment_issue,
     create_issue,
     ensure_labels,
+    get_issue,
     search_issues,
 )
 from mlops_agents.storage.tables import project_settings
@@ -266,6 +267,7 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
 
         repo_full_name = f"{ref.owner}/{ref.repo}"
         try:
+            issue = await get_issue(self._http, token, repo_full_name, args.number)
             comment = await comment_issue(self._http, token, repo_full_name, args.number, args.body)
         except DomainError as err:
             return ToolOutput(content=str(err), is_error=True)
@@ -276,8 +278,8 @@ class CommentOnIssueTool(AgentTool[CommentOnIssueArgs]):
             type="issue.commented",
             payload={
                 "number": args.number,
-                "url": comment.html_url,
-                "comment_id": comment.id,
+                "url": issue.html_url,
+                "title": issue.title,
             },
             subject_id=str(args.number),
         )

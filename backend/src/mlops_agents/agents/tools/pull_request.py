@@ -102,7 +102,15 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
             try:
                 await self._tasks.commit(ctx.project_id, ctx.task, args.title)
             except CommitRefused as err:
-                return ToolOutput(content=str(err), is_error=True)
+                task_view = await self._tasks.view(ctx.project_id, ctx.task.id)
+                has_unpublished = await self._tasks.has_unpublished_changes(
+                    ctx.project_id, ctx.task
+                )
+                if not (
+                    "Nothing to commit" in str(err)
+                    and (has_unpublished or task_view.pr_number is not None)
+                ):
+                    return ToolOutput(content=str(err), is_error=True)
 
             try:
                 await self._tasks.push(ctx.project_id, ctx.task)

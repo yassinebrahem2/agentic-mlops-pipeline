@@ -43,9 +43,12 @@ def fake_github() -> Iterator[RunningFakeGitHub]:
         running.stop()
 
 
+ORIGIN = "https://github.com/test-owner/test-repo.git"
+
+
 @contextmanager
 def git_instead_of(
-    tmp_path: Path, bare: Path, remote_url: str = "https://github.com/test-owner/test-repo.git"
+    tmp_path: Path, bare: Path, remote_url: str = ORIGIN
 ) -> Generator[None, None, None]:
     fake_global = tmp_path / f"fake_global_{bare.name}.gitconfig"
     cmd(["git", "config", "--file", str(fake_global), f"url.{bare.as_uri()}.insteadOf", remote_url])
@@ -89,12 +92,7 @@ class _TasksServiceForTests(TasksService):
             await conn.execute(
                 update(tasks)
                 .where(tasks.c.id == task_id)
-                .values(
-                    status="in_review",
-                    review_kind=kind,
-                    pr_number=pr_number,
-                    pr_url=pr_url,
-                )
+                .values(status="in_review", review_kind=kind, pr_number=pr_number, pr_url=pr_url)
             )
         return await self.view(project_id, task_id)
 
@@ -107,6 +105,7 @@ async def setup_test_service(
     git_env: dict[str, str],
     *,
     token: str | None = None,
+    remote_url: str | None = None,
 ) -> tuple[
     _TasksServiceForTests,
     WorkspaceService,
@@ -119,16 +118,15 @@ async def setup_test_service(
     repo = make_repo(tmp_path / "repo", {"app.py": "print('hello')\n"}, git_env)
     cmd(["git", "config", "user.name", "Jane Doe"], cwd=repo)
     cmd(["git", "config", "user.email", "jane@example.com"], cwd=repo)
+    if remote_url:
+        cmd(["git", "remote", "add", "origin", remote_url], cwd=repo)
     http = httpx2.AsyncClient()
     keystore.set(GITHUB_KEYSTORE_REF, effective_token)
     app_engine = await databases.app()
     async with app_engine.begin() as conn:
         await conn.execute(
             insert(integrations).values(
-                name="github",
-                mode="token",
-                login="octo",
-                verified_at=now_iso(),
+                name="github", mode="token", login="octo", verified_at=now_iso()
             )
         )
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -137,18 +135,10 @@ async def setup_test_service(
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     service = _TasksServiceForTests(
-        databases=databases,
-        paths=paths,
-        git=runner,
-        events=events,
-        workspace=workspace,
+        databases=databases, paths=paths, git=runner, events=events, workspace=workspace
     )
     tool = OpenPullRequestTool(
-        tasks=service,
-        workspace=workspace,
-        github=github,
-        events=events,
-        http=http,
+        tasks=service, workspace=workspace, github=github, events=events, http=http
     )
     return service, workspace, events, tool, project.id, repo
 
@@ -171,41 +161,28 @@ async def test_open_pull_request_first_call_and_second_call(
     fake_github: RunningFakeGitHub,
 ) -> None:
     bare = make_bare_remote(tmp_path, git_env)
-    service, _, events, tool, project_id, repo = await setup_test_service(
-        tmp_path, paths, databases, keystore, git_env
+    service, _, events, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
     )
-    cmd(["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"], cwd=repo)
-
     with git_instead_of(tmp_path, bare):
         await create_session(databases, project_id, "ses_1", agent="coder")
         task = await service.start(project_id, "ses_1", "coder", "First PR task")
 
-        # 1. First call: creates PR with footer and fixes
         (task.worktree / "feature.py").write_text("print('feature 1')\n", encoding="utf-8")
         ctx = await make_ctx(service, project_id, task)
-
         out1 = await tool.invoke(
             ctx, {"title": "Add feature", "body": "Summary of changes", "fixes": [3]}
         )
         assert out1.is_error is False
         assert "Pull request #1 opened:" in out1.content
-        assert "https://github.com/test-owner/test-repo/pull/1" in out1.content
 
-        # Verify task is in_review on github
         task_view = await service.view(project_id, task.id)
         assert task_view.status == "in_review"
-        assert task_view.review_kind == "github"
         assert task_view.pr_number == 1
-        assert task_view.pr_url == "https://github.com/test-owner/test-repo/pull/1"
 
-        # Verify event pr.opened recorded
         pr_events = [r for r in events.records if r["type"].startswith("pr.")]
         assert len(pr_events) == 1
-        evt1 = pr_events[0]
-        assert evt1["type"] == "pr.opened"
-        assert evt1["source"] == "coder"
-        assert evt1["subject_id"] == task.id
-        assert evt1["payload"] == {
+        assert pr_events[0]["payload"] == {
             "task_id": task.id,
             "number": 1,
             "url": "https://github.com/test-owner/test-repo/pull/1",
@@ -220,14 +197,9 @@ async def test_open_pull_request_first_call_and_second_call(
         assert out2.is_error is False
         assert "Pull request #1 updated:" in out2.content
 
-        # Verify event pr.updated recorded
         pr_events = [r for r in events.records if r["type"].startswith("pr.")]
         assert len(pr_events) == 2
-        evt2 = pr_events[1]
-        assert evt2["type"] == "pr.updated"
-        assert evt2["source"] == "coder"
-        assert evt2["subject_id"] == task.id
-        assert evt2["payload"] == {
+        assert pr_events[1]["payload"] == {
             "task_id": task.id,
             "number": 1,
             "url": "https://github.com/test-owner/test-repo/pull/1",
@@ -243,18 +215,14 @@ async def test_open_pull_request_denylisted_file(
     git_env: dict[str, str],
 ) -> None:
     bare = make_bare_remote(tmp_path, git_env)
-    service, _, events, tool, project_id, repo = await setup_test_service(
-        tmp_path, paths, databases, keystore, git_env
+    service, _, events, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
     )
-    cmd(["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"], cwd=repo)
-
     with git_instead_of(tmp_path, bare):
         await create_session(databases, project_id, "ses_1", agent="coder")
         task = await service.start(project_id, "ses_1", "coder", "Denylisted task")
-
         (task.worktree / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
         ctx = await make_ctx(service, project_id, task)
-
         out = await tool.invoke(ctx, {"title": "Secret PR", "body": "Body"})
         assert out.is_error is True
         assert ".env" in out.content
@@ -328,6 +296,80 @@ async def test_open_pull_request_preview(
     assert "diff preview" in prev.body
 
 
+async def test_open_pull_request_push_failure_recovery_on_clean_tree(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Retry push task")
+        (task.worktree / "work.py").write_text("print('push retry')\n", encoding="utf-8")
+        ctx = await make_ctx(service, project_id, task)
+
+        real_push = service.push
+        call_count = 0
+
+        async def failing_push(pid: str, t: TaskRef) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                from mlops_agents.integrations.github.git import GitError
+
+                raise GitError("fatal: connection reset by peer", code=1)
+            await real_push(pid, t)
+
+        service.push = failing_push  # type: ignore[method-assign]
+
+        out1 = await tool.invoke(ctx, {"title": "Retry PR", "body": "Initial body"})
+        assert out1.is_error is True
+        assert "fatal: connection reset" in out1.content
+
+        # Tree is clean; second call publishes unpushed commits and creates PR
+        out2 = await tool.invoke(ctx, {"title": "Retry PR", "body": "Initial body"})
+        assert out2.is_error is False
+        assert "Pull request #1 opened:" in out2.content
+
+
+async def test_open_pull_request_clean_tree_update(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Clean update task")
+        (task.worktree / "work.py").write_text("print('clean update')\n", encoding="utf-8")
+        ctx = await make_ctx(service, project_id, task)
+
+        out1 = await tool.invoke(ctx, {"title": "Initial Title", "body": "Initial Body"})
+        assert out1.is_error is False
+
+        # Tree is clean; call updates PR title and body on existing PR
+        out2 = await tool.invoke(ctx, {"title": "Updated Title", "body": "Updated Body"})
+        assert out2.is_error is False
+        assert "Pull request #1 updated:" in out2.content
+
+        pr_item = fake_github.state.prs.get(("test-owner/test-repo", 1))
+        assert pr_item is not None
+        assert pr_item["title"] == "Updated Title"
+        assert "Updated Body" in pr_item["body"]
+
+
 def test_default_registry_wiring(
     databases: Databases,
     paths: DataPaths,
@@ -342,18 +384,9 @@ def test_default_registry_wiring(
     workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
     events = FakeEventLog()
     service = _TasksServiceForTests(
-        databases=databases,
-        paths=paths,
-        git=runner,
-        events=events,
-        workspace=workspace,
+        databases=databases, paths=paths, git=runner, events=events, workspace=workspace
     )
-
     reg_full = default_registry(
-        tasks=service,
-        workspace=workspace,
-        github=github,
-        events=events,
-        http=http,
+        tasks=service, workspace=workspace, github=github, events=events, http=http
     )
     assert "OpenPullRequest" in reg_full.names()

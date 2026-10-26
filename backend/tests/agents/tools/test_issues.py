@@ -343,8 +343,8 @@ async def test_comment_on_issue_success_and_event(
     assert evt["subject_id"] == "1"
     assert evt["payload"] == {
         "number": 1,
-        "url": "https://github.com/test-owner/test-repo/issues/1#issuecomment-1",
-        "comment_id": 1,
+        "url": "https://github.com/test-owner/test-repo/issues/1",
+        "title": "Initial issue",
     }
 
 

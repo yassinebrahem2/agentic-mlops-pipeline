@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -90,6 +91,18 @@ async def list_local_reviews(
     return reviews
 
 
+_review_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _get_review_lock(project_id: str, task_id: str) -> asyncio.Lock:
+    key = (project_id, task_id)
+    lock = _review_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _review_locks[key] = lock
+    return lock
+
+
 async def decide_local_review(
     tasks: Tasks,
     sessions: AgentSessions,
@@ -100,46 +113,48 @@ async def decide_local_review(
     note: str | None = None,
 ) -> TaskView:
     """Approves (merges) or rejects (closes) a task in local review."""
-    task = await tasks.view(project_id, task_id)
-    if task.status != "in_review" or task.review_kind != "local":
-        raise DomainError(
-            "not_in_review",
-            f"Task '{task_id}' is not awaiting local review.",
-            status=400,
+    lock = _get_review_lock(project_id, task_id)
+    async with lock:
+        task = await tasks.view(project_id, task_id)
+        if task.status != "in_review" or task.review_kind != "local":
+            raise DomainError(
+                "not_in_review",
+                f"Task '{task_id}' is not awaiting local review.",
+                status=400,
+            )
+
+        task_ref = TaskRef(
+            id=task.id,
+            title=task.title,
+            branch=task.branch,
+            worktree=Path(),
+            status=task.status,
         )
 
-    task_ref = TaskRef(
-        id=task.id,
-        title=task.title,
-        branch=task.branch,
-        worktree=Path(),
-        status=task.status,
-    )
+        if approve:
+            try:
+                await tasks.local_merge(project_id, task_ref)
+            except CommitRefused as err:
+                raise DomainError("conflict", str(err), status=409) from err
+            await tasks.end(project_id, task_id, status="merged")
+        else:
+            await tasks.end(project_id, task_id, status="closed")
+            rejection_text = (
+                f"Local review rejected for task '{task.title}': {note}"
+                if note
+                else f"Local review rejected for task '{task.title}'."
+            )
+            await sessions.post(
+                project_id,
+                task.agent,
+                author_name="Review",
+                from_agent=task.agent,
+                text=rejection_text,
+                exchange_id=None,
+                hop=None,
+            )
 
-    if approve:
-        try:
-            await tasks.local_merge(project_id, task_ref)
-        except CommitRefused as err:
-            raise DomainError("conflict", str(err), status=409) from err
-        await tasks.end(project_id, task_id, status="merged")
-    else:
-        await tasks.end(project_id, task_id, status="closed")
-        rejection_text = (
-            f"Local review rejected for task '{task.title}': {note}"
-            if note
-            else f"Local review rejected for task '{task.title}'."
-        )
-        await sessions.post(
-            project_id,
-            task.agent,
-            author_name="Review",
-            from_agent=task.agent,
-            text=rejection_text,
-            exchange_id=None,
-            hop=None,
-        )
-
-    return await tasks.view(project_id, task_id)
+        return await tasks.view(project_id, task_id)
 
 
 async def get_github_activity(

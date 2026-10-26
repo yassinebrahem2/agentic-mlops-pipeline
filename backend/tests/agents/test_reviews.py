@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -237,6 +238,29 @@ async def test_decide_local_review_invalid_state(
             approve=True,
         )
     assert exc_info.value.status == 400
+
+
+async def test_decide_local_review_concurrent_approvals(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    services = app.state.services
+    project_id = await _setup_project(app, tmp_path, git_env)
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Task Concurrency")
+    (task.worktree / "c.py").write_text("x = 1\n", encoding="utf-8")
+    await services.tasks.commit(project_id, task, "feat: c")
+    await services.tasks.set_review(project_id, task.id, kind="local")
+
+    results = await asyncio.gather(
+        decide_local_review(services.tasks, services.sessions, project_id, task.id, approve=True),
+        decide_local_review(services.tasks, services.sessions, project_id, task.id, approve=True),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if not isinstance(r, Exception)]
+    failures = [r for r in results if isinstance(r, DomainError)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert failures[0].status == 400
 
 
 async def test_get_github_activity(app: FastAPI, tmp_path: Path, git_env: dict[str, str]) -> None:

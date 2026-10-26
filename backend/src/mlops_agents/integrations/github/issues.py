@@ -115,6 +115,29 @@ async def create_issue(
         raise unreadable() from None
 
 
+async def get_issue(
+    http: httpx2.AsyncClient,
+    token: str,
+    repo: str,
+    number: int,
+) -> IssueSummary:
+    response = await request(
+        http,
+        "GET",
+        f"/repos/{repo}/issues/{number}",
+        token,
+        permission=PERMISSION_ISSUES_WRITE,
+    )
+    if response.status_code != 200:
+        raise DomainError(
+            "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+        )
+    try:
+        return IssueSummary.model_validate(response.json())
+    except (ValidationError, ValueError):
+        raise unreadable() from None
+
+
 async def comment_issue(
     http: httpx2.AsyncClient,
     token: str,
