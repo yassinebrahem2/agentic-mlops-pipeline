@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.contract import TaskView
-from mlops_agents.events.contract import EventRecord
+from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.events.status import (
@@ -18,6 +17,8 @@ from mlops_agents.events.status import (
     format_agent_status_line,
 )
 from mlops_agents.storage.databases import Databases
+from tests.api.fake_sessions import FakeSessions
+from tests.fakes.fake_tasks import FakeTasks
 
 
 def make_definition(
@@ -42,7 +43,7 @@ def make_definition(
 
 def make_event(
     seq: int,
-    event_type: str,
+    event_type: EventType,
     source: str = "orchestrator",
     subject_id: str | None = None,
     payload: dict[str, object] | None = None,
@@ -52,7 +53,7 @@ def make_event(
         seq=seq,
         ts="2026-10-24T12:00:00Z",
         source=source,
-        type=event_type,  # pyright: ignore[reportArgumentType]
+        type=event_type,
         subject_id=subject_id,
         payload=payload or {},
     )
@@ -273,14 +274,6 @@ def test_format_agent_status_line() -> None:
     )
 
 
-class _FakeSessions:
-    def __init__(self, states: dict[str, Literal["running", "waiting"]]) -> None:
-        self._states = states
-
-    async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
-        return self._states
-
-
 @pytest.mark.asyncio
 async def test_sqlite_status_board_snapshot_catalog_order(databases: Databases) -> None:
     project_id = "prj_statustest"
@@ -293,11 +286,11 @@ async def test_sqlite_status_board_snapshot_catalog_order(databases: Databases) 
     d_alert = make_definition("alert-prioritization", "Alert Prioritization", chat=False)
     catalog = AgentCatalog([d_alert, d_orch, d_retrain], tool_names=frozenset())
 
-    fake_sessions = _FakeSessions({"retraining": "running"})
+    fake_sessions = FakeSessions(turn_state_by_agent={"retraining": "running"})
     board = SqliteStatusBoard(
         catalog,
         events,
-        sessions=fake_sessions,  # pyright: ignore[reportArgumentType]
+        sessions=fake_sessions,
     )
 
     snapshot = await board.snapshot(project_id)
@@ -339,11 +332,11 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     d_retrain = make_definition("retraining", "Retraining", chat=True, status_board=False)
     catalog = AgentCatalog([d_orch, d_retrain], tool_names=frozenset())
 
-    fake_sessions = _FakeSessions({"retraining": "running"})
+    fake_sessions = FakeSessions(turn_state_by_agent={"retraining": "running"})
     board = SqliteStatusBoard(
         catalog,
         events,
-        sessions=fake_sessions,  # pyright: ignore[reportArgumentType]
+        sessions=fake_sessions,
     )
 
     summary_text = await board.summary(project_id)
@@ -426,15 +419,7 @@ async def test_sqlite_status_board_separate_history_windows_preserves_prs(
         pr_url="https://github.com/org/repo/pull/99",
     )
 
-    class _FakeTasks:
-        async def open_tasks(self, pid: str) -> list[TaskView]:
-            return [task]
-
-    board = SqliteStatusBoard(
-        catalog,
-        events,
-        tasks=_FakeTasks(),  # pyright: ignore[reportArgumentType]
-    )
+    board = SqliteStatusBoard(catalog, events, tasks=FakeTasks([task]))
     snapshot = await board.snapshot(project_id)
     assert len(snapshot) == 1
     # PR 99 is preserved because pr.opened has its own bounded window
@@ -483,7 +468,7 @@ def test_sqlite_status_board_bind_sessions_twice_raises(databases: Databases) ->
     events = SqliteEventLog(databases)
     catalog = AgentCatalog([], tool_names=frozenset())
     board = SqliteStatusBoard(catalog, events)
-    fake_sessions = _FakeSessions({})
-    board.bind_sessions(fake_sessions)  # pyright: ignore[reportArgumentType]
+    fake_sessions = FakeSessions()
+    board.bind_sessions(fake_sessions)
     with pytest.raises(RuntimeError, match="already bound"):
-        board.bind_sessions(fake_sessions)  # pyright: ignore[reportArgumentType]
+        board.bind_sessions(fake_sessions)
