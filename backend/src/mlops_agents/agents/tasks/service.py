@@ -316,13 +316,14 @@ class TasksService(Tasks):
     async def local_merge(self, project_id: str, task: TaskRef) -> None:
         p = await self._workspace.get(project_id)
         await local_merge(
-            self._git,
-            self._workspace.repo_root(p),
-            self._paths.empty_hooks,
-            self._paths.project_dir(project_id) / "temp_merges",
-            p.default_branch or "main",
-            task.branch,
-            task.id,
+            databases=self._databases,
+            runner=self._git,
+            repo_root=self._workspace.repo_root(p),
+            empty_hooks=self._paths.empty_hooks,
+            temp_base_dir=self._paths.project_dir(project_id) / "temp_merges",
+            default_branch=p.default_branch or "main",
+            task_branch=task.branch,
+            task_id=task.id,
         )
 
     async def set_review(

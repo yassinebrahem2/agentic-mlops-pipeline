@@ -11,11 +11,13 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mlops_agents.agents.tasks.author import resolve_commit_author
 from mlops_agents.agents.tasks.contract import CommitRefused
 from mlops_agents.agents.tasks.git import run_safe_git
 
 if TYPE_CHECKING:
     from mlops_agents.integrations.github.git import GitRunner
+    from mlops_agents.storage.databases import Databases
 
 
 def _make_writable(path: Path) -> None:
@@ -85,6 +87,8 @@ async def local_merge_preview(
 
 
 async def local_merge(
+    *,
+    databases: Databases,
     runner: GitRunner,
     repo_root: Path,
     empty_hooks: Path,
@@ -95,14 +99,30 @@ async def local_merge(
 ) -> None:
     """Merges task_branch into default_branch following spec section 6:
 
-    1. Builds merge commit in a temporary worktree in the data folder.
+    1. Resolves commit author identity (human from git config or GitHub login fallback).
+    2. Builds merge commit in a temporary worktree in the data folder.
        A conflict raises CommitRefused naming the conflicting paths, leaving user repo untouched.
-    2. In the user repository:
+    3. In the user repository:
        - If default_branch is checked out in any worktree W, run git merge --ff-only <commit> in W.
          If git refuses (e.g. uncommitted changes in the way), raises CommitRefused.
        - If checked out in none of the repository's worktrees, updates branch ref with git update-ref.
-    3. Removes the temporary worktree in finally.
+    4. Removes the temporary worktree in finally.
     """
+    git_dir = repo_root / ".git"
+    if git_dir.is_file():
+        line = git_dir.read_text(encoding="utf-8").strip()
+        if line.startswith("gitdir:"):
+            target = Path(line.removeprefix("gitdir:").strip())
+            git_dir = target if target.is_absolute() else (repo_root / target).resolve()
+
+    author_name, author_email = await resolve_commit_author(
+        databases=databases,
+        runner=runner,
+        git_dir=git_dir,
+        worktree=repo_root,
+        empty_hooks=empty_hooks,
+    )
+
     temp_worktree = temp_base_dir / f"merge_{task_id}"
     await asyncio.to_thread(temp_base_dir.mkdir, parents=True, exist_ok=True)
 
@@ -126,7 +146,17 @@ async def local_merge(
         merge_msg = f"Merge task {task_id} into {default_branch}"
         merge_res = await run_safe_git(
             runner,
-            args=["merge", "--no-ff", "-m", merge_msg, task_branch],
+            args=[
+                "-c",
+                f"user.name={author_name}",
+                "-c",
+                f"user.email={author_email}",
+                "merge",
+                "--no-ff",
+                "-m",
+                merge_msg,
+                task_branch,
+            ],
             cwd=temp_worktree,
             empty_hooks=empty_hooks,
             check=False,
@@ -141,8 +171,10 @@ async def local_merge(
                 check=False,
             )
             conflicts = [p.strip() for p in diff_res.stdout.splitlines() if p.strip()]
-            conflict_names = ", ".join(conflicts) if conflicts else "unknown"
-            raise CommitRefused(f"Merge conflict in: {conflict_names}")
+            if conflicts:
+                raise CommitRefused(f"Merge conflict in: {', '.join(conflicts)}")
+            err_msg = merge_res.stderr.strip() or merge_res.stdout.strip() or "Git merge failed."
+            raise CommitRefused(err_msg)
 
         rev_res = await run_safe_git(
             runner,

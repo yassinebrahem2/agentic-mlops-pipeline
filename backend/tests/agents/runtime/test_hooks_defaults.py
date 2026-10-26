@@ -1,6 +1,6 @@
 """The stage 1 defaults of the inbound source and the turn-end check (I12).
 
-`RepositoryOnlyWorkspaces` is tested in test_agent.py, beside the workspace service it reads.
+`FakeWorkspaces` is tested in test_agent.py, beside the workspace service it reads.
 """
 
 from __future__ import annotations

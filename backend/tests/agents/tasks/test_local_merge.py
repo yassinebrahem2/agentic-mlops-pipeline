@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import stat
-from collections.abc import AsyncGenerator, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,72 +11,14 @@ from mlops_agents.agents.tasks.contract import CommitRefused
 from mlops_agents.agents.tasks.local_merge import local_merge_preview
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.clock import now_iso
-from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.events.contract import EventLog, EventRecord, EventType
-from mlops_agents.ids import new_id
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import sessions
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.tasks.helpers import FakeEventLog, create_session, settings
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.integrations.test_github_auth import FakeGh
-
-
-class FakeEventLog(EventLog):
-    def __init__(self) -> None:
-        self.records: list[dict[str, Any]] = []
-
-    async def record(
-        self,
-        project_id: str,
-        *,
-        source: str,
-        type: EventType,
-        payload: dict[str, Any],
-        subject_id: str | None = None,
-    ) -> EventRecord:
-        record = EventRecord(
-            id=new_id("evt"),
-            seq=len(self.records) + 1,
-            ts=now_iso(),
-            source=source,
-            type=type,
-            subject_id=subject_id,
-            payload=payload,
-        )
-        self.records.append(
-            {
-                "project_id": project_id,
-                "source": source,
-                "type": type,
-                "payload": payload,
-                "subject_id": subject_id,
-                "record": record,
-            }
-        )
-        return record
-
-    async def subscribe(
-        self, project_id: str, after_seq: int | None
-    ) -> AsyncGenerator[EventRecord, None]:
-        if False:
-            yield
-
-    async def history(
-        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
-    ) -> list[EventRecord]:
-        return [
-            r["record"]
-            for r in reversed(self.records)
-            if r["project_id"] == project_id and r["type"] in types
-        ][:limit]
-
-
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
 
 
 async def _setup_service(
@@ -94,7 +34,7 @@ async def _setup_service(
     runner = GitRunner(paths.bin, github.token)
     await runner.run(["config", "user.name", "Jane Doe"], cwd=repo)
     await runner.run(["config", "user.email", "jane@example.com"], cwd=repo)
-    workspace = WorkspaceService(_settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     service = TasksService(
@@ -107,24 +47,6 @@ async def _setup_service(
     return service, workspace, runner, events, project.id, repo
 
 
-async def _create_session(
-    databases: Databases, project_id: str, session_id: str, agent: str = "coder"
-) -> None:
-    from sqlalchemy import insert
-
-    engine = await databases.project(project_id)
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(sessions).values(
-                id=session_id,
-                agent=agent,
-                summary=None,
-                compacted_through=None,
-                created_at=now_iso(),
-            )
-        )
-
-
 async def test_local_merge_preview(
     tmp_path: Path,
     paths: DataPaths,
@@ -135,7 +57,7 @@ async def test_local_merge_preview(
     service, _, runner, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_preview")
+    await create_session(databases, project_id, "ses_preview")
 
     task = await service.start(
         project_id=project_id,
@@ -172,7 +94,7 @@ async def test_local_merge_clean_fast_forward_default_branch_checked_out(
     service, _, _, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_merge_clean")
+    await create_session(databases, project_id, "ses_merge_clean")
 
     task = await service.start(
         project_id=project_id,
@@ -207,7 +129,7 @@ async def test_local_merge_uncommitted_changes_in_way_raises_commit_refused(
     service, _, _, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_merge_dirty")
+    await create_session(databases, project_id, "ses_merge_dirty")
 
     task = await service.start(
         project_id=project_id,
@@ -243,7 +165,7 @@ async def test_local_merge_default_branch_not_checked_out(
     service, _, runner, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_merge_not_checked_out")
+    await create_session(databases, project_id, "ses_merge_not_checked_out")
 
     task = await service.start(
         project_id=project_id,
@@ -291,7 +213,7 @@ async def test_local_merge_conflicting_changes_raise_commit_refused(
     service, _, runner, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_merge_conflict")
+    await create_session(databases, project_id, "ses_merge_conflict")
 
     task = await service.start(
         project_id=project_id,
@@ -329,7 +251,7 @@ async def test_local_merge_post_merge_hook_does_not_run(
     service, _, _, _, project_id, repo = await _setup_service(
         tmp_path, paths, databases, keystore, git_env
     )
-    await _create_session(databases, project_id, "ses_hook_test")
+    await create_session(databases, project_id, "ses_hook_test")
 
     task = await service.start(
         project_id=project_id,
@@ -351,3 +273,88 @@ async def test_local_merge_post_merge_hook_does_not_run(
     # Merge must succeed because empty_hooks disables core.hooksPath
     await service.local_merge(project_id, task)
     assert (repo / "hook_test.py").exists()
+
+
+async def test_local_merge_author_identity_and_error_reporting(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import insert, update
+
+    from mlops_agents.agents.tasks import local_merge as lm_module
+    from mlops_agents.integrations.github.git import GitResult
+    from mlops_agents.storage.tables import integrations
+
+    service, _, runner, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_identity")
+
+    # 1. Unset user.name and user.email in repo; add GitHub login in app database
+    await runner.run(["config", "--unset", "user.name"], cwd=repo)
+    await runner.run(["config", "--unset", "user.email"], cwd=repo)
+
+    app_engine = await databases.app()
+    async with app_engine.begin() as conn:
+        await conn.execute(
+            insert(integrations).values(
+                name="github",
+                mode="token",
+                login="octocat",
+                verified_at=now_iso(),
+            )
+        )
+
+    task = await service.start(
+        project_id=project_id,
+        session_id="ses_identity",
+        agent="coder",
+        title="Author fallback task",
+    )
+    (task.worktree / "mod.py").write_text("a = 1\n", encoding="utf-8")
+    await service.commit(project_id, task, "Commit with fallback")
+
+    # Local merge should succeed using octocat identity
+    await service.local_merge(project_id, task)
+    assert (repo / "mod.py").exists()
+
+    # Verify merge commit author on main
+    log = await runner.run(["log", "-1", "--pretty=format:%an <%ae>"], cwd=repo)
+    assert log.stdout.strip() == "octocat <octocat@users.noreply.github.com>"
+
+    # 2. When neither git config nor GitHub login exists, refuse with CommitRefused
+    async with app_engine.begin() as conn:
+        await conn.execute(update(integrations).values(login=None))
+
+    task2 = await service.start(
+        project_id=project_id,
+        session_id="ses_identity",
+        agent="coder",
+        title="No identity task",
+    )
+    with pytest.raises(CommitRefused, match="Cannot determine commit author"):
+        await service.local_merge(project_id, task2)
+
+    # 3. When git merge fails with no unmerged paths, report real error, not "Merge conflict in: unknown"
+    async with app_engine.begin() as conn:
+        await conn.execute(update(integrations).values(login="octocat"))
+
+    orig_run_safe_git = lm_module.run_safe_git
+
+    async def mock_run_safe_git(*args: Any, **kwargs: Any) -> Any:
+        git_args = kwargs.get("args") or (args[1] if len(args) > 1 else None)
+        if git_args and "merge" in git_args and "--no-ff" in git_args:
+            return GitResult(code=1, stdout="", stderr="fatal: something broken in merge")
+        return await orig_run_safe_git(*args, **kwargs)
+
+    monkeypatch.setattr(lm_module, "run_safe_git", mock_run_safe_git)
+
+    with pytest.raises(CommitRefused) as exc_info:
+        await service.local_merge(project_id, task2)
+
+    assert "fatal: something broken in merge" in str(exc_info.value)
+    assert "Merge conflict in: unknown" not in str(exc_info.value)
