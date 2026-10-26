@@ -2,9 +2,9 @@
 
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. One PR for the branch, no early PRs (`AGENTS.md` rule 5). Each task lists its files, interfaces, tests (its stop condition) and checks.
 
-**Goal:** Fix the Minor findings filed at merge in bugs #265 (github-work), #261 (tasks), #264 (sandbox) and #258 (approvals and runtime), and bug #273 (the status board reports a turn running after `turn.ended`), so stage 2 ships with no known defect.
+**Goal:** Fix the Minor findings filed at merge in bugs #265 (github-work), #261 (tasks), #264 (sandbox) and #258 (approvals and runtime), bug #273 (the status board reports a turn running after `turn.ended`) and bug #276 (recording `waiting` has no fallback), so stage 2 ships with no known defect.
 
-**Branch:** `plan/stage-2-cleanup`. **Consumes:** merged code. **Produces:** `Tasks.repo_ref` and `Tasks.has_commits_beyond_base` (task 1; used only inside this plan's files).
+**Branch:** `plan/stage-2-cleanup`. **Consumes:** merged code. **Produces:** `Tasks.repo_ref`, `Tasks.has_commits_beyond_base` and `Tasks.decide_review` (task 1; used only inside this plan's files).
 
 **Read first:** the four bug issues; the stage 2 overview (I8–I12, the Tasks interface); `AGENTS.md` Code quality.
 
@@ -15,7 +15,7 @@
 | 1 | One owner for the repo reference and the branch's state (#265) | merged code |
 | 2 | Ending, discarding and local merge (#261) | task 1 |
 | 3 | One wording for every failed build (#264) | merged code |
-| 4 | Approvals and runtime tidy-up (#258, #273) | runtime-fixes (#250) and messaging (#266) merged |
+| 4 | Approvals and runtime tidy-up (#258, #273, #276) | runtime-fixes (#250) and messaging (#266) merged |
 
 Task 4 edits `agents/runtime/sessions.py`, `worker.py` and `executor.py`, which PRs #250 and #266 also change: start it only after both are merged. Tasks 1 to 3 don't touch those files.
 
@@ -31,19 +31,27 @@ The PR-description items of the bugs (#264 item 2, #265 item 8) were corrected b
 ```python
 async def repo_ref(self, project_id: str) -> RepoRef | None: ...
 async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...
+async def decide_review(self, project_id: str, task_id: str,
+                        step: Callable[[TaskRef], Awaitable[None]],
+                        status: Literal["merged", "closed"]) -> TaskView: ...
+# Decision #275: under one acquisition of the task lock, raises a 409 domain error unless the
+# task is in local review, runs step (local_merge for approve, the system message for reject),
+# then ends the task with status (an inner, lock-held end). If step raises (e.g. local_merge refuses
+# because the user's folder is dirty), the task is not ended and stays in review. On reject, a post
+# that succeeds followed by a failed end can post again on retry; accepted.
 ```
 
 **Implementation notes:**
 - `Tasks.repo_ref` replaces the four copies (`_resolve_repo_ref` in `pull_request.py`, `issues.py` and `pr_sync.py`, and `project_repo_ref` in `push.py`); nothing reads `workspace._git` or `_paths` through `getattr`.
-- `Tasks.has_commits_beyond_base` replaces `pull_request.py`'s `_has_commits_beyond_base`, through the task git function and the one base ref `refs/<app>/base/<default branch>`; no `except Exception`. `has_unpublished_changes` uses the same rev-list helper, so "commits beyond a ref" has one owner in `push.py`.
-- `decide_local_review` runs under the per-task lock of `TasksService`; the module-level `_review_locks` goes.
+- `Tasks.has_commits_beyond_base` replaces `pull_request.py`'s `_has_commits_beyond_base`, through the task git function from the task's stored `base_sha` (Decision #275: one source, works for local-only projects too); no `except Exception`. `has_unpublished_changes` uses the same rev-list helper, so "commits beyond a ref" has one owner in `push.py`.
+- `decide_local_review` goes through `Tasks.decide_review` (Decision #275); the module-level `_review_locks` goes.
 - Reject (spec §6: "Rejecting closes the task, and a system message tells the agent"): post the system message first, then end the task `closed`. A failed post leaves the task in review and the route answers the error (never a 500); a second decision on a task no longer in review answers 409, so a retry never closes or posts twice.
 - `get_pull` reports a 404 as "not found" (the PR was deleted), not as a missing permission.
-- Activity items for issues show the issue's real state.
+- Issue state in the activity feed (Decision #275, corrected): every `issue.*` event carries `state` (overview I11). PR state sync (`pr_sync`) also refreshes the issues the project's agents opened or commented on: `get_issue` for each, and an `issue.updated` event when the state changed. The feed shows the latest recorded state, so an issue closed on GitHub (by hand or by a merged PR) shows closed after the next sync. Its failure handling is the PR sync's own (log and continue).
 - The rejection reaches the agent as a system message (`author_name="system"`), not as a message from the task's own agent.
-- Trace and fix the `PytestUnhandledThreadExceptionWarning` ("Event loop is closed").
+- The `PytestUnhandledThreadExceptionWarning` seen once in a review run did not reproduce (Decision #275): no code change; the `-W error` run below stays as the check.
 
-**Tests (stop condition):** one test per item above (the reject case with a failing post, the 404, the issue state, the sender); `git grep -n "_resolve_repo_ref\|project_repo_ref\|_review_locks" backend/src` finds nothing; `uv run pytest -W error::pytest.PytestUnhandledThreadExceptionWarning` passes; full suite, ruff, format, pyright; CI green.
+**Tests (stop condition):** one test per item above (the reject case with a failing post, the 404, an issue closed on GitHub shows closed after a sync, the sender); `git grep -n "_resolve_repo_ref\|project_repo_ref\|_review_locks" backend/src` finds nothing; `uv run pytest -W error::pytest.PytestUnhandledThreadExceptionWarning` passes; full suite, ruff, format, pyright; CI green.
 
 ---
 
@@ -52,9 +60,9 @@ async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
 **Files:** `agents/tasks/service.py` (`end`, `current`), `agents/tasks/local_merge.py`, `api/routers/tasks.py` (discard), `tests/fakes/workspaces.py` and the tests that import it.
 
 **Implementation notes:**
-- `end` refuses a task that has already ended with a domain error (no event), which the discard route maps to 409; local merge and reject, which call `end` on a task in review, keep working.
+- `end` refuses a task that has already ended with a domain error (no event), which the discard route maps to 409. The public `end` and the lock-held inner `end` used by `decide_review` share one implementation of that refusal.
 - The discard route's project scan treats one unreadable project as "not there" and logs it; it never answers 500 for that.
-- `local_merge` uses `workspace/fs.rmtree` (its own `_rmtree` goes), runs under the per-task lock, and uses a fresh temp path per merge.
+- `local_merge` uses `workspace/fs.rmtree` (its own `_rmtree` goes) and a fresh temp path per merge. It is reached only through `Tasks.decide_review`, which already holds the task lock, so it takes no lock of its own (the lock is not reentrant).
 - No `suppress(Exception)` in `end` or the merge cleanup: failures are logged with their traceback.
 - Reading the session view (`SessionView.current_task`) never recreates a missing worktree; the turn path keeps its current behaviour.
 - The name `RepositoryOnlyWorkspaces` is gone from the tests (alias and imports).
@@ -73,7 +81,7 @@ async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
 
 ---
 
-### Task 4: Approvals and runtime tidy-up (#258, #273)
+### Task 4: Approvals and runtime tidy-up (#258, #273, #276)
 
 **Files:** `agents/approvals/` (`store.py`, `service.py`, `waiting.py`), `agents/runtime/sessions.py`, `worker.py`, `executor.py` (split, behaviour unchanged), their tests.
 
@@ -82,12 +90,14 @@ async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
 - `waiting.py` uses the typed observer contract, not `hasattr(sink, "turn_waiting")`.
 - `ApprovalsService` takes one events dependency, not `audit_log` and `event_log` separately.
 - `sessions.py` reads the session view through its typed contract, not `getattr`/`inspect.isawaitable` (#261 item 5).
+- #276: recording `waiting` in `worker._take_turn` goes through the same shielded fallback as every other end (Decision #249): logged, `turn.waiting` published, observers notified, never raises.
 - #273: `turn_states` agrees with `turn.ended`. A session whose turn has ended counts as running only if another turn has started; a worker that is only finishing its loop doesn't count. Fix the state, not the test.
 - `sessions.py`, `worker.py` and `executor.py` each go under 400 lines by moving one concern each into its own module; behaviour unchanged.
 
 **Tests (stop condition):**
 - The concurrent-decision test fails when the `status='pending'` guard is removed, and the restart test fails when `ensure_recovered` is removed from `pending` or `decide` (check both by reverting and restoring).
 - A decision with another task current keeps the approval's `task_id`.
+- A storage error while recording `waiting`, with a second turn queued: the second turn runs.
 - `turn_states` called right after `turn.ended` (with the worker held just before it exits) reports no running turn; `test_session_manager_turn_states_running_worker` passes 50 times in a loop.
 - `wc -l` on the three runtime files is under 400 each; the runtime tests pass 10 times in a loop.
 - Full suite, checks; CI green.

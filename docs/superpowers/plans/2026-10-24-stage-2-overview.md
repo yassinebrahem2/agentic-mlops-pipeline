@@ -174,7 +174,7 @@ def decide(risk: RiskClass, level: PermissionLevel) -> PolicyDecision   # the sp
 ```python
 EventType = Literal[
     "turn.started", "turn.waiting", "turn.ended", "task.started", "task.ended",
-    "pr.opened", "pr.updated", "issue.opened", "issue.commented",
+    "pr.opened", "pr.updated", "issue.opened", "issue.commented", "issue.updated",
     "approval.requested", "approval.decided", "message.sent", "wakeup.scheduled",
     "sandbox.build.started", "sandbox.build.finished", "sandbox.build.failed",
 ]
@@ -185,7 +185,7 @@ EventType = Literal[
 #   task.started:                 {"task_id", "title", "branch"}         subject_id = task_id
 #   task.ended:                   {"task_id", "status"}                  subject_id = task_id
 #   pr.opened, pr.updated:        {"task_id", "number", "url", "title"}  subject_id = task_id
-#   issue.opened, issue.commented: {"number", "url", "title"}
+#   issue.opened, issue.commented, issue.updated: {"number", "url", "title", "state"}  (state and issue.updated: Decision #275)
 #   approval.requested:           {"approval_id", "turn_id", "tool"}     subject_id = approval_id
 #   approval.decided:             {"approval_id", "status"}              subject_id = approval_id
 #   message.sent:                 {"to", "exchange_id", "hop"}           subject_id = exchange_id
@@ -277,6 +277,9 @@ class Tasks(TaskWorkspaces, Protocol):
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool: ...
     async def repo_ref(self, project_id: str) -> RepoRef | None: ...           # added by the cleanup plan (#265)
     async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...  # added by the cleanup plan (#265)
+    async def decide_review(self, project_id: str, task_id: str, step: Callable[[TaskRef], Awaitable[None]],
+                            status: Literal["merged", "closed"]) -> TaskView: ...  # Decision #275: check, step and end under one task lock;
+    # a step that raises leaves the task in review. local_merge is reached only through it and takes no lock.
     async def staged_diff(self, project_id: str, task: TaskRef) -> str: ...  # what commit would record, capped
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult: ...  # raises CommitRefused
     async def push(self, project_id: str, task: TaskRef) -> None: ...

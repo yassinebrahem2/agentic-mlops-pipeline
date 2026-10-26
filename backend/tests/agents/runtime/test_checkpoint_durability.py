@@ -12,8 +12,8 @@ from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMet
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from mlops_agents.agents.runtime.contract import TextPart
-from mlops_agents.agents.runtime.executor import TURN_DURABILITY
 from mlops_agents.agents.runtime.graph import TurnState, create_turn_graph
+from mlops_agents.agents.runtime.graph_run import TURN_DURABILITY
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
