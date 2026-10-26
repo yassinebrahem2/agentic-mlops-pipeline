@@ -35,6 +35,10 @@ class DataPaths:
     def bin(self) -> Path:
         return self.root / "bin"
 
+    @property
+    def empty_hooks(self) -> Path:
+        return self.root / "empty-hooks"
+
     def project_dir(self, project_id: str) -> Path:
         if not _PROJECT_ID.match(project_id):
             raise ValueError(f"project_id must match ^[a-z]{{3}}_[A-Za-z0-9]+$, got {project_id!r}")
@@ -46,6 +50,12 @@ class DataPaths:
     def repo_dir(self, project_id: str) -> Path:
         return self.project_dir(project_id) / "repo"
 
+    def worktrees_dir(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / "worktrees"
+
+    def worktree_path(self, project_id: str, task_id: str) -> Path:
+        return self.worktrees_dir(project_id) / task_id
+
     def ensure(self) -> None:
-        for folder in (self.root, self.backups, self.projects, self.bin):
+        for folder in (self.root, self.backups, self.projects, self.bin, self.empty_hooks):
             folder.mkdir(parents=True, exist_ok=True)

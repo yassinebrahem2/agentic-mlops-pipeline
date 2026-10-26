@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Final
 
 from mlops_agents.agents.runtime.contract import (
     MessageCreated,
@@ -28,10 +28,10 @@ from mlops_agents.agents.runtime.contract import (
     TurnEndedData,
 )
 
-__all__ = ["AsyncRLock", "SessionHub"]
+__all__ = ["SLOW_SUBSCRIBER_THRESHOLD", "AsyncRLock", "SessionHub"]
 
 _RING_BUFFER_SIZE = 5000
-_SLOW_SUBSCRIBER_THRESHOLD = 10000
+SLOW_SUBSCRIBER_THRESHOLD: Final[int] = 10000
 
 
 class AsyncRLock:
@@ -153,7 +153,7 @@ class SessionHub:
         self._buffer.append(event)
 
         for q in list(self._subscribers):
-            if q.qsize() >= _SLOW_SUBSCRIBER_THRESHOLD:
+            if q.qsize() >= SLOW_SUBSCRIBER_THRESHOLD:
                 while not q.empty():
                     try:
                         q.get_nowait()

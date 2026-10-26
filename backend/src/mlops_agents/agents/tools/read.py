@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +14,9 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.tasks.contract import Tasks
 
 MAX_LINES = 2000
 MAX_LINE_CHARS = 2000
@@ -73,6 +77,14 @@ def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, b
         return out, False, False
 
 
+def _compute_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(CHUNK_SIZE):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 class ReadTool(AgentTool[ReadArgs]):
     name: ClassVar[str] = "Read"
     description: ClassVar[str] = (
@@ -82,15 +94,24 @@ class ReadTool(AgentTool[ReadArgs]):
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = ReadArgs
 
+    def __init__(self, tasks: Tasks | None = None) -> None:
+        self._tasks = tasks
+
     async def run(self, ctx: ToolContext, args: ReadArgs) -> ToolOutput:
         rel = await ctx.files.resolve_file(args.file_path)
         offset = args.offset or 1
+        full_path = ctx.files.root / rel
         try:
             lines, binary, more = await asyncio.to_thread(
-                _read_lines, ctx.files.root / rel, offset, args.limit or MAX_LINES
+                _read_lines, full_path, offset, args.limit or MAX_LINES
             )
         except OSError as exc:
             raise ToolFailure(f"{rel} could not be read: {exc.strerror or exc}") from None
+
+        if ctx.task is not None and self._tasks is not None:
+            sha256 = await asyncio.to_thread(_compute_sha256, full_path)
+            await self._tasks.record_read(ctx.project_id, ctx.task, rel, sha256)
+
         if binary:
             return ToolOutput(f"{rel} is a binary file; its contents are not shown.")
         if not lines:
