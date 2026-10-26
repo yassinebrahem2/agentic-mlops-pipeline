@@ -15,6 +15,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
+from mlops_agents.agents.messaging.wakeups import WakeupService
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.hooks import (
     NoTurnEndCheck,
@@ -64,6 +65,7 @@ class Services:
     status_board: StatusBoard
     tasks: Tasks
     approvals: Approvals
+    wakeups: WakeupService
 
 
 async def _app_secrets(
@@ -147,9 +149,11 @@ async def build_services(
         sandbox=sandbox,
     )
 
-    tools = default_registry(tasks=tasks, sandbox=sandbox, bus=bus)
+    wakeups = WakeupService(databases, events=events)
+    tools = default_registry(tasks=tasks, sandbox=sandbox, bus=bus, wakeups=wakeups)
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     bus.use_catalog(catalog)
+    wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
@@ -175,6 +179,9 @@ async def build_services(
     )
     inbound.bind(sessions)
     status_board.bind_sessions(sessions)
+    wakeups.bind(sessions)
+    await wakeups.start()
+    stack.push_async_callback(wakeups.close)
     stack.push_async_callback(sessions.close)
 
     approvals = ApprovalsService(
@@ -204,4 +211,5 @@ async def build_services(
         status_board=status_board,
         tasks=tasks,
         approvals=approvals,
+        wakeups=wakeups,
     )

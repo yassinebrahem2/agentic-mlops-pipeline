@@ -10,12 +10,14 @@ from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
 from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.read import ReadTool
+from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.write import WriteTool
 
 if TYPE_CHECKING:
     from mlops_agents.agents.catalog import AgentCatalog
     from mlops_agents.agents.messaging.bus import SqliteMessageBus
+    from mlops_agents.agents.messaging.wakeups import WakeupService
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import StatusBoard
     from mlops_agents.sandbox.contract import Sandbox
@@ -28,6 +30,7 @@ __all__ = [
     "ListAgentsTool",
     "ReadTool",
     "ResumeTaskTool",
+    "ScheduleWakeupTool",
     "StartTaskTool",
     "ToolRegistry",
     "WriteTool",
@@ -42,6 +45,7 @@ def default_registry(
     bus: SqliteMessageBus | None = None,
     status_board: StatusBoard | None = None,
     catalog: AgentCatalog | None = None,
+    wakeups: WakeupService | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -71,4 +75,7 @@ def default_registry(
         )
         if effective_catalog is not None:
             registry.register(ListAgentsTool(catalog=effective_catalog, status_board=status_board))
+    if wakeups is not None:
+        effective_catalog = catalog if catalog is not None else getattr(wakeups, "catalog", None)
+        registry.register(ScheduleWakeupTool(wakeups, catalog=effective_catalog))
     return registry
