@@ -23,7 +23,6 @@ from mlops_agents.agents.runtime.hooks import (
     GateCall,
     GateDecision,
     InboundSource,
-    NoTurnEndCheck,
     TurnEndCheck,
 )
 from mlops_agents.agents.runtime.hub import AsyncRLock
@@ -42,6 +41,7 @@ from mlops_agents.agents.tools.base import (
 )
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.storage.databases import Databases
+from tests.fakes.turn_end import NoTurnEndCheck
 
 ALLOW = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
 APPROVED = GateDecision(outcome="approved", message=None, approval_id="apr_1", preview=None)

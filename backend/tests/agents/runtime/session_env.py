@@ -17,7 +17,6 @@ from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
     Gate,
     InboundSource,
-    NoTurnEndCheck,
     TurnObserver,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -36,6 +35,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 

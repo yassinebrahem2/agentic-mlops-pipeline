@@ -16,10 +16,9 @@ from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
 from mlops_agents.agents.messaging.wakeups import WakeupService
+from mlops_agents.agents.pr_reminder import PrReminder
+from mlops_agents.agents.pr_sync import PrSyncObserver
 from mlops_agents.agents.runtime.contract import AgentSessions
-from mlops_agents.agents.runtime.hooks import (
-    NoTurnEndCheck,
-)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import Tasks
@@ -150,7 +149,17 @@ async def build_services(
     )
 
     wakeups = WakeupService(databases, events=events)
-    tools = default_registry(tasks=tasks, sandbox=sandbox, bus=bus, wakeups=wakeups)
+    tools = default_registry(
+        tasks=tasks,
+        sandbox=sandbox,
+        bus=bus,
+        wakeups=wakeups,
+        workspace=workspace,
+        github=github,
+        events=events,
+        http=http,
+        databases=databases,
+    )
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -158,6 +167,8 @@ async def build_services(
     status_board = SqliteStatusBoard(catalog, events)
     turn_observer = EventTurnObserver(events)
     inbound = SqliteInboundSource(databases)
+    pr_sync = PrSyncObserver(tasks, workspace, github, http)
+    stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
         databases=databases,
@@ -169,9 +180,9 @@ async def build_services(
         http=http,
         gate=gate,
         inbound=inbound,
-        turn_end=NoTurnEndCheck(),
+        turn_end=PrReminder(tasks),
         workspaces=tasks,
-        observers=[turn_observer, inbound],
+        observers=[turn_observer, inbound, pr_sync],
         bus=bus,
         status_board=status_board,
         audit_log=audit,

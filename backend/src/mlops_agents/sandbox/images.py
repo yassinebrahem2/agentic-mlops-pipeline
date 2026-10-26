@@ -141,9 +141,7 @@ class ImageManager:
                     detail += "\n" + "\n".join(exc.stderr.splitlines()[-FAIL_DETAIL_LINES:])
                 return EnvironmentStatus(state="failed", tag=tag, detail=detail)
             except OSError as exc:
-                return EnvironmentStatus(
-                    state="failed", tag=tag, detail=f"Image build failed: {exc}"
-                )
+                return EnvironmentStatus(state="failed", tag=tag, detail=str(exc))
         if res.exit_code != 0:
             detail = "\n".join(
                 (res.stdout + "\n" + res.stderr).strip().splitlines()[-FAIL_DETAIL_LINES:]

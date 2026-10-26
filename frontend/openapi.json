@@ -738,6 +738,53 @@
         "title": "FolderListing",
         "type": "object"
       },
+      "GitHubItem": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "pr",
+              "issue"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "number",
+          "title",
+          "url",
+          "state",
+          "agent",
+          "created_at"
+        ],
+        "title": "GitHubItem",
+        "type": "object"
+      },
       "GitHubStatus": {
         "properties": {
           "gh_available": {
@@ -786,6 +833,25 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IssuesSettings": {
+        "properties": {
+          "min_priority": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ],
+            "title": "Min Priority",
+            "type": "string"
+          }
+        },
+        "required": [
+          "min_priority"
+        ],
+        "title": "IssuesSettings",
+        "type": "object"
+      },
       "KeyHint": {
         "properties": {
           "hint": {
@@ -802,6 +868,36 @@
           "hint"
         ],
         "title": "KeyHint",
+        "type": "object"
+      },
+      "LocalReview": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "diff": {
+            "title": "Diff",
+            "type": "string"
+          },
+          "files_changed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Files Changed",
+            "type": "array"
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskView"
+          }
+        },
+        "required": [
+          "task",
+          "agent",
+          "files_changed",
+          "diff"
+        ],
+        "title": "LocalReview",
         "type": "object"
       },
       "MessageCreated": {
@@ -1493,6 +1589,31 @@
         "additionalProperties": false,
         "properties": {},
         "title": "ResyncData",
+        "type": "object"
+      },
+      "ReviewDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approve": {
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "approve"
+        ],
+        "title": "ReviewDecisionRequest",
         "type": "object"
       },
       "RiskClass": {
@@ -3627,6 +3748,52 @@
         ]
       }
     },
+    "/api/projects/{project_id}/github/activity": {
+      "get": {
+        "operationId": "get_github_activity_route_api_projects__project_id__github_activity_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitHubItem"
+                  },
+                  "title": "Response Get Github Activity Route Api Projects  Project Id  Github Activity Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Github Activity Route",
+        "tags": [
+          "github-work"
+        ]
+      }
+    },
     "/api/projects/{project_id}/open": {
       "post": {
         "operationId": "open_project_api_projects__project_id__open_post",
@@ -3763,6 +3930,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/reviews": {
+      "get": {
+        "operationId": "get_local_reviews_api_projects__project_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LocalReview"
+                  },
+                  "title": "Response Get Local Reviews Api Projects  Project Id  Reviews Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Local Reviews",
+        "tags": [
+          "github-work"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/reviews/{task_id}/decision": {
+      "post": {
+        "operationId": "decide_review_api_projects__project_id__reviews__task_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Review",
+        "tags": [
+          "github-work"
+        ]
+      }
+    },
     "/api/projects/{project_id}/sandbox": {
       "get": {
         "operationId": "get_project_sandbox_api_projects__project_id__sandbox_get",
@@ -3844,6 +4118,98 @@
         "summary": "Rebuild Project Sandbox",
         "tags": [
           "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/issues": {
+      "get": {
+        "operationId": "get_issues_settings_api_projects__project_id__settings_issues_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuesSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Issues Settings",
+        "tags": [
+          "github-work"
+        ]
+      },
+      "put": {
+        "operationId": "update_issues_settings_api_projects__project_id__settings_issues_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssuesSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuesSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Issues Settings",
+        "tags": [
+          "github-work"
         ]
       }
     },
