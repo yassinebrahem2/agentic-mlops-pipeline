@@ -222,7 +222,6 @@ async def has_unpublished_changes_task(
                 worktree=worktree,
                 empty_hooks=empty_hooks,
                 args=["rev-list", f"{base_sha}..{task.branch}"],
-                check=False,
             )
             return bool(rev_list_res.stdout.strip())
 
@@ -232,7 +231,6 @@ async def has_unpublished_changes_task(
             worktree=worktree,
             empty_hooks=empty_hooks,
             args=["rev-list", f"{pushed_ref}..{task.branch}"],
-            check=False,
         )
         return bool(rev_list_res.stdout.strip())
 
@@ -243,7 +241,6 @@ async def has_unpublished_changes_task(
         worktree=worktree,
         empty_hooks=empty_hooks,
         args=["rev-list", f"{base_sha}..{task.branch}"],
-        check=False,
     )
     if not bool(rev_list_res.stdout.strip()):
         return False

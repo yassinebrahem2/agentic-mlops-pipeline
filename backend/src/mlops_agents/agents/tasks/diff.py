@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -106,8 +105,14 @@ async def staged_diff_task(
             try:
                 await asyncio.shield(add_fut)
             except asyncio.CancelledError:
-                with suppress(Exception):
+                try:
                     await add_fut
+                except Exception as exc:
+                    logger.warning(
+                        "Error awaiting shielded add after cancellation: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 raise
 
             async with engine.connect() as conn:

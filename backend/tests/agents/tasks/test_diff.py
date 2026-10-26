@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from mlops_agents.agents.tasks import diff as diff_module
+from mlops_agents.agents.tasks.contract import CommitRefused
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.tasks.test_commit import cmd, create_session, setup_service
+from tests.agents.tasks.helpers import cmd, create_session, setup_service
 from tests.conftest import MemoryKeyStore
 
 
@@ -161,3 +169,135 @@ async def test_literal_pathspecs_committed_literally(
     committed_files = show_res.stdout.splitlines()
     for name in filenames_to_check:
         assert name in committed_files
+
+
+async def test_diff_failing_cleanup_reset_logs_warning_with_stderr(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Failing reset diff test")
+
+    (task.worktree / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+    orig_task_git = diff_module.task_git
+
+    async def mock_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "reset" in git_args_raw:
+            from mlops_agents.integrations.github.git import GitResult
+
+            return GitResult(code=1, stdout="", stderr="fatal: mock diff reset error")
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(diff_module, "task_git", mock_task_git)
+
+    with caplog.at_level(logging.WARNING):
+        diff = await service.staged_diff(project_id, task)
+
+    assert "+x = 1" in diff
+    assert (
+        "Failed to reset working tree during staged_diff cleanup (exit code 1): fatal: mock diff reset error"
+        in caplog.text
+    )
+
+
+async def test_staged_diff_cancellation_during_add_executes_cleanup(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Cancel diff add test")
+
+    (task.worktree / "work.py").write_text("a = 100\n", encoding="utf-8")
+
+    orig_task_git = diff_module.task_git
+    in_add = asyncio.Event()
+    release_add = asyncio.Event()
+    git_calls: list[str] = []
+
+    async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence):
+            if "add" in git_args_raw:
+                git_calls.append("add")
+                in_add.set()
+                await release_add.wait()
+            elif "reset" in git_args_raw:
+                git_calls.append("reset")
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(diff_module, "task_git", blocking_task_git)
+
+    caller_task = asyncio.create_task(service.staged_diff(project_id, task))
+    await in_add.wait()
+    caller_task.cancel()
+    release_add.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller_task
+
+    assert "add" in git_calls
+    assert "reset" in git_calls
+    assert git_calls.index("reset") > git_calls.index("add")
+
+    diff = cmd(["git", "diff", "--cached", "--name-only"], cwd=task.worktree)
+    assert diff.stdout.strip() == ""
+
+
+async def test_literal_pathspecs_prevents_glob_matching_secret_env(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Glob literal test")
+
+    (task.worktree / ".env").write_text("SUPER_SECRET_TOKEN=xyz123\n", encoding="utf-8")
+    (task.worktree / "[.]env").write_text("PUBLIC_CONFIG=visible\n", encoding="utf-8")
+
+    diff = await service.staged_diff(project_id, task)
+    assert "PUBLIC_CONFIG=visible" in diff
+    assert "SUPER_SECRET_TOKEN" not in diff
+    assert "xyz123" not in diff
+    assert "Commit will refuse: secret files present (.env)." in diff
+
+    # .env must not have entered git object store
+    hash_res = cmd(["git", "hash-object", ".env"], cwd=task.worktree)
+    blob_sha = hash_res.stdout.strip()
+    cat_res = cmd(["git", "cat-file", "-e", blob_sha], cwd=task.worktree, check=False)
+    assert cat_res.returncode != 0
+
+    # Commit refuses while .env is present
+    with pytest.raises(CommitRefused, match=r"\.env"):
+        await service.commit(project_id, task, "refused commit")
+
+    # Remove secret .env and commit [.]env
+    (task.worktree / ".env").unlink()
+    commit_res = await service.commit(project_id, task, "feat: commit literal bracket file")
+    assert commit_res.changed == ("[.]env",)
+
+    show_res = cmd(["git", "show", "--name-only", "--format=", commit_res.sha], cwd=task.worktree)
+    files = show_res.stdout.splitlines()
+    assert "[.]env" in files
+    assert ".env" not in files
