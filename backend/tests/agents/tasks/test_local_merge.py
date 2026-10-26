@@ -454,7 +454,7 @@ async def test_local_merge_cancelled_mid_merge_leaves_no_temp_worktree_and_repo_
 
     assert list(temp_base.iterdir()) == []
     listing = await _git_out(runner, ["worktree", "list", "--porcelain"], repo)
-    assert str(temp_base) not in listing
+    assert "temp_merges" not in listing
     assert await _git_out(runner, ["rev-parse", "refs/heads/main"], repo) == main_before
     assert await _git_out(runner, ["status", "--porcelain"], repo) == ""
     assert (repo / "main.py").read_text(encoding="utf-8") == "print('initial')\n"

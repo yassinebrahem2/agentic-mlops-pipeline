@@ -264,6 +264,22 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     assert len(tool_finished_events) == 1
     assert "print('wired')" in tool_finished_events[0].data.content
 
+    # Step 4: the worktree is deleted; the next turn's tool step recreates it from the branch
+    shutil.rmtree(current.worktree)
+    fake_openai.state.scripted_tool_calls = [
+        {"id": "call_4", "name": "Read", "arguments": {"file_path": "hello.txt"}},
+    ]
+    sub4 = session_mgr.subscribe(project.id, "orchestrator", after_seq=None)
+    await anext(sub4)
+    await session_mgr.send(project.id, "orchestrator", "Read hello.txt")
+    events_t4 = await collect_until_turn_ended(sub4)
+
+    assert current.worktree.is_dir()
+    finished_t4 = [e for e in events_t4 if isinstance(e, ToolFinished)]
+    assert len(finished_t4) == 1
+    assert "initial" in finished_t4[0].data.content
+    assert "the task worktree was recreated" in finished_t4[0].data.content
+
 
 async def test_discard_of_an_ended_task_is_refused_without_a_second_event(
     app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
