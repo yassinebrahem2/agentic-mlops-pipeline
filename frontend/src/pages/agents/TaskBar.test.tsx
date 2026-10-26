@@ -11,6 +11,7 @@ describe("TaskBar", () => {
 
   const baseTask: TaskView = {
     id: "tsk_123",
+    agent: "orchestrator",
     title: "Implement user authentication",
     branch: "feat/auth",
     status: "active",
