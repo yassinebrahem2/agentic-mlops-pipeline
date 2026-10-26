@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useParams } from "react-router";
-import type { Client } from "openapi-fetch";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,28 +10,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { api, errorText, unwrap, type paths as GeneratedPaths } from "@/lib/api";
+import { api, errorText, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export type TaskView = components["schemas"]["TaskView"];
-
-export type TaskDiscardPaths = GeneratedPaths & {
-  "/api/projects/{project_id}/tasks/{task_id}/discard": {
-    post: {
-      parameters: {
-        path: {
-          project_id: string;
-          task_id: string;
-        };
-      };
-      responses: {
-        204: {
-          content: never;
-        };
-      };
-    };
-  };
-};
 
 export interface TaskBarProps {
   task: TaskView;
@@ -53,8 +34,7 @@ export function TaskBar({ task, projectId, onDiscard, className }: TaskBarProps)
     setSubmitting(true);
     setError(null);
     try {
-      const client = api as unknown as Client<TaskDiscardPaths>;
-      const res = await client.POST("/api/projects/{project_id}/tasks/{task_id}/discard", {
+      const res = await api.POST("/api/projects/{project_id}/tasks/{task_id}/discard", {
         params: {
           path: {
             project_id: activeProjectId,
