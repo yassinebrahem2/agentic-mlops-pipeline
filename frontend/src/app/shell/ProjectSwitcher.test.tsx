@@ -102,6 +102,13 @@ describe("ProjectSwitcher", () => {
         const agents: components["schemas"]["AgentInfo"][] = [];
         const models: components["schemas"]["ModelEntry"][] = [];
         const providers: components["schemas"]["Provider"][] = [];
+        const permissions: components["schemas"]["PermissionsSettings"] = { level: "ask" };
+        const issues: components["schemas"]["IssuesSettings"] = { min_priority: "medium" };
+        const sandbox: components["schemas"]["SandboxView"] = {
+          docker: { available: true, version: "27.1", detail: null },
+          environment: { state: "ready", tag: "env:1", detail: null },
+          network: false,
+        };
         const data: unknown = url.endsWith("/api/app")
           ? app
           : url.endsWith("/agents")
@@ -110,7 +117,13 @@ describe("ProjectSwitcher", () => {
               ? models
               : url.endsWith("/api/providers")
                 ? providers
-                : fakeProjects.find((project) => url.endsWith(`/api/projects/${project.id}`));
+                : url.endsWith("/settings/permissions")
+                  ? permissions
+                  : url.endsWith("/settings/issues")
+                    ? issues
+                    : url.endsWith("/sandbox")
+                      ? sandbox
+                      : fakeProjects.find((project) => url.endsWith(`/api/projects/${project.id}`));
         if (data !== undefined)
           return Promise.resolve(
             new Response(JSON.stringify(data), {
