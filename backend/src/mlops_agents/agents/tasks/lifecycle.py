@@ -187,6 +187,13 @@ async def end_task(
 
     if row is None:
         raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
+    if row["status"] not in ("active", "in_review"):
+        # An ended task keeps its first outcome: no second cleanup, status change or event.
+        raise DomainError(
+            "task_not_open",
+            f"Task {task_id} has status {row['status']!r} and has already ended.",
+            status=409,
+        )
 
     # 1. Container removal
     if sandbox is not None:

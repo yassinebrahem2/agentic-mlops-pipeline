@@ -262,3 +262,48 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     tool_finished_events = [e for e in events_t3 if isinstance(e, ToolFinished)]
     assert len(tool_finished_events) == 1
     assert "print('wired')" in tool_finished_events[0].data.content
+
+
+async def test_discard_of_an_ended_task_is_refused_without_a_second_event(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Merged task")
+    await services.tasks.end(project_id, task.id, "merged")
+
+    res = await client.post(f"/api/projects/{project_id}/tasks/{task.id}/discard")
+
+    assert res.status_code == 409
+    view = await services.tasks.view(project_id, task.id)
+    assert view.status == "merged"
+    ended = await services.events.history(project_id, types=["task.ended"])
+    assert [e.payload for e in ended] == [{"task_id": task.id, "status": "merged"}]
+
+
+async def test_global_discard_skips_a_project_whose_database_is_unreadable(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Found task")
+    broken_repo = make_repo(tmp_path / "broken-repo", {"README.md": "# Broken"}, git_env)
+    broken = await services.workspace.add_local(str(broken_repo))
+    await services.databases.close_project(broken.id)
+    broken_db = services.paths.project_db(broken.id)
+    broken_db.parent.mkdir(parents=True, exist_ok=True)
+    broken_db.write_bytes(b"not a sqlite database" * 100)
+    # The scan must meet the broken project before the one holding the task.
+    assert (await services.workspace.list_projects())[0].id == broken.id
+
+    res = await client.post(f"/api/tasks/{task.id}/discard")
+
+    assert res.status_code == 204
+    assert (await services.tasks.view(project_id, task.id)).status == "discarded"
+    assert any(broken.id in r.getMessage() and r.exc_info for r in caplog.records)
