@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.graph import TurnHooks
-from mlops_agents.agents.runtime.hooks import AllowAllGate, NoInbound, NoTurnEndCheck
+from mlops_agents.agents.runtime.hooks import NoInbound, NoTurnEndCheck
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
@@ -33,9 +34,9 @@ class FixedWorkspaces:
 
 
 def stage1_hooks(workspaces: TaskWorkspaces) -> TurnHooks:
-    """Stage 1's behavior: every call allowed, nothing delivered mid-turn, no turn-end note."""
+    """Every call allowed (ApprovalGate defaults to allow for READ tools), nothing delivered mid-turn, no turn-end note."""
     return TurnHooks(
-        gate=AllowAllGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
+        gate=ApprovalGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
     )
 
 
@@ -50,6 +51,7 @@ class RecordingSink:
         self.tools_started: list[ToolCallPart] = []
         self.tools_finished: list[ToolResultPart] = []
         self.messages: list[tuple[MessageView, bool]] = []
+        self.waiting_turns: list[str] = []
 
     async def text(self, message_id: str, text: str) -> None:
         self.texts.append(text)
@@ -62,6 +64,9 @@ class RecordingSink:
 
     async def message(self, message: MessageView, *, created: bool) -> None:
         self.messages.append((message, created))
+
+    async def turn_waiting(self, turn_id: str) -> None:
+        self.waiting_turns.append(turn_id)
 
 
 def make_agent(
