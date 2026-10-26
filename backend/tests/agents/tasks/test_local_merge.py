@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import stat
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +11,11 @@ import httpx2
 import pytest
 
 from mlops_agents.agents.tasks.contract import CommitRefused
-from mlops_agents.agents.tasks.local_merge import local_merge_preview
+from mlops_agents.agents.tasks.local_merge import local_merge, local_merge_preview
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.clock import now_iso
 from mlops_agents.integrations.github.auth import GitHubAuth
-from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.integrations.github.git import GitResult, GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -115,8 +118,7 @@ async def test_local_merge_clean_fast_forward_default_branch_checked_out(
     assert (repo / "helper.py").read_text(encoding="utf-8") == "print('helper')\n"
 
     # Temporary merge worktree is removed
-    temp_worktree = paths.project_dir(project_id) / "temp_merges" / f"merge_{task.id}"
-    assert not temp_worktree.exists()
+    assert list((paths.project_dir(project_id) / "temp_merges").iterdir()) == []
 
 
 async def test_local_merge_uncommitted_changes_in_way_raises_commit_refused(
@@ -358,3 +360,136 @@ async def test_local_merge_author_identity_and_error_reporting(
 
     assert "fatal: something broken in merge" in str(exc_info.value)
     assert "Merge conflict in: unknown" not in str(exc_info.value)
+
+
+class _HeldMergeRunner(GitRunner):
+    """Holds the `merge --no-ff` call until released. Like git in a worker thread, the held call
+    keeps going when its caller is cancelled. Optionally fails the cleanup's worktree remove."""
+
+    def __init__(self, real: GitRunner, bin_dir: Path, *, fail_remove: bool = False) -> None:
+        super().__init__(bin_dir)
+        self._real = real
+        self._fail_remove = fail_remove
+        self.merge_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(
+        self,
+        args: Sequence[str],
+        cwd: Path | None = None,
+        *,
+        check: bool = True,
+        timeout: float = 600,  # noqa: ASYNC109 -- mirrors GitRunner.run
+        authenticated: bool = False,
+        extra_env: dict[str, str] | None = None,
+    ) -> GitResult:
+        async def real() -> GitResult:
+            return await self._real.run(
+                args,
+                cwd,
+                check=check,
+                timeout=timeout,
+                authenticated=authenticated,
+                extra_env=extra_env,
+            )
+
+        if "--no-ff" in args:
+            self.merge_started.set()
+
+            async def held() -> GitResult:
+                await self.release.wait()
+                return await real()
+
+            return await asyncio.shield(held())
+        if self._fail_remove and "remove" in args:
+            return GitResult(1, "", "fatal: simulated remove failure")
+        return await real()
+
+
+async def _git_out(runner: GitRunner, args: list[str], cwd: Path) -> str:
+    return (await runner.run(args, cwd=cwd)).stdout
+
+
+async def test_local_merge_cancelled_mid_merge_leaves_no_temp_worktree_and_repo_untouched(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, runner, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_merge_cancel")
+    task = await service.start(
+        project_id=project_id, session_id="ses_merge_cancel", agent="coder", title="Cancelled"
+    )
+    (task.worktree / "main.py").write_text("print('from task')\n", encoding="utf-8")
+    await service.commit(project_id, task, "Change main")
+    main_before = await _git_out(runner, ["rev-parse", "refs/heads/main"], repo)
+    temp_base = paths.project_dir(project_id) / "temp_merges"
+    held = _HeldMergeRunner(runner, paths.bin)
+
+    merge = asyncio.create_task(
+        local_merge(
+            databases=databases,
+            runner=held,
+            repo_root=repo,
+            empty_hooks=paths.empty_hooks,
+            temp_base_dir=temp_base,
+            default_branch="main",
+            task_branch=task.branch,
+            task_id=task.id,
+        )
+    )
+    await held.merge_started.wait()
+    merge.cancel()
+
+    # The cleanup must not race the git process still running in the temp worktree.
+    done, _ = await asyncio.wait({merge}, timeout=1)
+    assert not done
+    held.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await merge
+
+    assert list(temp_base.iterdir()) == []
+    listing = await _git_out(runner, ["worktree", "list", "--porcelain"], repo)
+    assert str(temp_base) not in listing
+    assert await _git_out(runner, ["rev-parse", "refs/heads/main"], repo) == main_before
+    assert await _git_out(runner, ["status", "--porcelain"], repo) == ""
+    assert (repo / "main.py").read_text(encoding="utf-8") == "print('initial')\n"
+
+
+async def test_local_merge_logs_a_failed_temp_worktree_removal(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _, runner, _, project_id, repo = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_merge_log")
+    task = await service.start(
+        project_id=project_id, session_id="ses_merge_log", agent="coder", title="Logged"
+    )
+    (task.worktree / "main.py").write_text("print('from task')\n", encoding="utf-8")
+    await service.commit(project_id, task, "Change main")
+    held = _HeldMergeRunner(runner, paths.bin, fail_remove=True)
+    held.release.set()
+
+    with caplog.at_level(logging.WARNING):
+        await local_merge(
+            databases=databases,
+            runner=held,
+            repo_root=repo,
+            empty_hooks=paths.empty_hooks,
+            temp_base_dir=paths.project_dir(project_id) / "temp_merges",
+            default_branch="main",
+            task_branch=task.branch,
+            task_id=task.id,
+        )
+
+    assert any("simulated remove failure" in r.getMessage() for r in caplog.records)

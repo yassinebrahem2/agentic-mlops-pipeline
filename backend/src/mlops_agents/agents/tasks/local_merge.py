@@ -3,39 +3,49 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import os
-import shutil
-import stat
-from contextlib import suppress
+import logging
+import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mlops_agents.agents.tasks.author import resolve_commit_author
 from mlops_agents.agents.tasks.contract import CommitRefused
 from mlops_agents.agents.tasks.git import run_safe_git
+from mlops_agents.integrations.github.git import GitError
+from mlops_agents.workspace.fs import rmtree
 
 if TYPE_CHECKING:
-    from mlops_agents.integrations.github.git import GitRunner
+    from collections.abc import Sequence
+
+    from mlops_agents.integrations.github.git import GitResult, GitRunner
     from mlops_agents.storage.databases import Databases
 
-
-def _make_writable(path: Path) -> None:
-    if os.name == "nt":
-        with suppress(Exception):
-            ctypes.windll.kernel32.SetFileAttributesW(str(path), 128)  # FILE_ATTRIBUTE_NORMAL
-    with suppress(Exception):
-        path.chmod(stat.S_IWRITE | stat.S_IREAD)
+logger = logging.getLogger(__name__)
 
 
-def _rmtree(path: Path) -> None:
-    def on_exc(func: Any, target: str, exc: Any) -> None:
-        del exc
-        _make_writable(Path(target))
-        func(target)
+async def _git_to_end(
+    runner: GitRunner,
+    *,
+    args: Sequence[str],
+    cwd: Path,
+    empty_hooks: Path,
+    check: bool = True,
+) -> GitResult:
+    """Runs git and, when cancelled, waits for that git process before cancelling.
 
-    if path.exists():
-        shutil.rmtree(path, onexc=on_exc)
+    git runs in a worker thread that a cancel cannot stop, so without the wait the cleanup
+    would remove the temporary worktree under a git process still writing to it.
+    """
+    call = asyncio.ensure_future(
+        run_safe_git(runner, args=args, cwd=cwd, empty_hooks=empty_hooks, check=check)
+    )
+    try:
+        return await asyncio.shield(call)
+    except asyncio.CancelledError:
+        await asyncio.wait({call})
+        if not call.cancelled() and (exc := call.exception()) is not None:
+            logger.warning("git %s failed after the merge was cancelled", args[0], exc_info=exc)
+        raise
 
 
 def _find_checked_out_worktree(
@@ -123,12 +133,16 @@ async def local_merge(
         empty_hooks=empty_hooks,
     )
 
-    temp_worktree = temp_base_dir / f"merge_{task_id}"
     await asyncio.to_thread(temp_base_dir.mkdir, parents=True, exist_ok=True)
+    # A fresh folder per merge: a retry never meets what an earlier merge left behind.
+    temp_worktree = Path(
+        await asyncio.to_thread(tempfile.mkdtemp, prefix=f"merge_{task_id}_", dir=temp_base_dir)
+    )
+    added = False
 
     try:
         # Step 1: Create detached temp worktree on default_branch
-        old_sha_res = await run_safe_git(
+        old_sha_res = await _git_to_end(
             runner,
             args=["rev-parse", f"refs/heads/{default_branch}"],
             cwd=repo_root,
@@ -136,15 +150,16 @@ async def local_merge(
         )
         old_sha = old_sha_res.stdout.strip()
 
-        await run_safe_git(
+        await _git_to_end(
             runner,
             args=["worktree", "add", "--detach", str(temp_worktree), default_branch],
             cwd=repo_root,
             empty_hooks=empty_hooks,
         )
+        added = True
 
         merge_msg = f"Merge task {task_id} into {default_branch}"
-        merge_res = await run_safe_git(
+        merge_res = await _git_to_end(
             runner,
             args=[
                 "-c",
@@ -163,7 +178,7 @@ async def local_merge(
         )
 
         if merge_res.code != 0:
-            diff_res = await run_safe_git(
+            diff_res = await _git_to_end(
                 runner,
                 args=["diff", "--name-only", "--diff-filter=U"],
                 cwd=temp_worktree,
@@ -176,7 +191,7 @@ async def local_merge(
             err_msg = merge_res.stderr.strip() or merge_res.stdout.strip() or "Git merge failed."
             raise CommitRefused(err_msg)
 
-        rev_res = await run_safe_git(
+        rev_res = await _git_to_end(
             runner,
             args=["rev-parse", "HEAD"],
             cwd=temp_worktree,
@@ -185,7 +200,7 @@ async def local_merge(
         merge_sha = rev_res.stdout.strip()
 
         # Step 2: In user's repository
-        wt_list_res = await run_safe_git(
+        wt_list_res = await _git_to_end(
             runner,
             args=["worktree", "list", "--porcelain"],
             cwd=repo_root,
@@ -196,7 +211,7 @@ async def local_merge(
         )
 
         if checked_out_wt is not None:
-            ff_res = await run_safe_git(
+            ff_res = await _git_to_end(
                 runner,
                 args=["merge", "--ff-only", merge_sha],
                 cwd=checked_out_wt,
@@ -207,7 +222,7 @@ async def local_merge(
                 err_msg = ff_res.stderr.strip() or ff_res.stdout.strip() or "Fast-forward refused."
                 raise CommitRefused(err_msg)
         else:
-            ref_res = await run_safe_git(
+            ref_res = await _git_to_end(
                 runner,
                 args=["update-ref", f"refs/heads/{default_branch}", merge_sha, old_sha],
                 cwd=repo_root,
@@ -220,13 +235,33 @@ async def local_merge(
                 )
 
     finally:
-        # Step 3: Clean up temporary worktree
-        with suppress(Exception):
-            await run_safe_git(
+        await _remove_temp_worktree(runner, repo_root, empty_hooks, temp_worktree, added=added)
+
+
+async def _remove_temp_worktree(
+    runner: GitRunner, repo_root: Path, empty_hooks: Path, temp_worktree: Path, *, added: bool
+) -> None:
+    """Removes the merge's temporary worktree; a failure is logged, never raised, so it cannot
+    replace the merge's own outcome."""
+    if added:
+        try:
+            res = await _git_to_end(
                 runner,
                 args=["worktree", "remove", "--force", str(temp_worktree)],
                 cwd=repo_root,
                 empty_hooks=empty_hooks,
                 check=False,
             )
-        await asyncio.to_thread(_rmtree, temp_worktree)
+        except GitError:
+            logger.exception("Could not remove the temporary merge worktree %s", temp_worktree)
+        else:
+            if res.code != 0:
+                logger.warning(
+                    "Could not remove the temporary merge worktree %s: %s",
+                    temp_worktree,
+                    res.stderr.strip() or res.stdout.strip(),
+                )
+    try:
+        await asyncio.to_thread(rmtree, temp_worktree)
+    except OSError:
+        logger.exception("Could not delete the temporary merge folder %s", temp_worktree)
