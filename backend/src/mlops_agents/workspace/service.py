@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import stat
-import string
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import httpx2
 from sqlalchemy import RowMapping, delete, insert, select, update
@@ -22,7 +17,8 @@ from mlops_agents.integrations.github.git import GitError, GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
-from mlops_agents.workspace.models import FolderEntry, FolderListing, Project, ProjectStatus
+from mlops_agents.workspace.fs import browse_folder, rmtree, user_path
+from mlops_agents.workspace.models import FolderListing, Project, ProjectStatus
 from mlops_agents.workspace.refs import https_url, parse_github_ref, path_key, repo_ref
 
 EMPTY_REPO_DETAIL = "The repository has no committed files yet. Commit your files first."
@@ -32,29 +28,6 @@ NOT_A_REPO_DETAIL = "The folder is no longer a git repository."
 
 def _default_remote_url(full_name: str) -> str:
     return https_url(repo_ref(full_name))
-
-
-def _rmtree(path: Path) -> None:
-    def make_writable_and_retry(func: Callable[..., Any], target: str, exc: BaseException) -> None:
-        del exc
-        Path(target).chmod(
-            stat.S_IWRITE
-        )  # git marks pack files read-only; Windows refuses to delete them
-        func(target)
-
-    if path.exists():
-        shutil.rmtree(path, onexc=make_writable_and_retry)
-
-
-def _user_path(text: str) -> Path:
-    return Path(text.strip()).expanduser()
-
-
-def _drive_roots() -> list[str]:
-    if os.name != "nt":
-        return ["/"]
-    # Probing a disconnected network drive can take seconds; this runs in a worker thread.
-    return [f"{d}:\\" for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
 
 
 class WorkspaceService:
@@ -118,7 +91,7 @@ class WorkspaceService:
             )
 
     async def _repo_folder(self, path_text: str, *, init_git: bool) -> tuple[Path, str]:
-        folder = await asyncio.to_thread(_user_path, path_text)
+        folder = await asyncio.to_thread(user_path, path_text)
         if not await asyncio.to_thread(folder.is_dir):
             raise DomainError(
                 "folder_not_found", f"{folder} is not a folder on this machine.", status=422
@@ -189,51 +162,13 @@ class WorkspaceService:
 
     async def browse(self, path_text: str | None) -> FolderListing:
         self._require_local_mode()
-        text = (path_text or "").strip()
-        folder = await asyncio.to_thread(_user_path, text) if text else Path.home()
-        if not await asyncio.to_thread(folder.is_dir):
-            raise DomainError(
-                "folder_not_found", f"{folder} is not a folder on this machine.", status=404
-            )
-
-        def scan() -> list[FolderEntry]:
-            found: list[FolderEntry] = []
-            for child in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
-                try:
-                    if child.is_dir():
-                        found.append(
-                            FolderEntry(
-                                name=child.name,
-                                path=str(child),
-                                is_git_repo=(child / ".git").exists(),
-                            )
-                        )
-                except OSError:
-                    continue
-            return found
-
-        try:
-            entries = await asyncio.to_thread(scan)
-        except PermissionError:
-            raise DomainError(
-                "folder_unreadable", f"The app is not allowed to read {folder}.", status=403
-            ) from None
-        except OSError as exc:  # a disconnected network path or a drive that is not ready
-            reason = exc.strerror or type(exc).__name__
-            raise DomainError(
-                "folder_unreadable",
-                f"{folder} could not be read ({reason}). Check the drive or network path and try again.",
-                status=409,
-            ) from None
-        roots = await asyncio.to_thread(_drive_roots)
-        parent = str(folder.parent) if folder.parent != folder else None
-        return FolderListing(path=str(folder), parent=parent, entries=entries, roots=roots)
+        return await browse_folder(path_text)
 
     # GitHub projects
 
     async def _clone(self, project_id: str, full_name: str) -> tuple[ProjectStatus, str | None]:
         target = self._paths.repo_dir(project_id)
-        await asyncio.to_thread(_rmtree, target)
+        await asyncio.to_thread(rmtree, target)
         await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
         try:
             result = await self._git.run(
@@ -362,9 +297,25 @@ class WorkspaceService:
         return await self.refresh(project_id)
 
     async def remove(self, project_id: str) -> None:
-        await self.get(project_id)
+        project = await self.get(project_id)
+        repo_root = self.repo_root(project)
         await self._dbs.close_project(project_id)
-        await asyncio.to_thread(_rmtree, self._paths.project_dir(project_id))
+        await asyncio.to_thread(rmtree, self._paths.project_dir(project_id))
+        if await asyncio.to_thread(repo_root.is_dir):
+            await self._git.run(["worktree", "prune"], cwd=repo_root, check=False)
+            if not project.github_full_name:
+                res = await self._git.run(
+                    ["for-each-ref", "--format=%(refname:short)", "refs/heads/agent"],
+                    cwd=repo_root,
+                    check=False,
+                )
+                if res.code == 0:
+                    for branch in res.stdout.splitlines():
+                        branch = branch.strip()
+                        if branch:
+                            await self._git.run(
+                                ["branch", "-D", branch], cwd=repo_root, check=False
+                            )
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(delete(projects).where(projects.c.id == project_id))

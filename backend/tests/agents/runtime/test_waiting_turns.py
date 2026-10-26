@@ -23,7 +23,6 @@ from mlops_agents.agents.runtime.hooks import (
     GateDecision,
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -40,6 +39,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 

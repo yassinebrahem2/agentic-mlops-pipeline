@@ -14,6 +14,7 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+from mlops_agents.agents.tools.file_ops import pop_pending_note
 
 if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
@@ -112,14 +113,25 @@ class ReadTool(AgentTool[ReadArgs]):
             sha256 = await asyncio.to_thread(_compute_sha256, full_path)
             await self._tasks.record_read(ctx.project_id, ctx.task, rel, sha256)
 
+        note = (
+            pop_pending_note(self._tasks, ctx.project_id, ctx.task.id)
+            if ctx.task is not None
+            else None
+        )
+
+        def _out(content: str) -> ToolOutput:
+            if note:
+                content = f"{content}\n\n{note}"
+            return ToolOutput(content)
+
         if binary:
-            return ToolOutput(f"{rel} is a binary file; its contents are not shown.")
+            return _out(f"{rel} is a binary file; its contents are not shown.")
         if not lines:
-            return ToolOutput(
+            return _out(
                 f"{rel} has no lines from line {offset}." if offset > 1 else f"{rel} is empty."
             )
         text = "\n".join(lines)
         if more:
             last = offset + len(lines) - 1
             text += f"\n[{rel} continues after line {last}. Read again with offset={last + 1} to see more.]"
-        return ToolOutput(text)
+        return _out(text)

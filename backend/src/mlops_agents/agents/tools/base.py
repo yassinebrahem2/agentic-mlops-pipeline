@@ -58,6 +58,7 @@ class TaskRef:
     branch: str
     worktree: Path
     status: TaskStatus
+    pending_note: str | None = None
 
 
 @dataclass(frozen=True)
