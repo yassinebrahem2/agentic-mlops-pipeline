@@ -43,7 +43,7 @@ from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
-from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
+from tests.fakes.workspaces import FakeWorkspaces
 
 
 class DummyArgs(BaseModel):
@@ -98,7 +98,7 @@ def make_tool_reg(*extra_tools: AgentTool[Any]) -> ToolRegistry:
     return reg
 
 
-class MutableTaskWorkspaces(RepositoryOnlyWorkspaces):
+class MutableTaskWorkspaces(FakeWorkspaces):
     """Workspaces double allowing testing task changes between approval and execution."""
 
     def __init__(self, *, workspace: Any, git: Any) -> None:
@@ -497,7 +497,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
     )
     new_approvals_service = ApprovalsService(
         databases=databases,

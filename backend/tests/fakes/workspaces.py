@@ -25,6 +25,3 @@ class FakeWorkspaces:
             raise ValueError(f"No task workspaces here, so no files for task {task.id}.")
         project = await self._workspace.get(project_id)
         return RepoFiles(self._workspace.repo_root(project), self._git)
-
-
-RepositoryOnlyWorkspaces = FakeWorkspaces

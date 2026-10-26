@@ -39,7 +39,7 @@ from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
-from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -125,7 +125,7 @@ def _make_manager(
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
     )
 
 
