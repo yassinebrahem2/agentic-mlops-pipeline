@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -229,6 +230,7 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
     orig_task_git = diff_module.task_git
     in_add = asyncio.Event()
     release_add = asyncio.Event()
+    add_completed = asyncio.Event()
     git_calls: list[str] = []
 
     async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
@@ -238,7 +240,12 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
                 git_calls.append("add")
                 in_add.set()
                 await release_add.wait()
-            elif "reset" in git_args_raw:
+                with suppress(asyncio.CancelledError):
+                    await asyncio.sleep(0.05)
+                res = await orig_task_git(*args, **kwargs)
+                add_completed.set()
+                return res
+            if "reset" in git_args_raw:
                 git_calls.append("reset")
         return await orig_task_git(*args, **kwargs)
 
@@ -251,6 +258,8 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
 
     with pytest.raises(asyncio.CancelledError):
         await caller_task
+
+    await add_completed.wait()
 
     assert "add" in git_calls
     assert "reset" in git_calls
