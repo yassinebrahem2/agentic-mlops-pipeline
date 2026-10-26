@@ -10,8 +10,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnd
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -90,7 +89,7 @@ async def test_an_outside_cancel_of_the_turn_task_reports_it_interrupted_once(
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         task = asyncio.current_task()
         assert task is not None
         turn_tasks.append(task)

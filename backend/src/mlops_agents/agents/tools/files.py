@@ -18,7 +18,8 @@ DENYLIST: tuple[str, ...] = (
 
 
 def is_secret(rel_posix: str) -> bool:
-    name = rel_posix.rsplit("/", 1)[-1].lower()
+    # On Windows, file systems strip trailing spaces and dots, so normalize them before checking
+    name = rel_posix.rsplit("/", 1)[-1].rstrip(" .").lower()
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in DENYLIST)
 
 

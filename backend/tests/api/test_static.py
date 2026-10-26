@@ -11,6 +11,7 @@ from mlops_agents.api.static import mount_ui
 from mlops_agents.config import RunMode, load_settings
 from tests.api.conftest import LOCAL_URL, NoGh, signed_in
 from tests.conftest import MemoryKeyStore
+from tests.sandbox.fakes import FakeDockerRunner
 
 
 @pytest.fixture
@@ -30,7 +31,13 @@ def web_dir(tmp_path: Path) -> Path:
 async def static_app(tmp_path: Path, web_dir: Path) -> AsyncIterator[FastAPI]:
     home = tmp_path / "data"
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(home)})
-    application = create_app(settings, keystore=MemoryKeyStore(), gh=NoGh(), web_dir=web_dir)
+    application = create_app(
+        settings,
+        keystore=MemoryKeyStore(),
+        gh=NoGh(),
+        web_dir=web_dir,
+        docker_runner=FakeDockerRunner(),
+    )
     async with application.router.lifespan_context(application):
         yield application
 
@@ -124,7 +131,13 @@ async def test_without_index_html_not_built_page_is_returned(tmp_path: Path) -> 
     empty_web.mkdir(parents=True)
     home = tmp_path / "data"
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(home)})
-    application = create_app(settings, keystore=MemoryKeyStore(), gh=NoGh(), web_dir=empty_web)
+    application = create_app(
+        settings,
+        keystore=MemoryKeyStore(),
+        gh=NoGh(),
+        web_dir=empty_web,
+        docker_runner=FakeDockerRunner(),
+    )
 
     async with (
         application.router.lifespan_context(application),

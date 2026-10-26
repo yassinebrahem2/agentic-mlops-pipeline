@@ -108,6 +108,7 @@ Anything not listed here is unknown.
 - [USER] The lead (yassinebrahem2) decides what is built and writes every spec, plan, task and issue; teammates implement task issues only.
 - [AGREED] 2026-10-21: one owner per plan, plans depend on interfaces rather than whole plans, one PR per task into main, a teammate review then the lead's review and merge (details in AGENTS.md).
 - [AGREED] 2026-10-23 (#120): frontend tests are CPU-bound in testing-library's role queries; a page test timing out under heavy concurrent local load is an environment limit, not a defect. testing-library's defaults stay (no raised timeouts); frontend tests run without other suites running alongside.
+- [USER] 2026-10-26: only Critical and Important findings hold a merge (red CI, broken contract, touching the user's repo, secrets, data loss, crash at startup or shutdown, a 500 or wrong answer on a normal path). Minor findings never block: they are filed as a Bug or in the owner's next task in the same step as the merge. Re-reviews check only the last review's points and the new commits. Details in docs/reviewing-and-merging.md.
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open

@@ -6,10 +6,11 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
-    AllowAllGate,
     NoInbound,
     NoTurnEndCheck,
     RepositoryOnlyWorkspaces,
@@ -78,7 +79,7 @@ async def test_live_turn_orchestrator_readme(
             settings=settings_svc,
             providers=providers_svc,
             http=http,
-            gate=AllowAllGate(),
+            gate=ApprovalGate(databases),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git),
@@ -93,6 +94,7 @@ async def test_live_turn_orchestrator_readme(
 
         repo_root = Path(__file__).parents[4]
         project = await workspace_svc.add_local(str(repo_root))
+        await set_permission_level(databases, project.id, "autonomous")
         await settings_svc.set_default_model("orchestrator", live_model)
 
         # Subscribing after the snapshot's last_seq replays what was published before the first read.
