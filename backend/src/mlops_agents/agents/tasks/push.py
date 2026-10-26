@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import shutil
+import stat
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from mlops_agents.agents.tasks.git import task_git
+from mlops_agents.agents.tasks.git import run_safe_git, task_git
 from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
@@ -18,6 +22,18 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tools.base import TaskRef
     from mlops_agents.integrations.github.git import GitRunner
     from mlops_agents.workspace.models import Project
+
+
+def _rmtree(path: Path) -> None:
+    def on_exc(func: Any, target: str, exc: Any) -> None:
+        del exc
+        with suppress(Exception):
+            Path(target).chmod(stat.S_IWRITE | stat.S_IREAD)
+        with suppress(Exception):
+            func(target)
+
+    if path.exists():
+        shutil.rmtree(path, onexc=on_exc)
 
 
 async def project_repo_ref(
@@ -84,20 +100,45 @@ async def push_task(
     )
     commit_sha = sha_res.stdout.strip()
 
-    empty_cfg = empty_hooks.parent / "empty.gitconfig"
-    if not empty_cfg.exists():
-        empty_cfg.touch()
-
-    args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
-    await task_git(
+    # Discover the repository object directory so the push can read objects
+    # from an isolated bare repository without loading user remotes from .git/config.
+    objects_res = await task_git(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=args,
-        authenticated=True,
-        extra_env={"GIT_CONFIG": str(empty_cfg)},
+        args=["rev-parse", "--git-path", "objects"],
     )
+    objects_path = Path(objects_res.stdout.strip())
+    if not objects_path.is_absolute():
+        objects_path = (worktree / objects_path).resolve()
+
+    temp_push = empty_hooks.parent / f".tmp_push_{task.id}_{commit_sha[:8]}"
+    if not temp_push.exists():
+        await run_safe_git(
+            runner,
+            args=["init", "--bare", str(temp_push)],
+            cwd=empty_hooks.parent,
+            empty_hooks=empty_hooks,
+        )
+
+    try:
+        args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
+        await run_safe_git(
+            runner,
+            args=args,
+            cwd=temp_push,
+            git_dir=temp_push,
+            empty_hooks=empty_hooks,
+            authenticated=True,
+            extra_env={
+                "GIT_OBJECT_DIRECTORY": str(objects_path),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects_path),
+            },
+        )
+    finally:
+        with suppress(Exception):
+            await asyncio.to_thread(_rmtree, temp_push)
 
     pushed_ref = f"refs/{APP_NAME}/pushed/{task.branch}"
     await task_git(
