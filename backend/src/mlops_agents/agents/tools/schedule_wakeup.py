@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.agents.messaging.wakeups import (
     MAX_DELAY_SECONDS,
+    MAX_NOTE_LENGTH,
     MIN_DELAY_SECONDS,
     WakeupLimitReached,
     WakeupPermissionError,
@@ -35,6 +36,7 @@ class ScheduleWakeupArgs(BaseModel):
     )
     note: str = Field(
         min_length=1,
+        max_length=MAX_NOTE_LENGTH,
         description="What you need to be reminded of when you wake up.",
     )
 

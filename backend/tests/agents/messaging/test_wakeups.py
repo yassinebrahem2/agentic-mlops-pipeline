@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import httpx2
+import pytest
 from sqlalchemy import insert, select
 
 from mlops_agents.agents.catalog import AgentCatalog
@@ -376,3 +377,194 @@ async def test_wakeup_fires_and_starts_turn_with_note(
                 all_user_messages.append(str(m.get("content", "")))
 
     assert any("Scheduled wake-up: Check deployment metrics" in msg for msg in all_user_messages)
+
+
+async def test_cancel_wakeup(
+    tmp_path: Path,
+    databases: Databases,
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    current_time = now
+
+    wakeups_svc = WakeupService(databases, clock=lambda: current_time)
+    registry = default_registry(wakeups=wakeups_svc)
+    catalog = AgentCatalog.load(registry.names(), extra_dirs=[defs_dir])
+    wakeups_svc.use_catalog(catalog)
+
+    engine = await databases.project("prj_test")
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(sessions).values(
+                id="ses_test",
+                agent="sched",
+                summary=None,
+                compacted_through=None,
+                created_at="2026-10-26T12:00:00.000Z",
+            )
+        )
+
+    wak_id = await wakeups_svc.schedule(
+        "prj_test",
+        session_id="ses_test",
+        agent="sched",
+        delay_seconds=120,
+        note="To be cancelled",
+    )
+
+    # First cancel should return True
+    assert await wakeups_svc.cancel("prj_test", wak_id) is True
+
+    # Subsequent cancel should return False
+    assert await wakeups_svc.cancel("prj_test", wak_id) is False
+
+    # Non-existent cancel should return False
+    assert await wakeups_svc.cancel("prj_test", "wak_nonexistent") is False
+
+    # Check status in db is cancelled
+    async with engine.connect() as conn:
+        status = await conn.scalar(select(wakeups.c.status).where(wakeups.c.id == wak_id))
+        assert status == "cancelled"
+
+    # Advancing clock past due time should NOT fire the cancelled wake-up
+    current_time += timedelta(minutes=5)
+    fired_count = await wakeups_svc.fire_due()
+    assert fired_count == 0
+
+
+async def test_list_pending(
+    tmp_path: Path,
+    databases: Databases,
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    (defs_dir / "sched2.md").write_text(
+        "---\n"
+        "name: sched2\n"
+        "display_name: Sched2\n"
+        "description: Second scheduling agent\n"
+        "tools: [ScheduleWakeup]\n"
+        "schedules: true\n"
+        "---\n"
+        "You are sched2.\n",
+        encoding="utf-8",
+    )
+    now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    wakeups_svc = WakeupService(databases, clock=lambda: now)
+    registry = default_registry(wakeups=wakeups_svc)
+    catalog = AgentCatalog.load(registry.names(), extra_dirs=[defs_dir])
+    wakeups_svc.use_catalog(catalog)
+
+    engine = await databases.project("prj_test")
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(sessions).values(
+                id="ses_test1",
+                agent="sched",
+                summary=None,
+                compacted_through=None,
+                created_at="2026-10-26T12:00:00.000Z",
+            )
+        )
+        await conn.execute(
+            insert(sessions).values(
+                id="ses_test2",
+                agent="sched2",
+                summary=None,
+                compacted_through=None,
+                created_at="2026-10-26T12:00:00.000Z",
+            )
+        )
+
+    # Schedule wakeups with different delays
+    id1 = await wakeups_svc.schedule(
+        "prj_test",
+        session_id="ses_test1",
+        agent="sched",
+        delay_seconds=300,
+        note="Second due",
+    )
+    id2 = await wakeups_svc.schedule(
+        "prj_test",
+        session_id="ses_test2",
+        agent="sched2",
+        delay_seconds=100,
+        note="First due",
+    )
+
+    # list_pending returns both, ordered by due_at ASC (id2 before id1)
+    all_pending = await wakeups_svc.list_pending("prj_test")
+    assert len(all_pending) == 2
+    assert all_pending[0].id == id2
+    assert all_pending[0].agent == "sched2"
+    assert all_pending[1].id == id1
+    assert all_pending[1].agent == "sched"
+
+    # Filter by agent
+    sched2_pending = await wakeups_svc.list_pending("prj_test", agent="sched2")
+    assert len(sched2_pending) == 1
+    assert sched2_pending[0].id == id2
+
+    # Cancel id2 -> should no longer appear in list_pending
+    assert await wakeups_svc.cancel("prj_test", id2) is True
+    remaining = await wakeups_svc.list_pending("prj_test")
+    assert len(remaining) == 1
+    assert remaining[0].id == id1
+
+
+async def test_note_length_validation(
+    tmp_path: Path,
+    databases: Databases,
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    wakeups_svc = WakeupService(databases, clock=lambda: now)
+    tool = ScheduleWakeupTool(wakeups_svc)
+    registry = default_registry(wakeups=wakeups_svc)
+    catalog = AgentCatalog.load(registry.names(), extra_dirs=[defs_dir])
+    wakeups_svc.use_catalog(catalog)
+
+    engine = await databases.project("prj_test")
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(sessions).values(
+                id="ses_test",
+                agent="sched",
+                summary=None,
+                compacted_through=None,
+                created_at="2026-10-26T12:00:00.000Z",
+            )
+        )
+
+    ctx = _ctx("prj_test", "sched")
+
+    # Note exceeding 500 characters
+    long_note = "a" * 501
+    out_tool = await tool.invoke(ctx, {"delay_seconds": 120, "note": long_note})
+    assert out_tool.is_error
+
+    with pytest.raises(ValueError, match="500 characters"):
+        await wakeups_svc.schedule(
+            "prj_test",
+            session_id="ses_test",
+            agent="sched",
+            delay_seconds=120,
+            note=long_note,
+        )
+
+    # Empty/whitespace note
+    out_empty = await tool.invoke(ctx, {"delay_seconds": 120, "note": "   "})
+    assert out_empty.is_error
+
+    with pytest.raises(ValueError, match="empty"):
+        await wakeups_svc.schedule(
+            "prj_test",
+            session_id="ses_test",
+            agent="sched",
+            delay_seconds=120,
+            note="   ",
+        )
+
+    # Valid note (exactly 500 characters)
+    max_note = "b" * 500
+    out_valid = await tool.invoke(ctx, {"delay_seconds": 120, "note": max_note})
+    assert not out_valid.is_error

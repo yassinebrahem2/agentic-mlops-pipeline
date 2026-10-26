@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -24,8 +25,22 @@ logger = logging.getLogger(__name__)
 
 MIN_DELAY_SECONDS = 60
 MAX_DELAY_SECONDS = 7 * 86400  # 7 days = 604800 seconds
+MAX_NOTE_LENGTH = 500
 MAX_PENDING_PER_AGENT = 5
 MAX_FIRED_PER_ROLLING_DAY = 24
+
+
+@dataclass(frozen=True)
+class WakeupRecord:
+    id: str
+    project_id: str
+    session_id: str
+    agent: str
+    due_at: str
+    note: str
+    status: str
+    created_at: str
+    fired_at: str | None = None
 
 
 class WakeupLimitReached(Exception):
@@ -113,6 +128,10 @@ class WakeupService:
         """Schedule a wake-up for an agent after delay_seconds."""
         if not note.strip():
             raise ValueError("Wake-up note cannot be empty.")
+        if len(note) > MAX_NOTE_LENGTH:
+            raise ValueError(
+                f"Wake-up note exceeds maximum length of {MAX_NOTE_LENGTH} characters."
+            )
         if delay_seconds < MIN_DELAY_SECONDS:
             raise WakeupLimitReached(f"delay_seconds must be at least {MIN_DELAY_SECONDS} seconds.")
         if delay_seconds > MAX_DELAY_SECONDS:
@@ -187,6 +206,57 @@ class WakeupService:
         self.notify_sooner()
         return wak_id
 
+    async def cancel(self, project_id: str, wakeup_id: str) -> bool:
+        """Cancel a pending wake-up. Returns True if a pending record was cancelled, False otherwise."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            res = await conn.execute(
+                update(wakeups)
+                .where(wakeups.c.id == wakeup_id, wakeups.c.status == "pending")
+                .values(status="cancelled")
+            )
+            return res.rowcount > 0
+
+    async def list_pending(
+        self, project_id: str, *, agent: str | None = None
+    ) -> list[WakeupRecord]:
+        """Retrieve pending wake-ups for the project, ordered by due_at ASC."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(
+                wakeups.c.id,
+                wakeups.c.session_id,
+                wakeups.c.agent,
+                wakeups.c.due_at,
+                wakeups.c.note,
+                wakeups.c.status,
+                wakeups.c.created_at,
+                wakeups.c.fired_at,
+            )
+            .where(wakeups.c.status == "pending")
+            .order_by(wakeups.c.due_at.asc())
+        )
+        if agent is not None:
+            query = query.where(wakeups.c.agent == agent)
+
+        async with engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+
+        return [
+            WakeupRecord(
+                id=str(row["id"]),
+                project_id=project_id,
+                session_id=str(row["session_id"]),
+                agent=str(row["agent"]),
+                due_at=str(row["due_at"]),
+                note=str(row["note"]),
+                status=str(row["status"]),
+                created_at=str(row["created_at"]),
+                fired_at=str(row["fired_at"]) if row["fired_at"] is not None else None,
+            )
+            for row in rows
+        ]
+
     async def fire_due(self) -> int:
         """Fire any pending wake-ups whose due_at is on or before the current clock time."""
         if self._sessions is None:
@@ -240,16 +310,24 @@ class WakeupService:
                     if res.rowcount == 0:
                         continue
 
-                await self._sessions.post(
-                    project_id,
-                    agent,
-                    author_name="Scheduled wake-up",
-                    from_agent=agent,
-                    text=f"Scheduled wake-up: {note}",
-                    exchange_id=None,
-                    hop=None,
-                )
-                fired_count += 1
+                try:
+                    await self._sessions.post(
+                        project_id,
+                        agent,
+                        author_name="Scheduled wake-up",
+                        from_agent=agent,
+                        text=f"Scheduled wake-up: {note}",
+                        exchange_id=None,
+                        hop=None,
+                    )
+                    fired_count += 1
+                except Exception:
+                    logger.exception(
+                        "Failed to post scheduled wake-up %s to session %s for agent %s",
+                        wak_id,
+                        row["session_id"],
+                        agent,
+                    )
 
         return fired_count
 

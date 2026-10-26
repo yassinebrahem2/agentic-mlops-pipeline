@@ -180,9 +180,9 @@ async def build_services(
     inbound.bind(sessions)
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
+    stack.push_async_callback(sessions.close)
     await wakeups.start()
     stack.push_async_callback(wakeups.close)
-    stack.push_async_callback(sessions.close)
 
     approvals = ApprovalsService(
         databases=databases,
