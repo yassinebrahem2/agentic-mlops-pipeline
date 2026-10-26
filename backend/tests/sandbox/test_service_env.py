@@ -93,6 +93,7 @@ async def test_environment_does_not_hide_unexpected_failures(tmp_path: Path) -> 
 class FakeDockerRunner(DockerRunner):
     def __init__(self) -> None:
         self.build_delays: dict[str, float] = {}
+        self.default_build_delay: float = 0.0
         self.fail_build: bool = False
         self.build_calls: int = 0
         self.built_tags: set[str] = set()
@@ -119,7 +120,7 @@ class FakeDockerRunner(DockerRunner):
                 return DockerResult(
                     stdout="", stderr="Syntax error in requirements\nLine 2 failed", exit_code=1
                 )
-            delay = self.build_delays.get(tag, 0.0)
+            delay = self.build_delays.get(tag, self.default_build_delay)
             if delay > 0:
                 await asyncio.sleep(delay)
             self.built_tags.add(tag)
@@ -194,25 +195,11 @@ async def test_service_rebuild_serializes_concurrent_calls(tmp_path: Path) -> No
     (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
 
     runner = FakeDockerRunner()
+    runner.default_build_delay = 0.05
     events = FakeEventLog()
     service = SandboxService(
         runner, events=events, projects=MemorySandboxProjects({"prj_123": repo})
     )
-
-    original_run = runner.run
-
-    async def delayed_run(
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        if cmd[0] == "build":
-            await asyncio.sleep(0.05)
-        return await original_run(args, timeout_s=timeout_s, secrets=secrets)
-
-    runner.run = delayed_run  # type: ignore[method-assign]
 
     task1 = asyncio.create_task(service.rebuild("prj_123"))
     task2 = asyncio.create_task(service.rebuild("prj_123"))

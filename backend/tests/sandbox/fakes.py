@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog, EventRecord, EventType, Resync
@@ -48,11 +48,14 @@ class FakeEventLog(EventLog):
         self.records.append(rec)
         return rec
 
-    async def subscribe(  # type: ignore[override]
+    async def _empty_stream(self) -> AsyncGenerator[EventRecord | Resync, None]:
+        for _ in ():
+            yield cast(EventRecord, None)
+
+    def subscribe(
         self, project_id: str, after_seq: int | None
     ) -> AsyncGenerator[EventRecord | Resync, None]:
-        if False:
-            yield  # type: ignore[misc]
+        return self._empty_stream()
 
     async def history(
         self, project_id: str, *, types: Sequence[EventType], limit: int = 200

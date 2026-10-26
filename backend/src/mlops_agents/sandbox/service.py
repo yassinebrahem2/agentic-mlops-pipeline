@@ -115,8 +115,6 @@ class SandboxService(Sandbox):
             if current is not None and current.state == "failed" and current.tag == inputs.tag:
                 return current
             exists = await self._image_manager.image_exists(inputs.tag)
-        except FileNotFoundError:
-            return EnvironmentStatus(state="none", tag=None, detail=None)
         except (ValueError, OSError) as exc:
             status = EnvironmentStatus(state="failed", tag=None, detail=str(exc))
             self._status[project_id] = status
@@ -229,7 +227,9 @@ class SandboxService(Sandbox):
                 try:
                     await _finish_operation(self._restart_container(cname))
                 except BaseException as cleanup_error:
-                    raise exc from cleanup_error
+                    if exc.__cause__ is None:
+                        raise exc from cleanup_error
+                    raise exc from exc.__cause__
                 raise
             except DockerTimeoutError as exc:
                 await _finish_operation(self._restart_container(cname))
@@ -300,7 +300,9 @@ class SandboxService(Sandbox):
                         await _finish_operation(self._container_manager.unpause(cname))
                     except BaseException as cleanup_error:
                         if body_error is not None:
-                            raise body_error from cleanup_error
+                            if body_error.__cause__ is None:
+                                raise body_error from cleanup_error
+                            raise body_error from body_error.__cause__
                         raise
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
@@ -309,8 +311,10 @@ class SandboxService(Sandbox):
             await _finish_operation(self._container_manager.remove_task(project_id, task_id))
 
     async def close(self) -> None:
-        async with self._exclusive_tasks():
-            await _finish_operation(self._container_manager.cleanup_all())
+        docker_status = await self.docker()
+        if docker_status.available:
+            async with self._exclusive_tasks():
+                await _finish_operation(self._container_manager.cleanup_all())
 
     async def cleanup_orphans(self) -> None:
         docker_status = await self.docker()

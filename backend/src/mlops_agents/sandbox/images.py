@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from mlops_agents.config import APP_NAME
-from mlops_agents.sandbox.contract import EnvironmentStatus
+from mlops_agents.sandbox.contract import EnvironmentStatus, SandboxUnavailable
 from mlops_agents.sandbox.dependencies import read_dependency_files
 from mlops_agents.sandbox.docker import DOCKER_INSTALL_MESSAGE, DockerRunner, DockerTimeoutError
 from mlops_agents.sandbox.environment import (
@@ -100,8 +100,20 @@ class ImageManager:
         self._runner = runner
 
     async def image_exists(self, tag: str) -> bool:
-        res = await self._runner.run(["image", "inspect", tag], timeout_s=15.0)
-        return res.exit_code == 0
+        try:
+            res = await self._runner.run(["image", "inspect", tag], timeout_s=15.0)
+        except FileNotFoundError as err:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except TimeoutError as err:
+            raise SandboxUnavailable(f"Timed out inspecting image {tag}.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Failed to inspect image {tag}: {err}") from err
+        if res.exit_code == 0:
+            return True
+        err = (res.stderr or res.stdout).strip()
+        if "no such image" in err.lower():
+            return False
+        raise SandboxUnavailable(f"Failed to inspect image {tag}: {err}")
 
     async def build_image(
         self,
@@ -130,10 +142,8 @@ class ImageManager:
                 return EnvironmentStatus(state="failed", tag=tag, detail=detail)
             await self.prune_project_tags(project_id, keep_tag=tag)
             return EnvironmentStatus(state="ready", tag=tag, detail=None)
-        except FileNotFoundError as exc:
-            detail = (
-                DOCKER_INSTALL_MESSAGE if exc.filename == "docker" else f"Image build failed: {exc}"
-            )
+        except FileNotFoundError:
+            detail = DOCKER_INSTALL_MESSAGE
         except DockerTimeoutError as exc:
             detail = f"Image build timed out after {BUILD_TIMEOUT_S}s."
             if exc.stderr:

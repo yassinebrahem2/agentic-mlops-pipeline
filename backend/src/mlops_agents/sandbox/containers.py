@@ -91,7 +91,14 @@ class ContainerManager:
 
     async def inspect(self, name: str) -> ContainerInfo | None:
         """Inspects a container and returns its info, or None if not found."""
-        res = await self._runner.run(["inspect", name, "--type", "container"], timeout_s=15.0)
+        try:
+            res = await self._runner.run(["inspect", name, "--type", "container"], timeout_s=15.0)
+        except FileNotFoundError as err:
+            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+        except TimeoutError as err:
+            raise SandboxUnavailable(f"Timed out inspecting sandbox container {name}.") from err
+        except OSError as err:
+            raise SandboxUnavailable(f"Failed to inspect sandbox container {name}: {err}") from err
         if res.exit_code != 0:
             detail = (res.stderr or res.stdout).strip()
             if "no such container" in detail.lower():

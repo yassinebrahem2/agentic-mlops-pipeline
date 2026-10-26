@@ -4,22 +4,7 @@ from pathlib import Path
 
 import httpx2
 
-from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from tests.conftest import make_repo
-
-
-class FakeRunner(DockerRunner):
-    async def run(
-        self,
-        args: object,
-        *,
-        timeout_s: float | None = None,
-        secrets: object = (),
-    ) -> DockerResult:
-        import json
-
-        data = {"Client": {"Version": "27.0.0"}, "Server": {"Version": "27.0.0"}}
-        return DockerResult(stdout=json.dumps(data), stderr="", exit_code=0)
 
 
 async def test_anonymous_cannot_access_sandbox(anonymous: httpx2.AsyncClient) -> None:
