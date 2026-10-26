@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
-from typing import Literal
+from typing import Literal, cast
 
 import httpx2
 
@@ -18,6 +19,7 @@ from mlops_agents.agents.runtime.contract import (
     Part,
     SessionView,
     StreamEvent,
+    TaskView,
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
@@ -72,6 +74,7 @@ class SessionManager(AgentSessions):
         self._settings = settings
         self._providers = providers
         self._http = http
+        self._workspaces = workspaces
         self._audit_log = audit_log
         self._event_log = event_log
         self._observers = tuple(observers)
@@ -168,13 +171,21 @@ class SessionManager(AgentSessions):
             messages = [live if (live and m.id == live.id) else m for m in stored]
             last_seq = hub.last_seq
 
+        current_ref = await self._workspaces.current(project_id, session_id)
+        current_task: TaskView | None = None
+        if current_ref is not None:
+            view_fn = getattr(self._workspaces, "view", None)
+            if callable(view_fn):
+                res = view_fn(project_id, current_ref.id)
+                current_task = cast(TaskView, await res if inspect.isawaitable(res) else res)
+
         return SessionView(
             id=session_id,
             agent=agent,
             busy=is_busy,
             messages=messages,
             last_seq=last_seq,
-            current_task=None,
+            current_task=current_task,
         )
 
     async def _busy(self, project_id: str, session_id: str) -> bool:

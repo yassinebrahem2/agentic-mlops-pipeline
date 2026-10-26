@@ -14,7 +14,6 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
-from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.store import SessionStore
@@ -32,6 +31,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -91,7 +91,7 @@ async def _setup_executor_env(
     git = GitRunner(paths.bin)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=git)
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,

@@ -16,10 +16,11 @@ from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.agents.runtime.hooks import (
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
+from mlops_agents.agents.tasks.contract import Tasks
+from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
@@ -58,6 +59,7 @@ class Services:
     events: SqliteEventLog
     audit: SqliteAuditLog
     status_board: StatusBoard
+    tasks: Tasks
     approvals: Approvals
 
 
@@ -121,7 +123,6 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace, git=git)
     gate = ApprovalGate(databases, audit_log=audit, event_log=events)
 
     sandbox = SandboxService(
@@ -132,7 +133,16 @@ async def build_services(
     await sandbox.cleanup_orphans()
     stack.push_async_callback(sandbox.close)
 
-    tools = default_registry(sandbox=sandbox)
+    tasks = TasksService(
+        databases=databases,
+        paths=paths,
+        git=git,
+        events=events,
+        workspace=workspace,
+        sandbox=sandbox,
+    )
+
+    tools = default_registry(tasks=tasks, sandbox=sandbox)
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
@@ -149,7 +159,7 @@ async def build_services(
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=workspaces,
+        workspaces=tasks,
         observers=[turn_observer],
         status_board=status_board,
         audit_log=audit,
@@ -163,7 +173,7 @@ async def build_services(
         sessions=sessions,
         audit_log=audit,
         event_log=events,
-        workspaces=workspaces,
+        workspaces=tasks,
     )
 
     return Services(
@@ -182,5 +192,6 @@ async def build_services(
         events=events,
         audit=audit,
         status_board=status_board,
+        tasks=tasks,
         approvals=approvals,
     )

@@ -276,3 +276,55 @@ async def test_task_calls_are_serialized_per_task(
 
     diff_res = await diff_fut
     assert diff_res == ""
+
+
+async def test_end_and_discard_wait_for_running_commit(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_coder", agent="coder")
+    task = await service.start(
+        project_id=project_id,
+        session_id="ses_coder",
+        agent="coder",
+        title="End serialization test",
+    )
+
+    (task.worktree / "work.py").write_text("x = 1\n", encoding="utf-8")
+
+    from mlops_agents.agents.tasks import commit as commit_module
+
+    orig_task_git = commit_module.task_git
+    in_add = asyncio.Event()
+    release_add = asyncio.Event()
+
+    async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "add" in git_args_raw:
+            in_add.set()
+            await release_add.wait()
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", blocking_task_git)
+
+    commit_fut = asyncio.create_task(service.commit(project_id, task, "feat: blocked add"))
+    await in_add.wait()
+
+    end_fut = asyncio.create_task(service.end(project_id, task.id, "closed"))
+    await asyncio.sleep(0.05)
+    assert not end_fut.done()
+
+    release_add.set()
+    commit_res = await commit_fut
+    assert commit_res.changed == ("work.py",)
+
+    await end_fut
+    view = await service.view(project_id, task.id)
+    assert view.status == "closed"
