@@ -107,7 +107,7 @@ class SqliteInboundSource(InboundSource, TurnObserver):
             for msg in redelivered:
                 await hub.message(msg, created=False)
 
-        if self._sessions is not None and redelivered:
-            workers = cast("TurnWorkers | None", getattr(self._sessions, "_workers", None))
-            if workers is not None and not workers.running((project_id, session_id)):
-                workers.start(project_id, session_id, agent, hub, lock)
+            if self._sessions is not None and redelivered:
+                workers = cast("TurnWorkers | None", getattr(self._sessions, "_workers", None))
+                if workers is not None and not workers.running((project_id, session_id)):
+                    workers.start(project_id, session_id, agent, hub, lock)

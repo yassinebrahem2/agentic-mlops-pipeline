@@ -106,9 +106,13 @@ class InboundStore(StoreBase):
             )
             trigger_msg_id = None if turn_row is None else str(turn_row["trigger_message_id"])
 
-            stmt = select(messages).where(
-                messages.c.session_id == session_id,
-                messages.c.read_by_turn == turn_id,
+            stmt = (
+                select(messages)
+                .where(
+                    messages.c.session_id == session_id,
+                    messages.c.read_by_turn == turn_id,
+                )
+                .order_by(messages.c.seq.asc())
             )
             if trigger_msg_id is not None:
                 stmt = stmt.where(messages.c.id != trigger_msg_id)
