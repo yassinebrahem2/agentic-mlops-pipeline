@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. One PR for the branch, no early PRs (`AGENTS.md` rule 5). Each task lists its files, interfaces, tests (its stop condition) and checks.
 
-**Goal:** Fix the Minor findings filed at merge in bugs #265 (github-work), #261 (tasks), #264 (sandbox) and #258 (approvals and runtime), and bug #273 (the status board reports a turn running after `turn.ended`), so stage 2 ships with no known defect.
+**Goal:** Fix the Minor findings filed at merge in bugs #265 (github-work), #261 (tasks), #264 (sandbox) and #258 (approvals and runtime), bug #273 (the status board reports a turn running after `turn.ended`) and bug #276 (recording `waiting` has no fallback), so stage 2 ships with no known defect.
 
 **Branch:** `plan/stage-2-cleanup`. **Consumes:** merged code. **Produces:** `Tasks.repo_ref` and `Tasks.has_commits_beyond_base` (task 1; used only inside this plan's files).
 
@@ -15,7 +15,7 @@
 | 1 | One owner for the repo reference and the branch's state (#265) | merged code |
 | 2 | Ending, discarding and local merge (#261) | task 1 |
 | 3 | One wording for every failed build (#264) | merged code |
-| 4 | Approvals and runtime tidy-up (#258, #273) | runtime-fixes (#250) and messaging (#266) merged |
+| 4 | Approvals and runtime tidy-up (#258, #273, #276) | runtime-fixes (#250) and messaging (#266) merged |
 
 Task 4 edits `agents/runtime/sessions.py`, `worker.py` and `executor.py`, which PRs #250 and #266 also change: start it only after both are merged. Tasks 1 to 3 don't touch those files.
 
@@ -73,7 +73,7 @@ async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
 
 ---
 
-### Task 4: Approvals and runtime tidy-up (#258, #273)
+### Task 4: Approvals and runtime tidy-up (#258, #273, #276)
 
 **Files:** `agents/approvals/` (`store.py`, `service.py`, `waiting.py`), `agents/runtime/sessions.py`, `worker.py`, `executor.py` (split, behaviour unchanged), their tests.
 
@@ -82,12 +82,14 @@ async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
 - `waiting.py` uses the typed observer contract, not `hasattr(sink, "turn_waiting")`.
 - `ApprovalsService` takes one events dependency, not `audit_log` and `event_log` separately.
 - `sessions.py` reads the session view through its typed contract, not `getattr`/`inspect.isawaitable` (#261 item 5).
+- #276: recording `waiting` in `worker._take_turn` goes through the same shielded fallback as every other end (Decision #249): logged, `turn.waiting` published, observers notified, never raises.
 - #273: `turn_states` agrees with `turn.ended`. A session whose turn has ended counts as running only if another turn has started; a worker that is only finishing its loop doesn't count. Fix the state, not the test.
 - `sessions.py`, `worker.py` and `executor.py` each go under 400 lines by moving one concern each into its own module; behaviour unchanged.
 
 **Tests (stop condition):**
 - The concurrent-decision test fails when the `status='pending'` guard is removed, and the restart test fails when `ensure_recovered` is removed from `pending` or `decide` (check both by reverting and restoring).
 - A decision with another task current keeps the approval's `task_id`.
+- A storage error while recording `waiting`, with a second turn queued: the second turn runs.
 - `turn_states` called right after `turn.ended` (with the worker held just before it exits) reports no running turn; `test_session_manager_turn_states_running_worker` passes 50 times in a loop.
 - `wc -l` on the three runtime files is under 400 each; the runtime tests pass 10 times in a loop.
 - Full suite, checks; CI green.
