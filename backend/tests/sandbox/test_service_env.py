@@ -36,6 +36,32 @@ async def test_context_failure_sets_failed_status_and_event(
     assert events.records[-1].payload == {"tag": status.tag, "detail": status.detail}
 
 
+async def test_build_error_after_started_ends_in_failed_with_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import images
+    from mlops_agents.sandbox.contract import SandboxUnavailable
+
+    async def fail_build(*args: object, **kwargs: object) -> object:
+        raise SandboxUnavailable("Cannot connect to the Docker daemon")
+
+    events = FakeEventLog()
+    service = SandboxService(
+        FakeDockerRunner(), events=events, projects=MemorySandboxProjects({"prj_123": tmp_path})
+    )
+    monkeypatch.setattr(images.ImageManager, "build_image", fail_build)
+    status = await service.rebuild("prj_123")
+    assert status.state == "failed"
+    assert "Cannot connect to the Docker daemon" in (status.detail or "")
+    current = await service.environment("prj_123")
+    assert current.state == "failed"
+    assert [record.type for record in events.records] == [
+        "sandbox.build.started",
+        "sandbox.build.failed",
+    ]
+    assert events.records[-1].payload == {"tag": status.tag, "detail": status.detail}
+
+
 async def test_dependency_read_failure_records_failed_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

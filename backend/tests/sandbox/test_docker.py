@@ -1,48 +1,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
 
 import pytest
 
 from mlops_agents.sandbox.contract import DockerStatus
 from mlops_agents.sandbox.docker import (
     CliDockerRunner,
-    DockerResult,
     DockerRunner,
     DockerTimeoutError,
     detect_docker,
 )
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-
-
-class FakeDockerRunner:
-    def __init__(
-        self,
-        *,
-        stdout: str = "",
-        stderr: str = "",
-        exit_code: int = 0,
-        raise_not_found: bool = False,
-    ) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
-        self.exit_code = exit_code
-        self.raise_not_found = raise_not_found
-        self.calls: list[tuple[Sequence[str], float | None, tuple[str, ...]]] = []
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        self.calls.append((args, timeout_s, tuple(secrets)))
-        if self.raise_not_found:
-            raise FileNotFoundError("docker not found")
-        return DockerResult(stdout=self.stdout, stderr=self.stderr, exit_code=self.exit_code)
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
 async def test_detect_docker_available() -> None:
@@ -54,8 +24,8 @@ async def test_detect_docker_available() -> None:
     status = await detect_docker(runner)
     assert status == DockerStatus(available=True, version="27.3.1", detail=None)
     assert len(runner.calls) == 1
-    assert runner.calls[0][0] == ["version", "--format", "json"]
-    assert runner.calls[0][1] == 10.0
+    assert runner.calls[0] == ["version", "--format", "json"]
+    assert runner.timeouts[0] == 10.0
 
 
 async def test_detect_docker_not_installed() -> None:

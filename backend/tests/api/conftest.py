@@ -46,9 +46,6 @@ class NoGh:
         )
 
 
-ApiFakeDockerRunner = FakeDockerRunner
-
-
 def build_app(
     home: Path,
     mode: RunMode = RunMode.LOCAL,

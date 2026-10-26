@@ -8,6 +8,7 @@ import httpx2
 import pytest
 
 from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.docker import CliDockerRunner
 from mlops_agents.storage.databases import Databases
 from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
 
@@ -104,11 +105,9 @@ def fake_openai(_fake_openai_server: RunningFake) -> Iterator[RunningFake]:
 
 @pytest.fixture(autouse=True)
 def guard_docker_cli(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    item = cast(pytest.Item, getattr(request, "node"))
+    item = cast(pytest.Item, request.node)  # pyright: ignore[reportUnknownMemberType]
     if item.get_closest_marker("docker") is not None:
         return
-
-    from mlops_agents.sandbox.docker import CliDockerRunner
 
     original_run = CliDockerRunner.run
 

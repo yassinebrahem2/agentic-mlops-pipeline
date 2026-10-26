@@ -23,11 +23,18 @@ TAIL_CAPTURE_CHARS = 15_000
 
 
 @contextlib.asynccontextmanager
-async def docker_error_boundary(action: str, *, gerund: str | None = None) -> AsyncGenerator[None]:
+async def docker_error_boundary(
+    action: str, *, gerund: str | None = None, reraise_docker_timeout: bool = False
+) -> AsyncGenerator[None]:
     try:
         yield
     except FileNotFoundError as err:
         raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
+    except DockerTimeoutError as err:
+        if reraise_docker_timeout:
+            raise
+        timing = gerund or action
+        raise SandboxUnavailable(f"Timed out {timing}.") from err
     except TimeoutError as err:
         timing = gerund or action
         raise SandboxUnavailable(f"Timed out {timing}.") from err

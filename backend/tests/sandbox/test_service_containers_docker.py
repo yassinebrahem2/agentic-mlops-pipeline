@@ -95,12 +95,20 @@ async def test_real_docker_paused_container_removal_paths(tmp_path: Path) -> Non
         await manager.pause(cname)
         info = await manager.inspect(cname)
         assert info is not None and info.paused
+        raw1 = await runner.run(["inspect", cname])
+        cid1 = json.loads(raw1.stdout)[0]["Id"]
+        tag1 = info.image_tag
+
         # Change requirements to trigger a new tag
         (worktree / "requirements.txt").write_text("six\n# changed\n", encoding="utf-8")
         new_cname = await service.ensure_container("prj_rm_paused", task)
         assert new_cname == cname
         new_info = await manager.inspect(cname)
         assert new_info is not None and new_info.running and not new_info.paused
+        raw2 = await runner.run(["inspect", cname])
+        cid2 = json.loads(raw2.stdout)[0]["Id"]
+        assert cid2 != cid1
+        assert new_info.image_tag != tag1
 
         # 2. start() removes paused container
         await manager.pause(cname)
@@ -112,6 +120,9 @@ async def test_real_docker_paused_container_removal_paths(tmp_path: Path) -> Non
         assert started_name == cname
         started_info = await manager.inspect(cname)
         assert started_info is not None and started_info.running and not started_info.paused
+        raw3 = await runner.run(["inspect", cname])
+        cid3 = json.loads(raw3.stdout)[0]["Id"]
+        assert cid3 != cid2
 
         # 3. remove_task() removes paused container
         await manager.pause(cname)

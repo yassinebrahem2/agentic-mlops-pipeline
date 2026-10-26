@@ -6,11 +6,7 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.config import APP_NAME
-from mlops_agents.sandbox.docker import (
-    DockerResult,
-    DockerRunner,
-    DockerTimeoutError,
-)
+from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.environment import DetectedEnvironment
 from mlops_agents.sandbox.images import (
     BUILD_TIMEOUT_S,
@@ -20,6 +16,7 @@ from mlops_agents.sandbox.images import (
     load_template,
     snapshot_image,
 )
+from tests.sandbox.fakes import FakeDockerRunner
 
 
 async def test_build_context_uses_the_bytes_hashed_before_inspect(tmp_path: Path) -> None:
@@ -30,7 +27,7 @@ async def test_build_context_uses_the_bytes_hashed_before_inspect(tmp_path: Path
     original = dependency.read_bytes()
     context_contents: list[bytes] = []
 
-    class SwappingDocker(FakeDocker):
+    class SwappingDocker(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],
@@ -56,64 +53,6 @@ async def test_build_context_uses_the_bytes_hashed_before_inspect(tmp_path: Path
 
 def test_template_version_rejects_trailing_newline() -> None:
     assert load_template("base", "3.11\n") == load_template("base", "3.12")
-
-
-class FakeDocker(DockerRunner):
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-        self.timeouts: list[float | None] = []
-        self.existing_images: set[str] = set()
-        self.containers_by_image: dict[str, list[str]] = {}
-        self.build_fail_output: str | None = None
-        self.raise_timeout: bool = False
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        self.calls.append(cmd)
-        self.timeouts.append(timeout_s)
-
-        if cmd[0] == "image" and cmd[1] == "inspect":
-            tag = cmd[2]
-            if tag in self.existing_images:
-                return DockerResult(stdout="{}", stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr="Error: No such image", exit_code=1)
-
-        if cmd[0] == "build":
-            if self.raise_timeout:
-                raise DockerTimeoutError(
-                    "Docker build timed out", stderr="dependency download stalled"
-                )
-            if self.build_fail_output is not None:
-                return DockerResult(stdout="", stderr=self.build_fail_output, exit_code=1)
-            # Find the tag in cmd
-            tag_idx = cmd.index("-t") + 1
-            self.existing_images.add(cmd[tag_idx])
-            return DockerResult(stdout="Successfully built", stderr="", exit_code=0)
-
-        if cmd[0] == "images":
-            # return lines formatted as repo:tag
-            tags = [img for img in self.existing_images if img.startswith(f"{APP_NAME}-env:")]
-            return DockerResult(stdout="\n".join(tags), stderr="", exit_code=0)
-
-        if cmd[0] == "ps":
-            # ancestor=<tag>
-            for arg in cmd:
-                if arg.startswith("ancestor="):
-                    tag = arg.split("=", 1)[1]
-                    containers = self.containers_by_image.get(tag, [])
-                    return DockerResult(stdout="\n".join(containers), stderr="", exit_code=0)
-            return DockerResult(stdout="", stderr="", exit_code=0)
-
-        if cmd[0] in ("image", "rmi"):
-            return DockerResult(stdout="Deleted", stderr="", exit_code=0)
-
-        return DockerResult(stdout="", stderr="", exit_code=0)
 
 
 def test_compute_image_tag_format_and_stability() -> None:
@@ -165,7 +104,7 @@ def test_build_context_contains_only_expected_files(tmp_path: Path) -> None:
 
 
 async def test_build_reuses_existing_image(tmp_path: Path) -> None:
-    runner = FakeDocker()
+    runner = FakeDockerRunner()
     manager = ImageManager(runner)
     worktree = tmp_path / "worktree"
     worktree.mkdir()
@@ -187,7 +126,7 @@ async def test_build_reuses_existing_image(tmp_path: Path) -> None:
 
 
 async def test_build_executes_with_15min_timeout(tmp_path: Path) -> None:
-    runner = FakeDocker()
+    runner = FakeDockerRunner()
     manager = ImageManager(runner)
     worktree = tmp_path / "worktree"
     worktree.mkdir()
@@ -209,7 +148,7 @@ async def test_build_executes_with_15min_timeout(tmp_path: Path) -> None:
 
 
 async def test_build_failure_retains_last_50_lines(tmp_path: Path) -> None:
-    runner = FakeDocker()
+    runner = FakeDockerRunner()
     # Generate 70 lines of error output
     lines = [f"Step {i}/10 : RUN pip install ... failed" for i in range(1, 71)]
     runner.build_fail_output = "\n".join(lines)
@@ -233,7 +172,7 @@ async def test_build_failure_retains_last_50_lines(tmp_path: Path) -> None:
 
 
 async def test_prune_removes_only_unused_older_tags(tmp_path: Path) -> None:
-    runner = FakeDocker()
+    runner = FakeDockerRunner()
     current_tag = f"{APP_NAME}-env:prj_123-current00000"
     older_unused_tag = f"{APP_NAME}-env:prj_123-unused000000"
     older_in_use_tag = f"{APP_NAME}-env:prj_123-inuse0000000"
@@ -254,7 +193,7 @@ async def test_prune_removes_only_unused_older_tags(tmp_path: Path) -> None:
 
 
 async def test_build_timeout_caught_as_failed(tmp_path: Path) -> None:
-    runner = FakeDocker()
+    runner = FakeDockerRunner()
     runner.raise_timeout = True
     manager = ImageManager(runner)
     worktree = tmp_path / "worktree"

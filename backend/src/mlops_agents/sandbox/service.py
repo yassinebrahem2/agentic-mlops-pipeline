@@ -25,11 +25,11 @@ from mlops_agents.sandbox.contract import (
     SandboxUnavailable,
 )
 from mlops_agents.sandbox.docker import (
-    DOCKER_INSTALL_MESSAGE,
     CliDockerRunner,
     DockerRunner,
     DockerTimeoutError,
     detect_docker,
+    docker_error_boundary,
 )
 from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
@@ -158,7 +158,14 @@ class SandboxService(Sandbox):
                     type="sandbox.build.started",
                     payload={"tag": tag, "detail": None},
                 )
-                status = await self._image_manager.build_image(project_id, worktree, inputs=inputs)
+                try:
+                    status = await self._image_manager.build_image(
+                        project_id, worktree, inputs=inputs
+                    )
+                except Exception as exc:
+                    status = EnvironmentStatus(
+                        state="failed", tag=tag, detail=str(exc) or "Image build failed"
+                    )
             except (OSError, ValueError) as exc:
                 status = EnvironmentStatus(
                     state="failed", tag=tag, detail=f"Image build failed: {exc}"
@@ -216,16 +223,12 @@ class SandboxService(Sandbox):
                 f"Environment build failed: {status.detail or 'unknown error'}"
             )
         network = await self.get_network(project_id)
-        try:
+        async with docker_error_boundary("ensure sandbox container"):
             return await _finish_operation(
                 self._container_manager.ensure_container(
                     project_id, task, status.tag, network=network
                 )
             )
-        except FileNotFoundError as exc:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
-        except OSError as exc:
-            raise SandboxUnavailable(f"Sandbox container operation failed: {exc}") from exc
 
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
@@ -239,10 +242,13 @@ class SandboxService(Sandbox):
             )
 
             try:
-                res = await self._runner.run(
-                    ["exec", cname, "bash", "-lc", command],
-                    timeout_s=timeout,
-                )
+                async with docker_error_boundary(
+                    "run sandbox command", reraise_docker_timeout=True
+                ):
+                    res = await self._runner.run(
+                        ["exec", cname, "bash", "-lc", command],
+                        timeout_s=timeout,
+                    )
             except asyncio.CancelledError as exc:
                 try:
                     await _finish_operation(self._restart_container(cname))
@@ -260,10 +266,6 @@ class SandboxService(Sandbox):
                     timed_out=True,
                     truncated=exc.truncated,
                 )
-            except FileNotFoundError as err:
-                raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-            except OSError as err:
-                raise SandboxUnavailable(f"Sandbox command failed: {err}") from err
 
             output, truncated = res.command_output()
             return CommandResult(
@@ -274,14 +276,11 @@ class SandboxService(Sandbox):
             )
 
     async def _restart_container(self, cname: str) -> None:
-        try:
+        async with docker_error_boundary(
+            f"restart sandbox container {cname}",
+            gerund=f"restarting sandbox container {cname}",
+        ):
             restarted = await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
-        except FileNotFoundError as err:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from err
-        except TimeoutError as err:
-            raise SandboxUnavailable("Timed out restarting sandbox container.") from err
-        except OSError as err:
-            raise SandboxUnavailable(f"Sandbox container restart failed: {err}") from err
         if restarted.exit_code != 0:
             raise SandboxUnavailable(
                 f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"

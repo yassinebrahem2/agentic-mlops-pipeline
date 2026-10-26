@@ -10,7 +10,6 @@ from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import (
-    DOCKER_INSTALL_MESSAGE,
     DockerRunner,
     docker_error_boundary,
 )
@@ -222,7 +221,7 @@ class ContainerManager:
             ):
                 res = await self._runner.run(["rm", "-f", name], timeout_s=30.0)
         except SandboxUnavailable as err:
-            if str(err) == DOCKER_INSTALL_MESSAGE:
+            if isinstance(err.__cause__, FileNotFoundError):
                 # Removal is already satisfied if Docker has been uninstalled.
                 return
             raise

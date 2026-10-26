@@ -280,11 +280,10 @@ async def test_real_service_build_path_failure_is_a_tool_error(
     from mlops_agents.sandbox import service as service_module
     from mlops_agents.sandbox.docker import DockerResult
     from mlops_agents.sandbox.service import SandboxService
-    from tests.sandbox.fakes import MemorySandboxProjects
+    from tests.sandbox.fakes import FakeDockerRunner, MemorySandboxProjects
     from tests.sandbox.test_service_env import FakeEventLog
-    from tests.sandbox.test_service_run import FakeRunDocker
 
-    class FailingBuild(FakeRunDocker):
+    class FailingBuild(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],
@@ -330,10 +329,9 @@ async def test_container_operational_failure_becomes_tool_error(
 
     from mlops_agents.sandbox.docker import DockerResult
     from mlops_agents.sandbox.service import SandboxService
-    from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-    from tests.sandbox.test_service_run import FakeRunDocker
+    from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
-    class FailedOperation(FakeRunDocker):
+    class FailedOperation(FakeDockerRunner):
         async def run(
             self,
             args: Sequence[str],

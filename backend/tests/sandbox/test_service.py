@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import pytest
@@ -13,34 +12,17 @@ from mlops_agents.sandbox.contract import (
     DockerStatus,
     Sandbox,
 )
-from mlops_agents.sandbox.docker import DockerResult, DockerRunner
 from mlops_agents.sandbox.service import SandboxService
-from tests.sandbox.fakes import FakeEventLog, MemorySandboxProjects
-
-
-class FakeRunner(DockerRunner):
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        cmd = list(args)
-        if cmd[0] == "version":
-            version_data = {"Client": {"Version": "25.0.0"}, "Server": {"Version": "25.0.0"}}
-            return DockerResult(stdout=json.dumps(version_data), stderr="", exit_code=0)
-        if cmd[0] == "inspect":
-            return DockerResult(stdout="", stderr="no such container", exit_code=1)
-        if cmd[0] == "run":
-            return DockerResult(stdout="cid_1", stderr="", exit_code=0)
-        if cmd[0] == "exec":
-            return DockerResult(stdout="hi", stderr="", exit_code=0)
-        return DockerResult(stdout="", stderr="", exit_code=0)
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
 async def test_service_implements_sandbox_protocol(tmp_path: Path) -> None:
-    service = SandboxService(FakeRunner(), projects=MemorySandboxProjects(), events=FakeEventLog())
+    version_json = json.dumps({"Client": {"Version": "25.0.0"}, "Server": {"Version": "25.0.0"}})
+    service = SandboxService(
+        FakeDockerRunner(stdout=version_json),
+        projects=MemorySandboxProjects(),
+        events=FakeEventLog(),
+    )
     # Static protocol check:
     sandbox: Sandbox = service
     assert {"docker", "environment", "rebuild", "run", "remove_task", "paused", "close"} <= set(
