@@ -96,7 +96,9 @@ class FakeSessions(AgentSessions):
         unknown_agents: set[str] | None = None,
         no_chat_agents: set[str] | None = None,
         order_log: list[str] | None = None,
+        turn_state_by_agent: dict[str, Literal["running", "waiting"]] | None = None,
     ) -> None:
+        self.turn_state_by_agent = turn_state_by_agent or {}
         self.views: dict[tuple[str, str], SessionView] = {}
         self.default_view = default_view
         self.scripted_events = scripted_events or []
@@ -215,7 +217,7 @@ class FakeSessions(AgentSessions):
         return sub.stream()
 
     async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
-        return {}
+        return dict(self.turn_state_by_agent)
 
     async def close_project(self, project_id: str) -> None:
         self.closed_projects.append(project_id)

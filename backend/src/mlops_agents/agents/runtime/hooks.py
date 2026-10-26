@@ -60,13 +60,6 @@ class NoInbound:
         return []
 
 
-class NoTurnEndCheck:
-    """Stage 1: a turn ends when the model ends it. The github-work plan replaces it."""
-
-    async def note(self, project_id: str, session_id: str, turn_id: str) -> str | None:
-        return None
-
-
 class TurnObserver(Protocol):
     async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None: ...
 

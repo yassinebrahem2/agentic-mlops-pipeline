@@ -12,6 +12,15 @@ from mlops_agents.errors import DomainError
 GITHUB_API = "https://api.github.com"
 _HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
+PERMISSION_CONTENTS_WRITE = "contents: write"
+PERMISSION_PULL_REQUESTS_WRITE = "pull requests: write"
+PERMISSION_ISSUES_WRITE = "issues: write"
+NEEDED_PERMISSIONS: tuple[str, ...] = (
+    PERMISSION_CONTENTS_WRITE,
+    PERMISSION_PULL_REQUESTS_WRITE,
+    PERMISSION_ISSUES_WRITE,
+)
+
 
 class RepoSummary(BaseModel):
     full_name: str
@@ -20,12 +29,21 @@ class RepoSummary(BaseModel):
     description: str | None
 
 
-async def _get(
-    http: httpx2.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None
+async def _request(
+    http: httpx2.AsyncClient,
+    method: str,
+    path: str,
+    token: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json: Any = None,
+    permission: str | None = None,
 ) -> httpx2.Response:
     headers = {**_HEADERS, "Authorization": f"Bearer {token}"}
     try:
-        response = await http.get(GITHUB_API + path, headers=headers, params=params, timeout=30)
+        response = await http.request(
+            method, GITHUB_API + path, headers=headers, params=params, json=json, timeout=30
+        )
     except httpx2.HTTPError as exc:
         raise DomainError(
             "github_unreachable", f"Could not reach GitHub: {error_text(exc)}", status=502
@@ -44,7 +62,22 @@ async def _get(
             f"GitHub's rate limit was reached. Try again {_retry_time(response.headers)}.",
             status=429,
         )
+    if permission is not None and response.status_code in (403, 404):
+        raise DomainError(
+            "github_permission_missing",
+            f"GitHub rejected the request because the token lacks the '{permission}' permission.",
+            status=403,
+        )
     return response
+
+
+request = _request
+
+
+async def _get(
+    http: httpx2.AsyncClient, token: str, path: str, params: dict[str, Any] | None = None
+) -> httpx2.Response:
+    return await _request(http, "GET", path, token, params=params)
 
 
 def _retry_time(headers: httpx2.Headers) -> str:
@@ -68,6 +101,9 @@ def _unreadable() -> DomainError:
     return DomainError(
         "github_error", "GitHub answered with data this app cannot read. Try again.", status=502
     )
+
+
+unreadable = _unreadable
 
 
 async def get_login(http: httpx2.AsyncClient, token: str) -> str:

@@ -21,7 +21,6 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.hooks import (
     NoInbound,
-    NoTurnEndCheck,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.tools import ToolRegistry, default_registry
@@ -43,6 +42,7 @@ from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
 
 
