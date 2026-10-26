@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.agents.tasks.contract import ClaimConflict
-from mlops_agents.storage.tables import file_claims, tasks
+from mlops_agents.storage.tables import file_claims, task_reads, tasks
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -68,3 +68,32 @@ async def claim_paths(
             await conn.execute(
                 sqlite_insert(file_claims).values(task_id=task.id, path=p).on_conflict_do_nothing()
             )
+
+
+async def record_task_read(
+    engine: AsyncEngine,
+    task_id: str,
+    path: str,
+    sha256: str,
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            delete(task_reads).where(task_reads.c.task_id == task_id, task_reads.c.path == path)
+        )
+        await conn.execute(
+            sqlite_insert(task_reads).values(task_id=task_id, path=path, sha256=sha256)
+        )
+
+
+async def get_task_read_hash(
+    engine: AsyncEngine,
+    task_id: str,
+    path: str,
+) -> str | None:
+    async with engine.connect() as conn:
+        res = await conn.execute(
+            select(task_reads.c.sha256).where(
+                task_reads.c.task_id == task_id, task_reads.c.path == path
+            )
+        )
+        return res.scalar_one_or_none()

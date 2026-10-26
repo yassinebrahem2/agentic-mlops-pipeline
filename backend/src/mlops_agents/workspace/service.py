@@ -362,9 +362,25 @@ class WorkspaceService:
         return await self.refresh(project_id)
 
     async def remove(self, project_id: str) -> None:
-        await self.get(project_id)
+        project = await self.get(project_id)
+        repo_root = self.repo_root(project)
         await self._dbs.close_project(project_id)
         await asyncio.to_thread(_rmtree, self._paths.project_dir(project_id))
+        if await asyncio.to_thread(repo_root.is_dir):
+            await self._git.run(["worktree", "prune"], cwd=repo_root, check=False)
+            if not project.github_full_name:
+                res = await self._git.run(
+                    ["for-each-ref", "--format=%(refname:short)", "refs/heads/agent"],
+                    cwd=repo_root,
+                    check=False,
+                )
+                if res.code == 0:
+                    for branch in res.stdout.splitlines():
+                        branch = branch.strip()
+                        if branch:
+                            await self._git.run(
+                                ["branch", "-D", branch], cwd=repo_root, check=False
+                            )
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(delete(projects).where(projects.c.id == project_id))

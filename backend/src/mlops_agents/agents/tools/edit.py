@@ -135,6 +135,11 @@ class EditTool(AgentTool[EditArgs]):
 
     async def run(self, ctx: ToolContext, args: EditArgs) -> ToolOutput:
         current = await get_current_task(ctx, self._tasks)
+        note = (
+            self._tasks.pop_pending_note(ctx.project_id, current.id)
+            if hasattr(self._tasks, "pop_pending_note")
+            else None
+        )
         async with pause_task(self._sandbox, ctx.project_id, current.id):
             (
                 candidate,
@@ -151,4 +156,7 @@ class EditTool(AgentTool[EditArgs]):
 
             safe_write_bytes(candidate, resolved_worktree, new_bytes)
             ctx.files.invalidate()
-            return ToolOutput(content=cap_diff(diff_text))
+            content = cap_diff(diff_text)
+            if note:
+                content = f"{content}\n\n{note}"
+            return ToolOutput(content=content)
