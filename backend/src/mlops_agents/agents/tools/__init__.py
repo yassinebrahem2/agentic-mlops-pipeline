@@ -4,6 +4,7 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 from mlops_agents.agents.tools.base import AgentTool, ToolRegistry
+from mlops_agents.agents.tools.bash import BashTool
 from mlops_agents.agents.tools.edit import EditTool
 from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
 
 __all__ = [
+    "BashTool",
     "EditTool",
     "GlobTool",
     "GrepTool",
@@ -46,4 +48,6 @@ def default_registry(
                 EditTool(tasks, sandbox=effective_sandbox),
             ]
         )
+    if sandbox is not None:
+        tools.append(BashTool(sandbox=sandbox))
     return ToolRegistry(tools)

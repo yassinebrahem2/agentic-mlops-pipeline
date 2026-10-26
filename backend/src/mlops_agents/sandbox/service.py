@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from typing import NoReturn
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.events.contract import EventLog
@@ -15,6 +16,8 @@ from mlops_agents.sandbox.containers import (
     host_container_user,
 )
 from mlops_agents.sandbox.contract import (
+    DEFAULT_BASH_TIMEOUT_S,
+    MAX_BASH_TIMEOUT_S,
     CommandResult,
     DockerStatus,
     EnvironmentStatus,
@@ -22,10 +25,11 @@ from mlops_agents.sandbox.contract import (
     SandboxUnavailable,
 )
 from mlops_agents.sandbox.docker import (
-    DOCKER_INSTALL_MESSAGE,
     CliDockerRunner,
     DockerRunner,
+    DockerTimeoutError,
     detect_docker,
+    docker_error_boundary,
 )
 from mlops_agents.sandbox.images import ImageManager, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
@@ -44,6 +48,14 @@ async def _finish_operation[T](operation: Coroutine[object, object, T]) -> T:
     if cancelled is not None:
         raise cancelled
     return result
+
+
+def _raise_with_cleanup(body_error: BaseException, cleanup_error: BaseException) -> NoReturn:
+    """Re-raise body_error while preserving cleanup_error details via add_note and chaining."""
+    body_error.add_note(f"Cleanup failed: {cleanup_error}")
+    if body_error.__cause__ is None:
+        raise body_error from cleanup_error
+    raise body_error
 
 
 class SandboxService(Sandbox):
@@ -106,14 +118,17 @@ class SandboxService(Sandbox):
         current = self._status.get(project_id)
         if current is not None and current.state == "building":
             return current
+        docker_status = await self.docker()
+        if not docker_status.available:
+            return EnvironmentStatus(state="unavailable", tag=None, detail=docker_status.detail)
         root = await self._projects.root(project_id)
         try:
             inputs = snapshot_image(project_id, root)
             if current is not None and current.state == "failed" and current.tag == inputs.tag:
                 return current
             exists = await self._image_manager.image_exists(inputs.tag)
-        except FileNotFoundError:
-            return EnvironmentStatus(state="none", tag=None, detail=None)
+        except SandboxUnavailable as exc:
+            return EnvironmentStatus(state="unavailable", tag=None, detail=str(exc))
         except (ValueError, OSError) as exc:
             status = EnvironmentStatus(state="failed", tag=None, detail=str(exc))
             self._status[project_id] = status
@@ -143,7 +158,14 @@ class SandboxService(Sandbox):
                     type="sandbox.build.started",
                     payload={"tag": tag, "detail": None},
                 )
-                status = await self._image_manager.build_image(project_id, worktree, inputs=inputs)
+                try:
+                    status = await self._image_manager.build_image(
+                        project_id, worktree, inputs=inputs
+                    )
+                except Exception as exc:
+                    status = EnvironmentStatus(
+                        state="failed", tag=tag, detail=str(exc) or "Image build failed"
+                    )
             except (OSError, ValueError) as exc:
                 status = EnvironmentStatus(
                     state="failed", tag=tag, detail=f"Image build failed: {exc}"
@@ -163,6 +185,9 @@ class SandboxService(Sandbox):
             return status
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
         root = await self._projects.root(project_id)
         return await self._build_project_image(project_id, root)
 
@@ -170,6 +195,9 @@ class SandboxService(Sandbox):
         return await self._projects.get_network(project_id)
 
     async def set_network(self, project_id: str, enabled: bool) -> bool:
+        docker_status = await self.docker()
+        if not docker_status.available:
+            raise SandboxUnavailable(docker_status.detail or "Docker is not available.")
         async with self._exclusive_tasks(project_id):
             old = await self.get_network(project_id)
             if old != enabled:
@@ -195,21 +223,68 @@ class SandboxService(Sandbox):
                 f"Environment build failed: {status.detail or 'unknown error'}"
             )
         network = await self.get_network(project_id)
-        try:
+        async with docker_error_boundary("ensure sandbox container"):
             return await _finish_operation(
                 self._container_manager.ensure_container(
                     project_id, task, status.tag, network=network
                 )
             )
-        except FileNotFoundError as exc:
-            raise SandboxUnavailable(DOCKER_INSTALL_MESSAGE) from exc
-        except OSError as exc:
-            raise SandboxUnavailable(f"Sandbox container operation failed: {exc}") from exc
 
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:
-        raise NotImplementedError("Run will be implemented in task 4.")
+        async with self._task_guard(project_id, task.id):
+            cname = await self._ensure_container_locked(project_id, task)
+            timeout = (
+                max(1, min(timeout_s, MAX_BASH_TIMEOUT_S))
+                if timeout_s > 0
+                else DEFAULT_BASH_TIMEOUT_S
+            )
+
+            try:
+                async with docker_error_boundary(
+                    "run sandbox command", reraise_docker_timeout=True
+                ):
+                    res = await self._runner.run(
+                        ["exec", cname, "bash", "-lc", command],
+                        timeout_s=timeout,
+                    )
+            except asyncio.CancelledError as exc:
+                try:
+                    await _finish_operation(self._restart_container(cname))
+                except BaseException as cleanup_error:
+                    _raise_with_cleanup(exc, cleanup_error)
+                raise
+            except DockerTimeoutError as exc:
+                await _finish_operation(self._restart_container(cname))
+                captured = exc.output
+                message = f"Command took longer than {timeout} seconds and was stopped."
+                output = f"{captured}\n\n{message}" if captured else message
+                return CommandResult(
+                    output=output,
+                    exit_code=None,
+                    timed_out=True,
+                    truncated=exc.truncated,
+                )
+
+            output, truncated = res.command_output()
+            return CommandResult(
+                output=output,
+                exit_code=res.exit_code,
+                timed_out=False,
+                truncated=truncated,
+            )
+
+    async def _restart_container(self, cname: str) -> None:
+        async with docker_error_boundary(
+            f"restart sandbox container {cname}",
+            gerund=f"restarting sandbox container {cname}",
+        ):
+            restarted = await self._runner.run(["restart", "-t", "0", cname], timeout_s=30.0)
+        if restarted.exit_code != 0:
+            raise SandboxUnavailable(
+                f"Failed to restart sandbox container: {restarted.stderr or restarted.stdout}"
+            )
 
     @asynccontextmanager
     async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None]:
@@ -242,7 +317,7 @@ class SandboxService(Sandbox):
                         await _finish_operation(self._container_manager.unpause(cname))
                     except BaseException as cleanup_error:
                         if body_error is not None:
-                            raise body_error from cleanup_error
+                            _raise_with_cleanup(body_error, cleanup_error)
                         raise
 
     async def remove_task(self, project_id: str, task_id: str) -> None:
@@ -251,8 +326,10 @@ class SandboxService(Sandbox):
             await _finish_operation(self._container_manager.remove_task(project_id, task_id))
 
     async def close(self) -> None:
-        async with self._exclusive_tasks():
-            await _finish_operation(self._container_manager.cleanup_all())
+        docker_status = await self.docker()
+        if docker_status.available:
+            async with self._exclusive_tasks():
+                await _finish_operation(self._container_manager.cleanup_all())
 
     async def cleanup_orphans(self) -> None:
         docker_status = await self.docker()

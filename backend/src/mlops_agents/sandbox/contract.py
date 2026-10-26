@@ -25,7 +25,7 @@ class DockerStatus(BaseModel):
 
 
 class EnvironmentStatus(BaseModel):
-    state: Literal["none", "building", "ready", "failed"]
+    state: Literal["none", "building", "ready", "failed", "unavailable"]
     tag: str | None
     detail: str | None
 

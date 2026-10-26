@@ -12,6 +12,7 @@ from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from tests.api.conftest import NoGh
 from tests.conftest import MemoryKeyStore
+from tests.sandbox.fakes import FakeDockerRunner
 
 
 async def test_lifespan_starts_and_stops_on_a_temporary_data_folder(
@@ -27,7 +28,9 @@ async def test_lifespan_starts_and_stops_on_a_temporary_data_folder(
     monkeypatch.setattr(httpx2, "AsyncClient", RecordedHttpx2)
     data = tmp_path / "data"
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(data)})
-    app = create_app(settings, keystore=MemoryKeyStore(), gh=NoGh())
+    app = create_app(
+        settings, keystore=MemoryKeyStore(), gh=NoGh(), docker_runner=FakeDockerRunner()
+    )
 
     async with app.router.lifespan_context(app):
         services: Services = app.state.services
@@ -103,7 +106,7 @@ def test_create_app_touches_no_file(tmp_path: Path) -> None:
     data = tmp_path / "not-created"
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(data)})
 
-    create_app(settings)
+    create_app(settings, docker_runner=FakeDockerRunner())
 
     assert not data.exists()
     assert list(tmp_path.iterdir()) == []
