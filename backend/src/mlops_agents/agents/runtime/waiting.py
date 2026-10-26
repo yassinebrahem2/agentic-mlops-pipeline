@@ -35,10 +35,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How long one observer call may take before it is abandoned and logged.
 OBSERVER_TIMEOUT_S = 10.0
 
 __all__ = [
     "OBSERVER_TIMEOUT_S",
+    "UNEXPECTED_FAILURE_TEXT",
     "_UNEXPECTED_FAILURE",
     "_CheckpointHolder",
     "_Ending",
@@ -73,6 +75,8 @@ async def open_checkpointer(db_path: str | Path, turn_id: str) -> AsyncGenerator
                 except Exception:
                     logger.exception("Could not delete checkpointer thread for turn %s", turn_id)
     finally:
+        # Windows keeps the project folder locked until the connection is closed, also when a
+        # second cancel interrupts the thread cleanup.
         await conn.close()
 
 
@@ -92,22 +96,22 @@ async def delete_checkpoint_thread(db_path: str | Path, turn_id: str) -> None:
 
 @dataclass(frozen=True)
 class _Ending:
-    """How a taken turn ended, decided before anything of it is stored."""
+    """How a taken turn ended, or that it waits for approval, decided before anything of it is
+    stored. `failure_notice` is the system message of a failure still to be written: None when
+    there is none left to write (no failure, written already, or recorded by the executor)."""
 
     status: TurnEnd | Literal["waiting"]
     error: str | None = None
     failure_notice: str | None = None
 
-    @property
-    def notice_recorded(self) -> bool:
-        return self.status == "failed" and self.failure_notice is None
 
-
-_UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
-_UNEXPECTED_FAILURE = _Ending("failed", _UNEXPECTED_FAILURE_TEXT, _UNEXPECTED_FAILURE_TEXT)
+UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
+# A failure no part of the turn recorded: its system message is written with the end.
+_UNEXPECTED_FAILURE = _Ending("failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT)
 
 
 def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
+    """How a finished, not cancelled turn task ended; an error that escaped it fails the turn."""
     error = child_task.exception()
     if error is not None:
         logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
@@ -117,10 +121,14 @@ def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
 
 
 async def _observed(call: Awaitable[None]) -> None:
+    """Await one observer call, bounded. A failing or hanging observer is logged and never
+    stops the queue. The end report runs the observers one after another through a cancel,
+    so hanging ones hold a shutdown up to OBSERVER_TIMEOUT_S each."""
     try:
         async with asyncio.timeout(OBSERVER_TIMEOUT_S):
             await call
     except asyncio.CancelledError:
+        # Only a cancel of the worker itself goes on; an observer's own cancel is its failure.
         current = asyncio.current_task()
         if current is not None and current.cancelling() > 0:
             raise

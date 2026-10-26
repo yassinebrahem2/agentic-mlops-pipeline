@@ -13,7 +13,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.runtime import executor as executor_module
+from mlops_agents.agents.runtime import waiting as waiting_module
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -173,7 +173,7 @@ async def test_executor_cancellation_during_slow_tool(
         monkeypatch.setattr(conn, "close", recording_close)
         return conn
 
-    monkeypatch.setattr(executor_module, "connect_checkpointer", recording_connect)
+    monkeypatch.setattr(waiting_module, "connect_checkpointer", recording_connect)
 
     sink = EndStateSink(log)
     task = asyncio.create_task(
