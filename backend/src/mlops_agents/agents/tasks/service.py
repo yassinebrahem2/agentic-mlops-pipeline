@@ -346,19 +346,20 @@ class TasksService(Tasks):
     async def end(
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None:
-        p = await self._workspace.get(project_id)
-        await end_task(
-            runner=self._git,
-            repo_root=self._workspace.repo_root(p),
-            empty_hooks=self._paths.empty_hooks,
-            databases=self._databases,
-            project_id=project_id,
-            task_id=task_id,
-            status=status,
-            sandbox=self._sandbox,
-            events=self._events,
-        )
-        for (pid, sid), tid in list(self._current_tasks.items()):
-            if pid == project_id and tid == task_id:
-                self._current_tasks.pop((pid, sid), None)
-        self._pending_notes.pop((project_id, task_id), None)
+        async with self._task_lock(project_id, task_id):
+            p = await self._workspace.get(project_id)
+            await end_task(
+                runner=self._git,
+                repo_root=self._workspace.repo_root(p),
+                empty_hooks=self._paths.empty_hooks,
+                databases=self._databases,
+                project_id=project_id,
+                task_id=task_id,
+                status=status,
+                sandbox=self._sandbox,
+                events=self._events,
+            )
+            for (pid, sid), tid in list(self._current_tasks.items()):
+                if pid == project_id and tid == task_id:
+                    self._current_tasks.pop((pid, sid), None)
+            self._pending_notes.pop((project_id, task_id), None)

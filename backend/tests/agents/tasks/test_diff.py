@@ -254,7 +254,7 @@ async def test_staged_diff_cancellation_during_add_executes_cleanup(
     release_add.set()
 
     with pytest.raises(asyncio.CancelledError):
-        await caller_task
+        await asyncio.wait_for(caller_task, timeout=5.0)
 
     await asyncio.sleep(0.05)
 
