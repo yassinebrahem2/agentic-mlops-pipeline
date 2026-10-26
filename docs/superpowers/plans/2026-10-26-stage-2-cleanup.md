@@ -4,7 +4,7 @@
 
 **Goal:** Fix the Minor findings filed at merge in bugs #265 (github-work), #261 (tasks), #264 (sandbox) and #258 (approvals and runtime), bug #273 (the status board reports a turn running after `turn.ended`) and bug #276 (recording `waiting` has no fallback), so stage 2 ships with no known defect.
 
-**Branch:** `plan/stage-2-cleanup`. **Consumes:** merged code. **Produces:** `Tasks.repo_ref` and `Tasks.has_commits_beyond_base` (task 1; used only inside this plan's files).
+**Branch:** `plan/stage-2-cleanup`. **Consumes:** merged code. **Produces:** `Tasks.repo_ref`, `Tasks.has_commits_beyond_base` and `Tasks.decide_review` (task 1; used only inside this plan's files).
 
 **Read first:** the four bug issues; the stage 2 overview (I8–I12, the Tasks interface); `AGENTS.md` Code quality.
 
@@ -31,17 +31,23 @@ The PR-description items of the bugs (#264 item 2, #265 item 8) were corrected b
 ```python
 async def repo_ref(self, project_id: str) -> RepoRef | None: ...
 async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...
+async def decide_review(self, project_id: str, task_id: str,
+                        step: Callable[[TaskRef], Awaitable[None]],
+                        status: Literal["merged", "closed"]) -> TaskView: ...
+# Decision #275: under one acquisition of the task lock, raises a 409 domain error unless the
+# task is in local review, runs step (local_merge for approve, the system message for reject),
+# then ends the task with status (an inner, lock-held end).
 ```
 
 **Implementation notes:**
 - `Tasks.repo_ref` replaces the four copies (`_resolve_repo_ref` in `pull_request.py`, `issues.py` and `pr_sync.py`, and `project_repo_ref` in `push.py`); nothing reads `workspace._git` or `_paths` through `getattr`.
-- `Tasks.has_commits_beyond_base` replaces `pull_request.py`'s `_has_commits_beyond_base`, through the task git function and the one base ref `refs/<app>/base/<default branch>`; no `except Exception`. `has_unpublished_changes` uses the same rev-list helper, so "commits beyond a ref" has one owner in `push.py`.
-- `decide_local_review` runs under the per-task lock of `TasksService`; the module-level `_review_locks` goes.
+- `Tasks.has_commits_beyond_base` replaces `pull_request.py`'s `_has_commits_beyond_base`, through the task git function from the task's stored `base_sha` (Decision #275: one source, works for local-only projects too); no `except Exception`. `has_unpublished_changes` uses the same rev-list helper, so "commits beyond a ref" has one owner in `push.py`.
+- `decide_local_review` goes through `Tasks.decide_review` (Decision #275); the module-level `_review_locks` goes.
 - Reject (spec §6: "Rejecting closes the task, and a system message tells the agent"): post the system message first, then end the task `closed`. A failed post leaves the task in review and the route answers the error (never a 500); a second decision on a task no longer in review answers 409, so a retry never closes or posts twice.
 - `get_pull` reports a 404 as "not found" (the PR was deleted), not as a missing permission.
-- Activity items for issues show the issue's real state.
+- Activity items for issues show the state last recorded in the event log (`issue.commented` records it from `get_issue`). An issue closed on GitHub by a merged PR (`Fixes #n`) still shows its last recorded state; the PR says so (Decision #275).
 - The rejection reaches the agent as a system message (`author_name="system"`), not as a message from the task's own agent.
-- Trace and fix the `PytestUnhandledThreadExceptionWarning` ("Event loop is closed").
+- The `PytestUnhandledThreadExceptionWarning` seen once in a review run did not reproduce (Decision #275): no code change; the `-W error` run below stays as the check.
 
 **Tests (stop condition):** one test per item above (the reject case with a failing post, the 404, the issue state, the sender); `git grep -n "_resolve_repo_ref\|project_repo_ref\|_review_locks" backend/src` finds nothing; `uv run pytest -W error::pytest.PytestUnhandledThreadExceptionWarning` passes; full suite, ruff, format, pyright; CI green.
 

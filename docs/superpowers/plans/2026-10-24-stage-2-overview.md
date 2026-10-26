@@ -277,6 +277,8 @@ class Tasks(TaskWorkspaces, Protocol):
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool: ...
     async def repo_ref(self, project_id: str) -> RepoRef | None: ...           # added by the cleanup plan (#265)
     async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...  # added by the cleanup plan (#265)
+    async def decide_review(self, project_id: str, task_id: str, step: Callable[[TaskRef], Awaitable[None]],
+                            status: Literal["merged", "closed"]) -> TaskView: ...  # Decision #275: check, step and end under one task lock
     async def staged_diff(self, project_id: str, task: TaskRef) -> str: ...  # what commit would record, capped
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult: ...  # raises CommitRefused
     async def push(self, project_id: str, task: TaskRef) -> None: ...
