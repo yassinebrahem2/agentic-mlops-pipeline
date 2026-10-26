@@ -10,8 +10,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnd
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -50,7 +49,7 @@ async def test_a_cancel_in_the_pass_the_turn_task_returns_keeps_the_turn_done(
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         result = await run_turn(self, project_id, session_id, agent, turn_id, sink, lock)
         # Queued before the turn task's end wakes the worker: the worker's wait on it raises
         # the cancel although the turn task returned.
@@ -106,7 +105,7 @@ async def test_a_cancel_in_the_pass_a_stopped_turn_task_ends_keeps_the_turn_stop
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         try:
             return await run_turn(self, project_id, session_id, agent, turn_id, sink, lock)
         except asyncio.CancelledError:
@@ -168,7 +167,7 @@ async def test_a_close_while_a_stopped_turn_task_unwinds_keeps_the_turn_stopped(
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         try:
             return await run_turn(self, project_id, session_id, agent, turn_id, sink, lock)
         except asyncio.CancelledError:

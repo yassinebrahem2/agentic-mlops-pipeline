@@ -344,6 +344,93 @@
         "title": "ApprovalPart",
         "type": "object"
       },
+      "ApprovalView": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/Preview"
+          },
+          "risk_class": {
+            "$ref": "#/components/schemas/RiskClass"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool": {
+            "title": "Tool",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "session_id",
+          "turn_id",
+          "tool_call_id",
+          "tool",
+          "risk_class",
+          "preview",
+          "status",
+          "note",
+          "created_at",
+          "decided_at"
+        ],
+        "title": "ApprovalView",
+        "type": "object"
+      },
       "AuthStatus": {
         "properties": {
           "mode": {
@@ -377,6 +464,31 @@
           "path"
         ],
         "title": "BackupResult",
+        "type": "object"
+      },
+      "DecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approve": {
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "approve"
+        ],
+        "title": "DecisionRequest",
         "type": "object"
       },
       "DetectedKey": {
@@ -994,6 +1106,26 @@
         "title": "PasswordSignIn",
         "type": "object"
       },
+      "PermissionsSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "enum": [
+              "suggest",
+              "ask",
+              "autonomous",
+              "bypass"
+            ],
+            "title": "Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "title": "PermissionsSettings",
+        "type": "object"
+      },
       "PrRef": {
         "properties": {
           "number": {
@@ -1341,6 +1473,19 @@
         "properties": {},
         "title": "ResyncData",
         "type": "object"
+      },
+      "RiskClass": {
+        "description": "Tool risk classes from docs/roadmap.md. The permission policy (stage 2) keys on these.",
+        "enum": [
+          "read",
+          "write_code",
+          "run",
+          "message",
+          "github",
+          "deploy"
+        ],
+        "title": "RiskClass",
+        "type": "string"
       },
       "SandboxSettings": {
         "properties": {
@@ -3271,6 +3416,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/approvals": {
+      "get": {
+        "operationId": "list_pending_approvals_api_projects__project_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalView"
+                  },
+                  "title": "Response List Pending Approvals Api Projects  Project Id  Approvals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pending Approvals",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/approvals/{approval_id}/decision": {
+      "post": {
+        "operationId": "decide_approval_api_projects__project_id__approvals__approval_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Approval",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
     "/api/projects/{project_id}/events/stream": {
       "get": {
         "operationId": "stream_events_api_projects__project_id__events_stream_get",
@@ -3571,6 +3823,98 @@
         "summary": "Rebuild Project Sandbox",
         "tags": [
           "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/permissions": {
+      "get": {
+        "operationId": "get_permissions_settings_api_projects__project_id__settings_permissions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Permissions Settings",
+        "tags": [
+          "approvals"
+        ]
+      },
+      "put": {
+        "operationId": "update_permissions_settings_api_projects__project_id__settings_permissions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionsSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Permissions Settings",
+        "tags": [
+          "approvals"
         ]
       }
     },

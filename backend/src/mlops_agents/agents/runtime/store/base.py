@@ -8,3 +8,7 @@ class StoreBase:
 
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
+
+    @property
+    def databases(self) -> Databases:
+        return self._databases
