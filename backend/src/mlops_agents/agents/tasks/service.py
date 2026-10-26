@@ -20,18 +20,16 @@ from mlops_agents.agents.tasks.commit import (
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tasks.git import git_dir_for_task
 from mlops_agents.agents.tasks.lifecycle import (
+    WORKTREE_RECREATED_NOTE,
     end_task,
+    prepare_worktree,
     resume_task,
     set_review_task,
     start_task,
 )
 from mlops_agents.agents.tasks.local_merge import local_merge, local_merge_preview
 from mlops_agents.agents.tasks.remote import resolve_repo_ref
-from mlops_agents.agents.tasks.worktrees import (
-    TaskFiles,
-    clean_leftover_temp_files,
-    recreate_worktree,
-)
+from mlops_agents.agents.tasks.worktrees import TaskFiles
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.file_ops import pause_task
 from mlops_agents.agents.tools.files import RepoFiles
@@ -126,31 +124,16 @@ class TasksService(Tasks):
         self._current_tasks[(project_id, session_id)] = task_id
         return ref
 
-    async def _get_task_ref(self, project_id: str, row: RowMapping) -> TaskRef:
-        worktree_path = Path(row["worktree"])
-        if not await asyncio.to_thread(worktree_path.is_dir):
-            p = await self._workspace.get(project_id)
-            await recreate_worktree(
-                runner=self._git,
-                repo_root=self._workspace.repo_root(p),
-                worktree_path=worktree_path,
-                empty_hooks=self._paths.empty_hooks,
-                task_id=row["id"],
-                branch=row["branch"],
-            )
-            note = "[Note: Uncommitted changes were lost because the task worktree was recreated.]"
-            self._pending_notes[(project_id, row["id"])] = note
-        else:
-            await asyncio.to_thread(clean_leftover_temp_files, worktree_path)
-            note = self._pending_notes.get((project_id, row["id"]))
-
+    def _get_task_ref(self, project_id: str, row: RowMapping) -> TaskRef:
+        # A pure read: the session view comes through here too, so the worktree is readied
+        # (and recreated when gone) only in `files`, on the turn path.
         return TaskRef(
             id=row["id"],
             title=row["title"],
             branch=row["branch"],
-            worktree=worktree_path,
+            worktree=Path(row["worktree"]),
             status=row["status"],
-            pending_note=note,
+            pending_note=self._pending_notes.get((project_id, row["id"])),
         )
 
     async def current(self, project_id: str, session_id: str) -> TaskRef | None:
@@ -168,7 +151,7 @@ class TasksService(Tasks):
                 and row["status"] in ("active", "in_review")
                 and row["session_id"] == session_id
             ):
-                return await self._get_task_ref(project_id, row)
+                return self._get_task_ref(project_id, row)
             self._current_tasks.pop((project_id, session_id), None)
 
         async with engine.connect() as conn:
@@ -186,7 +169,7 @@ class TasksService(Tasks):
             return None
 
         self._current_tasks[(project_id, session_id)] = row["id"]
-        return await self._get_task_ref(project_id, row)
+        return self._get_task_ref(project_id, row)
 
     def _build_task_view(self, row: RowMapping) -> TaskView:
         return TaskView(
@@ -238,6 +221,14 @@ class TasksService(Tasks):
         repo_root = self._workspace.repo_root(project)
         if task is None:
             return RepoFiles(repo_root, self._git)
+        if await prepare_worktree(
+            runner=self._git,
+            repo_root=repo_root,
+            worktree_path=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            task=task,
+        ):
+            self._pending_notes[(project_id, task.id)] = WORKTREE_RECREATED_NOTE
         return TaskFiles(
             root=task.worktree,
             git_dir=git_dir_for_task(repo_root, task.id),

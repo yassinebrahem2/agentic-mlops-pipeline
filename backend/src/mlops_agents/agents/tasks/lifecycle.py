@@ -15,6 +15,7 @@ from mlops_agents.agents.tasks.git import run_safe_git
 from mlops_agents.agents.tasks.worktrees import (
     clean_leftover_temp_files,
     create_worktree,
+    recreate_worktree,
 )
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.clock import now_iso
@@ -34,6 +35,10 @@ if TYPE_CHECKING:
     from mlops_agents.workspace.models import Project
 
 logger = logging.getLogger(__name__)
+
+WORKTREE_RECREATED_NOTE = (
+    "[Note: Uncommitted changes were lost because the task worktree was recreated.]"
+)
 
 
 async def start_task(
@@ -93,6 +98,30 @@ async def start_task(
         worktree=worktree_path,
         status="active",
     )
+
+
+async def prepare_worktree(
+    *,
+    runner: GitRunner,
+    repo_root: Path,
+    worktree_path: Path,
+    empty_hooks: Path,
+    task: TaskRef,
+) -> bool:
+    """Readies a task's worktree for its tools: recreates it from the branch when it is gone
+    (returns True), else clears temp files an interrupted write left behind."""
+    if await asyncio.to_thread(worktree_path.is_dir):
+        await asyncio.to_thread(clean_leftover_temp_files, worktree_path)
+        return False
+    await recreate_worktree(
+        runner=runner,
+        repo_root=repo_root,
+        worktree_path=worktree_path,
+        empty_hooks=empty_hooks,
+        task_id=task.id,
+        branch=task.branch,
+    )
+    return True
 
 
 async def resume_task(

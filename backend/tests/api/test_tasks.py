@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -307,3 +308,19 @@ async def test_global_discard_skips_a_project_whose_database_is_unreadable(
     assert res.status_code == 204
     assert (await services.tasks.view(project_id, task.id)).status == "discarded"
     assert any(broken.id in r.getMessage() and r.exc_info for r in caplog.records)
+
+
+async def test_reading_a_session_view_does_not_recreate_a_deleted_worktree(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Deleted worktree")
+    shutil.rmtree(task.worktree)
+
+    view = await services.sessions.get(project_id, "orchestrator")
+
+    assert view.current_task is not None
+    assert view.current_task.id == task.id
+    assert not task.worktree.exists()
