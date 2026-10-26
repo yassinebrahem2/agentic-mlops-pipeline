@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from mlops_agents.agents.constants import MAX_DIFF_CHARS, cap_diff
+from mlops_agents.agents.constants import cap_diff
 from mlops_agents.agents.tasks.git import task_git
 from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.agents.tools.files import is_secret
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.git import GitRunner
 
 __all__ = [
-    "MAX_DIFF_CHARS",
     "get_candidate_paths",
     "staged_diff_task",
 ]
@@ -45,26 +45,9 @@ async def get_candidate_paths(
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["status", "--porcelain=v1", "-uall", "-z"],
+        args=["status", "--porcelain=v1", "-uall", "-z", "--no-renames"],
     )
-    tokens = res.stdout.split("\0")
-    paths: list[str] = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if not token:
-            i += 1
-            continue
-        # Format is 'XY path'
-        status = token[:2]
-        path = token[3:]
-        paths.append(path)
-        # If it's a rename, the next token is the original path
-        if "R" in status:
-            i += 1
-            if i < len(tokens) and tokens[i]:
-                paths.append(tokens[i])
-        i += 1
+    paths = [token[3:] for token in res.stdout.split("\0") if len(token) > 3]
     return [p for p in paths if not is_generated_temp_file(p)]
 
 
@@ -110,14 +93,23 @@ async def staged_diff_task(
     diff = ""
     if valid_paths:
         try:
-            await task_git(
-                runner,
-                git_dir=git_dir,
-                worktree=worktree,
-                empty_hooks=empty_hooks,
-                args=["add", "--", *valid_paths],
-                extra_env={"GIT_LITERAL_PATHSPECS": "1"},
+            add_fut = asyncio.create_task(
+                task_git(
+                    runner,
+                    git_dir=git_dir,
+                    worktree=worktree,
+                    empty_hooks=empty_hooks,
+                    args=["add", "--", *valid_paths],
+                    extra_env={"GIT_LITERAL_PATHSPECS": "1"},
+                )
             )
+            try:
+                await asyncio.shield(add_fut)
+            except asyncio.CancelledError:
+                with suppress(Exception):
+                    await add_fut
+                raise
+
             async with engine.connect() as conn:
                 row = (
                     await conn.execute(select(tasks.c.base_sha).where(tasks.c.id == task.id))
@@ -136,7 +128,7 @@ async def staged_diff_task(
 
             async def _reset() -> None:
                 try:
-                    await task_git(
+                    reset_res = await task_git(
                         runner,
                         git_dir=git_dir,
                         worktree=worktree,
@@ -144,6 +136,12 @@ async def staged_diff_task(
                         args=["reset"],
                         check=False,
                     )
+                    if reset_res.code != 0:
+                        logger.warning(
+                            "Failed to reset working tree during staged_diff cleanup (exit code %d): %s",
+                            reset_res.code,
+                            reset_res.stderr.strip() or reset_res.stdout.strip(),
+                        )
                 except Exception as exc:
                     logger.warning(
                         "Failed to reset working tree during staged_diff cleanup: %s",

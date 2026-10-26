@@ -75,37 +75,37 @@ async def push_task(
     if repo_ref_val is None:
         raise DomainError("no_remote", "Project has no GitHub remote to push to.", status=409)
 
-    # Push without -u to avoid modifying .git/config
-    await task_git(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        args=[
-            "-c",
-            "remote.origin.fetch=",
-            "push",
-            https_url(repo_ref_val),
-            f"{task.branch}:{task.branch}",
-        ],
-        authenticated=True,
-    )
-
-    # Record pushed commit under namespaced ref refs/<app name>/pushed/<branch>
     sha_res = await task_git(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["rev-parse", task.branch],
+        args=["rev-parse", f"refs/heads/{task.branch}"],
     )
+    commit_sha = sha_res.stdout.strip()
+
+    empty_cfg = empty_hooks.parent / "empty.gitconfig"
+    if not empty_cfg.exists():
+        empty_cfg.touch()
+
+    args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
+    await task_git(
+        runner,
+        git_dir=git_dir,
+        worktree=worktree,
+        empty_hooks=empty_hooks,
+        args=args,
+        authenticated=True,
+        extra_env={"GIT_CONFIG": str(empty_cfg)},
+    )
+
     pushed_ref = f"refs/{APP_NAME}/pushed/{task.branch}"
     await task_git(
         runner,
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["update-ref", pushed_ref, sha_res.stdout.strip()],
+        args=["update-ref", pushed_ref, commit_sha],
     )
 
 
@@ -128,14 +128,13 @@ async def has_unpublished_changes_task(
         git_dir=git_dir,
         worktree=worktree,
         empty_hooks=empty_hooks,
-        args=["status", "--porcelain=v1", "-uall", "-z"],
+        args=["status", "--porcelain=v1", "-uall", "-z", "--no-renames"],
     )
     for token in status_res.stdout.split("\0"):
-        if not token:
-            continue
-        path = token[3:]
-        if not is_generated_temp_file(path):
-            return True
+        if len(token) > 3:
+            path = token[3:]
+            if not is_generated_temp_file(path):
+                return True
 
     # Read task record from DB
     async with engine.connect() as conn:

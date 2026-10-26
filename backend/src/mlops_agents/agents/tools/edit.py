@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mlops_agents.agents.constants import cap_diff
 from mlops_agents.agents.tasks.contract import ClaimConflict
 from mlops_agents.agents.tools.base import (
     AgentTool,
@@ -18,7 +19,6 @@ from mlops_agents.agents.tools.base import (
     ToolOutput,
 )
 from mlops_agents.agents.tools.file_ops import (
-    cap_diff,
     compute_sha256,
     get_current_task,
     pause_task,

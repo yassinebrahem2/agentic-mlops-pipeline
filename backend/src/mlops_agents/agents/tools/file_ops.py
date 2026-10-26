@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mlops_agents.agents.constants import MAX_DIFF_CHARS, cap_diff
 from mlops_agents.agents.temp_files import make_temp_name
 from mlops_agents.agents.tools.base import TaskRef, ToolContext, ToolFailure
 from mlops_agents.agents.tools.files import is_secret
@@ -20,8 +19,6 @@ if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
 
 __all__ = [
-    "MAX_DIFF_CHARS",
-    "cap_diff",
     "compute_sha256",
     "get_current_task",
     "pause_task",
