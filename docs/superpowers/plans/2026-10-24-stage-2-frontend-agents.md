@@ -66,6 +66,11 @@ Tasks 1 and 2 get early PRs, from `plan/stage-2-frontend-agents-task1` and `-tas
 
 **Tests (stop condition):** the bar renders with and without a PR; discard calls the route after confirming; the 409 message shows; labels render for agent messages and wake-ups; the bypass bar shows only on bypass; checks; CI green.
 
+**Review fixes (added in the review of #238):** task 3 also fixes these in `ApprovalCard.tsx` and `MessageView.tsx`:
+- after a successful decision the buttons stay disabled until `message.updated` arrives (reset only on error), and the double-submit guard is a ref, so two clicks in one tick send one decision; a test clicks twice;
+- the note's placeholder says it goes with either decision;
+- the no-op wrapper `div` around `ToolStep` goes.
+
 ---
 
 ### Task 4: The approval in the end-to-end flow
