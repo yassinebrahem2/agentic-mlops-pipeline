@@ -127,12 +127,22 @@ async def push_task(
     push_fut: asyncio.Task[Any] | None = None
 
     try:
-        await run_safe_git(
-            runner,
-            args=["init", "--bare", str(temp_push)],
-            cwd=empty_hooks.parent,
-            empty_hooks=empty_hooks,
+        init_fut = asyncio.create_task(
+            run_safe_git(
+                runner,
+                args=["init", "--bare", str(temp_push)],
+                cwd=empty_hooks.parent,
+                empty_hooks=empty_hooks,
+            )
         )
+        try:
+            await asyncio.shield(init_fut)
+        except asyncio.CancelledError:
+            try:
+                await init_fut
+            except Exception as exc:
+                logger.warning("Bare repo init failed during cancellation: %s", exc, exc_info=True)
+            raise
         args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
         push_fut = asyncio.create_task(
             run_safe_git(

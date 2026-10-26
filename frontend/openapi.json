@@ -3970,6 +3970,50 @@
         ]
       }
     },
+    "/api/projects/{project_id}/tasks/{task_id}/discard": {
+      "post": {
+        "operationId": "discard_project_task_api_projects__project_id__tasks__task_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Project Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/providers": {
       "get": {
         "operationId": "list_providers_api_providers_get",
@@ -4215,6 +4259,57 @@
         "summary": "List Remote Models",
         "tags": [
           "providers"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/discard": {
+      "post": {
+        "operationId": "discard_task_api_tasks__task_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Task",
+        "tags": [
+          "tasks"
         ]
       }
     }

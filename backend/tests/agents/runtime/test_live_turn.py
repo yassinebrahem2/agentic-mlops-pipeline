@@ -13,7 +13,6 @@ from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -27,6 +26,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 pytestmark = pytest.mark.live
@@ -82,7 +82,7 @@ async def test_live_turn_orchestrator_readme(
             gate=ApprovalGate(databases),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
-            workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=git),
+            workspaces=FakeWorkspaces(workspace=workspace_svc, git=git),
         )
 
         prov = await providers_svc.create_provider(
