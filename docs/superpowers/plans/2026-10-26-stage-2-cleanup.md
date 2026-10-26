@@ -36,7 +36,9 @@ async def decide_review(self, project_id: str, task_id: str,
                         status: Literal["merged", "closed"]) -> TaskView: ...
 # Decision #275: under one acquisition of the task lock, raises a 409 domain error unless the
 # task is in local review, runs step (local_merge for approve, the system message for reject),
-# then ends the task with status (an inner, lock-held end).
+# then ends the task with status (an inner, lock-held end). If step raises (e.g. local_merge refuses
+# because the user's folder is dirty), the task is not ended and stays in review. On reject, a post
+# that succeeds followed by a failed end can post again on retry; accepted.
 ```
 
 **Implementation notes:**
@@ -45,11 +47,11 @@ async def decide_review(self, project_id: str, task_id: str,
 - `decide_local_review` goes through `Tasks.decide_review` (Decision #275); the module-level `_review_locks` goes.
 - Reject (spec §6: "Rejecting closes the task, and a system message tells the agent"): post the system message first, then end the task `closed`. A failed post leaves the task in review and the route answers the error (never a 500); a second decision on a task no longer in review answers 409, so a retry never closes or posts twice.
 - `get_pull` reports a 404 as "not found" (the PR was deleted), not as a missing permission.
-- Activity items for issues show the state last recorded in the event log (`issue.commented` records it from `get_issue`). An issue closed on GitHub by a merged PR (`Fixes #n`) still shows its last recorded state; the PR says so (Decision #275).
+- Issue state in the activity feed (Decision #275, corrected): every `issue.*` event carries `state` (overview I11). PR state sync (`pr_sync`) also refreshes the issues the project's agents opened or commented on: `get_issue` for each, and an `issue.updated` event when the state changed. The feed shows the latest recorded state, so an issue closed on GitHub (by hand or by a merged PR) shows closed after the next sync. Its failure handling is the PR sync's own (log and continue).
 - The rejection reaches the agent as a system message (`author_name="system"`), not as a message from the task's own agent.
 - The `PytestUnhandledThreadExceptionWarning` seen once in a review run did not reproduce (Decision #275): no code change; the `-W error` run below stays as the check.
 
-**Tests (stop condition):** one test per item above (the reject case with a failing post, the 404, the issue state, the sender); `git grep -n "_resolve_repo_ref\|project_repo_ref\|_review_locks" backend/src` finds nothing; `uv run pytest -W error::pytest.PytestUnhandledThreadExceptionWarning` passes; full suite, ruff, format, pyright; CI green.
+**Tests (stop condition):** one test per item above (the reject case with a failing post, the 404, an issue closed on GitHub shows closed after a sync, the sender); `git grep -n "_resolve_repo_ref\|project_repo_ref\|_review_locks" backend/src` finds nothing; `uv run pytest -W error::pytest.PytestUnhandledThreadExceptionWarning` passes; full suite, ruff, format, pyright; CI green.
 
 ---
 
@@ -58,9 +60,9 @@ async def decide_review(self, project_id: str, task_id: str,
 **Files:** `agents/tasks/service.py` (`end`, `current`), `agents/tasks/local_merge.py`, `api/routers/tasks.py` (discard), `tests/fakes/workspaces.py` and the tests that import it.
 
 **Implementation notes:**
-- `end` refuses a task that has already ended with a domain error (no event), which the discard route maps to 409; local merge and reject, which call `end` on a task in review, keep working.
+- `end` refuses a task that has already ended with a domain error (no event), which the discard route maps to 409. The public `end` and the lock-held inner `end` used by `decide_review` share one implementation of that refusal.
 - The discard route's project scan treats one unreadable project as "not there" and logs it; it never answers 500 for that.
-- `local_merge` uses `workspace/fs.rmtree` (its own `_rmtree` goes), runs under the per-task lock, and uses a fresh temp path per merge.
+- `local_merge` uses `workspace/fs.rmtree` (its own `_rmtree` goes) and a fresh temp path per merge. It is reached only through `Tasks.decide_review`, which already holds the task lock, so it takes no lock of its own (the lock is not reentrant).
 - No `suppress(Exception)` in `end` or the merge cleanup: failures are logged with their traceback.
 - Reading the session view (`SessionView.current_task`) never recreates a missing worktree; the turn path keeps its current behaviour.
 - The name `RepositoryOnlyWorkspaces` is gone from the tests (alias and imports).
