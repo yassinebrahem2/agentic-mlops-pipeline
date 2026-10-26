@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
+from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -299,12 +302,25 @@ async def test_discard_of_an_ended_task_is_refused_without_a_second_event(
     assert [e.payload for e in ended] == [{"task_id": task.id, "status": "merged"}]
 
 
+def _write_junk(db: Path) -> None:
+    db.write_bytes(b"not a sqlite database" * 100)
+
+
+def _write_newer_schema(db: Path) -> None:
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT)")
+        conn.execute("INSERT INTO schema_version VALUES (9999, '2030-01-01')")
+        conn.commit()
+
+
+@pytest.mark.parametrize("corrupt", [_write_junk, _write_newer_schema], ids=["junk", "newer"])
 async def test_global_discard_skips_a_project_whose_database_is_unreadable(
     app: FastAPI,
     client: httpx2.AsyncClient,
     tmp_path: Path,
     git_env: dict[str, str],
     caplog: pytest.LogCaptureFixture,
+    corrupt: Callable[[Path], None],
 ) -> None:
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
@@ -315,7 +331,8 @@ async def test_global_discard_skips_a_project_whose_database_is_unreadable(
     await services.databases.close_project(broken.id)
     broken_db = services.paths.project_db(broken.id)
     broken_db.parent.mkdir(parents=True, exist_ok=True)
-    broken_db.write_bytes(b"not a sqlite database" * 100)
+    broken_db.unlink(missing_ok=True)
+    corrupt(broken_db)
     # The scan must meet the broken project before the one holding the task.
     assert (await services.workspace.list_projects())[0].id == broken.id
 

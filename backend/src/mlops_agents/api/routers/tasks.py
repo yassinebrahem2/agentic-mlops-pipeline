@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.errors import DomainError
+from mlops_agents.storage.migrate import MigrationError
 
 router = APIRouter(tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ async def discard_task(
                 break
             except DomainError:
                 continue
-            except (sqlite3.DatabaseError, SQLAlchemyError, OSError):
+            except (MigrationError, sqlite3.Error, SQLAlchemyError, OSError):
                 # One unreadable project must not hide the task in another one.
                 logger.exception("Skipped project %s while looking for task %s", proj.id, task_id)
                 continue
