@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -568,3 +568,136 @@ async def test_note_length_validation(
     max_note = "b" * 500
     out_valid = await tool.invoke(ctx, {"delay_seconds": 120, "note": max_note})
     assert not out_valid.is_error
+
+
+async def test_fire_due_retains_pending_if_post_fails(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    current_time = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    wakeups_svc = WakeupService(databases, clock=lambda: current_time)
+    tools = default_registry(wakeups=wakeups_svc)
+
+    session_env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[defs_dir],
+        tools=tools,
+    )
+    catalog = session_env.manager._catalog  # pyright: ignore[reportPrivateUsage]
+    wakeups_svc.use_catalog(catalog)
+    wakeups_svc.bind(session_env.manager)
+
+    session_id = await session_env.store.session_id(session_env.project_id, "sched")
+    ctx = _ctx(session_env.project_id, "sched", session_id=session_id)
+    tool = ScheduleWakeupTool(wakeups_svc, catalog=catalog)
+
+    res = await tool.invoke(ctx, {"delay_seconds": 60, "note": "Retry test note"})
+    assert not res.is_error
+
+    # Make post raise an unexpected exception
+    async def failing_post(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Transient delivery error")
+
+    real_post = session_env.manager.post
+    monkeypatch.setattr(session_env.manager, "post", failing_post)
+
+    # Advance clock past due
+    current_time += timedelta(seconds=65)
+
+    # fire_due should attempt to post, catch error, and leave wakeup as pending
+    fired = await wakeups_svc.fire_due()
+    assert fired == 0
+
+    pending = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending) == 1
+    assert pending[0].status == "pending"
+
+    # Restore post and retry fire_due
+    monkeypatch.setattr(session_env.manager, "post", real_post)
+    fired = await wakeups_svc.fire_due()
+    assert fired == 1
+
+    pending = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending) == 0
+
+    await session_env.manager.close()
+
+
+async def test_fire_due_guard_prevents_double_posting_on_restart(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    current_time = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    wakeups_svc = WakeupService(databases, clock=lambda: current_time)
+    tools = default_registry(wakeups=wakeups_svc)
+
+    session_env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[defs_dir],
+        tools=tools,
+    )
+    catalog = session_env.manager._catalog  # pyright: ignore[reportPrivateUsage]
+    wakeups_svc.use_catalog(catalog)
+    wakeups_svc.bind(session_env.manager)
+
+    session_id = await session_env.store.session_id(session_env.project_id, "sched")
+    ctx = _ctx(session_env.project_id, "sched", session_id=session_id)
+    tool = ScheduleWakeupTool(wakeups_svc, catalog=catalog)
+
+    # Schedule wakeup
+    res = await tool.invoke(ctx, {"delay_seconds": 60, "note": "Idempotency test note"})
+    assert not res.is_error
+
+    # Simulate crash right after post: post the wake-up message to the session, but leave wakeup pending
+    await session_env.manager.post(
+        session_env.project_id,
+        "sched",
+        author_name="Scheduled wake-up",
+        from_agent="sched",
+        text="Scheduled wake-up: Idempotency test note",
+        exchange_id=None,
+        hop=None,
+    )
+
+    # Advance clock past due
+    current_time += timedelta(seconds=65)
+
+    # fire_due runs (as if on restart)
+    fired = await wakeups_svc.fire_due()
+    assert fired == 1
+
+    # Status must be fired
+    pending = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending) == 0
+
+    # Verify no second message was posted: messages table has exactly 1 wake-up message
+    msgs = await session_env.store.messages(session_env.project_id, session_id)
+    wakeup_msgs = [m for m in msgs if m.author_name == "Scheduled wake-up"]
+    assert len(wakeup_msgs) == 1
+
+    await session_env.manager.close()

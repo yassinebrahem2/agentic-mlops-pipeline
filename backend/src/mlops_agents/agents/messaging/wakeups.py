@@ -14,7 +14,7 @@ from sqlalchemy import func, insert, select, update
 
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import projects, wakeups
+from mlops_agents.storage.tables import messages, projects, wakeups
 
 if TYPE_CHECKING:
     from mlops_agents.agents.catalog import AgentCatalog
@@ -284,6 +284,7 @@ class WakeupService:
                                 wakeups.c.agent,
                                 wakeups.c.note,
                                 wakeups.c.due_at,
+                                wakeups.c.created_at,
                             )
                             .where(
                                 wakeups.c.status == "pending",
@@ -298,8 +299,63 @@ class WakeupService:
 
             for row in rows:
                 wak_id = str(row["id"])
+                session_id = str(row["session_id"])
                 agent = str(row["agent"])
                 note = str(row["note"])
+                created_at = str(row["created_at"])
+
+                # Check if still pending (e.g. not cancelled between queries)
+                async with engine.connect() as conn:
+                    current_status = (
+                        await conn.execute(select(wakeups.c.status).where(wakeups.c.id == wak_id))
+                    ).scalar_one_or_none()
+                if current_status != "pending":
+                    continue
+
+                target_text = f"Scheduled wake-up: {note}"
+
+                # Guard: check if a restart or previous pass already posted this message to the
+                # session before crashing prior to the status update.
+                already_posted = False
+                async with engine.connect() as conn:
+                    recent_parts = (
+                        (
+                            await conn.execute(
+                                select(messages.c.parts).where(
+                                    messages.c.session_id == session_id,
+                                    messages.c.from_agent == agent,
+                                    messages.c.author_name == "Scheduled wake-up",
+                                    messages.c.created_at >= created_at,
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for p in recent_parts:
+                        if target_text in str(p):
+                            already_posted = True
+                            break
+
+                if not already_posted:
+                    try:
+                        await self._sessions.post(
+                            project_id,
+                            agent,
+                            author_name="Scheduled wake-up",
+                            from_agent=agent,
+                            text=target_text,
+                            exchange_id=None,
+                            hop=None,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to post scheduled wake-up %s to session %s for agent %s",
+                            wak_id,
+                            session_id,
+                            agent,
+                        )
+                        continue
 
                 async with engine.begin() as conn:
                     res = await conn.execute(
@@ -307,27 +363,8 @@ class WakeupService:
                         .where(wakeups.c.id == wak_id, wakeups.c.status == "pending")
                         .values(status="fired", fired_at=now_iso_str)
                     )
-                    if res.rowcount == 0:
-                        continue
-
-                try:
-                    await self._sessions.post(
-                        project_id,
-                        agent,
-                        author_name="Scheduled wake-up",
-                        from_agent=agent,
-                        text=f"Scheduled wake-up: {note}",
-                        exchange_id=None,
-                        hop=None,
-                    )
-                    fired_count += 1
-                except Exception:
-                    logger.exception(
-                        "Failed to post scheduled wake-up %s to session %s for agent %s",
-                        wak_id,
-                        row["session_id"],
-                        agent,
-                    )
+                    if res.rowcount > 0:
+                        fired_count += 1
 
         return fired_count
 

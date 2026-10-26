@@ -11,6 +11,7 @@ from typing import Any
 import httpx2
 import pytest
 from langgraph.types import interrupt
+from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
@@ -19,10 +20,12 @@ from mlops_agents.agents.messaging.settings import MessagingSettings
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
 from mlops_agents.agents.runtime.model_caller import TurnFailed
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import turns
 from tests.agents.messaging.bus_env import BusEnv
 from tests.agents.runtime.hook_fakes import ALLOW
 from tests.agents.runtime.session_env import (
@@ -434,3 +437,76 @@ async def test_a_message_taken_by_a_turn_that_does_not_end_done_is_delivered_aga
     assert "Message from alpha:" in turn_2_msgs
     assert "Crucial update." in turn_2_msgs
     await manager.close()
+
+
+async def test_a_message_taken_by_a_running_turn_is_redelivered_on_crash_recovery(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    gate = HoldingGate()
+    env, _inbound = await build_inbound_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, gate=gate
+    )
+    project_id = env.session.project_id
+    manager = env.session.manager
+    store = SessionStore(databases)
+
+    view = await manager.get(project_id, "beta")
+
+    # Start beta turn 1
+    await manager.send(project_id, "beta", "First turn.")
+    await gate.entered.wait()
+
+    # Alpha sends message mid-turn
+    await env.bus.send(
+        project_id,
+        sender="alpha",
+        sender_turn_id="trn_test",
+        to="beta",
+        text="Crash-recovery test.",
+    )
+
+    # Release gate so beta takes the inbound message mid-turn
+    gate.release.set()
+
+    # Wait until turn 1 is running and has taken the message
+    while True:
+        msgs = await store.messages(project_id, view.id)
+        mid_msg = next((m for m in msgs if m.author_name == "Alpha"), None)
+        if mid_msg is not None and mid_msg.status == "complete":
+            break
+        await asyncio.sleep(0.01)
+
+    # Simulate abrupt process crash: stop manager without letting normal turn end execute
+    await manager.close()
+
+    # On restart, recover() is called
+    await store.recover(project_id)
+
+    # Verify that the mid-turn message is redelivered (queued again)
+    msgs = await store.messages(project_id, view.id)
+    redelivered = next(m for m in msgs if m.author_name == "Alpha")
+    assert redelivered.status == "queued"
+
+    # Verify a new queued turn was created for it
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        turn_rows = (
+            (
+                await conn.execute(
+                    select(turns).where(
+                        turns.c.session_id == view.id,
+                        turns.c.status == "queued",
+                        turns.c.trigger_message_id == redelivered.id,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert len(turn_rows) == 1

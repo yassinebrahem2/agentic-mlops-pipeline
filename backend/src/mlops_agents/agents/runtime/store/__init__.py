@@ -108,12 +108,15 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
         """
         engine = await self._databases.project(project_id)
         now = now_iso()
+        running_turns: list[tuple[str, str]] = []
         async with engine.begin() as conn:
-            running_turn_ids = (
-                (await conn.execute(select(turns.c.id).where(turns.c.status == "running")))
-                .scalars()
-                .all()
-            )
+            rows = (
+                await conn.execute(
+                    select(turns.c.id, turns.c.session_id).where(turns.c.status == "running")
+                )
+            ).all()
+            running_turns = [(str(r[0]), str(r[1])) for r in rows]
+            running_turn_ids = [t[0] for t in running_turns]
 
             if running_turn_ids:
                 await conn.execute(
@@ -140,6 +143,9 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
                     .where(messages.c.status == "streaming")
                     .values(status="interrupted")
                 )
+
+        for turn_id, session_id in running_turns:
+            await self.redeliver_inbound(project_id, session_id, turn_id)
 
         # Expire pending approvals whose turn is not waiting
         actual_audit = audit_log or self._audit_log
