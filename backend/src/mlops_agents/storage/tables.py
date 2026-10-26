@@ -192,6 +192,7 @@ approvals = Table(
     Column("note", Text),
     Column("created_at", Text, nullable=False),
     Column("decided_at", Text),
+    Column("task_id", Text),
 )
 
 events = Table(
