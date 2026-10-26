@@ -23,7 +23,7 @@ from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import Tasks
 from mlops_agents.agents.tasks.service import TasksService
-from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
@@ -165,6 +165,9 @@ async def build_services(
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
+    list_agents = tools.get("ListAgents")
+    if isinstance(list_agents, ListAgentsTool):
+        list_agents.bind(catalog, status_board)
     turn_observer = EventTurnObserver(events)
     inbound = SqliteInboundSource(databases)
     pr_sync = PrSyncObserver(tasks, workspace, github, http)

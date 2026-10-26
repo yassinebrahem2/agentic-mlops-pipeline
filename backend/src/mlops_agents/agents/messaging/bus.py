@@ -100,7 +100,7 @@ class SqliteMessageBus(MessageBus):
                 await conn.execute(insert(exchanges).values(id=exchange_id, created_at=now_iso()))
 
         try:
-            posted = await sessions.post(
+            await sessions.post(
                 project_id,
                 to,
                 author_name=sender_definition.display_name,
@@ -120,8 +120,8 @@ class SqliteMessageBus(MessageBus):
             project_id,
             source=sender,
             type="message.sent",
-            subject_id=posted.id,
-            payload={"sender": sender, "recipient": to, "exchange_id": exchange_id, "hop": hop},
+            subject_id=exchange_id,
+            payload={"to": to, "exchange_id": exchange_id, "hop": hop},
         )
 
     def _require_catalog(self) -> AgentCatalog:

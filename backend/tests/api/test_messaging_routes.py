@@ -66,3 +66,20 @@ async def test_the_app_wires_send_message_to_a_bound_bus_with_the_catalog(app: F
     # An unbound bus or one without the catalog raises; a wired one refuses by can_message.
     assert out.is_error
     assert "may not message" in out.content
+
+
+async def test_the_app_wires_list_agents_bound_with_catalog_and_status_board(app: FastAPI) -> None:
+    tool = app.state.services.tools.get("ListAgents")
+    assert tool is not None
+    ctx = ToolContext(
+        project_id="prj_any",
+        agent="orchestrator",
+        session_id="ses_any",
+        turn_id="trn_any",
+        files=cast(FileAccess, object()),
+        task=None,
+    )
+
+    out = await tool.invoke(ctx, {})
+    assert not out.is_error
+    assert "Name: orchestrator" in out.content

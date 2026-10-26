@@ -31,11 +31,21 @@ class ListAgentsTool(AgentTool[ListAgentsArgs]):
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = ListAgentsArgs
 
-    def __init__(self, catalog: AgentCatalog, status_board: StatusBoard) -> None:
+    def __init__(
+        self,
+        catalog: AgentCatalog | None = None,
+        status_board: StatusBoard | None = None,
+    ) -> None:
+        self._catalog = catalog
+        self._status_board = status_board
+
+    def bind(self, catalog: AgentCatalog, status_board: StatusBoard) -> None:
         self._catalog = catalog
         self._status_board = status_board
 
     async def run(self, ctx: ToolContext, args: ListAgentsArgs) -> ToolOutput:
+        if self._catalog is None or self._status_board is None:
+            raise RuntimeError("ListAgentsTool has not been bound with catalog and status_board")
         caller_def: AgentDefinition | None = None
         with contextlib.suppress(DomainError):
             caller_def = self._catalog.get(ctx.agent)

@@ -111,12 +111,11 @@ def default_registry(
         from mlops_agents.agents.tools.send_message import SendMessageTool
 
         registry.register(SendMessageTool(bus))
-    if status_board is not None:
+    if bus is not None or status_board is not None:
         effective_catalog = (
             catalog if catalog is not None else getattr(status_board, "_catalog", None)
         )
-        if effective_catalog is not None:
-            registry.register(ListAgentsTool(catalog=effective_catalog, status_board=status_board))
+        registry.register(ListAgentsTool(catalog=effective_catalog, status_board=status_board))
     if wakeups is not None:
         effective_catalog = catalog if catalog is not None else getattr(wakeups, "catalog", None)
         registry.register(ScheduleWakeupTool(wakeups, catalog=effective_catalog))

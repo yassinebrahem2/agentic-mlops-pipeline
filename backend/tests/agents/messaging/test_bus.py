@@ -148,7 +148,8 @@ async def test_sending_records_a_message_sent_event(bus_env: BusEnv) -> None:
     assert len(records) == 1
     record = records[0]
     assert record.source == "alpha"
-    assert record.payload["recipient"] == "beta"
+    assert record.subject_id == str(record.payload["exchange_id"])
+    assert record.payload["to"] == "beta"
     assert record.payload["hop"] == 1
     assert str(record.payload["exchange_id"]).startswith("xch_")
 
