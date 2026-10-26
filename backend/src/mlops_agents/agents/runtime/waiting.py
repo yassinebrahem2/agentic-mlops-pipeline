@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Sequence
-from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncGenerator, Awaitable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
@@ -17,21 +21,99 @@ from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     Part,
     ToolCallPart,
+    TurnEnd,
 )
-from mlops_agents.agents.runtime.graph import TurnSink
+from mlops_agents.agents.runtime.graph import TurnSink, turn_checkpointer
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.hub import SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.events.contract import AuditLog, EventLog
+from mlops_agents.storage.sqlite import connect_checkpointer
 
 if TYPE_CHECKING:
-    from mlops_agents.agents.runtime.executor import TurnExecutor
+    from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 
 logger = logging.getLogger(__name__)
 
 OBSERVER_TIMEOUT_S = 10.0
 
-__all__ = ["OBSERVER_TIMEOUT_S", "_observed", "handle_turn_waiting", "stop_waiting_turn"]
+__all__ = [
+    "OBSERVER_TIMEOUT_S",
+    "_UNEXPECTED_FAILURE",
+    "_CheckpointHolder",
+    "_Ending",
+    "_ending_of",
+    "_observed",
+    "delete_checkpoint_thread",
+    "handle_turn_waiting",
+    "open_checkpointer",
+    "stop_waiting_turn",
+]
+
+
+class _CheckpointHolder:
+    def __init__(self, saver: AsyncSqliteSaver) -> None:
+        self.saver = saver
+        self.preserved = False
+
+
+@asynccontextmanager
+async def open_checkpointer(db_path: str | Path, turn_id: str) -> AsyncGenerator[_CheckpointHolder]:
+    conn = await connect_checkpointer(Path(db_path))
+    try:
+        saver = turn_checkpointer(conn)
+        await saver.setup()
+        holder = _CheckpointHolder(saver)
+        try:
+            yield holder
+        finally:
+            if not holder.preserved:
+                try:
+                    await saver.adelete_thread(turn_id)
+                except Exception:
+                    logger.exception("Could not delete checkpointer thread for turn %s", turn_id)
+    finally:
+        await conn.close()
+
+
+async def delete_checkpoint_thread(db_path: str | Path, turn_id: str) -> None:
+    """Delete a turn's checkpoint thread from the SQLite checkpointer."""
+    conn = await connect_checkpointer(Path(db_path))
+    try:
+        saver = turn_checkpointer(conn)
+        await saver.setup()
+        try:
+            await saver.adelete_thread(turn_id)
+        except Exception:
+            logger.exception("Could not delete checkpointer thread for turn %s", turn_id)
+    finally:
+        await conn.close()
+
+
+@dataclass(frozen=True)
+class _Ending:
+    """How a taken turn ended, decided before anything of it is stored."""
+
+    status: TurnEnd | Literal["waiting"]
+    error: str | None = None
+    failure_notice: str | None = None
+
+    @property
+    def notice_recorded(self) -> bool:
+        return self.status == "failed" and self.failure_notice is None
+
+
+_UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
+_UNEXPECTED_FAILURE = _Ending("failed", _UNEXPECTED_FAILURE_TEXT, _UNEXPECTED_FAILURE_TEXT)
+
+
+def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
+    error = child_task.exception()
+    if error is not None:
+        logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
+        return _UNEXPECTED_FAILURE
+    end_status, end_error = child_task.result()
+    return _Ending(end_status, end_error)
 
 
 async def _observed(call: Awaitable[None]) -> None:

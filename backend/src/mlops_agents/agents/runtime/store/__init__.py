@@ -80,6 +80,20 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore):
             ).first()
         return None if row is None else str(row[0])
 
+    async def session_agent_map(self, project_id: str) -> tuple[dict[str, str], set[str]]:
+        """Return (session_to_agent map, waiting_session_ids)."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(select(sessions.c.id, sessions.c.agent))).all()
+            session_to_agent = {str(r[0]): str(r[1]) for r in rows}
+            waiting_rows = (
+                await conn.execute(
+                    select(turns.c.session_id).where(turns.c.status == "waiting").distinct()
+                )
+            ).all()
+            waiting_ids = {str(r[0]) for r in waiting_rows}
+        return session_to_agent, waiting_ids
+
     @shielded
     async def recover(
         self,

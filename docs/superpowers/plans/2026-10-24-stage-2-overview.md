@@ -30,7 +30,7 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | runtime-contracts | `plan/stage-2-runtime-contracts` | I8 to I12 in code, the whole stage 2 schema, the graph's hook points with stage 1 defaults | none; task 4 after tool-errors merges | now | Merged |
 | events | `plan/stage-2-events` | Event log, project event stream, audit log, status board, the turn observer | I8 to I12 | after runtime-contracts tasks 1 and 2 (task 3 for the observer); task 3: runtime-contracts task 4 merged | Merged |
 | tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Planned |
-| sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Planned |
+| sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Merged (#240) |
 | approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | tasks 1 and 2: after runtime-contracts tasks 1 and 2 and events task 1; task 3 on: runtime-contracts task 4 merged | Planned |
 | github-work | `plan/stage-2-github-work` | GitHub client for PRs, issues and labels, the fake GitHub server, OpenPullRequest, issue tools, local reviews, the PR reminder, PR state sync | I8 to I12; tasks task 4; events task 1 | client: after runtime-contracts task 1; tools: after runtime-contracts task 3 and the tasks plan's commit task; task 5: runtime-contracts task 4 merged; tasks 4 and 5: the tasks plan merged | Planned |
 | messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 (task 4 merged before its task 2) | Planned |
@@ -290,6 +290,8 @@ class Tasks(TaskWorkspaces, Protocol):
 
 ```python
 class SandboxUnavailable(Exception): ...   # its message is written for the model and the user
+# Added in the review of #240: a route that hits SandboxUnavailable answers 503 with code
+# "sandbox_unavailable" and the message (one mapping in api/errors.py).
 
 class DockerStatus(BaseModel):
     available: bool
@@ -297,7 +299,9 @@ class DockerStatus(BaseModel):
     detail: str | None
 
 class EnvironmentStatus(BaseModel):
-    state: Literal["none", "building", "ready", "failed"]
+    state: Literal["none", "building", "ready", "failed", "unavailable"]
+    # "unavailable" added in the review of #240: Docker is not reachable, so the image state is
+    # unknown; detail carries the SandboxUnavailable message. Never reported as "none".
     tag: str | None
     detail: str | None
 

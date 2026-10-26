@@ -524,6 +524,87 @@
         "title": "DetectedKey",
         "type": "object"
       },
+      "DockerStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "available",
+          "version",
+          "detail"
+        ],
+        "title": "DockerStatus",
+        "type": "object"
+      },
+      "EnvironmentStatus": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "enum": [
+              "none",
+              "building",
+              "ready",
+              "failed",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "state",
+          "tag",
+          "detail"
+        ],
+        "title": "EnvironmentStatus",
+        "type": "object"
+      },
       "EventRecord": {
         "properties": {
           "id": {
@@ -1405,6 +1486,40 @@
         ],
         "title": "RiskClass",
         "type": "string"
+      },
+      "SandboxSettings": {
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "title": "SandboxSettings",
+        "type": "object"
+      },
+      "SandboxView": {
+        "properties": {
+          "docker": {
+            "$ref": "#/components/schemas/DockerStatus"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/EnvironmentStatus"
+          },
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "docker",
+          "environment",
+          "network"
+        ],
+        "title": "SandboxView",
+        "type": "object"
       },
       "SendMessage": {
         "additionalProperties": false,
@@ -3627,6 +3742,90 @@
         ]
       }
     },
+    "/api/projects/{project_id}/sandbox": {
+      "get": {
+        "operationId": "get_project_sandbox_api_projects__project_id__sandbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/sandbox/rebuild": {
+      "post": {
+        "operationId": "rebuild_project_sandbox_api_projects__project_id__sandbox_rebuild_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebuild Project Sandbox",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
     "/api/projects/{project_id}/settings/permissions": {
       "get": {
         "operationId": "get_permissions_settings_api_projects__project_id__settings_permissions_get",
@@ -3716,6 +3915,58 @@
         "summary": "Update Permissions Settings",
         "tags": [
           "approvals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/sandbox": {
+      "put": {
+        "operationId": "update_project_sandbox_settings_api_projects__project_id__settings_sandbox_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Sandbox Settings",
+        "tags": [
+          "sandbox"
         ]
       }
     },

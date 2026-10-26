@@ -7,7 +7,6 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command, Durability
 
@@ -32,7 +31,11 @@ from mlops_agents.agents.runtime.graph import (
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.runtime.waiting import handle_turn_waiting
+from mlops_agents.agents.runtime.waiting import (
+    _CheckpointHolder,
+    delete_checkpoint_thread,
+    handle_turn_waiting,
+)
 from mlops_agents.storage.sqlite import connect_checkpointer
 
 logger = logging.getLogger(__name__)
@@ -367,16 +370,7 @@ class TurnExecutor:
 
     async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
         """Delete a turn's checkpoint thread from the SQLite checkpointer."""
-        conn = await connect_checkpointer(self._store.db_path(project_id))
-        try:
-            saver = turn_checkpointer(conn)
-            await saver.setup()
-            try:
-                await saver.adelete_thread(turn_id)
-            except Exception:
-                logger.exception("Could not delete the checkpointer thread of turn %s", turn_id)
-        finally:
-            await conn.close()
+        await delete_checkpoint_thread(self._store.db_path(project_id), turn_id)
 
     @asynccontextmanager
     async def _checkpointer(
@@ -395,13 +389,7 @@ class TurnExecutor:
                         await saver.adelete_thread(turn_id)
                     except Exception:
                         logger.exception(
-                            "Could not delete the checkpointer thread of turn %s", turn_id
+                            "Could not delete checkpointer thread for turn %s", turn_id
                         )
         finally:
             await conn.close()
-
-
-class _CheckpointHolder:
-    def __init__(self, saver: AsyncSqliteSaver) -> None:
-        self.saver = saver
-        self.preserved = False

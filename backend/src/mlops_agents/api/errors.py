@@ -15,6 +15,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mlops_agents.credentials import KeyStoreError
 from mlops_agents.errors import DomainError
+from mlops_agents.sandbox.contract import SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -55,6 +56,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(KeyStoreError)
     async def keystore_unavailable(request: Request, exc: KeyStoreError) -> JSONResponse:
         return error_response(503, "keystore_unavailable", str(exc))
+
+    @app.exception_handler(SandboxUnavailable)
+    async def sandbox_unavailable(request: Request, exc: SandboxUnavailable) -> JSONResponse:
+        return error_response(503, "sandbox_unavailable", str(exc))
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:

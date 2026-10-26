@@ -7,7 +7,6 @@ from contextlib import aclosing
 from typing import Literal
 
 import httpx2
-from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.contract import MessageBus
@@ -36,8 +35,6 @@ from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog, StatusBoard
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import sessions as sessions_table
-from mlops_agents.storage.tables import turns as turns_table
 from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -109,16 +106,12 @@ class SessionManager(AgentSessions):
             bus.bind(self)
 
     def _get_lock(self, project_id: str, session_id: str) -> AsyncRLock:
-        key = (project_id, session_id)
-        if key not in self._locks:
-            self._locks[key] = AsyncRLock()
-        return self._locks[key]
+        return self._locks.setdefault((project_id, session_id), AsyncRLock())
 
     def _get_hub(self, project_id: str, session_id: str) -> SessionHub:
         key = (project_id, session_id)
         if key not in self._hubs:
-            lock = self._get_lock(project_id, session_id)
-            self._hubs[key] = SessionHub(session_id, lock=lock)
+            self._hubs[key] = SessionHub(session_id, lock=self._get_lock(project_id, session_id))
         return self._hubs[key]
 
     async def ensure_recovered(self, project_id: str) -> None:
@@ -148,12 +141,9 @@ class SessionManager(AgentSessions):
             return sid
 
     def _check_agent(self, agent: str) -> None:
-        definition = self._catalog.get(agent)
-        if not definition.chat:
+        if not self._catalog.get(agent).chat:
             raise DomainError(
-                "agent_cannot_chat",
-                f"Agent '{agent}' does not accept chat messages.",
-                status=409,
+                "agent_cannot_chat", f"Agent '{agent}' does not accept chat messages.", status=409
             )
 
     async def get(self, project_id: str, agent: str) -> SessionView:
@@ -174,19 +164,15 @@ class SessionManager(AgentSessions):
                     is_busy = True
 
             stored = await self._store.messages(project_id, session_id)
-            live_msg = hub.live_message
-            if is_busy and live_msg is not None:
-                messages_view = [live_msg if m.id == live_msg.id else m for m in stored]
-            else:
-                messages_view = stored
-
+            live = hub.live_message if is_busy else None
+            messages = [live if (live and m.id == live.id) else m for m in stored]
             last_seq = hub.last_seq
 
         return SessionView(
             id=session_id,
             agent=agent,
             busy=is_busy,
-            messages=messages_view,
+            messages=messages,
             last_seq=last_seq,
             current_task=None,
         )
@@ -199,13 +185,7 @@ class SessionManager(AgentSessions):
 
     async def send(self, project_id: str, agent: str, text: str) -> MessageView:
         return await self._enqueue(
-            project_id,
-            agent,
-            text,
-            author_name="user",
-            from_agent=None,
-            exchange_id=None,
-            hop=None,
+            project_id, agent, text, author_name="user", from_agent=None, exchange_id=None, hop=None
         )
 
     async def post(
@@ -276,28 +256,13 @@ class SessionManager(AgentSessions):
 
     async def turn_states(self, project_id: str) -> dict[str, Literal["running", "waiting"]]:
         """Each agent whose session has a running or waiting turn now."""
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            rows = (await conn.execute(select(sessions_table.c.id, sessions_table.c.agent))).all()
-            session_to_agent = {str(r[0]): str(r[1]) for r in rows}
-
-            waiting_rows = (
-                await conn.execute(
-                    select(turns_table.c.session_id)
-                    .where(turns_table.c.status == "waiting")
-                    .distinct()
-                )
-            ).all()
-            waiting_session_ids = {str(r[0]) for r in waiting_rows}
-
-        running_session_ids = self._workers.running_sessions(project_id)
-        states: dict[str, Literal["running", "waiting"]] = {}
-        for sid, agent in session_to_agent.items():
-            if sid in running_session_ids:
-                states[agent] = "running"
-            elif sid in waiting_session_ids:
-                states[agent] = "waiting"
-        return states
+        session_to_agent, waiting_ids = await self._store.session_agent_map(project_id)
+        running_ids = self._workers.running_sessions(project_id)
+        return {
+            agent: ("running" if sid in running_ids else "waiting")
+            for sid, agent in session_to_agent.items()
+            if sid in running_ids or sid in waiting_ids
+        }
 
     async def update_message(
         self,
@@ -369,13 +334,12 @@ class SessionManager(AgentSessions):
             async with lock:
                 waiting = await self._store.waiting_turn(project_id, session_id)
                 if waiting is not None:
-                    turn_id, _ = waiting
                     hub = self._get_hub(project_id, session_id)
                     await stop_waiting_turn(
                         project_id=project_id,
                         session_id=session_id,
                         agent=agent,
-                        turn_id=turn_id,
+                        turn_id=waiting[0],
                         store=self._store,
                         hub=hub,
                         executor=self._executor,
@@ -383,9 +347,7 @@ class SessionManager(AgentSessions):
                         event_log=self._event_log,
                         observers=self._observers,
                     )
-                    next_turn = await self._store.next_queued_turn(project_id, session_id)
-                    if next_turn is not None:
-                        hub = self._get_hub(project_id, session_id)
+                    if await self._store.next_queued_turn(project_id, session_id) is not None:
                         self._workers.start(project_id, session_id, agent, hub, lock)
 
     async def subscribe(
@@ -399,49 +361,35 @@ class SessionManager(AgentSessions):
             async for event in events:
                 yield event
 
-    async def close_project(self, project_id: str) -> None:
-        await self._workspace.get(project_id)
-        await self._workers.cancel(project_id)
-
+    async def _recover_and_clear_project(self, project_id: str) -> None:
         for (p, s), hub in list(self._hubs.items()):
             if p == project_id:
                 hub.close()
                 self._hubs.pop((p, s), None)
-
-        for key in list(self._locks.keys()):
-            if key[0] == project_id:
-                self._locks.pop(key, None)
+        self._locks = {k: v for k, v in self._locks.items() if k[0] != project_id}
+        self._session_ids = {k: v for k, v in self._session_ids.items() if k[0] != project_id}
         self._workers.forget(project_id)
-        for key in list(self._session_ids.keys()):
-            if key[0] == project_id:
-                self._session_ids.pop(key, None)
-
         self._recovered_projects.discard(project_id)
-
         try:
             await self._store.recover(
                 project_id, audit_log=self._audit_log, event_log=self._event_log
             )
         except Exception as exc:
-            logger.exception("Failed to recover project %s on close_project: %s", project_id, exc)
+            logger.exception("Failed to recover project %s: %s", project_id, exc)
 
+    async def close_project(self, project_id: str) -> None:
+        await self._workspace.get(project_id)
+        await self._workers.cancel(project_id)
+        await self._recover_and_clear_project(project_id)
         await self._databases.close_project(project_id)
 
     async def close(self) -> None:
         projects = self._workers.projects() | set(self._recovered_projects)
         await self._workers.cancel()
-
-        for project_id in projects:
-            try:
-                await self._store.recover(
-                    project_id, audit_log=self._audit_log, event_log=self._event_log
-                )
-            except Exception as exc:
-                logger.exception("Failed to recover project %s on close: %s", project_id, exc)
-
-        for hub in list(self._hubs.values()):
+        for p in projects:
+            await self._recover_and_clear_project(p)
+        for hub in self._hubs.values():
             hub.close()
-
         self._hubs.clear()
         self._workers.forget()
         self._locks.clear()
