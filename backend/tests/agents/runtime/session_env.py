@@ -18,7 +18,6 @@ from mlops_agents.agents.runtime.hooks import (
     Gate,
     NoInbound,
     NoTurnEndCheck,
-    RepositoryOnlyWorkspaces,
     TurnObserver,
 )
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -36,6 +35,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -95,7 +95,7 @@ async def build_session_env(
         gate=gate if gate is not None else ApprovalGate(databases),
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
         observers=observers,
         bus=bus,
         audit_log=audit_log,

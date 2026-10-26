@@ -16,7 +16,6 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
 )
 from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
-from mlops_agents.agents.runtime.hooks import RepositoryOnlyWorkspaces
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
@@ -35,6 +34,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -94,7 +94,7 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
@@ -164,7 +164,7 @@ async def test_executor_turn_failed_from_caller(
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
     caller = ModelCaller(providers_svc, model_http)
-    workspaces = RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
