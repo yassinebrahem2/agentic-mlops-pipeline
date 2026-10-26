@@ -23,6 +23,14 @@ export function failure(message: string, status = 409): Response {
   return json({ code: "conflict", message, detail: null }, status);
 }
 
+/** One property of a parsed request body, or undefined when the body is not an object with it. */
+export function bodyField(body: unknown, key: string): unknown {
+  if (body === null || typeof body !== "object") return undefined;
+  const entry = Object.entries(body).find(([name]) => name === key);
+  const value: unknown = entry?.[1];
+  return value;
+}
+
 /** Stubs `fetch` with handlers keyed "METHOD /path"; an unlisted route answers 404. */
 export function stubRoutes(routes: Record<string, RouteHandler>): RecordedRequest[] {
   const requests: RecordedRequest[] = [];

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import { SandboxSection } from "./SandboxSection";
-import { failure, json, renderSection, stubRoutes } from "./testing";
+import { bodyField, failure, json, renderSection, stubRoutes } from "./testing";
 
 type View = components["schemas"]["SandboxView"];
 type Environment = components["schemas"]["EnvironmentStatus"];
@@ -31,7 +31,8 @@ function setup(
       options.getFails ? failure("Sandbox unavailable", 500) : json(view),
     [`PUT ${BASE}/settings/sandbox`]: (body) => {
       if (options.putFails) return failure("Network setting not saved");
-      view = { ...view, network: (body as { network: boolean }).network };
+      const next = bodyField(body, "network");
+      if (typeof next === "boolean") view = { ...view, network: next };
       return json({ network: view.network });
     },
     [`POST ${BASE}/sandbox/rebuild`]: () => {
@@ -82,7 +83,7 @@ it("disables Rebuild while the image is building", async () => {
   expect(screen.getByRole("button", { name: "Rebuild" })).toBeDisabled();
 });
 
-it.each(["none", "failed"] as const)(
+it.each(["none", "ready", "failed"] as const)(
   "rebuilds from the %s state and shows the answer",
   async (state) => {
     const { user, requests } = setup({

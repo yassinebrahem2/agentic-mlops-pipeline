@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import { PermissionsSection } from "./PermissionsSection";
-import { failure, json, renderSection, stubRoutes } from "./testing";
+import { bodyField, failure, json, renderSection, stubRoutes } from "./testing";
 
 type Level = components["schemas"]["PermissionsSettings"]["level"];
 
@@ -16,7 +16,9 @@ function setup(options: { level?: Level; getFails?: boolean; putFails?: boolean 
       options.getFails ? failure("Permissions unavailable", 500) : json({ level }),
     [`PUT ${ROUTE}`]: (body) => {
       if (options.putFails) return failure("Level not saved");
-      level = (body as { level: Level }).level;
+      const next = bodyField(body, "level");
+      if (next === "suggest" || next === "ask" || next === "autonomous" || next === "bypass")
+        level = next;
       return json({ level });
     },
   });
@@ -35,18 +37,15 @@ it("loads the stored level and explains every level in one line", async () => {
   expect(await screen.findByRole("combobox", { name: "Permission level" })).toHaveTextContent(
     "Autonomous",
   );
-  const list = screen.getByRole("list", { name: "What each level allows" });
-  const items = within(list).getAllByRole("listitem");
-  expect(items.map((item) => item.querySelector("strong")?.textContent)).toEqual([
-    "Suggest",
-    "Ask",
-    "Autonomous",
-    "Bypass",
+  const items = within(screen.getByRole("list", { name: "What each level allows" })).getAllByRole(
+    "listitem",
+  );
+  expect(items.map((item) => item.textContent)).toEqual([
+    "Suggest: Agents read and message freely and propose every code change as a diff in their answer; they run and deploy nothing, and ask before they use GitHub.",
+    "Ask: Agents read and message freely and ask before they change code, run commands, use GitHub or deploy.",
+    "Autonomous: Agents change code, run commands and use GitHub without asking; they still ask before they deploy.",
+    "Bypass: Agents do everything without asking, deploys included.",
   ]);
-  for (const item of items) {
-    const label = item.querySelector("strong")?.textContent ?? "";
-    expect(item.textContent.length).toBeGreaterThan(label.length + 20);
-  }
 });
 
 it("saves a level chosen from the list", async () => {

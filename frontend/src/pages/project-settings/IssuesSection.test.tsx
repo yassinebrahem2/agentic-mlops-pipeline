@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import { IssuesSection } from "./IssuesSection";
-import { failure, json, renderSection, stubRoutes } from "./testing";
+import { bodyField, failure, json, renderSection, stubRoutes } from "./testing";
 
 type Priority = components["schemas"]["IssuesSettings"]["min_priority"];
 
@@ -18,7 +18,9 @@ function setup(options: { priority?: Priority; getFails?: boolean; putFails?: bo
         : json({ min_priority: priority }),
     [`PUT ${ROUTE}`]: (body) => {
       if (options.putFails) return failure("Priority not saved");
-      priority = (body as { min_priority: Priority }).min_priority;
+      const next = bodyField(body, "min_priority");
+      if (next === "low" || next === "medium" || next === "high" || next === "critical")
+        priority = next;
       return json({ min_priority: priority });
     },
   });

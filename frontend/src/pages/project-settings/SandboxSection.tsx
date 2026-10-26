@@ -14,7 +14,7 @@ const STATE_LABELS: Record<EnvironmentState, string> = {
   failed: "Failed",
   unavailable: "Unavailable",
 };
-// While an image builds nothing else tells the page it finished.
+// The status is polled while an image builds so the page learns when it finishes.
 const BUILD_POLL_MS = 2000;
 
 const sandboxKey = (projectId: string) => ["projects", projectId, "sandbox"] as const;

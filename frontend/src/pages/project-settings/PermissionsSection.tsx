@@ -26,15 +26,15 @@ type Level = components["schemas"]["PermissionsSettings"]["level"];
 const LEVEL_COPY: Record<Level, { label: string; help: string }> = {
   suggest: {
     label: "Suggest",
-    help: "Agents read the code and propose every change as a diff in their answer; they change and run nothing.",
+    help: "Agents read and message freely and propose every code change as a diff in their answer; they run and deploy nothing, and ask before they use GitHub.",
   },
   ask: {
     label: "Ask",
-    help: "Agents read freely and ask before they change code, run commands or use GitHub.",
+    help: "Agents read and message freely and ask before they change code, run commands, use GitHub or deploy.",
   },
   autonomous: {
     label: "Autonomous",
-    help: "Agents change code, run commands and use GitHub on their own; they still ask before they deploy.",
+    help: "Agents change code, run commands and use GitHub without asking; they still ask before they deploy.",
   },
   bypass: {
     label: "Bypass",
