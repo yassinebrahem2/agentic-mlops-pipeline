@@ -74,6 +74,12 @@ function setup(
         await Promise.resolve();
       });
     },
+    resync: async () => {
+      await act(async () => {
+        stream.emit("resync", {});
+        await Promise.resolve();
+      });
+    },
     finishRebuild: async (environment: Environment) => {
       await act(async () => {
         release?.(environment);
@@ -184,6 +190,15 @@ it("shows a build started elsewhere and then its result", async () => {
   await emit("sandbox.build.finished");
   expect(await screen.findByText("mlops-env:def")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Rebuild" })).toBeEnabled();
+});
+
+it("checks the status again after a resync", async () => {
+  const { resync, setEnvironment, sandboxGets } = setup();
+  expect(await screen.findByText("Ready")).toBeInTheDocument();
+  setEnvironment(building);
+  await resync();
+  expect(await screen.findByText("Building")).toBeInTheDocument();
+  expect(sandboxGets()).toBe(2);
 });
 
 it("shows a failed build reported by an event", async () => {
