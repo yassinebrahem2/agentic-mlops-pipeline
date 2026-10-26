@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -112,8 +111,14 @@ async def commit_task(
         try:
             await asyncio.shield(add_fut)
         except asyncio.CancelledError:
-            with suppress(Exception):
+            try:
                 await add_fut
+            except Exception as exc:
+                logger.warning(
+                    "Error awaiting shielded add after cancellation: %s",
+                    exc,
+                    exc_info=True,
+                )
             raise
 
         head_before_res = await task_git(
@@ -148,8 +153,14 @@ async def commit_task(
         try:
             commit_res = await asyncio.shield(commit_task_fut)
         except asyncio.CancelledError:
-            with suppress(Exception):
+            try:
                 await commit_task_fut
+            except Exception as exc:
+                logger.warning(
+                    "Error awaiting shielded commit after cancellation: %s",
+                    exc,
+                    exc_info=True,
+                )
             raise
 
         if commit_res.code != 0:
@@ -167,21 +178,22 @@ async def commit_task(
         return CommitResult(sha=sha, changed=tuple(candidate_paths))
 
     finally:
-        if not committed and head_before is not None:
-            head_now_res = await task_git(
-                runner,
-                git_dir=git_dir,
-                worktree=worktree,
-                empty_hooks=empty_hooks,
-                args=["rev-parse", "HEAD"],
-                check=False,
-            )
-            if head_now_res.code == 0 and head_now_res.stdout.strip() != head_before:
-                committed = True
 
-        if not committed:
+        async def _cleanup() -> None:
+            nonlocal committed
+            if not committed and head_before is not None:
+                head_now_res = await task_git(
+                    runner,
+                    git_dir=git_dir,
+                    worktree=worktree,
+                    empty_hooks=empty_hooks,
+                    args=["rev-parse", "HEAD"],
+                    check=False,
+                )
+                if head_now_res.code == 0 and head_now_res.stdout.strip() != head_before:
+                    committed = True
 
-            async def _cleanup() -> None:
+            if not committed:
                 try:
                     reset_res = await task_git(
                         runner,
@@ -214,4 +226,4 @@ async def commit_task(
                             exc_info=True,
                         )
 
-            await asyncio.shield(_cleanup())
+        await asyncio.shield(_cleanup())

@@ -37,7 +37,10 @@ from mlops_agents.storage.tables import task_reads, tasks
 from mlops_agents.workspace.service import WorkspaceService
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from mlops_agents.sandbox.contract import Sandbox
+    from mlops_agents.workspace.models import Project
 
 
 class TasksService(Tasks):
@@ -58,6 +61,10 @@ class TasksService(Tasks):
         self._workspace = workspace
         self._sandbox = sandbox
         self._current_tasks: dict[tuple[str, str], str] = {}
+        self._task_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    def _task_lock(self, project_id: str, task_id: str) -> asyncio.Lock:
+        return self._task_locks.setdefault((project_id, task_id), asyncio.Lock())
 
     @property
     def sandbox(self) -> Sandbox | None:
@@ -305,65 +312,65 @@ class TasksService(Tasks):
         engine = await self._databases.project(project_id)
         await claim_paths(engine, task, paths)
 
-    async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
+    async def _task_env(self, project_id: str, task_id: str) -> tuple[Project, Path, AsyncEngine]:
         project = await self._workspace.get(project_id)
         repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task.id)
+        git_dir = git_dir_for_task(repo_root, task_id)
         engine = await self._databases.project(project_id)
-        return await has_unpublished_changes_task(
-            runner=self._git,
-            git_dir=git_dir,
-            worktree=task.worktree,
-            empty_hooks=self._paths.empty_hooks,
-            engine=engine,
-            project=project,
-            task=task,
-        )
+        return project, git_dir, engine
+
+    async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
+        async with self._task_lock(project_id, task.id):
+            project, git_dir, engine = await self._task_env(project_id, task.id)
+            return await has_unpublished_changes_task(
+                runner=self._git,
+                git_dir=git_dir,
+                worktree=task.worktree,
+                empty_hooks=self._paths.empty_hooks,
+                engine=engine,
+                project=project,
+                task=task,
+            )
 
     async def staged_diff(self, project_id: str, task: TaskRef) -> str:
-        project = await self._workspace.get(project_id)
-        repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task.id)
-        engine = await self._databases.project(project_id)
-        async with pause_task(self._sandbox, project_id, task.id):
-            return await staged_diff_task(
-                runner=self._git,
-                git_dir=git_dir,
-                worktree=task.worktree,
-                empty_hooks=self._paths.empty_hooks,
-                engine=engine,
-                task=task,
-            )
+        async with self._task_lock(project_id, task.id):
+            _, git_dir, engine = await self._task_env(project_id, task.id)
+            async with pause_task(self._sandbox, project_id, task.id):
+                return await staged_diff_task(
+                    runner=self._git,
+                    git_dir=git_dir,
+                    worktree=task.worktree,
+                    empty_hooks=self._paths.empty_hooks,
+                    engine=engine,
+                    task=task,
+                )
 
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult:
-        project = await self._workspace.get(project_id)
-        repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task.id)
-        engine = await self._databases.project(project_id)
-        async with pause_task(self._sandbox, project_id, task.id):
-            return await commit_task(
+        async with self._task_lock(project_id, task.id):
+            _, git_dir, engine = await self._task_env(project_id, task.id)
+            async with pause_task(self._sandbox, project_id, task.id):
+                return await commit_task(
+                    runner=self._git,
+                    git_dir=git_dir,
+                    worktree=task.worktree,
+                    empty_hooks=self._paths.empty_hooks,
+                    databases=self._databases,
+                    engine=engine,
+                    task=task,
+                    message=message,
+                )
+
+    async def push(self, project_id: str, task: TaskRef) -> None:
+        async with self._task_lock(project_id, task.id):
+            project, git_dir, _ = await self._task_env(project_id, task.id)
+            await push_task(
                 runner=self._git,
                 git_dir=git_dir,
                 worktree=task.worktree,
                 empty_hooks=self._paths.empty_hooks,
-                databases=self._databases,
-                engine=engine,
+                project=project,
                 task=task,
-                message=message,
             )
-
-    async def push(self, project_id: str, task: TaskRef) -> None:
-        project = await self._workspace.get(project_id)
-        repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task.id)
-        await push_task(
-            runner=self._git,
-            git_dir=git_dir,
-            worktree=task.worktree,
-            empty_hooks=self._paths.empty_hooks,
-            project=project,
-            task=task,
-        )
 
     async def local_merge_preview(self, project_id: str, task: TaskRef) -> list[str]:
         raise NotImplementedError

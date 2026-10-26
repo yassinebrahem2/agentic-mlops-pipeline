@@ -14,7 +14,7 @@ from mlops_agents.agents.tasks import service as service_module
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import file_claims
-from tests.agents.tasks.test_commit import cmd, create_session, setup_service
+from tests.agents.tasks.helpers import cmd, create_session, setup_service
 from tests.conftest import MemoryKeyStore
 
 

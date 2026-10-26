@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import update
 
+from mlops_agents.agents.tasks import push as push_module
+from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import tasks
-from tests.agents.tasks.test_commit import cmd, create_session, setup_service
+from tests.agents.tasks.helpers import cmd, create_session, setup_service
 from tests.conftest import MemoryKeyStore, make_repo
 
 
@@ -234,3 +238,97 @@ async def test_leftover_generated_temp_file_not_counted_as_unpublished_change(
     # But creating a real user file DOES count as unpublished change
     (task.worktree / "real.py").write_text("x = 1\n", encoding="utf-8")
     assert await service.has_unpublished_changes(project_id, task)
+
+
+async def test_push_records_exact_pushed_sha_when_branch_moves_during_push(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bare = tmp_path / "remote_moving.git"
+    bare.mkdir()
+    cmd(["git", "init", "--bare", str(bare)])
+    seed = tmp_path / "seed_moving"
+    make_repo(seed, {"seed.txt": "seed\n"}, git_env)
+    cmd(["git", "push", str(bare), "main"], cwd=seed)
+
+    service, _, _, project_id, repo = await setup_service(
+        tmp_path / "client", paths, databases, keystore, git_env
+    )
+    cmd(
+        ["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"],
+        cwd=repo,
+    )
+
+    fake_global = tmp_path / "fake_global_moving.gitconfig"
+    bare_url = bare.as_uri()
+    cmd(
+        [
+            "git",
+            "config",
+            "--file",
+            str(fake_global),
+            f"url.{bare_url}.insteadOf",
+            "https://github.com/test-owner/test-repo.git",
+        ]
+    )
+
+    old_global = os.environ.get("GIT_CONFIG_GLOBAL")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(fake_global)
+    try:
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "Moving branch push test")
+
+        (task.worktree / "first.txt").write_text("first commit\n", encoding="utf-8")
+        c1 = await service.commit(project_id, task, "feat: first commit")
+
+        orig_run_safe_git = push_module.run_safe_git
+
+        async def moving_run_safe_git(*args: Any, **kwargs: Any) -> Any:
+            git_args_raw = kwargs.get("args")
+            if isinstance(git_args_raw, Sequence) and "push" in git_args_raw:
+                # Branch moves right before/during the push network command
+                (task.worktree / "second.txt").write_text("second commit\n", encoding="utf-8")
+                cmd(["git", "add", "second.txt"], cwd=task.worktree)
+                cmd(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Jane Doe",
+                        "-c",
+                        "user.email=jane@example.com",
+                        "commit",
+                        "-m",
+                        "feat: second commit",
+                    ],
+                    cwd=task.worktree,
+                )
+            return await orig_run_safe_git(*args, **kwargs)
+
+        monkeypatch.setattr(push_module, "run_safe_git", moving_run_safe_git)
+
+        await service.push(project_id, task)
+
+        # The bare remote received c1.sha (the resolved sha pushed)
+        remote_sha = cmd(["git", "rev-parse", f"refs/heads/{task.branch}"], cwd=bare).stdout.strip()
+        assert remote_sha == c1.sha
+
+        # The local pushed ref is recorded as c1.sha (NOT the new HEAD of the branch)
+        pushed_ref = f"refs/{APP_NAME}/pushed/{task.branch}"
+        pushed_sha = cmd(["git", "rev-parse", pushed_ref], cwd=task.worktree).stdout.strip()
+        assert pushed_sha == c1.sha
+
+        # New HEAD is different from pushed_sha
+        head_sha = cmd(["git", "rev-parse", "HEAD"], cwd=task.worktree).stdout.strip()
+        assert head_sha != pushed_sha
+
+        # Because second commit is on the branch but wasn't pushed, has_unpublished_changes is True!
+        assert await service.has_unpublished_changes(project_id, task) is True
+    finally:
+        if old_global is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = old_global

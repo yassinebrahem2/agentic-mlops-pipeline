@@ -1,128 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
-from dataclasses import replace
+import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import Resync
-from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tasks.worktrees import TaskFiles
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
-from mlops_agents.clock import now_iso
-from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.errors import DomainError
-from mlops_agents.events.contract import EventLog, EventRecord, EventType
-from mlops_agents.ids import new_id
-from mlops_agents.integrations.github.auth import GitHubAuth
-from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import sessions, tasks
-from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
-from tests.integrations.test_github_auth import FakeGh
-
-
-class FakeEventLog(EventLog):
-    def __init__(self) -> None:
-        self.records: list[dict[str, Any]] = []
-
-    async def record(
-        self,
-        project_id: str,
-        *,
-        source: str,
-        type: EventType,
-        payload: dict[str, Any],
-        subject_id: str | None = None,
-    ) -> EventRecord:
-        record = EventRecord(
-            id=new_id("evt"),
-            seq=len(self.records) + 1,
-            ts=now_iso(),
-            source=source,
-            type=type,
-            subject_id=subject_id,
-            payload=payload,
-        )
-        self.records.append(
-            {
-                "project_id": project_id,
-                "source": source,
-                "type": type,
-                "payload": payload,
-                "subject_id": subject_id,
-                "record": record,
-            }
-        )
-        return record
-
-    async def subscribe(
-        self, project_id: str, after_seq: int | None
-    ) -> AsyncGenerator[EventRecord | Resync, None]:
-        if False:
-            yield
-
-    async def history(
-        self, project_id: str, *, types: Sequence[EventType], limit: int = 200
-    ) -> list[EventRecord]:
-        return [
-            r["record"]
-            for r in reversed(self.records)
-            if r["project_id"] == project_id and r["type"] in types
-        ][:limit]
-
-
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
-
-
-async def _setup_service(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    git_env: dict[str, str],
-) -> tuple[TasksService, WorkspaceService, FakeEventLog, str, Path]:
-    repo = make_repo(tmp_path / "repo", {"app.py": "print('hello')\n"}, git_env)
-    http = httpx2.AsyncClient()
-    github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    runner = GitRunner(paths.bin, github.token)
-    workspace = WorkspaceService(_settings(paths), paths, databases, runner, github, http)
-    project = await workspace.add_local(str(repo))
-    events = FakeEventLog()
-    service = TasksService(
-        databases=databases,
-        paths=paths,
-        git=runner,
-        events=events,
-        workspace=workspace,
-    )
-    return service, workspace, events, project.id, repo
-
-
-async def _create_session(
-    databases: Databases, project_id: str, session_id: str, agent: str = "coder"
-) -> None:
-    from sqlalchemy import insert
-
-    engine = await databases.project(project_id)
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(sessions).values(
-                id=session_id,
-                agent=agent,
-                summary=None,
-                compacted_through=None,
-                created_at=now_iso(),
-            )
-        )
+from mlops_agents.storage.tables import tasks
+from tests.agents.tasks.helpers import create_session as _create_session
+from tests.agents.tasks.helpers import setup_service as _setup_service
+from tests.conftest import MemoryKeyStore
 
 
 async def test_start_task_creates_worktree_db_row_and_event(
@@ -331,3 +225,54 @@ async def test_resume_cleans_leftover_temp_files(
     await service.resume(project_id, "ses_coder", "coder", task.id)
     assert not generated_tmp.exists()
     assert user_file.exists()
+
+
+async def test_task_calls_are_serialized_per_task(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_coder", agent="coder")
+    task = await service.start(
+        project_id=project_id,
+        session_id="ses_coder",
+        agent="coder",
+        title="Serialization test",
+    )
+
+    (task.worktree / "work.py").write_text("x = 1\n", encoding="utf-8")
+
+    from mlops_agents.agents.tasks import commit as commit_module
+
+    orig_task_git = commit_module.task_git
+    in_add = asyncio.Event()
+    release_add = asyncio.Event()
+
+    async def blocking_task_git(*args: Any, **kwargs: Any) -> Any:
+        git_args_raw = kwargs.get("args")
+        if isinstance(git_args_raw, Sequence) and "add" in git_args_raw:
+            in_add.set()
+            await release_add.wait()
+        return await orig_task_git(*args, **kwargs)
+
+    monkeypatch.setattr(commit_module, "task_git", blocking_task_git)
+
+    commit_fut = asyncio.create_task(service.commit(project_id, task, "feat: blocked add"))
+    await in_add.wait()
+
+    diff_fut = asyncio.create_task(service.staged_diff(project_id, task))
+    await asyncio.sleep(0.05)
+    assert not diff_fut.done()
+
+    release_add.set()
+    commit_res = await commit_fut
+    assert commit_res.changed == ("work.py",)
+
+    diff_res = await diff_fut
+    assert diff_res == ""
