@@ -74,6 +74,7 @@ executionEnvironments = [
 
 [tool.pytest.ini_options]
 timeout = 120
+timeout_method = "thread"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

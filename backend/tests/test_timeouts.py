@@ -1,4 +1,3 @@
-import sys
 import tomllib
 from pathlib import Path
 
@@ -11,6 +10,7 @@ def test_hung_test_times_out(pytester: pytest.Pytester) -> None:
     pytester.makeini(
         """
 [pytest]
+timeout_method = thread
 asyncio_mode = auto
 asyncio_default_fixture_loop_scope = function
 """
@@ -34,8 +34,33 @@ async def test_hung(hanging):
     assert "test_hung" in output
     assert result.ret != 0
     assert "Timeout" in output
-    if sys.platform == "win32":
-        assert "Stack of" in output
+    assert "Stack of" in output
+
+
+def test_to_thread_hung_times_out(pytester: pytest.Pytester) -> None:
+    pytester.makeini(
+        """
+[pytest]
+timeout_method = thread
+asyncio_mode = auto
+asyncio_default_fixture_loop_scope = function
+"""
+    )
+    pytester.makepyfile(
+        """
+import asyncio
+import threading
+
+async def test_to_thread_hung():
+    await asyncio.to_thread(threading.Event().wait)
+"""
+    )
+    result = pytester.runpytest_subprocess("-o", "timeout=2", "-v", timeout=60)
+    output = result.stdout.str() + "\n" + result.stderr.str()
+    assert "test_to_thread_hung" in output
+    assert result.ret != 0
+    assert "Timeout" in output
+    assert "Stack of" in output
 
 
 def test_docker_and_live_item_timeout_markers(pytester: pytest.Pytester) -> None:
@@ -99,4 +124,4 @@ def test_pytest_timeout_configuration() -> None:
         data = tomllib.load(f)
     ini_options = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
     assert ini_options.get("timeout") == 120
-    assert "timeout_method" not in ini_options
+    assert ini_options.get("timeout_method") == "thread"
