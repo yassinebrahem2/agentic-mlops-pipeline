@@ -786,6 +786,25 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IssuesSettings": {
+        "properties": {
+          "min_priority": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ],
+            "title": "Min Priority",
+            "type": "string"
+          }
+        },
+        "required": [
+          "min_priority"
+        ],
+        "title": "IssuesSettings",
+        "type": "object"
+      },
       "KeyHint": {
         "properties": {
           "hint": {
@@ -3823,6 +3842,98 @@
         "summary": "Rebuild Project Sandbox",
         "tags": [
           "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/issues": {
+      "get": {
+        "operationId": "get_issues_settings_api_projects__project_id__settings_issues_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuesSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Issues Settings",
+        "tags": [
+          "github-work"
+        ]
+      },
+      "put": {
+        "operationId": "update_issues_settings_api_projects__project_id__settings_issues_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssuesSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuesSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Issues Settings",
+        "tags": [
+          "github-work"
         ]
       }
     },
