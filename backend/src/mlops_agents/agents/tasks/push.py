@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import stat
-from contextlib import suppress
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,17 +24,25 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.git import GitRunner
     from mlops_agents.workspace.models import Project
 
+logger = logging.getLogger(__name__)
+
 
 def _rmtree(path: Path) -> None:
     def on_exc(func: Any, target: str, exc: Any) -> None:
-        del exc
-        with suppress(Exception):
+        try:
             Path(target).chmod(stat.S_IWRITE | stat.S_IREAD)
-        with suppress(Exception):
+        except Exception as chmod_exc:
+            logger.warning("Failed to reset permissions on %s: %s", target, chmod_exc)
+        try:
             func(target)
+        except Exception as retry_exc:
+            logger.warning("Failed to remove %s: %s", target, retry_exc)
 
     if path.exists():
-        shutil.rmtree(path, onexc=on_exc)
+        try:
+            shutil.rmtree(path, onexc=on_exc)
+        except Exception as exc:
+            logger.warning("Failed to remove directory %s: %s", path, exc)
 
 
 async def project_repo_ref(
@@ -113,32 +122,50 @@ async def push_task(
     if not objects_path.is_absolute():
         objects_path = (worktree / objects_path).resolve()
 
-    temp_push = empty_hooks.parent / f".tmp_push_{task.id}_{commit_sha[:8]}"
-    if not temp_push.exists():
+    unique_suffix = uuid.uuid4().hex[:8]
+    temp_push = empty_hooks.parent / f".tmp_push_{task.id}_{commit_sha[:8]}_{unique_suffix}"
+    push_fut: asyncio.Task[Any] | None = None
+
+    try:
         await run_safe_git(
             runner,
             args=["init", "--bare", str(temp_push)],
             cwd=empty_hooks.parent,
             empty_hooks=empty_hooks,
         )
-
-    try:
         args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
-        await run_safe_git(
-            runner,
-            args=args,
-            cwd=temp_push,
-            git_dir=temp_push,
-            empty_hooks=empty_hooks,
-            authenticated=True,
-            extra_env={
-                "GIT_OBJECT_DIRECTORY": str(objects_path),
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects_path),
-            },
+        push_fut = asyncio.create_task(
+            run_safe_git(
+                runner,
+                args=args,
+                cwd=temp_push,
+                git_dir=temp_push,
+                empty_hooks=empty_hooks,
+                authenticated=True,
+                extra_env={
+                    "GIT_OBJECT_DIRECTORY": str(objects_path),
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects_path),
+                },
+            )
         )
+        await asyncio.shield(push_fut)
+    except asyncio.CancelledError:
+        if push_fut is not None:
+            try:
+                await asyncio.shield(push_fut)
+            except BaseException as exc:
+                if not isinstance(exc, asyncio.CancelledError):
+                    logger.warning("Push failed during cancellation: %s", exc)
+        raise
     finally:
-        with suppress(Exception):
-            await asyncio.to_thread(_rmtree, temp_push)
+
+        async def _cleanup() -> None:
+            try:
+                await asyncio.to_thread(_rmtree, temp_push)
+            except Exception as exc:
+                logger.warning("Failed to clean up temp bare repo %s: %s", temp_push, exc)
+
+        await asyncio.shield(_cleanup())
 
     pushed_ref = f"refs/{APP_NAME}/pushed/{task.branch}"
     await task_git(
@@ -160,22 +187,20 @@ async def has_unpublished_changes_task(
     project: Project,
     task: TaskRef,
 ) -> bool:
-    if not task.worktree.exists():
-        return False
-
-    # Check worktree cleanliness (ignoring any leftover generated atomic write temp files)
-    status_res = await task_git(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        args=["status", "--porcelain=v1", "-uall", "-z", "--no-renames"],
-    )
-    for token in status_res.stdout.split("\0"):
-        if len(token) > 3:
-            path = token[3:]
-            if not is_generated_temp_file(path):
-                return True
+    if await asyncio.to_thread(worktree.exists):
+        # Check worktree cleanliness (ignoring any leftover generated atomic write temp files)
+        status_res = await task_git(
+            runner,
+            git_dir=git_dir,
+            worktree=worktree,
+            empty_hooks=empty_hooks,
+            args=["status", "--porcelain=v1", "-uall", "-z", "--no-renames"],
+        )
+        for token in status_res.stdout.split("\0"):
+            if len(token) > 3:
+                path = token[3:]
+                if not is_generated_temp_file(path):
+                    return True
 
     # Read task record from DB
     async with engine.connect() as conn:

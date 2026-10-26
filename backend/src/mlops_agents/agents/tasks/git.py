@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -92,13 +93,14 @@ async def task_git(
     extra_env: dict[str, str] | None = None,
 ) -> GitResult:
     """The only code that runs git on a task worktree."""
+    worktree_exists = await asyncio.to_thread(worktree.exists)
     return await run_safe_git(
         runner,
         args=args,
-        cwd=worktree,
+        cwd=worktree if worktree_exists else empty_hooks.parent,
         empty_hooks=empty_hooks,
         git_dir=git_dir,
-        worktree=worktree,
+        worktree=worktree if worktree_exists else None,
         check=check,
         timeout=timeout,
         authenticated=authenticated,
