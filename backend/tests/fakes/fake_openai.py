@@ -117,17 +117,6 @@ def _reply(
         return "", [{"name": "report_capabilities", "arguments": TOOL_ARGS["report_capabilities"]}]
     if model == "fake-slow":
         return SLOW_TEXT, None
-    if state.scripted_tool_calls is not None:
-        return "", list(state.scripted_tool_calls)
-    if model == "fake-invalid-tools":
-        return "", [{"name": str(tools[0]["function"]["name"]), "arguments": "{pattern: foo}"}]
-    if model == "fake-mixed-tools":
-        t0 = str(tools[0]["function"]["name"])
-        t1 = str(tools[1]["function"]["name"]) if len(tools) > 1 else t0
-        return "", [
-            {"name": t0, "arguments": TOOL_ARGS.get(t0, {})},
-            {"name": t1, "arguments": "{pattern: foo}"},
-        ]
     if model == "fake-write":
         last_content = str(last.get("content") or "")
         if "pull request" in last_content or "OpenPullRequest" in last_content:
@@ -159,6 +148,17 @@ def _reply(
         content = str(last.get("content") or "").strip()
         first_line = content.splitlines()[0] if content else "(empty)"
         return f"Done. First line: {first_line}", None
+    if state.scripted_tool_calls is not None:
+        return "", list(state.scripted_tool_calls)
+    if model == "fake-invalid-tools":
+        return "", [{"name": str(tools[0]["function"]["name"]), "arguments": "{pattern: foo}"}]
+    if model == "fake-mixed-tools":
+        t0 = str(tools[0]["function"]["name"])
+        t1 = str(tools[1]["function"]["name"]) if len(tools) > 1 else t0
+        return "", [
+            {"name": t0, "arguments": TOOL_ARGS.get(t0, {})},
+            {"name": t1, "arguments": "{pattern: foo}"},
+        ]
     return "", [
         {
             "name": str(tools[0]["function"]["name"]),
