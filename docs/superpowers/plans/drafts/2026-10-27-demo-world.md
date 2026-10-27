@@ -11,7 +11,7 @@
 ## Planted flaws (the company's setup, by design)
 
 What a real mid-size company plausibly gets wrong. The agents' first audit should find them. `demo-world` writes this list to `world/planted_flaws.json` (id, category, where, what):
-Measured on the data with this exact setup (first model at cutoff 2016-01-01, never retrained):
+Measured by a replay of the data close to this setup (first model on arrivals before 2016-01-01, never retrained); task 3 re-measures them on the built system:
 1. **Random validation split.** `evaluate` scores a random 20% of the training window: PR-AUC about 0.98, against about 0.66 on later bookings.
 2. **Accuracy-only performance alert.** Accuracy stays between 0.66 and 0.78 while PR-AUC decays (about 0.74 in January 2016 to 0.45 in October), because about 65% of bookings are never cancelled.
 3. **No calibration check.** The model predicts a mean cancellation chance of about 0.15 against a real rate of about 0.35, which is what overbooking depends on.
@@ -37,13 +37,13 @@ Measured on the data with this exact setup (first model at cutoff 2016-01-01, ne
 - `paths`: `data_dir()` (`HOTEL_DEMO_DATA`), `world_dir()` (`HOTEL_DEMO_WORLD`), defaults under `~/hotel-demo/`.
 - `fetch`: downloads the TidyTuesday 2020-02-11 `hotels.csv` (a copy of the paper's data) from one pinned URL, checks one pinned SHA-256, writes `world_dir()/hotels.csv`; a wrong hash deletes the partial file and fails naming both hashes.
 - `source`: loads the CSV, converts the missing markers to nulls, adds `booking_id`, `booking_date`, `arrival_date`, `arrival_month`, `arrival_week` and the label release date (overview rules), and builds a day's bookings and labels frames with exactly the overview's columns (`booking_changes` 0 in bookings, final in labels).
-- `backfill --until 2016-01-01`: writes the bookings files for every booking date from 2015-07-01 to the day before, and the labels files for every release date up to the day before. Refuses to run on a data folder that already has files.
+- `backfill --until 2016-01-01`: writes the bookings files for every booking date before `--until` (no lower bound: long-lead bookings made before July 2015 are history too), and the labels files for every release date before `--until`. Refuses to run on a data folder that already has files.
 
 **Tests (stop condition):** fetch with a locally served fixture and its hash writes it, a wrong hash fails and leaves nothing; the bookings and labels frames have exactly the overview's columns, `booking_changes` is 0 in bookings and final in labels; release dates follow the overview (same-day cancellation included); backfill on the fixture writes the expected files and refuses a non-empty folder. CI green on Ubuntu and Windows.
 
 ### Task 2: The day loop, injected problems, answer key
 
-**Files:** `bench/demo-world/src/demo_world/{simulate,scenarios}.py`, `bench/demo-world/scenarios/default.toml`, `.github/workflows/demo-world.yml` (adds the contract test of the overview once demo-company task 2 is on the demo repository's `main`), tests.
+**Files:** `bench/demo-world/src/demo_world/{simulate,scenarios}.py`, `bench/demo-world/scenarios/default.toml`, tests.
 
 **Notes:**
 - `simulate --start 2016-01-01 --end 2017-03-31 --seconds-per-day 120`: state in `world_dir()/state.json` (the last business date done); resumes after it. `--seconds-per-day 0` runs as fast as possible. Each day: write that day's bookings file, then that day's labels file (every written booking whose label is released that day). The step that runs the company's daily job is added in task 3.
@@ -54,14 +54,16 @@ Measured on the data with this exact setup (first model at cutoff 2016-01-01, ne
 
 ### Task 3: The company's daily job in the loop, the PR merger, `up`, CI runs
 
-**Files:** `simulate.py`, `bench/demo-world/src/demo_world/{company,up}.py`, tests, README.
+**Files:** `simulate.py`, `bench/demo-world/src/demo_world/{company,up}.py`, `.github/workflows/demo-world.yml` (adds the overview's contract test), tests, README.
 
 **Notes:**
 - `company.py`: the one place the world runs the company's CLI, as `uv run --project <checkout> hotel-demo ...` in a checkout of the demo repository (`HOTEL_DEMO_COMPANY`, a path), with `HOTEL_DEMO_DATA` and `MLFLOW_TRACKING_URI` passed through. It returns the exit code and output; a failure is logged and never stops the loop. Before each day it updates the checkout to the latest `main` (`git pull --ff-only`), so merged PRs take effect.
-- **PR merger (evaluation runs only, `--merge-after-days N`):** an open PR on the demo repository is merged by the world once N simulated days have passed since it opened (`gh pr merge --merge`); each merge, with its delay, goes in the answer key. Without the option the world never merges (a live demo, where the user merges).
+- **The company repository is a setting, `HOTEL_DEMO_REPO`.** Evaluation runs never touch `yassinebrahem2/hotel-cancellation-demo` itself: each run uses its own copy, created from it (the demo repository is marked as a template), and the world refuses to run the merger or `ci_failure` against the original. A live demo uses the original, where the user merges by hand.
+- **PR merger (evaluation runs only, `--merge-after-days N`):** an open PR on `HOTEL_DEMO_REPO` is merged by the world once N simulated days have passed since it opened (`gh pr merge --merge`); each merge, with its delay, goes in the answer key. Without the option the world never merges (a live demo, where the user merges).
 - Before the first day, if the company has no `production` model: `train --cutoff <start>`, `evaluate`, `deploy`. Each day after the files: `daily --date <day>`. During a `score_failure` window the world withholds the day's bookings file until after `daily` has run, so the company's scoring fails on a missing file, as with a late upstream delivery.
-- **CI runs at simulation speed:** every `--ci-every N` simulated days (default 7) the world starts the demo repository's scheduled workflow with `workflow_dispatch` (`gh api`), so the Actions history moves with simulated time.
-- `ci_failure`: at the window's start the world sets the demo repository's `SAMPLE_DATA_URL` variable to a missing file and restores it at the end; the answer key records the window in business dates and in real start and end times (the CI adapter sees real times).
+- **CI runs at simulation speed:** every `--ci-every N` simulated days (default 7) the world starts `HOTEL_DEMO_REPO`'s scheduled workflow with `workflow_dispatch` (`gh api`), so the Actions history moves with simulated time.
+- `ci_failure`: at the window's start the world sets `HOTEL_DEMO_REPO`'s `SAMPLE_DATA_URL` variable to a missing file and restores it at the end; the answer key records the window in business dates and in real start and end times (the CI adapter sees real times).
 - `up`: starts `mlflow server` from the company's environment on its store at `HOTEL_DEMO_MLFLOW_PORT`, sets `MLFLOW_TRACKING_URI`, then runs `simulate`; Ctrl+C stops both cleanly, on Windows too (process groups).
 
-**Tests (stop condition):** with a fake company CLI (a script recording its calls), the loop bootstraps once and calls `daily` once per day with the right environment; a failing `daily` is logged and the next day runs; a `score_failure` window makes the real company's `daily` fail on that day (one test against the demo repo's CLI, marked to run only when `HOTEL_DEMO_COMPANY` is set); `ci_failure` and the CI runs call the right APIs at the right days (mocked `gh`); the merger merges a PR after N simulated days and never without the option (mocked `gh`); the checkout is updated before each day; `up` starts and stops both processes (a short run, in the Ubuntu and Windows jobs).
+**Tests (stop condition):** with a fake company CLI (a script recording its calls), the loop bootstraps once and calls `daily` once per day with the right environment; a failing `daily` is logged and the next day runs; a `score_failure` window makes the real company's `daily` fail on that day (one test against the demo repo's CLI, marked to run only when `HOTEL_DEMO_COMPANY` is set); `ci_failure` and the CI runs call the right APIs at the right days (mocked `gh`); the merger merges a PR after N simulated days and never without the option (mocked `gh`); the merger and `ci_failure` refuse to run against the original demo repository; the checkout is updated before each day; `up` starts and stops both processes (a short run, in the Ubuntu and Windows jobs); the contract test passes in CI.
+- **A full-data run** from 2016-01-01 to 2017-03-31 at full speed, with no injections; the PR pastes the first model's PR-AUC and mean predicted versus actual cancellation rate per month, and each legacy check's firing days per month. January 2016 must be quiet: at most 2 firing days per check. If it is not, stop and raise it in the plan issue (thresholds change only through a plan edit); the fallback is starting the simulation on 2016-07-01, after a year of history.
