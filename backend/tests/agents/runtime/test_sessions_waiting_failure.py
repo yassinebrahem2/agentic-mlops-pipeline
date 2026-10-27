@@ -53,6 +53,18 @@ class AskFirstCallGate:
         return decisions
 
 
+class WaitRecordingObserver(RecordingObserver):
+    """Also queues each wait it hears, so a test can wait for the observers themselves."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waits: asyncio.Queue[str] = asyncio.Queue()
+
+    async def turn_waiting(self, project_id: str, agent: str, turn_id: str) -> None:
+        await super().turn_waiting(project_id, agent, turn_id)
+        self.waits.put_nowait(turn_id)
+
+
 async def _until(
     sub: AsyncGenerator[StreamEvent, None], events: list[StreamEvent], count: int, kind: type
 ) -> None:
@@ -152,7 +164,7 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
         await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", second_wait_write_fails)
-    observer = RecordingObserver()
+    observer = WaitRecordingObserver()
     env = await build_session_env(
         tmp_path,
         paths,
@@ -185,12 +197,9 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
     await approvals.decide(env.project_id, approval.id, approve=True)
     await _until(sub, events, 2, TurnWaiting)
 
-    async def second_wait_observed() -> None:
-        # The observers hear the wait after the stream does; wait for them, not the stream.
-        while sum(c[0] == "waiting" for c in observer.calls) < 2:
-            await asyncio.sleep(0.01)
-
-    await asyncio.wait_for(second_wait_observed(), timeout=10)
+    # The observers hear a wait after the stream does: wait for them, not the stream.
+    for _ in range(2):
+        await asyncio.wait_for(observer.waits.get(), timeout=10)
     assert waiting_writes.count(first_turn) == 1
     [second_turn] = [c[3] for c in observer.calls if c[0] == "started" and c[3] != first_turn]
     assert [(c[0], c[3]) for c in observer.calls] == [
