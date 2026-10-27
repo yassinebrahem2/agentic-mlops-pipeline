@@ -4,22 +4,21 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any
 
 from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalRecord
+from mlops_agents.agents.runtime.contract import DecidedApprovalStatus
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
 
-__all__ = ["Decided", "record_decisions"]
-
-Decided = Literal["approved", "rejected", "cancelled", "expired"]
+__all__ = ["record_decisions"]
 
 
 async def record_decisions(
     project_id: str,
     approvals: Sequence[ApprovalRecord],
-    decision: Decided,
+    decision: DecidedApprovalStatus,
     *,
     actor: str,
     databases: Databases,

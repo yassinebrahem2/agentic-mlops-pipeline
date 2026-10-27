@@ -13,10 +13,11 @@ import httpx2
 import pytest
 from sqlalchemy import select
 
-from mlops_agents.agents.approvals.decisions import Decided, record_decisions
+from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
+from mlops_agents.agents.runtime.contract import DecidedApprovalStatus
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import AuditLog, EventLog
@@ -31,7 +32,7 @@ from tests.agents.test_approvals_service_guards import waiting_approval
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
-Call = tuple[str, list[str], Decided, str, str | None]
+Call = tuple[str, list[str], DecidedApprovalStatus, str, str | None]
 
 
 def spy_on(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[Call]:
@@ -41,7 +42,7 @@ def spy_on(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[Call]:
     async def spy(
         project_id: str,
         approvals: Sequence[ApprovalRecord],
-        decision: Decided,
+        decision: DecidedApprovalStatus,
         *,
         actor: str,
         databases: Databases,
@@ -83,7 +84,7 @@ async def _audit_rows(databases: Databases, project_id: str) -> list[dict[str, A
 )
 async def test_record_decisions_writes_an_audit_record_and_an_event_per_approval(
     databases: Databases,
-    decision: Decided,
+    decision: DecidedApprovalStatus,
     actor: str,
     note: str | None,
     detail_note: dict[str, str | None],
