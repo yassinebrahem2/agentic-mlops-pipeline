@@ -405,7 +405,7 @@ describe("AgentsPage", () => {
     expect(composer).toBeInTheDocument();
   });
 
-  it("renders task bar above composer when agent status carries task", async () => {
+  it("hides a task the session snapshot says has ended, even while the status list shows it", async () => {
     setupDefaultMocks({
       currentTask: null,
       agentsStatus: [
@@ -430,9 +430,15 @@ describe("AgentsPage", () => {
 
     renderPage("/projects/prj_1/agents", { routes: testRoutes });
 
-    expect(await screen.findByText("Task from status")).toBeInTheDocument();
-    expect(screen.getByText("task/status-branch")).toBeInTheDocument();
-    expect(screen.getByText("local review")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discard task" })).toBeInTheDocument();
+    // The status list (with its task) has loaded, and so has the snapshot: its stream is open.
+    const agentsList = await screen.findByRole("complementary", { name: "Agents" });
+    expect(within(agentsList).getByText("idle")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fakeStream.listeners.has("text.delta")).toBe(true);
+    });
+
+    // The snapshot has no current task, so the bar stays hidden.
+    expect(screen.queryByRole("region", { name: "Current task" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Task from status")).not.toBeInTheDocument();
   });
 });

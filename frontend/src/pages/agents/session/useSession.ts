@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, unwrap } from "@/lib/api";
 import { queryClient } from "@/lib/query";
+import { useProjectEvents } from "@/lib/useProjectEvents";
 import { applyEvent, type SessionState } from "./applyEvent";
 import { eventNames, parseEvent } from "./events";
 import { isConnecting, openStream, StreamBackoff, type StreamLike } from "@/lib/stream";
@@ -29,6 +30,24 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
   const stateRef = useRef<SessionState | undefined>(undefined);
 
   const reloadRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const refreshTaskRef = useRef<() => void>(() => {});
+
+  // Task events come on the project stream, not the session stream. Refreshing the snapshot on
+  // them keeps it the one source of the current task, shown from its start to its end.
+  useProjectEvents(projectId, {
+    onEvent: (event) => {
+      if (
+        (event.type === "task.started" || event.type === "task.ended") &&
+        event.source === agent
+      ) {
+        refreshTaskRef.current();
+      }
+    },
+    // A resync means task events may have been missed.
+    onResync: () => {
+      refreshTaskRef.current();
+    },
+  });
 
   const sendMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -113,6 +132,23 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         return { error: apiErr };
       }
     };
+
+    const refreshTask = () => {
+      void fetchSessionSnapshot()
+        .then((snapshot) => {
+          if (!disposed && stateRef.current) {
+            const updated: SessionState = {
+              ...stateRef.current,
+              current_task: snapshot.current_task,
+            };
+            stateRef.current = updated;
+            queryClient.setQueryData(queryKey, updated);
+            setState(updated);
+          }
+        })
+        .catch(() => {});
+    };
+    refreshTaskRef.current = refreshTask;
 
     const schedule = () => {
       backoffRef.current.schedule(() => {
@@ -209,19 +245,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         setState(next);
 
         if (parsed.type === "turn.ended") {
-          void fetchSessionSnapshot()
-            .then((snapshot) => {
-              if (!disposed && stateRef.current) {
-                const updated: SessionState = {
-                  ...stateRef.current,
-                  current_task: snapshot.current_task,
-                };
-                stateRef.current = updated;
-                queryClient.setQueryData(queryKey, updated);
-                setState(updated);
-              }
-            })
-            .catch(() => {});
+          refreshTask();
         }
       };
 

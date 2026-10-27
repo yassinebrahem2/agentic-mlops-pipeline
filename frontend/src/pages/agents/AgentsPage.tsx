@@ -31,11 +31,7 @@ export function AgentsPage() {
   const selectedAgentDisplayName = selectedAgent?.display_name ?? selectedAgentName;
 
   const session = useSession(projectId ?? "", selectedAgentName);
-
-  const selectedAgentStatus = (statusQuery.data ?? []).find(
-    (agent) => agent.agent === selectedAgentName,
-  );
-  const currentTask = session.state?.current_task ?? selectedAgentStatus?.task;
+  const currentTask = session.state?.current_task;
 
   if (!projectId) return null;
 
