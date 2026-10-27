@@ -38,14 +38,14 @@ No task has an early PR: nothing consumes these pages.
 
 **Files:**
 - new `frontend/src/lib/useInvalidateOnEvents.ts`: the one live-refresh helper (the Inbox hook's debounce, extracted).
-- `frontend/src/pages/inbox/usePendingApprovals.ts`: `usePendingApprovals` switches to the helper (its inline debounce and event list go; behavior and its tests unchanged, so there is one copy of the rule).
+- `frontend/src/pages/inbox/usePendingApprovals.ts`: `usePendingApprovals`, `useLocalReviews` and `useGithubActivity` (each carries its own copy of the debounce) all switch to the helper (their inline debounce, cleanup effect and event lists go, the event lists becoming the helper's `types` argument; behavior and its tests unchanged, so there is one copy of the rule).
 - new `frontend/src/lib/useTracking.ts`, `useConnections.ts`, `useHandoff.ts`: queries and keys.
 - new `frontend/src/lib/format.ts`: `formatDuration(seconds)`, `formatTime(iso)`, `shortCommit(sha)`.
 - tests beside each.
 
 **Interfaces:**
 - Produces `useInvalidateOnEvents(projectId: string | undefined, queryKey: readonly unknown[], types: readonly ProjectEventType[]): void`. On a listed event or `onResync` it invalidates the key after a 150 ms debounce and clears the timer on unmount.
-- Produces `trackingKey(projectId, part)`, `part` being `"sources" | "models" | "versions" | "runs" | "ci-runs" | "deployments" | "metrics"`; hooks `useTrackingSources`, `useTrackedModels`, `useModelVersions(projectId, model)`, `useTrackedRuns`, `useCiRuns`, `useDeployments`, `useRunMetrics(projectId, runKey)`, all refreshed on `tracking.synced` (one invalidation of the `["projects", id, "tracking"]` prefix); `useSyncNow(projectId)`, a mutation on `POST .../tracking/sync` without `source_id` (every source).
+- Produces `trackingKey(projectId, part)`, `part` being `"sources" | "models" | "versions" | "runs" | "ci-runs" | "deployments" | "metrics"`; hooks `useTrackingSources`, `useTrackedModels`, `useModelVersions(projectId, sourceId, model)`, `useTrackedRuns`, `useCiRuns`, `useDeployments(projectId, model?)`, `useRunMetrics(projectId, runKey)`, all refreshed on `tracking.synced` (one invalidation of the `["projects", id, "tracking"]` prefix); `useSyncNow(projectId)`, a mutation on `POST .../tracking/sync` without `source_id` (every source).
 - The list hooks return the route's `Page<T>` (`rows`, `total`, `truncated`) unchanged.
 - Produces `useConnections(projectId)` (prefix `["projects", id, "connections"]`, refreshed on `connection.created`, `connection.updated`, `connection.deleted`), `useTables(projectId, connectionId)`, `useTableDetail(projectId, connectionId, table, enabled)` (enabled only when a row is expanded), `useHandoff(projectId)` returning `HandoffView | null` (refreshed on `handoff.approved`).
 - Types are re-exported from `components["schemas"][...]` only; none is written by hand.
@@ -68,12 +68,13 @@ No task has an early PR: nothing consumes these pages.
 
 **Files:** new `frontend/src/pages/runs/route.tsx`, `RunsPage.tsx`, `RunsTable.tsx`, `SourceStatus.tsx`, `StatusBadge.tsx`, `mergeRuns.ts`, tests.
 
-**Interfaces:** Consumes `useTrackedRuns`, `useCiRuns`, `useTrackingSources`, `useSyncNow` (task 1). Produces `StatusBadge({ status: RunStatus })` (also used by task 3) and `mergeRuns(runs: RunRow[], ci: CiRunRow[]): RunListItem[]`, where `RunListItem = { kind: "run" | "ci"; sourceId; key; name; status: RunStatus; start: string | null; durationSeconds: number | null; detail: string | null; url: string | null }`.
+**Interfaces:** Consumes `useTrackedRuns`, `useCiRuns`, `useTrackingSources`, `useSyncNow` (task 1). Produces `StatusBadge({ status: RunStatus })` (also used by task 3) and `mergeRuns(runs: Page<RunRow>, ci: Page<CiRunRow>): RunListItem[]`, where `RunListItem = { kind: "run" | "ci"; sourceId; key; name; status: RunStatus; start: string | null; durationSeconds: number | null; detail: string | null; url: string | null }`.
 
 **Implementation notes:**
 - Route: path `/projects/:projectId/runs`, `nav: { area: "project", label: "Runs", order: 40, icon: Activity }`. The page renders nothing without a `projectId`, like `InboxPage`.
 - One table, newest first by `start` (rows without `start` last): kind (Run or CI icon), name (experiment, or workflow), status badge, started, duration, detail. A tracked run's duration is `end - start` (null while running); a CI run's is `duration_s`. A CI run's detail is its short commit and a link to `url` (`target="_blank" rel="noopener noreferrer"`); a tracked run's is its short `git_commit` and dataset names.
 - Statuses are the adapters' normalised `RunStatus` (`running`, `succeeded`, `failed`, `cancelled`, `other`); the page does no vendor mapping. Badge text and variant per value live only in `StatusBadge.tsx`.
+- When either page is truncated, the merged list is cut at the later of the two pages' oldest `start` (`mergeRuns` takes the two `truncated` flags), so the tail never implies a period without CI runs or runs where they were simply not loaded.
 - A filter (`Tabs`): All / Failed. "Failures" is the spec's word; the Failed filter narrows the same list, with no second query.
 - Header: "Sync now" button (`useSyncNow`), disabled while the mutation is pending, showing `errorText` on failure. A 202 only means the sync started; the table refreshes on `tracking.synced`, not on the response.
 - When either page has `truncated: true`, a muted line says "Showing the latest N of TOTAL" with the page's own `rows.length` and `total`.
@@ -85,7 +86,7 @@ No task has an early PR: nothing consumes these pages.
 - The Failed filter shows only failed rows of both kinds.
 - Sync now posts once with no `source_id`, is disabled while pending, shows a server error; a `tracking.synced` event refetches the rows and the sources.
 - A source with `last_error` shows it above the still-listed rows; no source, and no rows, each show their message; a route error shows its text; a truncated page shows the "Showing" line.
-- `mergeRuns` units: ordering, null starts last, both duration rules.
+- `mergeRuns` units: ordering, null starts last, both duration rules, the cut at the later oldest `start` when one page is truncated and none when neither is.
 - Checks as task 1.
 
 ---
@@ -100,8 +101,8 @@ No task has an early PR: nothing consumes these pages.
 - Route: path `/projects/:projectId/models`, `nav: { area: "project", label: "Models", order: 20, icon: Boxes }`.
 - One `Card` per `ModelSummary` (keyed by `source_id` and `name`): its name, the production badge showing `production_version` (no badge when null), the count `versions`, then the versions table, newest first. A card requests its versions (`useModelVersions`) when rendered.
 - Versions side by side: one row per `ModelVersionRow`; columns are version, aliases (badges), created, then one column per metric name in the union over the model's versions (sorted by name), each cell the metric's value at its highest `step` for that version's run, formatted to 4 significant digits, "–" when absent. Metrics are requested per run with `useRunMetrics(projectId, run_key)` for each version with a `run_key`. No best value is highlighted: whether higher is better is not this page's call. The column of the handoff's primary metric (§9 profile, from `useHandoff`) carries a "primary" badge; with no handoff no column is marked.
-- Lineage per version, in a row detail (a `Collapsible` under the row): run (experiment, `StatusBadge`, started, link to the Runs page), git commit (short, full in `title`), training data (`RunRow.datasets`, "Not recorded" when empty), params and tags as a key/value list. A version whose `run_key` is null or whose run is not in `useTrackedRuns` says "Run not tracked" (no error).
-- "Alias history": the model's last 10 `DeploymentRow`s (alias, from to `to_version`, seen at; a null `to_version` reads "removed"), collapsed by default.
+- Lineage per version, in a row detail (a `Collapsible` under the row): run (experiment, `StatusBadge`, started, link to the Runs page), git commit (short, full in `title`), training data (`RunRow.datasets`, "Not recorded" when empty), params and tags as a key/value list. A version whose `run_key` is null says "Run not tracked". A version whose run is missing from `useTrackedRuns` says "Run not tracked" when that page is not truncated, and "Run not in the loaded runs" when it is (the run may be older than the page).
+- "Alias history": the model's `DeploymentRow`s from `useDeployments(projectId, model)` (newest 10 shown) (alias, from to `to_version`, seen at; a null `to_version` reads "removed"), collapsed by default; a truncated page adds "History truncated".
 - A metrics page with `truncated: true` adds "Metrics truncated" to that version's detail, so a cut history is never shown as complete (see Interface gap 1).
 - States as task 2: no source; sources but no models ("No models tracked yet"); errors with `errorText`; a source's `last_error` in a warning `Alert` at the top.
 - Rows keep one height (the stage 2 rule): details live in the collapsible, not in the cell.
@@ -144,5 +145,5 @@ No task has an early PR: nothing consumes these pages.
 
 ## Interface gaps
 
-1. **Metrics volume and the list limits.** `metrics?run_key=&metric=` returns a `Page[MetricPoint]` capped by `TrackingQuery.limit` (default 50), so a run with a long history truncates before its highest step is reached; and the overview names no `limit` query parameter on `models`, `versions`, `runs`, `ci-runs`, `deployments`, `metrics`. Needed: a `limit` parameter on each list route (the Runs page wants more than 50), and for metrics either a `latest=true` mode (the highest step per metric) or a guarantee that the cap applies per metric. Task 3 works without it but shows "Metrics truncated" when a page is cut.
+1. **Metrics volume and the list limits.** `metrics?run_key=&metric=` returns a `Page[MetricPoint]` capped by `TrackingQuery.limit` (default 50), so a run with a long history truncates before its highest step is reached; and the overview names no `limit` query parameter on `models`, `versions`, `runs`, `ci-runs`, `deployments`, `metrics`. Needed: a `limit` parameter on each list route (the Runs page wants more than 50); a `run_key` filter on `/runs` (lineage looks runs up by key); a `model` filter on `/deployments` (alias history is per model); a `source_id` on `/versions` (a summary is keyed by `source_id` and name, so two sources with one model name would mix versions); and for metrics either a `latest=true` mode (the highest step per metric) or a guarantee that the cap applies per metric. Task 3 works without these but never presents a cut page as complete: it says "Metrics truncated", "History truncated" or "Run not in the loaded runs".
 2. **`HandoffPayload` field names.** The data roles (table to role, ID column, time column) and the primary metric are "exactly the spec's §9 fields" but their names are not listed in I19. Contracts writes them; `roles.ts` and the primary-metric badge read the generated types, so tasks 3 and 4 wait for contracts task 3 (already in their Consumes).
