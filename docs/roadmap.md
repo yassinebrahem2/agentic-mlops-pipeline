@@ -108,12 +108,7 @@ Agreed:
 - Notifications: Discord and email (SMTP) in this stage. WhatsApp and Slack later.
 - Operational telemetry: GitHub Actions run history first. Airflow, cron and other schedulers come in through data connections.
 - Dashboard (one screen, each card linking to its page): pipeline map from Onboarding (stages are not fixed), current model version and metrics, deployment status, data quality, open incidents, agent status.
-- Shadow baseline, recorded silently from the very first check and never notifying anyone. Naive static checks per category:
-  - data quality: schema, nulls, ranges from training data;
-  - drift: a drift test per feature at p < 0.05;
-  - model performance: a fixed threshold on accuracy;
-  - operational: fixed timeouts and failure counts.
-  Configurable per project.
+- Shadow baseline, recorded silently from the very first check and never notifying anyone: the team's own existing monitoring (the checks, alerts and reports it ran before the agents), found by Onboarding and approved by the user, with a per-check rule for reading "fired / not fired". It runs in the sandbox with no network, so its own alerts never go out. A project with no existing monitoring has no baseline, and Stats says so instead of inventing one.
 - Verdicts on every incident, one click: real issue / not an issue / wrong type. Also: user-reported misses, baseline alerts the agents stayed silent on that the user marks real, and automatic confirmation when labels prove a metric drop. Verdicts cannot be backfilled, so they ship here.
 
 The spec must answer:
