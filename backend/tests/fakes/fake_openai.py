@@ -26,10 +26,13 @@ MODELS: dict[str, int] = {
     "fake-slow": 32768,
     "fake-invalid-tools": 32768,
     "fake-mixed-tools": 32768,
+    "fake-write": 32768,
 }
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "Read": {"file_path": "README.md"},
     "report_capabilities": {"ok": True},
+    "StartTask": {"title": "Write notes"},
+    "Write": {"file_path": "NOTES.md", "content": "# Notes\n\nNotes created by fake-write.\n"},
 }
 SLOW_TEXT = " ".join(f"word{i}" for i in range(40))
 
@@ -114,10 +117,6 @@ def _reply(
         return "", [{"name": "report_capabilities", "arguments": TOOL_ARGS["report_capabilities"]}]
     if model == "fake-slow":
         return SLOW_TEXT, None
-    if last.get("role") == "tool":
-        content = str(last.get("content") or "").strip()
-        first_line = content.splitlines()[0] if content else "(empty)"
-        return f"Done. First line: {first_line}", None
     if state.scripted_tool_calls is not None:
         return "", list(state.scripted_tool_calls)
     if model == "fake-invalid-tools":
@@ -129,6 +128,37 @@ def _reply(
             {"name": t0, "arguments": TOOL_ARGS.get(t0, {})},
             {"name": t1, "arguments": "{pattern: foo}"},
         ]
+    if model == "fake-write":
+        last_content = str(last.get("content") or "")
+        if "pull request" in last_content or "OpenPullRequest" in last_content:
+            return (
+                "This project is local with no remote repository, so no pull request is needed.",
+                None,
+            )
+        if last.get("role") == "tool":
+            tool_name = str(last.get("name") or "")
+            if not tool_name:
+                tool_call_id = str(last.get("tool_call_id") or "")
+                for m in reversed(messages):
+                    if m.get("role") == "assistant":
+                        tool_calls_list: list[dict[str, Any]] = m.get("tool_calls") or []
+                        for tc in tool_calls_list:
+                            if tc.get("id") == tool_call_id:
+                                fn: dict[str, Any] = tc.get("function") or {}
+                                tool_name = str(fn.get("name") or tc.get("name") or "")
+                                break
+                        if tool_name:
+                            break
+            if tool_name == "StartTask":
+                return "", [{"name": "Write", "arguments": TOOL_ARGS["Write"]}]
+            if tool_name == "Write":
+                return "I have started the task and written NOTES.md.", None
+            return "Done.", None
+        return "", [{"name": "StartTask", "arguments": TOOL_ARGS["StartTask"]}]
+    if last.get("role") == "tool":
+        content = str(last.get("content") or "").strip()
+        first_line = content.splitlines()[0] if content else "(empty)"
+        return f"Done. First line: {first_line}", None
     return "", [
         {
             "name": str(tools[0]["function"]["name"]),
