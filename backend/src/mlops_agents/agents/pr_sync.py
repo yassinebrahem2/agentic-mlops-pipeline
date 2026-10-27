@@ -7,17 +7,17 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from mlops_agents.errors import DomainError
+from mlops_agents.integrations.github.issues import get_issue
 from mlops_agents.integrations.github.pulls import get_pull
-from mlops_agents.workspace.refs import RepoRef, github_remote, repo_ref
 
 if TYPE_CHECKING:
     import httpx2
 
     from mlops_agents.agents.runtime.contract import TurnEnd
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
-    from mlops_agents.workspace.models import Project
-    from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,12 @@ class PrSyncObserver:
     def __init__(
         self,
         tasks: Tasks,
-        workspace: WorkspaceService,
         github: GitHubAuth,
         http: httpx2.AsyncClient,
+        events: EventLog,
     ) -> None:
+        self._events = events
         self._tasks = tasks
-        self._workspace = workspace
         self._github = github
         self._http = http
         self._last_sync: dict[str, float] = {}
@@ -62,28 +62,6 @@ class PrSyncObserver:
     ) -> None:
         pass
 
-    async def _resolve_repo_ref(self, project: Project) -> RepoRef | None:
-        if project.github_full_name:
-            return repo_ref(project.github_full_name)
-
-        git = getattr(self._workspace, "_git", None)
-        if git is not None:
-            try:
-                repo_root = self._workspace.repo_root(project)
-            except Exception:
-                repo_root = None
-            if repo_root is not None:
-                res = await git.run(
-                    ["config", "--get", "remote.origin.url"], cwd=repo_root, check=False
-                )
-                origin_url = res.stdout.strip() if res.code == 0 else None
-                if not origin_url:
-                    res = await git.run(["remote", "get-url", "origin"], cwd=repo_root, check=False)
-                    origin_url = res.stdout.strip() if res.code == 0 else None
-                return github_remote(project, origin_url)
-
-        return github_remote(project, None)
-
     async def _sync_safely(self, project_id: str) -> None:
         try:
             await self._do_sync(project_id)
@@ -103,23 +81,17 @@ class PrSyncObserver:
         if not token:
             return
 
-        try:
-            project = await self._workspace.get(project_id)
-        except Exception as exc:
-            logger.warning("PR sync could not load project %s: %s", project_id, exc)
-            return
-
-        ref = await self._resolve_repo_ref(project)
+        ref = await self._tasks.repo_ref(project_id)
         if ref is None:
             return
 
+        repo_slug = f"{ref.owner}/{ref.repo}"
         try:
             open_tasks = await self._tasks.open_tasks(project_id)
         except Exception as exc:
             logger.warning("PR sync could not load open tasks for project %s: %s", project_id, exc)
             return
 
-        repo_slug = f"{ref.owner}/{ref.repo}"
         for task in open_tasks:
             if task.pr_number is None:
                 continue
@@ -148,6 +120,41 @@ class PrSyncObserver:
                     await self._tasks.end(project_id, task.id, status="closed")
                 except Exception as exc:
                     logger.warning("PR sync could not end task %s as closed: %s", task.id, exc)
+
+        # After the PRs, so a failing issue refresh never keeps a merged PR from ending its task.
+        try:
+            await self._refresh_issues(project_id, token, repo_slug)
+        except Exception as exc:
+            logger.warning("PR sync could not refresh issues for project %s: %s", project_id, exc)
+
+    async def _refresh_issues(self, project_id: str, token: str, repo_slug: str) -> None:
+        """Records issue.updated for every issue the agents touched whose state changed on GitHub,
+        so the activity feed shows an issue closed by hand or by a merged PR as closed."""
+        recorded = await self._events.history(
+            project_id, types=["issue.opened", "issue.commented", "issue.updated"], limit=200
+        )
+        last_state: dict[int, str] = {}
+        for record in reversed(recorded):  # oldest first, so the newest record wins
+            number = record.payload.get("number")
+            if isinstance(number, int):
+                last_state[number] = str(record.payload.get("state") or "open")
+
+        for number, state in last_state.items():
+            try:
+                issue = await get_issue(self._http, token, repo_slug, number)
+            except DomainError as exc:
+                logger.warning(
+                    "PR sync could not check issue #%s in %s: %s", number, repo_slug, exc
+                )
+                continue
+            if issue.state != state:
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="issue.updated",
+                    payload=issue.event_payload(),
+                    subject_id=str(number),
+                )
 
     async def sync_now(self, project_id: str) -> None:
         """Manually run sync for a project, awaiting its completion."""

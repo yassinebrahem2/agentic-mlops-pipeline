@@ -115,8 +115,7 @@ async def test_local_merge_clean_fast_forward_default_branch_checked_out(
     assert (repo / "helper.py").read_text(encoding="utf-8") == "print('helper')\n"
 
     # Temporary merge worktree is removed
-    temp_worktree = paths.project_dir(project_id) / "temp_merges" / f"merge_{task.id}"
-    assert not temp_worktree.exists()
+    assert list((paths.project_dir(project_id) / "temp_merges").iterdir()) == []
 
 
 async def test_local_merge_uncommitted_changes_in_way_raises_commit_refused(

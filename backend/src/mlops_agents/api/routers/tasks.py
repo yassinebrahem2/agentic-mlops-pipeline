@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
+
 from fastapi import APIRouter, Query, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.errors import DomainError
+from mlops_agents.storage.migrate import MigrationError
 
 router = APIRouter(tags=["tasks"])
+logger = logging.getLogger(__name__)
 
 
 async def _discard_task(services: ServicesDep, project_id: str, task_id: str) -> None:
@@ -54,6 +60,10 @@ async def discard_task(
                 project_id = proj.id
                 break
             except DomainError:
+                continue
+            except (MigrationError, sqlite3.Error, SQLAlchemyError, OSError):
+                # One unreadable project must not hide the task in another one.
+                logger.exception("Skipped project %s while looking for task %s", proj.id, task_id)
                 continue
 
     if project_id is None:

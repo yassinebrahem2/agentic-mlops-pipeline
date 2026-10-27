@@ -12,21 +12,16 @@ from mlops_agents.agents.tools.base import (
     ToolContext,
     ToolOutput,
 )
-from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.git import GitError
 from mlops_agents.integrations.github.pulls import create_pull, update_pull
-from mlops_agents.workspace.refs import github_remote, repo_ref
 
 if TYPE_CHECKING:
     import httpx2
 
     from mlops_agents.agents.tasks.contract import Tasks
-    from mlops_agents.agents.tools.base import TaskRef
     from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
-    from mlops_agents.workspace.models import Project
-    from mlops_agents.workspace.refs import RepoRef
     from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -64,68 +59,6 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
         diff = await self._tasks.staged_diff(ctx.project_id, ctx.task)
         return Preview(kind="diff", title=args.title, body=diff)
 
-    async def _resolve_repo_ref(self, project: Project, task: TaskRef) -> RepoRef | None:
-        if project.github_full_name:
-            return repo_ref(project.github_full_name)
-
-        git = getattr(self._workspace, "_git", None)
-        if git is not None:
-            try:
-                repo_root = self._workspace.repo_root(project)
-            except Exception:
-                repo_root = task.worktree
-            res = await git.run(
-                ["config", "--get", "remote.origin.url"], cwd=repo_root, check=False
-            )
-            origin_url = res.stdout.strip() if res.code == 0 else None
-            if not origin_url:
-                res = await git.run(["remote", "get-url", "origin"], cwd=repo_root, check=False)
-                origin_url = res.stdout.strip() if res.code == 0 else None
-            return github_remote(project, origin_url)
-
-        return github_remote(project, None)
-
-    async def _has_commits_beyond_base(self, project: Project, task: TaskRef) -> bool:
-        git = getattr(self._workspace, "_git", None)
-        if git is None:
-            return False
-
-        try:
-            cwd = self._workspace.repo_root(project)
-        except Exception:
-            cwd = task.worktree
-
-        if not cwd.exists() and task.worktree.exists():
-            cwd = task.worktree
-
-        paths = getattr(self._workspace, "_paths", None)
-        empty_hooks = getattr(paths, "empty_hooks", None) if paths else None
-
-        default_branch = project.default_branch or "main"
-        candidates = [
-            f"refs/{APP_NAME}/base/{default_branch}",
-            default_branch,
-            f"origin/{default_branch}",
-        ]
-
-        for candidate in candidates:
-            cmd = ["rev-list", f"{candidate}..{task.branch}"]
-            if empty_hooks is not None:
-                cmd = [
-                    "-c",
-                    f"core.hooksPath={empty_hooks}",
-                    "-c",
-                    "core.fsmonitor=false",
-                    "-c",
-                    "core.longpaths=true",
-                    *cmd,
-                ]
-            res = await git.run(cmd, cwd=cwd, check=False)
-            if res.code == 0:
-                return bool(res.stdout.strip())
-
-        return False
-
     async def run(self, ctx: ToolContext, args: OpenPullRequestArgs) -> ToolOutput:
         if ctx.task is None:
             return ToolOutput(content="Start a task first with StartTask.", is_error=True)
@@ -138,7 +71,7 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
         formatted_body = f"{stripped_body}\n\n{footer}" if stripped_body else footer
 
         project = await self._workspace.get(ctx.project_id)
-        ref = await self._resolve_repo_ref(project, ctx.task)
+        ref = await self._tasks.repo_ref(ctx.project_id)
 
         if ref is not None:
             try:
@@ -148,7 +81,7 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
                 has_unpublished = await self._tasks.has_unpublished_changes(
                     ctx.project_id, ctx.task
                 )
-                has_commits = await self._has_commits_beyond_base(project, ctx.task)
+                has_commits = await self._tasks.has_commits_beyond_base(ctx.project_id, ctx.task)
                 if not (
                     "Nothing to commit" in str(err)
                     and (has_commits or has_unpublished or task_view.pr_number is not None)
@@ -242,7 +175,7 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
         except CommitRefused as err:
             task_view = await self._tasks.view(ctx.project_id, ctx.task.id)
             has_unpublished = await self._tasks.has_unpublished_changes(ctx.project_id, ctx.task)
-            has_commits = await self._has_commits_beyond_base(project, ctx.task)
+            has_commits = await self._tasks.has_commits_beyond_base(ctx.project_id, ctx.task)
             if not (
                 "Nothing to commit" in str(err)
                 and (has_commits or has_unpublished or task_view.review_kind == "local")

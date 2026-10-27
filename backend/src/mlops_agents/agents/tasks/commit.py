@@ -12,7 +12,11 @@ from mlops_agents.agents.tasks.claims import claim_paths, release_claims
 from mlops_agents.agents.tasks.contract import ClaimConflict, CommitRefused, CommitResult
 from mlops_agents.agents.tasks.diff import get_candidate_paths, staged_diff_task
 from mlops_agents.agents.tasks.git import task_git
-from mlops_agents.agents.tasks.push import has_unpublished_changes_task, push_task
+from mlops_agents.agents.tasks.push import (
+    has_commits_beyond_base_task,
+    has_unpublished_changes_task,
+    push_task,
+)
 from mlops_agents.agents.tools.files import is_secret
 from mlops_agents.storage.tables import file_claims
 
@@ -27,6 +31,7 @@ __all__ = [
     "CommitRefused",
     "CommitResult",
     "commit_task",
+    "has_commits_beyond_base_task",
     "has_unpublished_changes_task",
     "push_task",
     "staged_diff_task",

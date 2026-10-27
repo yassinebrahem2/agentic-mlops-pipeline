@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mlops_agents.agents.tools.files import RepoFiles
+from mlops_agents.errors import DomainError
 
 if TYPE_CHECKING:
+    from mlops_agents.agents.runtime.contract import TaskView
     from mlops_agents.agents.tools.base import FileAccess, TaskRef
     from mlops_agents.integrations.github.git import GitRunner
     from mlops_agents.workspace.service import WorkspaceService
@@ -26,5 +28,5 @@ class FakeWorkspaces:
         project = await self._workspace.get(project_id)
         return RepoFiles(self._workspace.repo_root(project), self._git)
 
-
-RepositoryOnlyWorkspaces = FakeWorkspaces
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)

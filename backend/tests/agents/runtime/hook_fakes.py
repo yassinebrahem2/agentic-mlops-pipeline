@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.runtime.agent import Agent
-from mlops_agents.agents.runtime.contract import Part, TextPart
+from mlops_agents.agents.runtime.contract import Part, TaskView, TextPart
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
 from mlops_agents.agents.runtime.hooks import (
     Gate,
@@ -160,6 +160,9 @@ class SwitchingWorkspaces:
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
         self.files_calls.append(task)
         return self._repository if task is None else self._task_files
+
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        raise NotImplementedError("graph runs read no task view")
 
 
 class RecordingCaller(ModelCaller):

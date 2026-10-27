@@ -394,3 +394,23 @@ async def test_build_image_error_and_prior_oserror_have_same_detail_wording(
     status_build = await service_b.rebuild("prj_b")
     assert status_build.state == "failed"
     assert status_build.detail == "Image build failed: docker builder crashed"
+
+
+class OSErrorBuildRunner(FakeDockerRunner):
+    async def run(
+        self, args: Sequence[str], *, timeout_s: float | None = None, secrets: Iterable[str] = ()
+    ) -> DockerResult:
+        if args and args[0] == "build":
+            raise OSError("boom")
+        return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+
+async def test_runner_oserror_during_build_reports_the_shared_failure_wording(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    projects = MemorySandboxProjects({"prj_oe": tmp_path})
+    service = SandboxService(OSErrorBuildRunner(), events=FakeEventLog(), projects=projects)
+    status = await service.rebuild("prj_oe")
+    assert status.state == "failed"
+    assert status.detail == "Image build failed: boom"

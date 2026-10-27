@@ -29,7 +29,9 @@ from mlops_agents.agents.tools.base import Preview, TaskStatus
 
 AuthorKind = Literal["user", "agent", "system"]
 MessageStatus = Literal["complete", "streaming", "queued", "stopped", "interrupted", "waiting"]
-ApprovalStatus = Literal["pending", "approved", "rejected", "cancelled", "expired"]
+# What a pending approval can become: by a user's decision, a Stop or recovery.
+DecidedApprovalStatus = Literal["approved", "rejected", "cancelled", "expired"]
+ApprovalStatus = Literal["pending", DecidedApprovalStatus]
 TurnEnd = Literal["done", "stopped", "interrupted", "failed"]
 
 
@@ -257,6 +259,7 @@ __all__ = [
     "ApprovalPart",
     "ApprovalStatus",
     "AuthorKind",
+    "DecidedApprovalStatus",
     "MessageCreated",
     "MessageData",
     "MessageStatus",

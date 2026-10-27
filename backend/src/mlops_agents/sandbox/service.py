@@ -32,15 +32,10 @@ from mlops_agents.sandbox.docker import (
     detect_docker,
     docker_error_boundary,
 )
-from mlops_agents.sandbox.images import ImageManager, snapshot_image
+from mlops_agents.sandbox.images import ImageManager, build_failure_detail, snapshot_image
 from mlops_agents.sandbox.projects import SandboxProjects
 
 logger = logging.getLogger(__name__)
-
-
-def _build_failure_detail(exc: BaseException) -> str:
-    err = str(exc).strip() or type(exc).__name__
-    return f"Image build failed: {err}"
 
 
 async def _finish_operation[T](operation: Coroutine[object, object, T]) -> T:
@@ -203,18 +198,18 @@ class SandboxService(Sandbox):
                         project_id, worktree, inputs=inputs
                     )
                 except asyncio.CancelledError as exc:
-                    detail = _build_failure_detail(exc)
+                    detail = build_failure_detail(exc)
                     logger.exception("Image build cancelled for project %s", project_id)
                     status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
                     self._status[project_id] = status
                     await self._record_build_end(project_id, status)
                     raise
                 except Exception as exc:
-                    detail = _build_failure_detail(exc)
+                    detail = build_failure_detail(exc)
                     logger.exception("Image build failed for project %s", project_id)
                     status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
             except (OSError, ValueError) as exc:
-                detail = _build_failure_detail(exc)
+                detail = build_failure_detail(exc)
                 logger.exception("Image build failed for project %s", project_id)
                 status = EnvironmentStatus(state="failed", tag=tag, detail=detail)
 

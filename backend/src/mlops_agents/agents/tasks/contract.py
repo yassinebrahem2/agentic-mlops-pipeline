@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
     from mlops_agents.agents.runtime.contract import TaskView
     from mlops_agents.agents.tools.base import FileAccess, TaskRef
+    from mlops_agents.workspace.refs import RepoRef
 
 
 class ClaimConflict(Exception):
@@ -35,6 +36,10 @@ class TaskWorkspaces(Protocol):
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess: ...
 
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        """A task's view, read from what is stored: it never recreates a missing worktree."""
+        ...
+
 
 class Tasks(TaskWorkspaces, Protocol):
     async def start(self, project_id: str, session_id: str, agent: str, title: str) -> TaskRef: ...
@@ -42,8 +47,6 @@ class Tasks(TaskWorkspaces, Protocol):
     async def resume(
         self, project_id: str, session_id: str, agent: str, task_id: str
     ) -> TaskRef: ...
-
-    async def view(self, project_id: str, task_id: str) -> TaskView: ...
 
     async def open_tasks(self, project_id: str) -> list[TaskView]: ...
 
@@ -54,6 +57,12 @@ class Tasks(TaskWorkspaces, Protocol):
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None:
         """Raises ClaimConflict."""
         ...
+
+    async def repo_ref(self, project_id: str) -> RepoRef | None:
+        """The GitHub repository the project pushes to, or None when it has none."""
+        ...
+
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool: ...
 
@@ -88,3 +97,15 @@ class Tasks(TaskWorkspaces, Protocol):
     async def end(
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None: ...
+
+    async def decide_review(
+        self,
+        project_id: str,
+        task_id: str,
+        step: Callable[[TaskRef], Awaitable[None]],
+        status: Literal["merged", "closed"],
+    ) -> TaskView:
+        """Under one acquisition of the task lock: raises a 409 DomainError unless the task is in
+        local review, runs step (local_merge to approve, the system message to reject), then ends
+        the task with status. If step raises, the task is not ended and stays in review."""
+        ...

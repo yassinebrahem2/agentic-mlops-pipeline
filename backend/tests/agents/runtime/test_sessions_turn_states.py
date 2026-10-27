@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx2
 import pytest
 
 from mlops_agents.agents.runtime.contract import Resync, TextPart
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    opened_stream,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -106,3 +112,45 @@ async def test_session_manager_turn_states_running_worker(
     assert states_done == {}
 
     await manager.close()
+
+
+async def test_turn_states_reports_no_running_turn_once_turn_ended_is_published(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker is held just before it exits, in its look for a next turn after the end: a
+    worker that is only finishing its loop runs no turn (#273)."""
+    looks: list[str] = []
+    held = asyncio.Event()
+    release = asyncio.Event()
+    next_queued_turn = SessionStore.next_queued_turn
+
+    async def held_after_the_first_turn(
+        self: SessionStore, project_id: str, session_id: str
+    ) -> tuple[str, str] | None:
+        found = await next_queued_turn(self, project_id, session_id)
+        looks.append("found" if found is not None else "none")
+        if looks == ["found", "none"]:
+            held.set()
+            await release.wait()
+        return found
+
+    monkeypatch.setattr(SessionStore, "next_queued_turn", held_after_the_first_turn)
+    env = await build_session_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    sub = await opened_stream(env)
+    await env.manager.send(env.project_id, "orchestrator", "Check readme")
+    await collect_until_turn_ended(sub, timeout=10)
+
+    await asyncio.wait_for(held.wait(), timeout=10)
+    assert await env.manager.turn_states(env.project_id) == {}
+
+    release.set()
+    await env.manager.close()

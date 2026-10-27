@@ -7,7 +7,7 @@ from typing import cast
 
 from sqlalchemy import and_, insert, or_, select, update
 
-from mlops_agents.agents.approvals.settings import get_permission_level
+from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.runtime.contract import ApprovalPart, Part
 from mlops_agents.agents.runtime.shielded import shielded
@@ -169,27 +169,15 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
                             new_parts.append(part)
                     await self.update_message(project_id, message_id, parts=new_parts)
 
-            level = await get_permission_level(self._databases, project_id)
-            for rec in expired_records:
-                if actual_audit is not None:
-                    await actual_audit.record(
-                        project_id,
-                        actor="system",
-                        action="approval",
-                        risk_class=rec.risk_class,
-                        permission_level=level,
-                        decision="expired",
-                        target=rec.tool,
-                        detail={"approval_id": rec.id, "tool": rec.tool},
-                    )
-                if actual_event is not None:
-                    await actual_event.record(
-                        project_id,
-                        source="system",
-                        type="approval.decided",
-                        subject_id=rec.id,
-                        payload={"approval_id": rec.id, "status": "expired"},
-                    )
+            await record_decisions(
+                project_id,
+                expired_records,
+                "expired",
+                actor="system",
+                databases=self._databases,
+                audit_log=actual_audit,
+                event_log=actual_event,
+            )
 
     @shielded
     async def set_summary(
