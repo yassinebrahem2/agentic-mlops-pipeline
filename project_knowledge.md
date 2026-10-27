@@ -113,7 +113,7 @@ Anything not listed here is unknown.
 
 ## 3. Open
 - What runs where: whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
-- Deliverable format. (Team of 6 since 2026-10-24. Deadline 2026-10-29, confirmed 2026-10-24.)
+- Deliverable format. (Team of 6 since 2026-10-24. Deadline 2026-11-05, confirmed 2026-10-27; it was 2026-10-29.)
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
 - Fine-tuning: not planned; no decision recorded.
 

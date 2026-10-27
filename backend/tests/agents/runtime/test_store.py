@@ -199,6 +199,66 @@ async def test_recover_turns_running_into_interrupted(databases: Databases) -> N
     assert next(m for m in messages if m.id == msg_system.id).status == "complete"
 
 
+async def test_recover_redelivers_inbound_messages_taken_by_running_turn(
+    databases: Databases,
+) -> None:
+    store = SessionStore(databases)
+    project_id = "prj_test"
+    session_id = await store.session_id(project_id, "beta")
+
+    # A trigger message and its running turn
+    trigger_msg = await store.add_message(
+        project_id,
+        session_id,
+        author_kind="user",
+        author_name="User",
+        parts=[TextPart(type="text", text="Hello")],
+        status="complete",
+    )
+    running_turn_id = await store.add_turn(project_id, session_id, trigger_msg.id, "running")
+
+    # Inbound message posted by another agent and taken mid-turn
+    inbound_msg = await store.add_message(
+        project_id,
+        session_id,
+        author_kind="user",
+        author_name="Alpha",
+        from_agent="alpha",
+        parts=[TextPart(type="text", text="Mid-turn message")],
+        status="queued",
+    )
+    taken = await store.take_inbound(project_id, session_id, running_turn_id)
+    assert len(taken) == 1
+    assert taken[0].id == inbound_msg.id
+    assert taken[0].status == "complete"
+
+    # Simulate crash recovery
+    await store.recover(project_id)
+
+    # Inbound message should be redelivered: status="queued", read_by_turn cleared
+    all_msgs = await store.messages(project_id, session_id)
+    redelivered = next(m for m in all_msgs if m.id == inbound_msg.id)
+    assert redelivered.status == "queued"
+
+    # A new queued turn should exist for the inbound message
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        turn_rows = (
+            (
+                await conn.execute(
+                    select(turns).where(
+                        turns.c.session_id == session_id,
+                        turns.c.status == "queued",
+                        turns.c.trigger_message_id == inbound_msg.id,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert len(turn_rows) == 1
+
+
 async def test_set_summary_and_summary_round_trip(databases: Databases) -> None:
     store = SessionStore(databases)
     session_id = await store.session_id("prj_test", "orchestrator")
