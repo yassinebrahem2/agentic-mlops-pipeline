@@ -26,6 +26,7 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.graph import TurnSink, turn_checkpointer
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.hub import SessionHub
+from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.sqlite import connect_checkpointer
@@ -49,6 +50,7 @@ __all__ = [
     "delete_checkpoint_thread",
     "handle_turn_waiting",
     "open_checkpointer",
+    "record_waiting",
     "stop_waiting_turn",
 ]
 
@@ -137,6 +139,20 @@ async def _observed(call: Awaitable[None]) -> None:
         logger.exception("A turn observer failed")
 
 
+@shielded
+async def record_waiting(store: SessionStore, project_id: str, turn_id: str) -> bool:
+    """Store that a turn waits for approval; False when it could not be stored. A storage
+    error is logged and never raised, as at every turn end (Decision #249): the wait is still
+    told, and a turn whose wait was not stored stays running in the database until the next
+    recovery marks it interrupted."""
+    try:
+        await store.set_turn(project_id, turn_id, "waiting")
+    except Exception:
+        logger.exception("Could not record turn %s waiting", turn_id)
+        return False
+    return True
+
+
 async def handle_turn_waiting(
     *,
     store: SessionStore,
@@ -187,7 +203,7 @@ async def handle_turn_waiting(
             )
             await sink.message(updated_msg, created=False)
 
-    await store.set_turn(project_id, turn_id, "waiting")
+    await record_waiting(store, project_id, turn_id)
 
     await sink.turn_waiting(turn_id)
 

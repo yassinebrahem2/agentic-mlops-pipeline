@@ -11,7 +11,7 @@ from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.turn_end import TurnEnds
-from mlops_agents.agents.runtime.waiting import _Ending, _ending_of, _observed
+from mlops_agents.agents.runtime.waiting import _Ending, _ending_of, _observed, record_waiting
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +227,11 @@ class TurnWorkers:
         if ending.status == "waiting":
             # The turn has not ended: the executor stored the wait and told the subscribers and
             # the observers (`handle_turn_waiting`), and the turn's resume starts a new worker.
-            await self._store.set_turn(project_id, turn_id, "waiting")
+            # The wait is stored once more, as every end is; a wait that could not be stored
+            # has no resume to come, so the worker goes on to the next queued turn.
+            stored = await record_waiting(self._store, project_id, turn_id)
             _raise_worker_cancel()
-            return False
+            return not stored
         # Nothing suspends between deciding the end and ending: a cancel from here on lands in
         # the shielded ending, which keeps the decided status and reports it once.
         await self._ends.end(
