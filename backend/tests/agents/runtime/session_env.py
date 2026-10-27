@@ -33,7 +33,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -77,7 +77,7 @@ async def build_session_env(
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
 
     tool_reg = tools if tools is not None else default_registry()
-    catalog = AgentCatalog.load(tool_reg.names(), extra_dirs=extra_dirs or ())
+    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=extra_dirs or ())
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()

@@ -86,7 +86,7 @@ class AgentSettingsService:
         )
 
     async def list_settings(self, project_id: str | None = None) -> list[AgentSettingsView]:
-        agents = sorted(self._catalog.all(), key=lambda d: d.name)
+        agents = self._catalog.all()
         return [await self.get(agent.name, project_id=project_id) for agent in agents]
 
     async def set_default_model(self, agent: str, address: str | None) -> AgentSettingsView:

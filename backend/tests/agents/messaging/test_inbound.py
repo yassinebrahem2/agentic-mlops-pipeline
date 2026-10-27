@@ -32,7 +32,7 @@ from tests.agents.runtime.session_env import (
     build_session_env,
     collect_until_turn_ended,
 )
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 NO_TURN = "trn_none"
@@ -130,7 +130,7 @@ async def build_inbound_env(
     settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, settings)
     tools = default_registry(bus=bus)
-    bus.use_catalog(AgentCatalog.load(tools.names(), extra_dirs=[defs]))
+    bus.use_catalog(AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[defs]))
 
     inbound = SqliteInboundSource(databases)
 

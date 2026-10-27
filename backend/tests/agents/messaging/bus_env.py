@@ -16,7 +16,7 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.session_env import SessionEnv, build_session_env
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 DEFINITIONS = {
@@ -56,7 +56,7 @@ async def build_bus_env(
     settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, settings)
     tools = default_registry(bus=bus)
-    bus.use_catalog(AgentCatalog.load(tools.names(), extra_dirs=[defs]))
+    bus.use_catalog(AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[defs]))
     session = await build_session_env(
         tmp_path,
         paths,
