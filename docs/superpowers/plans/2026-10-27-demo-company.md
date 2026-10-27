@@ -1,8 +1,6 @@
 # Demo — Company Implementation Plan
 
-> **Draft.** Missing: an advisor round with no blocking issues.
-
-> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says, in the demo repository (`yassinebrahem2/hotel-cancellation-demo`), on `plan/demo-company`. Read `2026-10-27-demo-overview.md` first: story, folders, data layout, CLI. Build the company's setup exactly as written here, including choices you would make differently: they are deliberate (the demo-world plan says why). Do not comment on them in code, the README or commit messages.
+> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says, in the demo repository (`yassinebrahem2/hotel-cancellation-demo`), on `plan/demo-company`. Read `docs/superpowers/plans/2026-10-27-demo-overview.md` first: story, folders, data layout, CLI. Build the company's setup exactly as written here, including choices you would make differently: they are deliberate (the demo-world plan says why). Do not comment on them in code, the README or commit messages.
 
 **Goal:** The hotel group's ML system: train and evaluate a cancellation model from its own data, logged to MLflow; deploy and roll back through the `production` alias; score each day's bookings; run its legacy monitoring; and a CI history.
 

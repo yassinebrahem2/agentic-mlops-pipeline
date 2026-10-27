@@ -1,7 +1,5 @@
 # Demo Project — Plans Overview
 
-> **Draft.** Missing: an advisor round with no blocking issues.
-
 The demo shows every feature of the app on a hotel group's live ML system, and lets the evaluation measure the agents against the company's own monitoring. It has two parts:
 - **The company**: the repository `yassinebrahem2/hotel-cancellation-demo`. Only what a real company would have: its pipeline, its daily job, its legacy monitoring, its CI. This is the project added to the app.
 - **The world**: `bench/demo-world/` in this repository, a developer tool outside the product. It plays time: it delivers each day's bookings and the late outcomes into the company's data folder, runs the company's daily job, injects problems, and keeps the answer key and the list of planted flaws for the evaluation.

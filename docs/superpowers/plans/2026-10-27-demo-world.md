@@ -1,8 +1,6 @@
 # Demo — World Implementation Plan
 
-> **Draft.** Missing: an advisor round with no blocking issues.
-
-> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. Read `2026-10-27-demo-overview.md` first: the two parts, folders, data layout, the company's CLI.
+> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. Read `docs/superpowers/plans/2026-10-27-demo-overview.md` first: the two parts, folders, data layout, the company's CLI.
 
 **Goal:** The world around the demo company, as a developer tool in this repository (`bench/demo-world/`, outside the product): it downloads the source data, gives the company its history, plays time day by day (new bookings, late outcomes, the company's daily job), injects problems at known dates, and keeps the answer key and the planted-flaws list the evaluation scores the agents against.
 
