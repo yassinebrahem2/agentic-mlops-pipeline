@@ -5,6 +5,7 @@ import type { components } from "@/api/schema";
 import { renderPage } from "@/test/render";
 import { hostedModelWarning } from "@/lib/models";
 import { route } from "./route";
+import { stubEventStream } from "./testing";
 
 type Project = components["schemas"]["Project"];
 type Agent = components["schemas"]["AgentInfo"];
@@ -76,6 +77,7 @@ function setup(
     failure?: string;
   } = {},
 ) {
+  stubEventStream();
   let current = options.project ?? project;
   let currentAgent = options.agent ?? agent;
   const requests: { path: string; method: string; body: unknown }[] = [];
@@ -106,6 +108,15 @@ function setup(
       if (path === "/api/providers") return json([options.provider ?? provider]);
       if (path === "/api/folders")
         return json({ path: "/new", parent: "/", entries: [], roots: ["/"] });
+      if (path.endsWith("/settings/permissions")) return json({ level: "ask" });
+      if (path.endsWith("/settings/issues")) return json({ min_priority: "medium" });
+      if (path.endsWith("/settings/messaging")) return json({ max_hops: 6, max_tokens: 300000 });
+      if (path.endsWith("/sandbox"))
+        return json({
+          docker: { available: true, version: "27.1", detail: null },
+          environment: { state: "ready", tag: "env:1", detail: null },
+          network: false,
+        });
       if (method !== "GET" && options.failure)
         return json({ code: options.failure, message: "Action failed", detail: null }, 409);
       if (path.endsWith("/refresh") || path.endsWith("/relink")) {
@@ -158,6 +169,7 @@ function setup(
   return { requests, user: userEvent.setup() };
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 it("shows local repository details and refreshes its status", async () => {
@@ -364,4 +376,18 @@ it("allows cancelling removal without deleting the project", async () => {
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+it("renders the permissions, sandbox, GitHub issues and agent messages sections", async () => {
+  setup();
+  expect(await screen.findByRole("combobox", { name: "Permission level" })).toHaveTextContent(
+    "Ask",
+  );
+  expect(await screen.findByRole("button", { name: "Rebuild" })).toBeEnabled();
+  expect(await screen.findByRole("combobox", { name: "Minimum priority" })).toHaveTextContent(
+    "Medium",
+  );
+  expect(await screen.findByRole("spinbutton", { name: "Maximum messages" })).toHaveValue(6);
+  for (const name of ["Permissions", "Sandbox", "GitHub issues", "Agent messages"]) {
+    expect(screen.getByRole("region", { name })).toBeInTheDocument();
+  }
 });
