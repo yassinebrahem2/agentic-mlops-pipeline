@@ -70,6 +70,7 @@ Anything not listed here is unknown.
 ### Stats (per-project evaluation)
 - [USER] The page is named "Stats". It shows how well the app performs on the user's own project, as the delta against a baseline ("the baseline = delta").
 - [USER] Stats cover more than drift: data quality, drift, model performance (including extreme class imbalance), and operational incidents.
+- [USER] 2026-10-27: the baseline must fit each project and its business; a fixed set of checks for every business is wrong.
 - [AGREED] Baseline: naive static checks run silently in shadow on the same data (schema, nulls, ranges from training data, per-feature drift test at p<0.05, fixed accuracy threshold, fixed timeouts/failure counts), configurable per project.
 - [AGREED] Ground truth: user verdicts on incidents (real / not an issue / wrong type), baseline alerts the agents stayed silent on that the user marks real, user-reported misses, and automatic confirmation when labels arrive.
 - [AGREED] Metrics per category: detection (precision, catches the baseline missed, false alarms avoided, misses), speed (detection delay, time to resolution), noise (alerts per week, merge ratio), diagnosis (bad data vs drift correctness), human effort (autonomous share, approvals, acceptance rate, PRs opened/merged/closed), model impact (metric before vs after agent actions), cost (tokens and $ per agent, cost per incident), reliability (failed runs, tool errors, sandbox failures). Each number shows how many verdicts it rests on and stays "collecting data" until there are enough.
