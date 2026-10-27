@@ -53,13 +53,6 @@ class TurnEndCheck(Protocol):
     async def note(self, project_id: str, session_id: str, turn_id: str) -> str | None: ...
 
 
-class NoInbound:
-    """Stage 1: nothing reaches a running turn. The messaging plan replaces it."""
-
-    async def take(self, project_id: str, session_id: str, turn_id: str) -> list[BaseMessage]:
-        return []
-
-
 class TurnObserver(Protocol):
     async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None: ...
 

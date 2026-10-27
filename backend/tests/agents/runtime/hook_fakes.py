@@ -23,7 +23,6 @@ from mlops_agents.agents.runtime.hooks import (
     GateCall,
     GateDecision,
     InboundSource,
-    NoInbound,
     TurnEndCheck,
 )
 from mlops_agents.agents.runtime.hub import AsyncRLock
@@ -46,6 +45,13 @@ from tests.fakes.turn_end import NoTurnEndCheck
 
 ALLOW = GateDecision(outcome="allow", message=None, approval_id=None, preview=None)
 APPROVED = GateDecision(outcome="approved", message=None, approval_id="apr_1", preview=None)
+
+
+class NoInbound:
+    """Test fake: takes nothing."""
+
+    async def take(self, project_id: str, session_id: str, turn_id: str) -> list[BaseMessage]:
+        return []
 
 
 def ask(approval_id: str) -> GateDecision:
