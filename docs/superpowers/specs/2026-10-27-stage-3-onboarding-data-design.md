@@ -1,6 +1,6 @@
 # Stage 3: Onboarding and data access
 
-Date: 2026-10-27. Status: draft, not approved.
+Date: 2026-10-27. Status: approved by the lead on 2026-10-28.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and the decisions behind it: `project_knowledge.md` (entries of 2026-10-27). Stage 1 and stage 2 behavior not mentioned here stays as their specs say.
 
 ## Goal
@@ -74,9 +74,12 @@ backend/src/mlops_agents/
 
 A change to the merged model call (`agents/runtime/model_caller.py`), modeled on the key failover engine of the Multimodal RAG Agent project (`providers/retry_engine.py` there):
 - **Error kinds.** Permanent (bad request, a rejected tool call already handled in stage 2) ends the call at once. Transient (a server error, a dropped connection, a timeout) retries with backoff a few times on the same key; a different key would not fix it. Every 429 is a rate limit, handled below, whatever its message says: providers such as Gemini word per-minute limits as "quota exceeded". Only an explicit billing signal (HTTP 402, `insufficient_quota`) or an authentication failure exhausts a key at once. The classification in `providers/errors.py` changes accordingly.
-- **Rate limits.** The call waits `max(retry_after, interval)` and retries the same key. Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn. When a key has been continuously rate-limited for longer than a threshold (a provider setting, default 90 seconds), it is treated as exhausted for the day.
-- **Key state is shared.** Each key's rate-limit streak and exhausted mark live in one place per provider in the app, shared by every turn and every call (the four kickoff audits share a key). A success on a key ends its streak.
-- **Exhausted keys.** An exhausted key is skipped and the call moves to the next key of the provider. After a cooldown (a provider setting, default 15 minutes) the next call tries it once again, since providers reset their daily limits at different times; a success clears the mark. Try again (below) clears every mark at once.
+- **Rate limits: the user never waits on one key.** On a 429 the call moves at once to the next key of the provider that is not exhausted, and cycles through the keys like that. Each key remembers when it was last rate-limited.
+  - When the cycle comes back to a key whose last rate limit is more than a minute old (a per-minute limit has had time to clear) and that key is rate-limited again, it is marked exhausted: it reached its daily limit.
+  - When every remaining key was rate-limited less than a minute ago, the call waits only until the earliest of them clears (its `Retry-After`, else a minute after its limit), then tries that key.
+  - Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn.
+- **Key state is shared.** Each key's last rate limit and exhausted mark live in one place per provider in the app, shared by every turn and every call (the four kickoff audits share keys). A success on a key clears its rate-limit time.
+- **Exhausted keys** are skipped. After a cooldown (a provider setting, default 15 minutes) the next call tries an exhausted key once again, since providers reset their daily limits at different times; a success clears the mark. Try again (below) clears every mark at once.
 - **Every key exhausted.** The turn does not fail: it pauses on an approval of a new kind, `stall`, which has no tool call.
   - The model node records the `stall` approval (keyed by turn ID and model-step index, so a re-run finds it instead of duplicating it) and returns without a model message. The graph routes model → wait while a stall is pending; once it is approved, `wait` routes back to `model`, which calls the model again. A change to the merged turn graph.
   - The approval record, the card, the Inbox entry, surviving a restart and resuming are stage 2's. The card shows the provider and each key's state and why (daily limit, billing, rejected), with Try again (approves: clears the marks and resumes, so no work is lost) and Stop (cancels: the turn ends `stopped`). A change to the merged approvals and Part interfaces: the approval kind `stall` and its preview.
@@ -229,7 +232,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 - **Project settings, Connections:** connections with status and data version; add (a folder picker in local mode, as the add-project wizard has), edit, remove; the denylist warning. Tracking sources: URL, credential (posted to the keystore), last sync. The embedder override.
 - **Proposal cards:** `connections` and `handoff` cards render their payloads readably; the handoff card has the credential field and the network sentence of §7. The Inbox lists them like any approval.
 - **Stalled-turn card** (§2), in the session and the Inbox.
-- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the rate-limit threshold per provider.
+- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the exhausted-key cooldown per provider.
 - **Models page:** tracked models; per model, its versions with their metrics side by side, the production alias, and each version's lineage (run, git commit, training data where recorded).
 - **Data page:** connections and their tables (schema, rows, data version, roles from the handoff), and "quality and drift history arrives with monitoring".
 - **Runs page:** tracked runs and CI runs in one list with status, duration and failures; Sync now.
@@ -260,7 +263,7 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 ## 15. Testing
 
 - Fakes, no real service: `/embeddings` and rate-limit and quota responses on the fake OpenAI server; a fake MLflow REST server; workflow runs on the fake GitHub server; small data folder fixtures.
-- Rate limits (§2), with a fake clock: per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
+- Rate limits (§2), with a fake clock: a 429 moves to the next key at once, without waiting; a key limited again after more than a minute is marked exhausted; with every key limited within the last minute, the call waits only until the earliest clears; per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
 - Connections: a folder inside the data folder is refused; a link out is resolved and checked; the mount is read-only (a write from Bash fails); denylisted files are listed; changing connections recreates the container.
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
