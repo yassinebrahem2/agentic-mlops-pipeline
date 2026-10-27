@@ -32,7 +32,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent, stage1_hooks
 from tests.agents.runtime.test_graph_tools import MockModelCaller, ModelReply
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -63,7 +63,7 @@ async def _setup_executor_env(
         mode=RunMode.LOCAL,
     )
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers = ProvidersService(databases, keystore, model_http)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     github = GitHubAuth(databases, keystore, httpx2.AsyncClient(), FakeGh(None))

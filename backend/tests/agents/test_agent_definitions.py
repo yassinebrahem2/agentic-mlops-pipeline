@@ -1,18 +1,40 @@
 from __future__ import annotations
 
+import os
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.catalog import (
     AgentCatalog,
     AgentDefinition,
     DefinitionError,
     parse_definition,
 )
+from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
+from mlops_agents.agents.runtime.sessions import SessionManager
+from mlops_agents.agents.settings import AgentSettingsService
+from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
+from mlops_agents.config import RunMode, load_settings
+from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.events.status import SqliteStatusBoard
+from mlops_agents.integrations.github.auth import GitHubAuth
+from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.paths import DataPaths
+from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.service import ProvidersService
+from mlops_agents.storage.databases import Databases
+from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.hook_fakes import NoInbound
+from tests.conftest import MemoryKeyStore, make_repo
+from tests.fakes.turn_end import NoTurnEndCheck
+from tests.integrations.test_github_auth import FakeGh
 
 STAGE_2_TOOLS = frozenset(
     {
@@ -189,3 +211,106 @@ def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     assert "ListAgents" in error_msg
     assert "ScheduleWakeup" in error_msg
     assert "SendMessage" in error_msg
+
+
+_BASE_URLS = {
+    "groq": "https://api.groq.com/openai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+}
+
+
+@pytest.mark.live
+async def test_live_orchestrator_adds_line_to_readme(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    live_model = os.environ.get("MLOPS_AGENTS_LIVE_MODEL")
+    if not live_model:
+        pytest.skip("set MLOPS_AGENTS_LIVE_MODEL to run this live test")
+
+    provider_name, separator, wire_id = live_model.partition(":")
+    if not separator or not wire_id:
+        pytest.fail(
+            "MLOPS_AGENTS_LIVE_MODEL must be 'provider:model', e.g. groq:openai/gpt-oss-20b"
+        )
+    base_url = _BASE_URLS.get(provider_name)
+    if base_url is None:
+        pytest.fail(f"MLOPS_AGENTS_LIVE_MODEL provider must be one of {sorted(_BASE_URLS)}")
+    key_env = f"{provider_name.upper()}_API_KEY"
+    key_val = os.environ.get(key_env)
+    if not key_val:
+        pytest.skip(f"set {key_env} to run this live test")
+
+    repo = make_repo(tmp_path / "repo", {"README.md": "Initial README\n"}, git_env)
+    app_settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
+
+    async with httpx2.AsyncClient(timeout=60.0) as http:
+        github = GitHubAuth(databases, keystore, http, FakeGh(None))
+        runner = GitRunner(paths.bin, github.token)
+        workspace_svc = WorkspaceService(app_settings, paths, databases, runner, github, http)
+        events = SqliteEventLog(databases)
+        project = await workspace_svc.add_local(str(repo))
+        await set_permission_level(databases, project.id, "autonomous")
+
+        tasks_svc = TasksService(
+            databases=databases,
+            paths=paths,
+            git=runner,
+            events=events,
+            workspace=workspace_svc,
+        )
+
+        tools = default_registry(tasks=tasks_svc)
+        catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+        providers_svc = ProvidersService(databases, keystore, http)
+        agent_settings = AgentSettingsService(databases, providers_svc, catalog)
+
+        prov = await providers_svc.create_provider(
+            ProviderCreate(name=provider_name, kind="hosted", base_url=base_url)
+        )
+        await providers_svc.add_key(prov.name, key_val)
+        await providers_svc.add_model(ModelCreate(provider=provider_name, wire_model_id=wire_id))
+        await providers_svc.verify_model(live_model)
+        await agent_settings.set_default_model("orchestrator", live_model)
+
+        status_board = SqliteStatusBoard(catalog, events)
+        manager = SessionManager(
+            databases=databases,
+            workspace=workspace_svc,
+            catalog=catalog,
+            tools=tools,
+            settings=agent_settings,
+            providers=providers_svc,
+            http=http,
+            gate=ApprovalGate(databases),
+            inbound=NoInbound(),
+            turn_end=NoTurnEndCheck(),
+            workspaces=tasks_svc,
+            status_board=status_board,
+        )
+
+        start = await manager.get(project.id, "orchestrator")
+        sub = manager.subscribe(project.id, "orchestrator", after_seq=start.last_seq)
+        await manager.send(
+            project.id,
+            "orchestrator",
+            "Please start a task, add a line 'Updated by orchestrator' to README.md, and open a local review for it.",
+        )
+
+        events_list: list[StreamEvent] = []
+        async for ev in sub:
+            events_list.append(ev)
+            if isinstance(ev, TurnEnded):
+                break
+
+        assert any(isinstance(e, TurnEnded) and e.data.status == "done" for e in events_list)
+        view = await manager.get(project.id, "orchestrator")
+        assert len(view.messages) >= 2
+        agent_msg = view.messages[-1]
+        text = "".join(p.text for p in agent_msg.parts if p.type == "text")
+        print("\nLive model response:", text)
+        assert len(text) > 0
+        await manager.close()
