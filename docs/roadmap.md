@@ -70,32 +70,24 @@ Answered in the stage 2 spec (`docs/superpowers/specs/2026-10-24-stage-2-agent-r
 
 Agreed:
 - Full add-project wizard, ending in a session with the Onboarding agent.
-- Onboarding: reads the repo, asks about the model's objectives and use cases, then proposes tests and a monitoring plan for the user to approve. It also:
+- Onboarding sets the app up for the project and hands off: it reads the repo, asks about the model's objectives and use cases, and proposes the data connections, then the handoff (profile, table roles, tracking, pipeline stages, the team's commands, its scheduler and existing monitoring, gaps, grants). The user approves both. It also:
   - suggests data connections it finds in the code (file paths, `read_sql` queries, DVC files, MLflow URIs);
   - sets up tracking (connects MLflow, or opens a PR adding it);
   - finds the project's pipeline stages, which the Dashboard draws in stage 4.
-- Data connections: read-only. Kinds: local folder, S3/GCS/Azure, SQL database, MLflow. Managed like a registry. Credentials go in the keystore.
+- After the handoff, Data Quality, Model Performance, Retraining and Deployment & Rollback audit their part and propose fixes; checks are proposed by them (stage 4), not by Onboarding.
+- Data connections: read-only, managed like a registry, credentials in the keystore. Stage 3 ships one kind, local folder; every other kind (PostgreSQL first, then S3, GCS, Azure, MySQL, ...) is one file implementing the same interface. MLflow is a tracking source, not a connection kind.
 - Missing predictions or labels: an agent opens a PR that adds logging of predictions and labels, with a shared ID, to a location a connection can read.
-- Agents never load whole datasets. Data understanding uses standard notebook commands (head, describe, value counts, top, ...) run as context hooks. Their output is injected into the agent's context.
-- Hooks run on DuckDB, querying files and databases in place.
-  - Output is capped (sample rows capped at about 20; wide results truncated).
-  - A truncated result carries a handle. The agent can page through it (`read_result`) or run a narrower command.
-  - Results (never data) are cached. The cache key is connection + table + command + arguments + data version (file size and mtime, S3 ETag, or row count and latest timestamp).
-  - Each project's cache has a size cap (about 500 MB) with least-recently-used eviction.
-  - Results are cached per data version, so a hook is not rerun every turn.
-- Tracking: integrate, never rebuild MLflow. One unified record (models, versions, runs, data versions, deployments, metrics over time) is filled by adapters: MLflow first, git/CI (commits, tags, GitHub Actions runs), and the agents' own runs. Other trackers (for example W&B) come later as adapters.
+- Agents never load whole datasets. They explore data with Bash in the sandbox (DuckDB, pandas) on the connections mounted read-only, with Bash's output cap. The app adds a capped summary of each table (the `data_summary` context hook, on DuckDB, querying files in place):
+  - sample rows capped at 20; wide results truncated;
+  - results (never data) are cached per data version (file size and mtime, or row count and latest timestamp), with a size cap per project (about 500 MB) and least-recently-used eviction.
+- Tracking: integrate, never rebuild MLflow. One unified record (models, versions, runs, metrics over time, deployments, CI runs) is filled by adapters: MLflow and GitHub Actions runs. Lineage comes from the git commit MLflow records on each run. Other trackers (for example W&B) come later as adapters.
 - Pages:
   - Models: versions, metrics across releases, comparisons, lineage (data version + commit).
   - Data: connections, data versions, quality and drift history.
   - Runs: pipeline and job runs, durations, failures, retries.
-- Knowledge store: agents record what they learn here. sqlite-vec + FTS5 hybrid search inside `project.db`, behind a VectorStore interface. Code is read with file tools, not RAG. The embedding model comes from the AI providers registry (embedder entries).
+- Knowledge store: agents record what they learn here. sqlite-vec + FTS5 hybrid search inside `project.db`, behind a VectorStore interface. Code is read with file tools, not RAG. The embedding model comes from the AI providers registry (embedder entries, any provider).
 
-The spec must answer:
-- Which DuckDB extensions cover each connection kind, and what to do where none does.
-- The exact command set and their caps.
-- The tracking data model and the MLflow adapter's mapping.
-- How the Onboarding agent's proposed tests and monitoring plan are stored and approved.
-- What the Knowledge store holds (notes, decisions, incident history, docs) and who writes what.
+Answered in the stage 3 spec (`docs/superpowers/specs/2026-10-27-stage-3-onboarding-data-design.md`): DuckDB per connection kind, the summary and its caps (no data-command tool), the tracking data model and the MLflow mapping, how proposals are stored and approved, and what the Knowledge store holds.
 
 ### Stage 4: Monitoring loop
 
@@ -201,9 +193,13 @@ Every stored entity has an ID of the form `<prefix>_<ULID>` (ULID: 26 characters
 | `tsk` | agent task (worktree and branch) | 2 |
 | `xch` | agent-to-agent exchange | 2 |
 | `wak` | scheduled wake-up | 2 |
+| `con` | data connection | 3 |
+| `trk` | tracking source | 3 |
+| `prp` | proposal | 3 |
+| `kno` | knowledge note | 3 |
 | `inc` | incident | 4 |
 
-Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`.
+Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`. Tracking record rows mirror another system's IDs and are keyed by their tracking source and that ID, with no prefix.
 
 ## Data folder layout
 
@@ -216,7 +212,7 @@ Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`
     project.db                 sessions, messages, agent state, usage, and all later per-project stores
     repo/                      managed clone (GitHub projects only; never edited by the app)
     worktrees/                 one per agent task (stage 2)
-    cache/                     data-command results (stage 3)
+    cache/                     data-summary results (stage 3)
 ```
 
 Nothing is written into the user's working files. Agent branches (stage 2) live in the repo's git data.
@@ -241,8 +237,7 @@ tools: [Read, Glob, Grep]     # names from the tool registry
 chat: true                    # false = background only (Alert Prioritization)
 schedules: false
 can_message: []               # agent names this agent may SendMessage to (stage 2)
-status_board: false           # true = a status board summary in every turn's context (stage 2)
-context_hooks: []             # hook names run at session/turn start
+context_hooks: []             # hook names from the hook registry, run at turn start (stage 3: status_board, data_summary, tracking_summary, knowledge)
 limits: { max_steps: 25 }     # optional; null = unlimited
 ---
 Role prompt.
@@ -251,7 +246,7 @@ Role prompt.
 ## Tools
 
 - General work uses Claude Code's standard tools and argument shapes: Read, Write, Edit, Glob, Grep, Bash.
-- Specialized tasks get specialized tools (ListAgents, SendMessage, PR/issue tools, data commands).
+- Specialized tasks get specialized tools (ListAgents, SendMessage, PR/issue tools, SaveNote, SearchNotes, TrackingHistory, Propose), only where Bash cannot do the job: the tool reads or writes the app's own database, needs a secret the sandbox must not hold, or needs its own approval. Data exploration is Bash in the sandbox.
 - Bash only ever runs inside the Docker sandbox (stage 2).
 - Every tool belongs to one risk class (below). The permission policy is enforced by the runtime, never by prompts.
 
@@ -259,21 +254,24 @@ Role prompt.
 
 | Class | Examples |
 |---|---|
-| `read` | Read, Glob, Grep, ListAgents, SearchIssues, data commands |
+| `read` | Read, Glob, Grep, ListAgents, SearchIssues, SaveNote, SearchNotes, TrackingHistory |
 | `write_code` | Write, Edit (in a worktree), StartTask, ResumeTask |
 | `run` | Bash in the sandbox |
 | `message` | SendMessage, ScheduleWakeup |
 | `github` | OpenPullRequest, OpenIssue, CommentOnIssue |
 | `deploy` | train / deploy / rollback hooks |
+| `propose` | Propose (connections, handoff; later checks, parsers, deploy hooks) |
 
 Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec §5):
 
-| Level | read | write_code | run | message | github | deploy |
-|---|---|---|---|---|---|---|
-| suggest | allow | deny | deny | allow | ask | deny |
-| ask | allow | ask | ask | allow | ask | ask |
-| autonomous | allow | allow | allow | allow | allow | ask |
-| bypass | allow | allow | allow | allow | allow | allow |
+| Level | read | write_code | run | message | github | deploy | propose |
+|---|---|---|---|---|---|---|---|
+| suggest | allow | deny | deny | allow | ask | deny | ask |
+| ask | allow | ask | ask | allow | ask | ask | ask |
+| autonomous | allow | allow | allow | allow | allow | ask | ask |
+| bypass | allow | allow | allow | allow | allow | allow | ask |
+
+`propose` is the one class `bypass` does not skip: a proposal changes what agents may see or do, so the user always decides it.
 
 ## Event and audit records (stage 2)
 
@@ -287,6 +285,7 @@ Audit record (permanent trail of decisions and actions):
 id aud_..., project_id, ts, actor (agent name | "user"), action, risk_class,
 permission_level, decision (allowed | asked | denied | approved | rejected), target, detail (JSON)
 ```
+A stalled turn (every provider key exhausted, stage 3) pauses on an approval of kind `stall`; it is not a policy decision and writes no audit record (events record it).
 
 ## Time
 
