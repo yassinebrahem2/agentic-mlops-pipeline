@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   backend:
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -40,6 +41,7 @@ jobs:
       - run: uv run python -m mlops_agents.api.openapi_export --check
 
   docker:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     defaults:
       run:
