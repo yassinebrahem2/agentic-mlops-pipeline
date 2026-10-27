@@ -19,10 +19,6 @@ from mlops_agents.agents.runtime.contract import (
     TurnEnded,
     TurnWaiting,
 )
-from mlops_agents.agents.runtime.hooks import (
-    NoInbound,
-    NoTurnEndCheck,
-)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.agents.tools.base import (
@@ -40,9 +36,11 @@ from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
 
 

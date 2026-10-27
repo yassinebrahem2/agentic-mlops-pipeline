@@ -12,16 +12,18 @@ from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.messaging.bus import SqliteMessageBus
+from mlops_agents.agents.messaging.inbound import SqliteInboundSource
+from mlops_agents.agents.messaging.settings import MessagingSettings
+from mlops_agents.agents.messaging.wakeups import WakeupService
+from mlops_agents.agents.pr_reminder import PrReminder
+from mlops_agents.agents.pr_sync import PrSyncObserver
 from mlops_agents.agents.runtime.contract import AgentSessions
-from mlops_agents.agents.runtime.hooks import (
-    NoInbound,
-    NoTurnEndCheck,
-)
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import Tasks
 from mlops_agents.agents.tasks.service import TasksService
-from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
@@ -55,12 +57,14 @@ class Services:
     tools: ToolRegistry
     agent_settings: AgentSettingsService
     sessions: AgentSessions
+    messaging_settings: MessagingSettings
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
     status_board: StatusBoard
     tasks: Tasks
     approvals: Approvals
+    wakeups: WakeupService
 
 
 async def _app_secrets(
@@ -123,6 +127,8 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    messaging_settings = MessagingSettings(databases)
+    bus = SqliteMessageBus(databases, events, messaging_settings)
     gate = ApprovalGate(databases, audit_log=audit, event_log=events)
 
     sandbox = SandboxService(
@@ -142,11 +148,30 @@ async def build_services(
         sandbox=sandbox,
     )
 
-    tools = default_registry(tasks=tasks, sandbox=sandbox)
+    wakeups = WakeupService(databases, events=events)
+    tools = default_registry(
+        tasks=tasks,
+        sandbox=sandbox,
+        bus=bus,
+        wakeups=wakeups,
+        workspace=workspace,
+        github=github,
+        events=events,
+        http=http,
+        databases=databases,
+    )
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    bus.use_catalog(catalog)
+    wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
+    list_agents = tools.get("ListAgents")
+    if isinstance(list_agents, ListAgentsTool):
+        list_agents.bind(catalog, status_board)
     turn_observer = EventTurnObserver(events)
+    inbound = SqliteInboundSource(databases)
+    pr_sync = PrSyncObserver(tasks, workspace, github, http)
+    stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
         databases=databases,
@@ -157,16 +182,21 @@ async def build_services(
         providers=providers,
         http=http,
         gate=gate,
-        inbound=NoInbound(),
-        turn_end=NoTurnEndCheck(),
+        inbound=inbound,
+        turn_end=PrReminder(tasks),
         workspaces=tasks,
-        observers=[turn_observer],
+        observers=[turn_observer, inbound, pr_sync],
+        bus=bus,
         status_board=status_board,
         audit_log=audit,
         event_log=events,
     )
+    inbound.bind(sessions)
     status_board.bind_sessions(sessions)
+    wakeups.bind(sessions)
     stack.push_async_callback(sessions.close)
+    await wakeups.start()
+    stack.push_async_callback(wakeups.close)
 
     approvals = ApprovalsService(
         databases=databases,
@@ -188,10 +218,12 @@ async def build_services(
         tools=tools,
         agent_settings=agent_settings,
         sessions=sessions,
+        messaging_settings=messaging_settings,
         sandbox=sandbox,
         events=events,
         audit=audit,
         status_board=status_board,
         tasks=tasks,
         approvals=approvals,
+        wakeups=wakeups,
     )

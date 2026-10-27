@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime import worker
+from mlops_agents.agents.runtime import waiting
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.observer_fakes import (
@@ -165,7 +165,7 @@ async def test_a_hanging_observer_does_not_hold_shutdown(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(worker, "OBSERVER_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(waiting, "OBSERVER_TIMEOUT_S", 0.2)
     hanging = HangingObserver(hang_in="ended")
     after = RecordingObserver()
     env = await build_session_env(

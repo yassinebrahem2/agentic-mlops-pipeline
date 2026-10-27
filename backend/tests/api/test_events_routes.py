@@ -274,8 +274,8 @@ async def test_services_audit_fails_closed_on_keystore_error(
         )
 
     # Invalidate cache
-    cache_attr = "_cached_secrets"
-    setattr(app.state.services.providers, cache_attr, None)
+    owner_attr = "_stored_keys"
+    getattr(app.state.services.providers, owner_attr).invalidate()
 
     class BrokenKeystoreError(RuntimeError):
         pass

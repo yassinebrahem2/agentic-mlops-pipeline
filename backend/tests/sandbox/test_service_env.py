@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from mlops_agents.config import APP_NAME
+from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
 from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
@@ -232,3 +234,163 @@ async def test_environment_returns_failed_on_value_error_python_version(
     status = await service.environment("prj_val")
     assert status.state == "failed"
     assert "invalid python version format" in (status.detail or "")
+
+
+class BlockingRunner(FakeDockerRunner):
+    def __init__(
+        self, started: asyncio.Event | None = None, cancelled: asyncio.Event | None = None
+    ) -> None:
+        super().__init__()
+        self.started, self.cancelled = started, cancelled
+
+    async def run(
+        self, args: Sequence[str], *, timeout_s: float | None = None, secrets: Iterable[str] = ()
+    ) -> DockerResult:
+        if args and args[0] == "build":
+            if self.started:
+                self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if self.cancelled:
+                    self.cancelled.set()
+                raise
+        return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+
+class BlockingRecordEventLog(FakeEventLog):
+    def __init__(
+        self,
+        block_type: EventType | None = None,
+        started: asyncio.Event | None = None,
+        unblock: asyncio.Event | None = None,
+    ) -> None:
+        super().__init__()
+        self.block_type, self.started, self.unblock, self.fail_on_failed = (
+            block_type,
+            started,
+            unblock,
+            False,
+        )
+
+    async def record(
+        self,
+        project_id: str,
+        *,
+        source: str,
+        type: EventType,
+        payload: dict[str, Any],
+        subject_id: str | None = None,
+    ) -> EventRecord:
+        if self.fail_on_failed and type == "sandbox.build.failed":
+            raise RuntimeError("event log store unreachable")
+        if self.block_type and type == self.block_type:
+            if self.started:
+                self.started.set()
+            if self.unblock:
+                await self.unblock.wait()
+        return await super().record(
+            project_id, source=source, type=type, payload=payload, subject_id=subject_id
+        )
+
+
+async def test_cancelled_rebuild_after_started_sets_failed_and_propagates(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    build_started, build_cancelled = asyncio.Event(), asyncio.Event()
+    events = FakeEventLog()
+    runner = BlockingRunner(started=build_started, cancelled=build_cancelled)
+    projects = MemorySandboxProjects({"prj_c": repo})
+    service = SandboxService(runner, events=events, projects=projects)
+    task = asyncio.create_task(service.rebuild("prj_c"))
+    await build_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert build_cancelled.is_set()
+    status = await service.environment("prj_c")
+    assert status.state == "failed"
+    assert status.detail == "Image build failed: CancelledError"
+    assert [r.type for r in events.records] == ["sandbox.build.started", "sandbox.build.failed"]
+    assert events.records[0].payload == {"tag": status.tag, "detail": None}
+    assert events.records[1].payload == {"tag": status.tag, "detail": status.detail}
+
+
+async def test_cancelled_rebuild_resilient_to_event_recording_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    build_started = asyncio.Event()
+    events = BlockingRecordEventLog()
+    projects = MemorySandboxProjects({"prj_e": repo})
+    service = SandboxService(
+        BlockingRunner(started=build_started), events=events, projects=projects
+    )
+    task = asyncio.create_task(service.rebuild("prj_e"))
+    await build_started.wait()
+    events.fail_on_failed = True
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    status = await service.environment("prj_e")
+    assert status.state == "failed"
+    assert status.detail == "Image build failed: CancelledError"
+    assert any(
+        "Failed to record sandbox.build.failed event" in r.message and r.exc_info is not None
+        for r in caplog.records
+    )
+
+
+async def test_cancelled_rebuild_during_finished_record_propagates_cancellation(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    record_started, record_unblock = asyncio.Event(), asyncio.Event()
+    events = BlockingRecordEventLog(
+        block_type="sandbox.build.finished", started=record_started, unblock=record_unblock
+    )
+    projects = MemorySandboxProjects({"prj_cf": repo})
+    service = SandboxService(FakeDockerRunner(), events=events, projects=projects)
+    task = asyncio.create_task(service.rebuild("prj_cf"))
+    await record_started.wait()
+    task.cancel()
+    record_unblock.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    status = await service.environment("prj_cf")
+    assert status.state == "ready"
+    assert [r.type for r in events.records] == ["sandbox.build.started", "sandbox.build.finished"]
+
+
+async def test_build_image_error_and_prior_oserror_have_same_detail_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mlops_agents.sandbox import images
+    from mlops_agents.sandbox import service as service_module
+
+    def fail_snapshot(*args: object, **kwargs: object) -> None:
+        raise OSError("failed to read requirements.txt")
+
+    monkeypatch.setattr(service_module, "snapshot_image", fail_snapshot)
+    projects_os = MemorySandboxProjects({"prj_os": tmp_path})
+    service_os = SandboxService(FakeDockerRunner(), events=FakeEventLog(), projects=projects_os)
+    status_os = await service_os.rebuild("prj_os")
+    assert status_os.state == "failed"
+    assert status_os.detail == "Image build failed: failed to read requirements.txt"
+
+    monkeypatch.undo()
+
+    async def fail_build(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("docker builder crashed")
+
+    monkeypatch.setattr(images.ImageManager, "build_image", fail_build)
+    projects_b = MemorySandboxProjects({"prj_b": tmp_path})
+    service_b = SandboxService(FakeDockerRunner(), events=FakeEventLog(), projects=projects_b)
+    status_build = await service_b.rebuild("prj_b")
+    assert status_build.state == "failed"
+    assert status_build.detail == "Image build failed: docker builder crashed"

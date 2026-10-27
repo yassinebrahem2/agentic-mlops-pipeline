@@ -32,8 +32,8 @@ Stage 2 is built through several plans. This overview holds what they share. Rea
 | tasks | `plan/stage-2-tasks` | Tasks, worktrees, the one task git function, file views, StartTask and ResumeTask, Write and Edit, claims, committing, local merge, discard | I8 to I12; events task 1 | tasks 1 to 4: after runtime-contracts tasks 1 to 3 and events task 1; task 5 (wiring): runtime-contracts task 4 merged | Merged (#259) |
 | sandbox | `plan/stage-2-sandbox` | Docker detection, environment images, task containers, Bash, sandbox settings and routes | I8 to I12; events task 1 | after runtime-contracts task 1 | Merged (#240) |
 | approvals | `plan/stage-2-approvals` | The gate, approval records and parts, waiting and resuming turns, expiry, Stop, approvals and permission-level routes | I8 to I12; events task 1 | tasks 1 and 2: after runtime-contracts tasks 1 and 2 and events task 1; task 3 on: runtime-contracts task 4 merged | Merged (#251) |
-| github-work | `plan/stage-2-github-work` | GitHub client for PRs, issues and labels, the fake GitHub server, OpenPullRequest, issue tools, local reviews, the PR reminder, PR state sync | I8 to I12; tasks task 4; events task 1 | client: after runtime-contracts task 1; tools: after runtime-contracts task 3 and the tasks plan's commit task; task 5: runtime-contracts task 4 merged; tasks 4 and 5: the tasks plan merged | Planned |
-| messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 (task 4 merged before its task 2) | Planned |
+| github-work | `plan/stage-2-github-work` | GitHub client for PRs, issues and labels, the fake GitHub server, OpenPullRequest, issue tools, local reviews, the PR reminder, PR state sync | I8 to I12; tasks task 4; events task 1 | client: after runtime-contracts task 1; tools: after runtime-contracts task 3 and the tasks plan's commit task; task 5: runtime-contracts task 4 merged; tasks 4 and 5: the tasks plan merged | Merged (#262) |
+| messaging | `plan/stage-2-messaging` | SendMessage, exchanges and limits, mid-turn delivery, ListAgents, ScheduleWakeup and its timer, messaging settings | I8 to I12; events tasks 1 and 3 | after runtime-contracts tasks 1 to 3 and events task 1 (task 4 merged before its task 2) | Merged (#266) |
 | agent-definitions | `plan/stage-2-agent-definitions` | The seven definition files and their prompts | every stage 2 tool on `main` | after tasks, sandbox, github-work and messaging | Planned |
 | frontend-agents | `plan/stage-2-frontend-agents` | Agents list with status, approval cards, the task bar, the bypass warning, "From <agent>" labels | I9, I11, the approvals, tasks and events routes | coding: after runtime-contracts task 1 and chat-layout merged; merging: after the routes it uses | Planned |
 | frontend-inbox | `plan/stage-2-frontend-inbox` | The Inbox page and its badge, project settings for permissions, sandbox, issues and messaging | I9, I11, the routes it uses; frontend-agents tasks 1 and 2 (`useProjectEvents`, `ApprovalCard`) | coding: after runtime-contracts task 1, project-context merged and frontend-agents tasks 1 and 2; merging: after the routes it uses | Planned |
@@ -174,7 +174,7 @@ def decide(risk: RiskClass, level: PermissionLevel) -> PolicyDecision   # the sp
 ```python
 EventType = Literal[
     "turn.started", "turn.waiting", "turn.ended", "task.started", "task.ended",
-    "pr.opened", "pr.updated", "issue.opened", "issue.commented",
+    "pr.opened", "pr.updated", "issue.opened", "issue.commented", "issue.updated",
     "approval.requested", "approval.decided", "message.sent", "wakeup.scheduled",
     "sandbox.build.started", "sandbox.build.finished", "sandbox.build.failed",
 ]
@@ -185,7 +185,7 @@ EventType = Literal[
 #   task.started:                 {"task_id", "title", "branch"}         subject_id = task_id
 #   task.ended:                   {"task_id", "status"}                  subject_id = task_id
 #   pr.opened, pr.updated:        {"task_id", "number", "url", "title"}  subject_id = task_id
-#   issue.opened, issue.commented: {"number", "url", "title"}
+#   issue.opened, issue.commented, issue.updated: {"number", "url", "title", "state"}  (state and issue.updated: Decision #275)
 #   approval.requested:           {"approval_id", "turn_id", "tool"}     subject_id = approval_id
 #   approval.decided:             {"approval_id", "status"}              subject_id = approval_id
 #   message.sent:                 {"to", "exchange_id", "hop"}           subject_id = exchange_id
@@ -275,6 +275,11 @@ class Tasks(TaskWorkspaces, Protocol):
     async def read_hash(self, project_id: str, task: TaskRef, path: str) -> str | None: ...
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None: ...  # raises ClaimConflict
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool: ...
+    async def repo_ref(self, project_id: str) -> RepoRef | None: ...           # added by the cleanup plan (#265)
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool: ...  # added by the cleanup plan (#265)
+    async def decide_review(self, project_id: str, task_id: str, step: Callable[[TaskRef], Awaitable[None]],
+                            status: Literal["merged", "closed"]) -> TaskView: ...  # Decision #275: check, step and end under one task lock;
+    # a step that raises leaves the task in review. local_merge is reached only through it and takes no lock.
     async def staged_diff(self, project_id: str, task: TaskRef) -> str: ...  # what commit would record, capped
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult: ...  # raises CommitRefused
     async def push(self, project_id: str, task: TaskRef) -> None: ...

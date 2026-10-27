@@ -1,14 +1,12 @@
-"""The stage 1 defaults of the inbound source and the turn-end check (I12).
+"""Test doubles for turn hooks with no side-effects.
 
 `FakeWorkspaces` is tested in test_agent.py, beside the workspace service it reads.
 """
 
 from __future__ import annotations
 
-from mlops_agents.agents.runtime.hooks import (
-    NoInbound,
-    NoTurnEndCheck,
-)
+from tests.agents.runtime.hook_fakes import NoInbound
+from tests.fakes.turn_end import NoTurnEndCheck
 
 
 async def test_no_inbound_and_no_turn_end_check_add_nothing() -> None:

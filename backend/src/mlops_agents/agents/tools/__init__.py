@@ -8,21 +8,44 @@ from mlops_agents.agents.tools.bash import BashTool
 from mlops_agents.agents.tools.edit import EditTool
 from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
+from mlops_agents.agents.tools.issues import (
+    CommentOnIssueTool,
+    OpenIssueTool,
+    SearchIssuesTool,
+)
+from mlops_agents.agents.tools.list_agents import ListAgentsTool
+from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
+from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.write import WriteTool
 
 if TYPE_CHECKING:
+    import httpx2
+
+    from mlops_agents.agents.catalog import AgentCatalog
+    from mlops_agents.agents.messaging.bus import SqliteMessageBus
+    from mlops_agents.agents.messaging.wakeups import WakeupService
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.events.contract import EventLog, StatusBoard
+    from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.sandbox.contract import Sandbox
+    from mlops_agents.storage.databases import Databases
+    from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
     "BashTool",
+    "CommentOnIssueTool",
     "EditTool",
     "GlobTool",
     "GrepTool",
+    "ListAgentsTool",
+    "OpenIssueTool",
+    "OpenPullRequestTool",
     "ReadTool",
     "ResumeTaskTool",
+    "ScheduleWakeupTool",
+    "SearchIssuesTool",
     "StartTaskTool",
     "ToolRegistry",
     "WriteTool",
@@ -34,9 +57,18 @@ def default_registry(
     *,
     tasks: Tasks | None = None,
     sandbox: Sandbox | None = None,
+    bus: SqliteMessageBus | None = None,
+    status_board: StatusBoard | None = None,
+    catalog: AgentCatalog | None = None,
+    wakeups: WakeupService | None = None,
+    workspace: WorkspaceService | None = None,
+    github: GitHubAuth | None = None,
+    events: EventLog | None = None,
+    http: httpx2.AsyncClient | None = None,
+    databases: Databases | None = None,
 ) -> ToolRegistry:
-    """The tools agents can be given. No tool needs a service yet; a later plan whose tool
-    needs one adds it as a keyword-only parameter here and passes it in `api/services.py`."""
+    """The tools agents can be given. Tools that need services take them here as keyword-only
+    parameters, and `api/services.py` passes them in."""
     tools: list[AgentTool[Any]] = [ReadTool(tasks=tasks), GlobTool(), GrepTool(shutil.which("rg"))]
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
@@ -50,4 +82,41 @@ def default_registry(
         )
     if sandbox is not None:
         tools.append(BashTool(sandbox=sandbox))
-    return ToolRegistry(tools)
+    if (
+        tasks is not None
+        and workspace is not None
+        and github is not None
+        and events is not None
+        and http is not None
+    ):
+        tools.append(OpenPullRequestTool(tasks, workspace, github, events, http))
+    if (
+        workspace is not None
+        and github is not None
+        and events is not None
+        and http is not None
+        and databases is not None
+    ):
+        tools.extend(
+            [
+                SearchIssuesTool(workspace, github, http),
+                OpenIssueTool(workspace, github, events, http, databases),
+                CommentOnIssueTool(workspace, github, events, http),
+            ]
+        )
+    registry = ToolRegistry(tools)
+    if bus is not None:
+        # Imported here: the bus reaches this package through the session contract, so a
+        # top-level import would be circular.
+        from mlops_agents.agents.tools.send_message import SendMessageTool
+
+        registry.register(SendMessageTool(bus))
+    if bus is not None or status_board is not None:
+        effective_catalog = (
+            catalog if catalog is not None else getattr(status_board, "_catalog", None)
+        )
+        registry.register(ListAgentsTool(catalog=effective_catalog, status_board=status_board))
+    if wakeups is not None:
+        effective_catalog = catalog if catalog is not None else getattr(wakeups, "catalog", None)
+        registry.register(ScheduleWakeupTool(wakeups, catalog=effective_catalog))
+    return registry
