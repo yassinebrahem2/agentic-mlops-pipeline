@@ -1,6 +1,6 @@
 # Stage 3: Onboarding and data access
 
-Date: 2026-10-27. Status: draft, not approved.
+Date: 2026-10-27. Status: approved by the lead on 2026-10-28.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and the decisions behind it: `project_knowledge.md` (entries of 2026-10-27). Stage 1 and stage 2 behavior not mentioned here stays as their specs say.
 
 ## Goal
@@ -41,6 +41,7 @@ Out:
 - File connections in server mode: they would read the server's disk. The connections section says so in server mode.
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
+- Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
 - Reading monitoring results and checks (stage 4), deploy hooks (stage 5), the Knowledge, Stats, Activity and Usage pages (stage 6). Stage 3 stores what they read.
 - The Data page's quality and drift history: empty until stage 4; the page says so.
 
@@ -74,10 +75,17 @@ backend/src/mlops_agents/
 
 A change to the merged model call (`agents/runtime/model_caller.py`), modeled on the key failover engine of the Multimodal RAG Agent project (`providers/retry_engine.py` there):
 - **Error kinds.** Permanent (bad request, a rejected tool call already handled in stage 2) ends the call at once. Transient (a server error, a dropped connection, a timeout) retries with backoff a few times on the same key; a different key would not fix it. Every 429 is a rate limit, handled below, whatever its message says: providers such as Gemini word per-minute limits as "quota exceeded". Only an explicit billing signal (HTTP 402, `insufficient_quota`) or an authentication failure exhausts a key at once. The classification in `providers/errors.py` changes accordingly.
-- **Rate limits.** The call waits `max(retry_after, interval)` and retries the same key. Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn. When a key has been continuously rate-limited for longer than a threshold (a provider setting, default 90 seconds), it is treated as exhausted for the day.
-- **Key state is shared.** Each key's rate-limit streak and exhausted mark live in one place per provider in the app, shared by every turn and every call (the four kickoff audits share a key). A success on a key ends its streak.
-- **Exhausted keys.** An exhausted key is skipped and the call moves to the next key of the provider. The mark lasts until the next UTC day, or until the user tries again.
-- **Every key exhausted.** The turn does not fail: it pauses on an approval of a new kind, `stall`, which has no tool call. The model step raises it (keyed by turn and step, so a re-run finds it instead of duplicating it), and the `wait` node pauses on it like any pending approval. So the record, the card, the Inbox entry, surviving a restart and resuming all come from stage 2 unchanged. The card shows the provider and each key's state and why (daily limit, billing, rejected), with Try again (approves: clears the marks and resumes the model step from the checkpoint, so no work is lost) and Stop (cancels: the turn ends `stopped`). A change to the merged approvals and Part interfaces: the approval kind `stall`, and a `stall` preview in the approval part.
+- **Rate limits: the user never waits on one key.** On a 429 the call moves at once to the next key of the provider that is not exhausted for that model, and cycles through the keys like that. Each key remembers when it was last rate-limited.
+  - When the cycle comes back to a key whose last rate limit is more than a minute old (a per-minute limit has had time to clear) and that key is rate-limited again, it is marked exhausted: it reached its daily limit.
+  - When every remaining key was rate-limited less than a minute ago, the call waits only until the earliest of them clears (its `Retry-After`, else a minute after its limit), then tries that key.
+  - Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn.
+- **Key state is per key and model.** Providers count limits per model, so a key's last rate limit and exhausted mark are kept per key and model: the same key can be exhausted for one model and fine for another. The state lives in one place in the app, shared by every turn and every call (the four kickoff audits share keys). A success clears that key and model's rate-limit time.
+- **Exhausted keys** are skipped. After a cooldown (a provider setting, default 15 minutes) the next call tries an exhausted key once again, since providers reset their daily limits at different times; a success clears the mark. Try again (below) clears every mark at once.
+- **Every key exhausted.** The turn does not fail: it pauses on an approval of a new kind, `stall`, which has no tool call.
+  - The model node records the `stall` approval (keyed by turn ID and model-step index, so a re-run finds it instead of duplicating it) and returns without a model message. The graph routes model → wait while a stall is pending; once it is approved, `wait` routes back to `model`, which calls the model again. A change to the merged turn graph.
+  - The approval record, the card, the Inbox entry, surviving a restart and resuming are stage 2's. The card shows the provider and each key's state and why (daily limit, billing, rejected), with Try again (approves: clears the marks and resumes, so no work is lost) and Stop (cancels: the turn ends `stopped`). A change to the merged approvals and Part interfaces: the approval kind `stall` and its preview.
+  - A stall is not a policy decision: it writes no audit record. It records `turn.stalled` and `turn.resumed` events.
+  - If text has already streamed in the step when the keys run out, the turn ends `failed` as today (a half-streamed answer cannot be resumed cleanly), with the same per-key explanation and a Try again that sends the trigger message again.
 - Stop works at any moment, including while a call is waiting out a rate limit.
 - The app never throttles or queues agents to avoid rate limits.
 
@@ -87,7 +95,7 @@ A change to the merged model call (`agents/runtime/model_caller.py`), modeled on
   - chat: as in stage 1 (tool calling, streaming);
   - embedder: one call to the provider's OpenAI-compatible `/embeddings` endpoint with a short text; it records the vector's `dimensions`.
 - `usable` is per type: a chat model needs tool calling and streaming; an embedder needs a verified dimension. Every model picker filters by type; the per-agent model defaults list chat models only.
-- Any provider, hosted or self-hosted (Ollama, vLLM, LM Studio, a llama.cpp server, anything OpenAI-compatible), can serve embedders. No provider list is built in. Embedding calls use the same key failover (§2).
+- Any provider, hosted or self-hosted (Ollama, vLLM, LM Studio, a llama.cpp server, anything OpenAI-compatible), can serve embedders. No provider list is built in. Embedding calls use the same key failover (§2), but never stall: when the embedder's keys are exhausted, search falls back to full text and says so, and a saved note waits for its vector until the background re-embed fills it in.
 - Settings gain an embedder (app default, project override), used by the Knowledge store. With none set, search is full-text only and says so.
 - The fake OpenAI server gains `/embeddings` (deterministic vectors).
 
@@ -172,7 +180,7 @@ class ConnectionKind(Protocol):
 
 **One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version (a newer pending proposal of the same kind supersedes the older one).
 - A proposal is a stage 2 approval: the tool call asks, the card renders the payload by its kind, the user approves or rejects with a note, the turn resumes. On approval the app runs the kind's `apply()`; the tool result tells the agent what was applied, what failed and why.
-- **Secrets never pass through a proposal.** A card that needs a credential (a tracker's) has a field that posts it straight to the keystore through its own endpoint; the approval, its preview, the audit record, the events and the checkpoint only ever hold "credential set: yes or no".
+- **Secrets never pass through a proposal.** A card that needs a credential (a tracker's) has a field that posts it straight to the keystore through its own endpoint, keyed by the proposal's ID and the source's position in the payload; the approval, its preview, the audit record, the events and the checkpoint only ever hold "credential set: yes or no". Applying the proposal moves the credential to the new tracking source; rejecting it, superseding it or failing to create that source deletes it, so no orphan secret stays in the keystore.
 - **New risk class `propose`:** it asks at every permission level, `bypass` included. A proposal changes what the agents may do or see, so the user always decides it. Roadmap change below.
 - Kinds in this stage: `connections` and `handoff`. Stage 4 adds checks and result parsers, stage 5 deploy hooks: each a new kind file with its payload model, card and `apply()`.
 
@@ -190,7 +198,7 @@ class ConnectionKind(Protocol):
 
 **Applying the handoff:** stores the profile, roles, pipeline, commands and operations as the project's current handoff (versioned; a later approved handoff replaces it); creates the tracking sources (the credential is already in the keystore); sets network and level; starts the tracking sync; records `handoff.approved`; starts the kickoff. A part that fails is reported and the rest is applied.
 
-**The kickoff.** The app posts one message to each of Data Quality, Model Performance, Retraining and Deployment & Rollback at once, authored by the system and labeled "handoff", with the handoff summary and that agent's audit brief. It is not an agent-to-agent message: replies stay in each agent's own session, nothing wakes Onboarding, and no hop or token limit applies. The user follows the audits on the status board and in the Inbox, where an audit's requests appear. Each audit studies its part (hooks, Bash on `/data`, the tracking record, the repository, the notes), saves what it learns as notes, opens PRs or issues for fixes through the stage 2 tools and gates, and ends with a report: what is good, broken or missing, with evidence. The kickoff is recorded per agent, so a restart neither repeats nor loses it.
+**The kickoff.** The app posts one message to each of Data Quality, Model Performance, Retraining and Deployment & Rollback at once, authored by the system and labeled "handoff", with the handoff summary and that agent's audit brief. It is posted the way stage 2's wake-ups are (`sessions.post` with author "Handoff", the recipient itself as `from_agent`, no exchange), so it is not an agent-to-agent message: replies stay in each agent's own session, nothing wakes Onboarding, and no hop or token limit applies. The user follows the audits on the status board and in the Inbox, where an audit's requests appear. Each audit studies its part (hooks, Bash on `/data`, the tracking record, the repository, the notes), saves what it learns as notes, opens PRs or issues for fixes through the stage 2 tools and gates, and ends with a report: what is good, broken or missing, with evidence. The kickoff is recorded per agent, so a restart neither repeats nor loses it.
 
 ## 10. Onboarding
 
@@ -225,7 +233,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 - **Project settings, Connections:** connections with status and data version; add (a folder picker in local mode, as the add-project wizard has), edit, remove; the denylist warning. Tracking sources: URL, credential (posted to the keystore), last sync. The embedder override.
 - **Proposal cards:** `connections` and `handoff` cards render their payloads readably; the handoff card has the credential field and the network sentence of §7. The Inbox lists them like any approval.
 - **Stalled-turn card** (§2), in the session and the Inbox.
-- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the rate-limit threshold per provider.
+- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the exhausted-key cooldown per provider.
 - **Models page:** tracked models; per model, its versions with their metrics side by side, the production alias, and each version's lineage (run, git commit, training data where recorded).
 - **Data page:** connections and their tables (schema, rows, data version, roles from the handoff), and "quality and drift history arrives with monitoring".
 - **Runs page:** tracked runs and CI runs in one list with status, duration and failures; Sync now.
@@ -233,12 +241,13 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 
 ## 13. Storage
 
-New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the rate-limit threshold and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. Each plan adds its own numbered migration.
+New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the exhausted-key cooldown and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. One plan (the overview's contracts) writes the stage 3 schema, as in stage 2.
 
 ## Changes to the roadmap
 
 Made in `docs/roadmap.md` before any stage 3 plan:
 - ID prefixes `con` (connection), `trk` (tracking source), `prp` (proposal), `kno` (knowledge note). Tracking record rows are keyed by source and source ID (no prefix): they mirror another system's IDs.
+- Audit records: a `stall` decision writes none (it is not a policy decision); events record it.
 - Risk class `propose` in the classes and the policy table: `ask` at every level, `bypass` included (the one class `bypass` does not skip).
 - Agent definitions: `status_board` becomes a context hook; `context_hooks` names hooks from the registry.
 - Tools: data commands are not a tool; agents explore data with Bash in the sandbox. Risk class `read` lists SaveNote, SearchNotes, TrackingHistory instead of data commands.
@@ -255,12 +264,12 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 ## 15. Testing
 
 - Fakes, no real service: `/embeddings` and rate-limit and quota responses on the fake OpenAI server; a fake MLflow REST server; workflow runs on the fake GitHub server; small data folder fixtures.
-- Rate limits (§2), with a fake clock: per-minute limits never end a turn, a 429 saying "quota" included; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
+- Rate limits (§2), with a fake clock: a 429 moves to the next key at once, without waiting; a key limited again after more than a minute is marked exhausted; with every key limited within the last minute, the call waits only until the earliest clears; per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a billing signal (402, `insufficient_quota`) or an authentication failure exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
 - Connections: a folder inside the data folder is refused; a link out is resolved and checked; the mount is read-only (a write from Bash fails); denylisted files are listed; changing connections recreates the container.
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
 - Knowledge: a keyword match and a meaning match both rank; changing the embedder re-embeds and never mixes dimensions.
-- Proposals: `Propose` asks at every level, `bypass` included; a credential never appears in the approval, audit, events or checkpoint; approving applies every part; a failing part is reported and the rest applied; a newer proposal supersedes the pending one; a handoff cannot set `bypass`.
+- Proposals: `Propose` asks at every level, `bypass` included; a credential never appears in the approval, audit, events or checkpoint; a credential entered for a proposal that is then rejected, superseded or fails to apply is deleted from the keystore; approving applies every part; a failing part is reported and the rest applied; a newer proposal supersedes the pending one; a handoff cannot set `bypass`.
 - Kickoff: four agents started at once by a system message labeled "handoff"; Onboarding is not woken by their replies; a restart neither repeats nor loses one.
 - End to end (fake model, a fixture repository and data folder): add the project, Onboarding proposes connections, approve, it proposes the handoff, approve, the connection and tracking appear, a kickoff turn runs with the data summary in its context.
 
