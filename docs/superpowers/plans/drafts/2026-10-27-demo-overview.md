@@ -24,7 +24,9 @@ Facts and the story: `project_knowledge.md` (the demo entries of 2026-10-27).
 - **Folders.** Outside both repositories, each overridable by an environment variable, defaults under `~/hotel-demo/`:
   - `HOTEL_DEMO_DATA` (`data/`): the company's production data, written by the world and the company's daily job; what an app data connection points at.
   - `HOTEL_DEMO_MLFLOW` (`mlflow/`): MLflow's SQLite store and artifacts (the company's).
-  - `HOTEL_DEMO_WORLD` (`world/`): the world's own folder: the downloaded CSV, its state, the answer key, the planted-flaws list. Never inside the data folder.
+  - `HOTEL_DEMO_SOURCE` (`source/`): the downloaded CSV, shared by every run.
+  - `HOTEL_DEMO_WORLD` (`world/`): the world's own folder: its state, the answer key, the planted-flaws list. Never inside the data folder.
+  - Each run (`demo-world new-run <name>`) gets its own copy of the company repository and its own data, MLflow and world folders under `runs/<name>/`; the defaults above are for development only.
 - **One tracking URI.** In the company, `paths.tracking_uri()` is the only place MLflow's URI is chosen: `MLFLOW_TRACKING_URI` if set (under `up`, the server), else `sqlite:///<mlflow dir>/mlflow.db`. The port is `HOTEL_DEMO_MLFLOW_PORT`, default 5000.
 - **Business dates.** Every file in the data folder carries its business date (the simulated day) in its name, `YYYY-MM-DD`. Nothing in the data depends on the wall clock.
 - **Labels arrive late.** A booking's label is released on its cancellation date if cancelled, otherwise on its arrival date, and never before its booking date (a booking cancelled the day it was made gets its label that day).
