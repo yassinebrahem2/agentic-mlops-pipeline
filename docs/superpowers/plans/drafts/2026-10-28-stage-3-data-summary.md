@@ -10,7 +10,7 @@
 - results (never data copies) are cached per data version, 500 MB per project, least recently used evicted;
 - `GET /api/projects/{id}/connections/{con}/tables/{table}` returns the same cached summary for the Data page.
 
-**Branch:** `plan/stage-3-data-summary`. **Consumes:** I15 (`Connections`, `TableRef`, `TableDetail`, `DuckDbSource`, `ConnectionView`) from connections task 1; I18's `HookContext` and `ContextHook` (`agents/hooks/contract.py`) from contracts task 1. **Produces:** `HookRegistry` (I18) from task 1 (early PR); the `data_summary` hook; `GET /api/projects/{id}/connections/{con}/tables/{table}` returning `TableDetail`; the `DUCKDB_VERSION` constant (see Interface gaps).
+**Branch:** `plan/stage-3-data-summary`. **Consumes:** I15 (`Connections`, `TableRef`, `TableDetail`, `DuckDbSource`, `ConnectionView`) from connections task 1; I18's `HookContext` and `ContextHook` (`agents/hooks/contract.py`), `DUCKDB_VERSION` (`config.py`) and the `duckdb==2.0.0` dependency, all from contracts task 1. **Produces:** `HookRegistry` (I18) from task 1 (early PR); the `data_summary` hook; `GET /api/projects/{id}/connections/{con}/tables/{table}` returning `TableDetail`; the registry is called by every plan that registers a hook (tracking, knowledge), in `build_services` before `AgentCatalog.load`.
 
 **Read first:** spec §6, §4 (the `duckdb_source` method) and §14; overview I15 and I18; `agents/catalog.py`, `agents/runtime/agent.py`, `agents/runtime/context.py`, `agents/runtime/executor.py`, `events/status.py`.
 
@@ -32,7 +32,7 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 **Files:**
 - new `backend/src/mlops_agents/agents/hooks/registry.py` (`HookRegistry`), `agents/hooks/names.py` (`STATUS_BOARD_HOOK = "status_board"`, the one source of the name; the other hooks' names live with their plans), `agents/hooks/status_board.py` (`StatusBoardHook`); `agents/hooks/__init__.py` if contracts did not create it;
-- `agents/catalog.py` (remove `KNOWN_HOOKS`; `hook_names`; `AgentDefinition.hook_names`), `agents/runtime/agent.py` (`AgentBuilder`, `Agent`), `agents/runtime/context.py` (`build_messages`), `agents/runtime/executor.py` (both `build` call sites and the two `build_messages` calls), `agents/runtime/sessions.py` (`SessionManager` passes `hooks`), `api/services.py` (its lines only);
+- `agents/catalog.py` (remove `KNOWN_HOOKS`; `hook_names`; `AgentDefinition.hook_names`), `agents/runtime/agent.py` (`AgentBuilder`, `Agent`), `agents/runtime/context.py` (`build_messages`), `agents/runtime/executor.py` (both `build` call sites and the two `build_messages` calls), `agents/runtime/sessions.py` (`SessionManager` passes `hooks`), `api/services.py` (its lines only: create the registry, register `StatusBoardHook`, pass `hooks.names()` to `AgentCatalog.load`, bind the board). `executor.py` and `sessions.py` are not named in the overview's shared-files list (see Interface gaps);
 - tests: new `tests/agents/hooks/test_registry.py`, `tests/agents/hooks/test_status_board.py`; adapted `tests/agents/test_catalog.py`, `tests/agents/runtime/test_agent.py`, `tests/agents/runtime/test_context.py`, `tests/events/test_status.py`.
 
 **Interfaces:**
@@ -44,7 +44,7 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 **Implementation notes:**
 - `run` renders the named hooks concurrently (`asyncio.gather`) and joins the non-empty results with a blank line, in the order of `names`. It raises nothing a hook raises: an unknown name gives the line `[<name>: unknown context hook]`; an `Exception` from a hook is logged with its traceback (`logger.exception`) and gives `[<name>: unavailable (<credentials.scrub.error_text(exc)>)]`. `CancelledError` is not an `Exception` and propagates, so Stop still works. Registering a name twice raises `ValueError`.
-- Hooks cap their own text (the registry does not cut: one cap per hook, each in its owner's constants). `StatusBoardHook.render` returns `"Status board:\n" + summary` (the label `build_messages` adds today moves into the hook), or `""` when the summary is empty. It is bound after the status board exists (`bind(board)`, the way `ListAgentsTool.bind` is): the catalog needs the registry's names before `SqliteStatusBoard` (which needs the catalog) can be built, so `services.py` registers an unbound `StatusBoardHook`, loads the catalog with `hooks.names()`, then binds. Unbound, `render` raises `RuntimeError`, which the registry reports as one line.
+- Hooks cap their own text (the registry does not cut: one cap per hook, each in its owner's constants). `StatusBoardHook.render` returns `"Status board:\n" + summary` (the label `build_messages` adds today moves into the hook), or `""` when the summary is empty. It is bound after the status board exists (`bind(board)`, the way `ListAgentsTool.bind` is): the catalog needs the registry's names before `SqliteStatusBoard` (which needs the catalog) can be built, so `services.py` registers an unbound `StatusBoardHook`, loads the catalog with `hooks.names()`, then binds. Unbound, `render` returns its own line `[status_board: unavailable (not bound)]` (a hook never raises, as I18 says; the registry's catch is only a backstop).
 - `AgentBuilder.build` runs `self._hooks.run(definition.hook_names, HookContext(...))` when `trigger_text is not None`, `hooks` is set and `hook_names` is not empty. The first run passes the turn's trigger message text. The resume path passes `None`: the resumed graph's messages are already in its checkpoint, so running the hooks again would be wasted work.
 - The executor reads the trigger with `store.turn_trigger_id(project_id, turn_id)` then `store.message(project_id, session_id, id)`: the joined `TextPart` texts, `""` when there is none (a wake-up, a handoff message and a user message are all stored messages).
 - `build_messages` appends `hook_context` as the last section of the system message, where the status board section was. Hook output never enters the session's stored messages.
@@ -52,7 +52,7 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 **Tests (stop condition):**
 - Registry: output follows the order of `names`; two hooks run concurrently (a pair that each wait on the other's event would deadlock if sequential); a raising hook gives one line while the others still render; an unknown name gives its line; an empty-rendering hook adds nothing; `run([])` is `""`; a duplicate `register` raises; `CancelledError` from a hook propagates.
-- `StatusBoardHook`: renders the labelled summary; `""` for an empty summary; unbound reports one line through the registry.
+- `StatusBoardHook`: renders the labelled summary; `""` for an empty summary; unbound renders `[status_board: unavailable (not bound)]` directly.
 - Catalog: `context_hooks` naming a registered hook is accepted, an unregistered one rejected; `status_board: true` gives `hook_names == ("status_board",)` and is accepted with the default `hook_names`; `context_hooks: [status_board]` together with `status_board: true` lists it once.
 - Builder: hooks run with a `HookContext` carrying the project, the agent name and the trigger text; `trigger_text=None` runs none; an agent without hooks calls none; the stage 2 test (Orchestrator gets the summary, another agent does not) passes against a registry holding a `StatusBoardHook`.
 - Executor: a turn's hooks see the trigger message's text; a resumed turn runs no hook.
@@ -66,7 +66,7 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 ### Task 2: The locked DuckDB session and the table profile
 
-**Files:** new `backend/src/mlops_agents/duckdb_version.py` (`DUCKDB_VERSION = "2.0.0"`), `data/__init__.py`, `data/constants.py` (every cap and version, below), `data/duck.py` (the locked session), `data/profile.py` (`TableProfile`, `ColumnProfile`, `profile_table`), `backend/pyproject.toml` (`duckdb==2.0.0`) and `uv.lock` (`uv lock`), tests under `tests/data/` (`test_duck_lockdown.py`, `test_profile.py`).
+**Files:** new `data/__init__.py`, `data/constants.py` (every cap and version, below), `data/duck.py` (the locked session), `data/profile.py` (`TableProfile`, `ColumnProfile`, `profile_table`), tests under `tests/data/` (`test_duck_lockdown.py`, `test_profile.py`).
 
 **Interfaces:**
 - Consumes `DuckDbSource(sql_from, allowed_directories)` (I15).
@@ -94,10 +94,10 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 - Caps: a 60-column table gives 50 `ColumnProfile`s and `more_columns == 10`; a 100,000-row table gives 20 sample rows; a text cell of 500 characters is cut to 80.
 - Timeout: with `PROFILE_TIMEOUT_S` patched small, a source `range(10000000000000)` returns `timed_out=True` in well under a second and the connection is closed.
 - Failure: a missing file and a malformed CSV give `table_unreadable` with no host path of the app's data folder in the message.
-- The event loop is not blocked (a concurrent coroutine ticks while a profile runs); `duckdb.__version__ == DUCKDB_VERSION`.
+- The event loop is not blocked (a concurrent coroutine ticks while a profile runs); `duckdb.__version__ == config.DUCKDB_VERSION` (contracts owns both; this plan only reads them).
 - Full suite, checks; CI green on both platforms.
 
-**Checks:** `uv sync`, `uv run ruff check`, `uv run ruff format`, `uv run pyright`, `uv run pytest`.
+**Checks:** `uv run ruff check`, `uv run ruff format`, `uv run pyright`, `uv run pytest`.
 
 ---
 
@@ -107,10 +107,10 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 **Interfaces:**
 - Consumes `TableProfile` (task 2); the constants of `data/constants.py`.
-- Produces `class ProfileCache`: `__init__(paths: DataPaths, cap_bytes: int = CACHE_CAP_BYTES)`; `async get_or_compute(project_id: str, connection_id: str, table: str, data_version: str, compute: Callable[[], Awaitable[TableProfile]]) -> TableProfile`; `DataPaths.cache_dir(project_id) -> Path` (`projects/<id>/cache`, validated like the other project paths, created on first write, not by `ensure`).
+- Produces `class ProfileCache`: `__init__(paths: DataPaths, cap_bytes: int = CACHE_CAP_BYTES)`; `async get_or_compute(project_id: str, connection_id: str, table: str, data_version: str, sql_from: str, compute: Callable[[], Awaitable[TableProfile]]) -> TableProfile`; `DataPaths.cache_dir(project_id) -> Path` (`projects/<id>/cache`, validated like the other project paths, created on first write, not by `ensure`).
 
 **Implementation notes:**
-- Key: connection ID, table, `SUMMARY_FORMAT_VERSION`, the table's data version. One file per key, `<sha256(connection|table)[:16]>-<sha256(format|data_version)[:16]>.json`, holding the profile's `model_dump_json` (the cache holds results, never table copies; the sample rows are the spec's 20).
+- Key: connection ID, table, `SUMMARY_FORMAT_VERSION`, the table's data version, and `DuckDbSource.sql_from` (so `Connections.update` pointing a connection at another folder never hits the old entry). One file per key, `<sha256(connection|table)[:16]>-<sha256(format|data_version|sql_from)[:16]>.json`, holding the profile's `model_dump_json` (the cache holds results, never table copies; the sample rows are the spec's 20).
 - Single flight: one `asyncio.Lock` per key, so the four kickoff audits asking for the same table compute it once and the rest read the result.
 - Writes are atomic: write a temporary file in the same folder, then `os.replace`. A file that does not parse (a crash, a format change) counts as a miss and is deleted. A profile with `timed_out=True` is returned but not cached (a slower run might finish next time).
 - After a write, entries of the same `(connection, table)` prefix with another data version are removed (they can never hit again), then, while the folder is over the cap, the least recently used files are removed. Use is the file's modified time, touched with `os.utime` on every hit (access times are unreliable on Windows). Eviction never removes the file just written.
@@ -181,6 +181,5 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 
 ## Interface gaps
 
-- **`DUCKDB_VERSION` has no owner.** The spec wants one version constant for the backend and the sandbox image, and the overview assigns "DuckDB in the environment image" to connections but not the constant or the backend dependency. This plan creates `mlops_agents/duckdb_version.py` and pins `duckdb==2.0.0` in `pyproject.toml` (task 2), with a test that the installed version equals the constant; the connections plan's image task must import the constant, not repeat the number. The lead should confirm this split in the overview.
-- **`TableDetail` carries column names and types, not the per-column statistics.** Its stats (nulls, distinct, min, max, top values) exist only inside `summary` text. If the Data page (pages plan) should show them structurally, `TableDetail` needs a field (for example `column_stats`), an I15 change that takes a Decision issue; the plan is written against `TableDetail` as the overview has it.
-- **Numbers the spec leaves to "a constant":** `DATA_SUMMARY_MAX_CHARS = 20_000` and `PROFILE_TIMEOUT_S = 30` are proposals in `data/constants.py`; the lead may change them in the plan before it is issued.
+Still open after the overview's revision:
+- **`executor.py` and `sessions.py`** are edited by task 1 (the injection point's plumbing: the trigger text, and `SessionManager(hooks=)`) but are not in "Files shared". `sessions.py` is also likely touched by rate-limits (the shared `KeyFailover` reaches `ModelCaller` there). The lead should list it under Files shared with the rule that each plan adds only its own parameter.
