@@ -128,7 +128,7 @@ class MutableTaskWorkspaces(FakeWorkspaces):
         )
 
 
-def _write_agent_def(tmp_path: Path) -> Path:
+def write_agent_def(tmp_path: Path) -> Path:
     def_dir = tmp_path / "definitions"
     def_dir.mkdir(parents=True, exist_ok=True)
     (def_dir / "writer.md").write_text(
@@ -186,7 +186,7 @@ async def test_resuming_turn_approve(
     """1. Approve: Tool runs, turn continues and ends done, message keeps its earlier parts."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -277,7 +277,7 @@ async def test_resuming_turn_reject_with_note(
     """2. Reject with a note: Model receives the rejection and note."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -360,7 +360,7 @@ async def test_resuming_turn_two_asks_in_one_step(
     write_tool = DummyWriteTool()
     run_tool = DummyRunTool()
     tool_reg = make_tool_reg(write_tool, run_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -442,7 +442,7 @@ async def test_resuming_turn_after_rebuilding_manager(
     """
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -557,7 +557,7 @@ async def test_resuming_turn_no_duplicates(
     """5. No duplicates: Resuming creates no second approval record or audit record."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -642,7 +642,7 @@ async def test_resuming_turn_task_mismatch(
     """
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
