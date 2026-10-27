@@ -83,6 +83,8 @@ data/
 
 `train --cutoff`, `evaluate --version`, `deploy --version`, `rollback`, `score --date`, `daily --date` (score, then every monitoring check). Onboarding finds these as the company's commands; the stage 5 agents use them. Exit code 0 on success, non-zero with a message on failure. The world always runs them, and MLflow's server, from the company's own environment (`uv run --project <company checkout> ...`), so there is one MLflow version.
 
+**The production schedule is a file.** `ops/schedule.toml` in the company repository lists the company's scheduled jobs (name, command, every N business days); the world runs exactly what it lists, as the company's ops host would. Onboarding records it as the team's scheduler. The scheduled GitHub workflow is only a CI smoke run on sample data.
+
 **Checks are files.** `daily` runs every check module in `src/hotel_demo/checks/`, so an agent's PR that adds a check file takes effect on the next run once merged. The legacy checks write their own result shape; the app reads them through a parser (stage 4). Who merges agents' PRs: the user in a live demo; the world in evaluation runs, after a fixed delay in simulated days recorded with the run.
 
 ## Plans
