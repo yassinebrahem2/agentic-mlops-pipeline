@@ -93,6 +93,7 @@ Anything not listed here is unknown.
 - [USER] 2026-10-27: deploys and rollbacks happen only through the team's deploy and rollback commands registered as deploy hooks, which are deploy-class actions and ask the user; the sandbox may read the tracking server but never write to it (a read-only credential for a real team; for a tracking server without authentication, read access goes through the app).
 - [AGREED] Agent messaging tools modeled on Claude Code: ListAgents (who exists, status) and SendMessage(to, message); the message lands in the recipient's session labeled with the sender, and the reply arrives back in the sender's session.
 - [USER] Stage 1: Orchestrator with read-only Read/Glob/Grep (filters enforced in the tools). Bash + Docker sandbox come in stage 2 (Bash only runs in the sandbox; the sandbox mounts a filtered view of the repo, network off by default).
+- [USER] 2026-10-27: rate limits are the provider's business, not the agents': a turn retries and cycles between keys on its own and never stalls unless every key is exhausted (daily limit reached, credits or quota gone, key rejected). Then the agent tells the user it stalled and why, and the user chooses with a button whether to try again. Agents are never throttled or queued by the app to avoid rate limits.
 - [USER] Safety limits (max steps etc.) are configurable, including off. Keys are verified when added; a key failing mid-work stops the turn with a clear message and flags the provider. Everything (tool errors included) returns to the agent's own context.
 
 ### Tech stack
