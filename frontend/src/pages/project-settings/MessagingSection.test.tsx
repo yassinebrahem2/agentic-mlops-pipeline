@@ -49,7 +49,7 @@ it("loads the stored limits and describes what each one limits", async () => {
   expect(screen.getByRole("region", { name: "Agent messages" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   expect(screen.getByText(/most messages one exchange/i)).toBeInTheDocument();
-  expect(screen.getByText(/most model tokens/i)).toBeInTheDocument();
+  expect(screen.getByText(/token budget of one exchange/i)).toBeInTheDocument();
 });
 
 it("saves both limits as numbers and shows the saved values", async () => {

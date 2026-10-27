@@ -23,7 +23,7 @@ const FIELDS: { name: LimitName; id: string; label: string; help: string }[] = [
     name: "max_tokens",
     id: "messaging-max-tokens",
     label: "Maximum tokens",
-    help: "The most model tokens the agents in one exchange can use while handling its messages. Past it, an agent is told to report to the user instead of sending another.",
+    help: "The token budget of one exchange between agents. Once its messages have used more than this, an agent that tries to continue the exchange is told to report to the user instead of sending another.",
   },
 ];
 
@@ -105,7 +105,7 @@ function MessagingForm({
   const [draft, setDraft] = useState(() => toDraft(stored));
   const [attempted, setAttempted] = useState(false);
   const unchanged = FIELDS.every(({ name }) => parseLimit(draft[name]) === stored[name]);
-  const submit = (event: SubmitEvent) => {
+  const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAttempted(true);
     const limits = parseDraft(draft);
