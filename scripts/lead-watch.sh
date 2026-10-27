@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The lead's watcher: prints one line per event worth acting on, then keeps polling.
-#   PUSH  #n <sha> <author> <commit subject>   a PR into main got a new head
-#   CI    #n <sha> pass|fail                    every check on that head finished
+#   PUSH  <repo>#n <sha> <author> <subject>     a PR into main got a new head (this repo or the demo repo)
+#   CI    <repo>#n <sha> pass|fail              every check on that head finished
 #   CARD  <status> #n <state> <title>           a card in Blocked or In review, a closed card not in
 #                                               Done, or an open Decision issue
 # Each event is printed once; a card is printed again only after 30 minutes out of those states.
@@ -9,7 +9,7 @@
 # Usage: scripts/lead-watch.sh [poll-seconds]   (default 60)
 set -uo pipefail
 
-REPO=yassinebrahem2/agentic-mlops-pipeline
+REPOS="yassinebrahem2/agentic-mlops-pipeline yassinebrahem2/hotel-cancellation-demo"
 POLL=${1:-60}
 FORGET_AFTER=1800
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,21 +24,22 @@ seen() { grep -qxF "$2" "$state/$1"; }
 mark() { echo "$2" >>"$state/$1"; }
 
 check_prs() {
-  local prs
-  prs=$(gh pr list -R $REPO --state open --base main \
-    --json number,headRefOid,author,commits \
-    --jq '.[] | [.number, .headRefOid[0:7], .author.login, (.commits[-1].messageHeadline // "")] | @tsv' 2>/dev/null) || return
-  while IFS=$'\t' read -r n sha author subject; do
-    [ -z "$n" ] && continue
-    key="$n $sha"
-    if ! seen heads "$key"; then mark heads "$key"; echo "PUSH #$n $sha $author $subject"; fi
-    seen ci "$key" && continue
-    buckets=$(gh pr checks "$n" -R $REPO --json bucket --jq '[.[].bucket] | unique | join(",")' 2>/dev/null) || continue
-    [ -z "$buckets" ] && continue
-    case $buckets in *pending*) continue ;; esac
-    mark ci "$key"
-    case $buckets in pass|pass,skipping|skipping,pass) echo "CI #$n $sha pass" ;; *) echo "CI #$n $sha fail ($buckets)" ;; esac
-  done <<<"$prs"
+  local repo prs short
+  for repo in $REPOS; do
+    short=${repo#*/}
+    prs=$(gh pr list -R "$repo" --state open --base main       --json number,headRefOid,author,commits       --jq '.[] | [.number, .headRefOid[0:7], .author.login, (.commits[-1].messageHeadline // "")] | @tsv' 2>/dev/null) || continue
+    while IFS=$'	' read -r n sha author subject; do
+      [ -z "$n" ] && continue
+      key="$short#$n $sha"
+      if ! seen heads "$key"; then mark heads "$key"; echo "PUSH $short#$n $sha $author $subject"; fi
+      seen ci "$key" && continue
+      buckets=$(gh pr checks "$n" -R "$repo" --json bucket --jq '[.[].bucket] | unique | join(",")' 2>/dev/null) || continue
+      [ -z "$buckets" ] && continue
+      case $buckets in *pending*) continue ;; esac
+      mark ci "$key"
+      case $buckets in pass|pass,skipping|skipping,pass) echo "CI $short#$n $sha pass" ;; *) echo "CI $short#$n $sha fail ($buckets)" ;; esac
+    done <<<"$prs"
+  done
 }
 
 check_cards() {
