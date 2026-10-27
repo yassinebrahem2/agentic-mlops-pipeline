@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api } from "@/lib/api";
@@ -201,9 +201,12 @@ describe("ApprovalCard", () => {
     const approveButton = screen.getByRole("button", { name: "Approve" });
     const rejectButton = screen.getByRole("button", { name: "Reject" });
 
-    // Two clicks in one tick
-    fireEvent.click(approveButton);
-    fireEvent.click(approveButton);
+    // Both clicks in one act(): React re-renders (and disables the button) only after both
+    // have reached the handler, so only the in-flight guard can stop the second request.
+    act(() => {
+      approveButton.click();
+      approveButton.click();
+    });
 
     expect(postSpy).toHaveBeenCalledTimes(1);
 
