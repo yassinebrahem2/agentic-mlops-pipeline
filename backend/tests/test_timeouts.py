@@ -31,7 +31,7 @@ async def test_hung(hanging):
     )
     result = pytester.runpytest_subprocess("-o", "timeout=2", "-v", timeout=60)
     output = result.stdout.str() + "\n" + result.stderr.str()
-    assert "test_hung" in output
+    assert "::test_hung" in output
     assert result.ret != 0
     assert "Timeout" in output
     assert "Stack of" in output
@@ -57,7 +57,7 @@ async def test_to_thread_hung():
     )
     result = pytester.runpytest_subprocess("-o", "timeout=2", "-v", timeout=60)
     output = result.stdout.str() + "\n" + result.stderr.str()
-    assert "test_to_thread_hung" in output
+    assert "::test_to_thread_hung" in output
     assert result.ret != 0
     assert "Timeout" in output
     assert "Stack of" in output
