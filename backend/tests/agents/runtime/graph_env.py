@@ -24,6 +24,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
 from tests.agents.runtime.hook_fakes import NoInbound
+from tests.conftest import STAGE_2_TOOLS
 from tests.fakes.turn_end import NoTurnEndCheck
 
 
@@ -88,7 +89,7 @@ def make_agent(
     tool_names: tuple[str, ...] | None = None,
 ) -> Agent:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     definition = catalog.get("orchestrator")
     project = Project(
         id=project_id,

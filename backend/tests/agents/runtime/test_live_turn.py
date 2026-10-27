@@ -22,7 +22,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -65,7 +65,7 @@ async def test_live_turn_orchestrator_readme(
         git = GitRunner(paths.bin, github.token)
         workspace_svc = WorkspaceService(settings, paths, databases, git, github, http)
         tools = default_registry()
-        catalog = AgentCatalog.load(tools.names())
+        catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
         providers_svc = ProvidersService(databases, keystore, http)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 

@@ -25,7 +25,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -68,7 +68,7 @@ async def _setup_services(
     git_env: dict[str, str],
 ) -> tuple[AgentBuilder, WorkspaceService, AgentSettingsService, str]:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
@@ -201,7 +201,7 @@ async def test_agent_builder_keystore_error_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
@@ -258,8 +258,8 @@ async def test_agent_builder_success(
 
     assert isinstance(agent, Agent)
     assert agent.definition.name == "orchestrator"
-    # Tools match definition in order
-    assert tuple(t.name for t in agent.tools) == agent.definition.tools
+    # Tools match definition in order for registered tools
+    assert tuple(t.name for t in agent.tools) == ("Read", "Glob", "Grep")
     assert agent.project.id == project_id
     assert "README.md" in agent.layout
     assert agent.files.root == workspace_svc.repo_root(agent.project)
@@ -283,7 +283,7 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     )
 
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names(), extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)

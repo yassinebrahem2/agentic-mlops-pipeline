@@ -15,7 +15,7 @@
 | 1 | One owner for the repo reference and the branch's state (#265) | merged code |
 | 2 | Ending, discarding and local merge (#261) | task 1 |
 | 3 | One wording for every failed build (#264) | merged code |
-| 4 | Approvals and runtime tidy-up (#258, #273, #276) | runtime-fixes (#250) and messaging (#266) merged |
+| 4 | Approvals and runtime tidy-up (#258, #273, #276, #280) | runtime-fixes (#250) and messaging (#266) merged |
 
 Task 4 edits `agents/runtime/sessions.py`, `worker.py` and `executor.py`, which PRs #250 and #266 also change: start it only after both are merged. Tasks 1 to 3 don't touch those files.
 
@@ -81,23 +81,26 @@ async def decide_review(self, project_id: str, task_id: str,
 
 ---
 
-### Task 4: Approvals and runtime tidy-up (#258, #273, #276)
+### Task 4: Approvals and runtime tidy-up (#258, #273, #276, #280)
 
 **Files:** `agents/approvals/` (`store.py`, `service.py`, `waiting.py`), `agents/runtime/sessions.py`, `worker.py`, `executor.py` (split, behaviour unchanged), their tests.
 
 **Implementation notes:**
 - `decide` keeps the approval's stored `task_id`; it never takes the task current at decision time.
 - `waiting.py` uses the typed observer contract, not `hasattr(sink, "turn_waiting")`.
-- `ApprovalsService` takes one events dependency, not `audit_log` and `event_log` separately.
-- `sessions.py` reads the session view through its typed contract, not `getattr`/`inspect.isawaitable` (#261 item 5).
-- #276: recording `waiting` in `worker._take_turn` goes through the same shielded fallback as every other end (Decision #249): logged, `turn.waiting` published, observers notified, never raises.
+- One owner for recording an approval decision (#258 item 4, Decision #278): a decision writes an audit record and `approval.decided` in three places (`ApprovalsService.decide`, Stop in `runtime/waiting.py`, recovery expiry in `runtime/store/__init__.py`). One function in `agents/approvals/` writes both and all three use it. The event log and the audit log stay two separate dependencies (separate concerns); no combined events type.
+- `sessions.py` reads the task view through the typed `TaskWorkspaces.view` (added to the overview's I12 by Decision #278), not `getattr`/`inspect.isawaitable` (#261 item 5). `TasksService` already has it; the test fakes that implement `TaskWorkspaces` gain it (`tests/fakes/workspaces.py`, `tests/agents/runtime/graph_env.py`, `hook_fakes.py`, `test_resuming_turns.py`, `tests/test_stage2_contracts.py`). It reads through the same path as task 2's view read, which never recreates a missing worktree.
+- #276 (corrected by Decision #281): `waiting` has one writer. `handle_turn_waiting` (executor path) already stores `waiting`, publishes `turn.waiting` and notifies observers, and ends the turn `failed` if that write fails; the worker's repeated `set_turn(..., "waiting")` in `_take_turn` goes. A session with a `waiting` turn is busy (`has_waiting_turn`): a queued turn never runs before the waiting turn is resumed and ends. Only if a test shows the executor's write can be skipped (for example a node LangGraph re-runs on resume) does the worker keep a guarded write, and then it moves on only when the wait was not stored.
+- #280: the session stream's `turn.ended` is not ordered after the observers, and nothing in the product needs it to be: the UI refreshes agent status from the project event stream, which only emits after the event log has recorded. Moving observers (PR sync calls GitHub) ahead of the publish would delay every turn end. Fix the test: `test_failed_turn_records_failed_turn_ended` waits for the event log (or the project stream's `turn.ended`) instead of reading history right after the session stream's event.
 - #273: `turn_states` agrees with `turn.ended`. A session whose turn has ended counts as running only if another turn has started; a worker that is only finishing its loop doesn't count. Fix the state, not the test.
 - `sessions.py`, `worker.py` and `executor.py` each go under 400 lines by moving one concern each into its own module; behaviour unchanged.
 
 **Tests (stop condition):**
 - The concurrent-decision test fails when the `status='pending'` guard is removed, and the restart test fails when `ensure_recovered` is removed from `pending` or `decide` (check both by reverting and restoring).
 - A decision with another task current keeps the approval's `task_id`.
-- A storage error while recording `waiting`, with a second turn queued: the second turn runs.
+- `test_failed_turn_records_failed_turn_ended` passes 50 times in a loop with a deliberately slow observer.
+- The executor's `waiting` write fails, with a second turn queued: the first turn ends `failed`, then the second runs.
+- A turn stored `waiting`, with a second turn queued: the second does not run until a decision resumes the first and it ends.
 - `turn_states` called right after `turn.ended` (with the worker held just before it exits) reports no running turn; `test_session_manager_turn_states_running_worker` passes 50 times in a loop.
 - `wc -l` on the three runtime files is under 400 each; the runtime tests pass 10 times in a loop.
 - Full suite, checks; CI green.

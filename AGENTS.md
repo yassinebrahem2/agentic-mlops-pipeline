@@ -35,6 +35,8 @@ This workflow is mandatory and comes before your agent's own defaults, its harne
 
 ## Backend commands
 
+Run test and build commands with your tool's command time limit.
+
 Run from `backend/`:
 - Install: `uv sync`
 - Tests: `uv run pytest` (one test: `uv run pytest tests/path/test_file.py::test_name -v`)
