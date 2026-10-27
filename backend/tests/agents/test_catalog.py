@@ -6,6 +6,25 @@ from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_def
 from mlops_agents.errors import DomainError
 
 TOOLS = frozenset({"Read", "Glob", "Grep"})
+STAGE_2_TOOLS = frozenset(
+    {
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "Bash",
+        "StartTask",
+        "ResumeTask",
+        "OpenPullRequest",
+        "SearchIssues",
+        "OpenIssue",
+        "CommentOnIssue",
+        "ListAgents",
+        "SendMessage",
+        "ScheduleWakeup",
+    }
+)
 
 VALID = """---
 name: helper
@@ -80,9 +99,25 @@ def test_catalog_rejects_unknown_tools_agents_and_hooks() -> None:
 
 
 def test_packaged_orchestrator() -> None:
-    catalog = AgentCatalog.load(TOOLS)
+    catalog = AgentCatalog.load(STAGE_2_TOOLS)
     orchestrator = catalog.get("orchestrator")
-    assert orchestrator.tools == ("Read", "Glob", "Grep")
+    assert orchestrator.tools == (
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "Bash",
+        "StartTask",
+        "ResumeTask",
+        "OpenPullRequest",
+        "SearchIssues",
+        "OpenIssue",
+        "CommentOnIssue",
+        "ListAgents",
+        "SendMessage",
+        "ScheduleWakeup",
+    )
     assert orchestrator.chat
     assert catalog.all()[0].name == "orchestrator"
     with pytest.raises(DomainError) as err:
@@ -92,5 +127,14 @@ def test_packaged_orchestrator() -> None:
 
 def test_adding_an_agent_is_adding_a_file(tmp_path: Path) -> None:
     (tmp_path / "helper.md").write_text(VALID, encoding="utf-8")
-    catalog = AgentCatalog.load(TOOLS, [tmp_path])
-    assert [d.name for d in catalog.all()] == ["orchestrator", "helper"]
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path])
+    assert [d.name for d in catalog.all()] == [
+        "orchestrator",
+        "alert-prioritization",
+        "data-quality",
+        "deployment",
+        "helper",
+        "model-performance",
+        "onboarding",
+        "retraining",
+    ]

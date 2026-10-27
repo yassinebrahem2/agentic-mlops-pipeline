@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx2
 
-from tests.conftest import make_repo
+from tests.conftest import STAGE_2_TOOLS, make_repo
 from tests.fakes.fake_openai import RunningFake
 
 
@@ -45,7 +45,7 @@ async def test_agents_listing_and_default_model(
     assert orchestrator is not None
     assert orchestrator["display_name"] == "Orchestrator"
     assert orchestrator["chat"] is True
-    assert set(orchestrator["tools"]) == {"Read", "Glob", "Grep"}
+    assert set(orchestrator["tools"]) == STAGE_2_TOOLS
     assert orchestrator["settings"]["default_model"] is None
     assert orchestrator["settings"]["effective_model"] is None
     assert orchestrator["settings"]["model_problem"] is not None
