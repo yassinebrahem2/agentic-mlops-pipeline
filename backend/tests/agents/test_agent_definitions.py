@@ -22,6 +22,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
@@ -32,7 +33,9 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
+from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import MemoryKeyStore, make_repo
+from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
 
@@ -74,6 +77,17 @@ EXPECTED_TOOL_ORDER = (
     "ScheduleWakeup",
 )
 
+ALERT_PRIORITIZATION_TOOLS = (
+    "Read",
+    "Glob",
+    "Grep",
+    "ListAgents",
+    "SendMessage",
+    "SearchIssues",
+    "OpenIssue",
+    "CommentOnIssue",
+)
+
 NAME_MAP: dict[str, str] = {
     "Orchestrator": "orchestrator",
     "Onboarding & Diagnosis": "onboarding",
@@ -81,6 +95,7 @@ NAME_MAP: dict[str, str] = {
     "Model Performance": "model-performance",
     "Retraining": "retraining",
     "Deployment & Rollback": "deployment",
+    "Alert Prioritization": "alert-prioritization",
 }
 
 
@@ -113,7 +128,7 @@ def load_spec_table_data() -> list[dict[str, Any]]:
         cols = [c.strip() for c in row.split("|")[1:-1]]
         agent_display = cols[0]
         if agent_display not in NAME_MAP:
-            continue  # Alert Prioritization is handled in Task 2
+            continue
         name = NAME_MAP[agent_display]
         chat = cols[1].lower() == "yes"
         schedules = cols[4].lower() == "yes"
@@ -126,8 +141,21 @@ def load_spec_table_data() -> list[dict[str, Any]]:
                 "retraining",
                 "deployment",
             )
+        elif raw_msg == "all chat agents":
+            can_message = (
+                "orchestrator",
+                "onboarding",
+                "data-quality",
+                "model-performance",
+                "retraining",
+                "deployment",
+            )
         else:
             can_message = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(","))
+
+        tools = (
+            ALERT_PRIORITIZATION_TOOLS if name == "alert-prioritization" else EXPECTED_TOOL_ORDER
+        )
 
         rows.append(
             {
@@ -136,7 +164,7 @@ def load_spec_table_data() -> list[dict[str, Any]]:
                 "chat": chat,
                 "schedules": schedules,
                 "status_board": (name == "orchestrator"),
-                "tools": EXPECTED_TOOL_ORDER,
+                "tools": tools,
                 "can_message": can_message,
             }
         )
@@ -181,7 +209,12 @@ def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
     assert "how to work:" in lower_prompt or "how to work" in lower_prompt, (
         f"{defn.name} prompt missing 'How to work' section"
     )
-    assert "starttask" in lower_prompt, f"{defn.name} prompt missing StartTask guidance"
+    if defn.chat:
+        assert "starttask" in lower_prompt, f"{defn.name} prompt missing StartTask guidance"
+    else:
+        assert "monitoring loop" in lower_prompt or "stage 4" in lower_prompt, (
+            f"{defn.name} prompt missing monitoring loop or stage 4 reference"
+        )
     assert "not available yet" in lower_prompt, (
         f"{defn.name} prompt missing note on what is not available yet"
     )
@@ -202,6 +235,78 @@ def test_agent_catalog_loads_stage2_definitions_with_full_tools() -> None:
         assert defn.chat is True
         assert defn.schedules is True
 
+    alert_defn = catalog.get("alert-prioritization")
+    assert alert_defn.status_board is False
+    assert alert_defn.chat is False
+    assert alert_defn.schedules is False
+    assert alert_defn.tools == ALERT_PRIORITIZATION_TOOLS
+
+
+def test_alert_prioritization_loads_in_catalog() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS)
+    defn = catalog.get("alert-prioritization")
+    assert defn.name == "alert-prioritization"
+    assert defn.display_name == "Alert Prioritization"
+    assert defn.chat is False
+    assert defn.schedules is False
+    assert defn.status_board is False
+    assert defn.tools == ALERT_PRIORITIZATION_TOOLS
+    assert defn.can_message == (
+        "orchestrator",
+        "onboarding",
+        "data-quality",
+        "model-performance",
+        "retraining",
+        "deployment",
+    )
+
+
+async def test_alert_prioritization_derived_as_inactive_on_status_board(
+    databases: Databases,
+) -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS)
+    events = SqliteEventLog(databases)
+    board = SqliteStatusBoard(catalog, events)
+    statuses = await board.snapshot("prj_test123")
+    alert_status = next(s for s in statuses if s.agent == "alert-prioritization")
+    assert alert_status.state == "inactive"
+    assert alert_status.display_name == "Alert Prioritization"
+    summary = await board.summary("prj_test123")
+    assert "Alert Prioritization: inactive" in summary
+
+
+async def test_alert_prioritization_cannot_chat(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await env.manager.send(env.project_id, "alert-prioritization", "Hello")
+    assert exc_info.value.code == "agent_cannot_chat"
+    assert exc_info.value.status == 409
+    await env.manager.close()
+
+
+def test_no_stage2_agent_may_message_alert_prioritization() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS)
+    for defn in catalog.all():
+        assert "alert-prioritization" not in defn.can_message, (
+            f"Agent '{defn.name}' unexpectedly allows messaging alert-prioritization"
+        )
+
 
 def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     # default_registry().names() from main does not yet have messaging tools
@@ -209,8 +314,12 @@ def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
         AgentCatalog.load(default_registry().names())
     error_msg = str(exc_info.value)
     assert "ListAgents" in error_msg
-    assert "ScheduleWakeup" in error_msg
     assert "SendMessage" in error_msg
+
+    # Missing ScheduleWakeup fails for agents that have schedules
+    with pytest.raises(DefinitionError) as exc_info_sched:
+        AgentCatalog.load(STAGE_2_TOOLS - {"ScheduleWakeup"})
+    assert "ScheduleWakeup" in str(exc_info_sched.value)
 
 
 _BASE_URLS = {

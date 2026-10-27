@@ -130,6 +130,7 @@ def test_adding_an_agent_is_adding_a_file(tmp_path: Path) -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path])
     assert [d.name for d in catalog.all()] == [
         "orchestrator",
+        "alert-prioritization",
         "data-quality",
         "deployment",
         "helper",
