@@ -141,3 +141,13 @@ def guard_docker_cli(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
         return await original_run(self, *args, **kwargs)
 
     monkeypatch.setattr(CliDockerRunner, "run", _guarded_run)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if item.get_closest_marker("timeout") is not None:
+            continue
+        if item.get_closest_marker("docker") is not None:
+            item.add_marker(pytest.mark.timeout(1200))
+        elif item.get_closest_marker("live") is not None:
+            item.add_marker(pytest.mark.timeout(600))
