@@ -203,7 +203,6 @@ async def build_services(
         sessions=sessions,
         audit_log=audit,
         event_log=events,
-        workspaces=tasks,
     )
 
     return Services(

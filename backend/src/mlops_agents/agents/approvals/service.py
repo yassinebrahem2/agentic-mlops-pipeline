@@ -6,7 +6,6 @@ from mlops_agents.agents.approvals.contract import Approvals, ApprovalView
 from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import AgentSessions, ApprovalPart, Part
-from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
@@ -23,14 +22,12 @@ class ApprovalsService(Approvals):
         store: ApprovalStore | None = None,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
-        workspaces: TaskWorkspaces | None = None,
     ) -> None:
         self._databases = databases
         self._sessions = sessions
         self._store = store if store is not None else ApprovalStore(databases)
         self._audit_log = audit_log
         self._event_log = event_log
-        self._workspaces = workspaces
 
     async def pending(self, project_id: str) -> list[ApprovalView]:
         """List all pending approvals for a project."""

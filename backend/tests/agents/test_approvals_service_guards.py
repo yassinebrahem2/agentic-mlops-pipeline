@@ -10,9 +10,9 @@ import pytest
 
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
-from mlops_agents.agents.runtime.contract import ApprovalPart, TaskView
+from mlops_agents.agents.runtime.contract import ApprovalPart
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.tools.base import FileAccess, Preview, RiskClass, TaskRef
+from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -22,22 +22,6 @@ from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 PREVIEW = Preview(kind="diff", title="edit main.py", body="- old\n+ new")
-
-
-class OtherTaskCurrent:
-    """Task workspaces whose current task is one the approval was not asked under."""
-
-    def __init__(self, current: TaskRef | None) -> None:
-        self._current = current
-
-    async def current(self, project_id: str, session_id: str) -> TaskRef | None:
-        return self._current
-
-    async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
-        raise NotImplementedError
-
-    async def view(self, project_id: str, task_id: str) -> TaskView:
-        raise NotImplementedError
 
 
 async def waiting_approval(
@@ -84,22 +68,12 @@ async def waiting_approval(
     )
 
 
-@pytest.mark.parametrize("current_task", ["tsk_other", None])
 async def test_a_decision_keeps_the_task_the_approval_was_asked_under(
-    databases: Databases, tmp_path: Path, current_task: str | None
+    databases: Databases,
 ) -> None:
     project_id = "prj_keeptask"
     apr = await waiting_approval(databases, project_id, task_id="tsk_asked")
-    current = (
-        TaskRef(id=current_task, title="Other", branch="b", worktree=tmp_path, status="active")
-        if current_task is not None
-        else None
-    )
-    service = ApprovalsService(
-        databases,
-        FakeSessionsForApproval(SessionStore(databases)),
-        workspaces=OtherTaskCurrent(current),
-    )
+    service = ApprovalsService(databases, FakeSessionsForApproval(SessionStore(databases)))
 
     await service.decide(project_id, apr.id, approve=True)
 
