@@ -200,3 +200,85 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `tests/fakes/fake_openai.py`: embedders (`/embeddings`) and rate-limits (429 and 402 scripts), each its own functions.
 - `frontend/e2e/flow.spec.ts`: onboarding only.
 - Frontend: each plan owns its own page or settings section files; `Sidebar.tsx` and the route table gain one line per page (pages).
+
+## Decisions on the plan drafts' interface gaps (binding; they extend I13 to I21)
+
+**Owners**
+- **contracts** owns these, in task 1:
+  - every new ID prefix (`con`, `trk`, `prp`, `kno`) in `ids.py`;
+  - every new event type, in the backend `EventType` and the frontend `PROJECT_EVENT_TYPES`: `connection.created`, `connection.updated`, `connection.deleted`, `tracking.synced`, `proposal.created`, `proposal.decided`, `handoff.approved`, `turn.stalled`, `turn.resumed`, `note.saved`, `note.deleted`;
+  - the `DUCKDB_VERSION` constant in `config.py` and the `duckdb==2.0.0` and `sqlite-vec` dependencies;
+  - `credentials/project_secrets.py` (`put(ref, value)`, `move(src_ref, dst_ref)`, `delete(ref)`, `delete_prefix(prefix)` over `KeyStore`, refs as in I19);
+  - every table a plan needs:
+    - `notes` with an explicit integer `seq` primary key plus the text `id`, the FTS5 external-content table with its triggers, and `note_embeddings` (note, embedder, dimensions);
+    - `handoff_versions`;
+    - `kickoff` (project, handoff version, agent, posted message id, status);
+    - unique keys on every tracking record table (source and key);
+    - `last_sync` and `last_error` on tracking sources;
+    - `proposals` with `result` and `turn_id`;
+    - the approvals columns below.
+- **data-summary** implements `HookRegistry`. contracts defines only `ContextHook` and `HookContext` (the protocol and its model).
+- **proposals** owns the `ProposalKinds` registry (`register(kind)`, `get(name)`); onboarding registers both kinds in `build_services`. proposals writes each kind's card; onboarding writes `preview`, `credentials_needed` and `apply`.
+- **tracking** provides the fake MLflow server as an in-process ASGI app and as a standalone command (`python -m tests.fakes.fake_mlflow --port`), which the e2e uses.
+- **onboarding** may add its own scripted fake models to `tests/fakes/fake_openai.py`, in its own functions.
+
+**I13 (approvals)**
+- For a `stall`, `tool`, `tool_call_id` and `risk_class` are null, and approvals gain `step` and `proposal_kind`. A stall is unique among pending approvals for its turn and step, and `create_stall(turn_id, step, preview)` is idempotent.
+- `ApprovalView` and `ApprovalPart` gain `proposal_kind: str | None`; the card dispatcher keys on it (no proposal kinds hard-coded in TypeScript beyond the component map).
+- contracts exports the card's note field and its Approve and Reject controls as one component, which every card reuses.
+- `turn.ended` and the turn view gain `error_kind: "keys_exhausted" | None`. The UI shows Try again on a failed turn with that kind, which re-sends the trigger message.
+
+**I14 (embedders)**
+- `Embedders` gains `status(project_id) -> EmbedderStatus` (`configured`, `address`, `dimensions`, `problem`).
+- Knowledge notices an embedder change lazily: vectors carry their embedder, and a search or save that finds a different one starts the background re-embed. No change event is needed.
+
+**I15 (connections)**
+- `sandbox_mount(name, settings)` takes the connection name.
+- `ConnectionKind.findings(settings) -> Findings` (`unsupported_files`, `secret_files`).
+- `Connections` gains `inspect(project_id, kind, settings) -> Findings` (route `POST .../connections/inspect`, used by the form and the proposal card before a connection exists) and `update(...)` (route `PATCH .../connections/{con}`).
+- Relative paths are refused, and so is a folder that contains the app's data folder.
+
+**I16 (tracking)**
+- `ProviderView` reads `Provider` throughout, here and in I21.
+- A `github_actions` source has `auth: "none"` and uses the app's GitHub login.
+- `DeploymentRow.to_version` is `str | None` (an alias removed).
+- Adapters normalise statuses to `RunStatus = Literal["running", "succeeded", "failed", "cancelled", "other"]`.
+- Routes return typed pages `Page[T] = {rows: list[T], total: int, truncated: bool}`:
+  - `GET .../tracking/models`: `Page[ModelSummary]`, where `ModelSummary` is `{source_id, name, production_version, latest_version, versions}`;
+  - `.../versions?model=`: `Page[ModelVersionRow]`;
+  - `.../runs`: `Page[RunRow]`;
+  - `.../ci-runs`: `Page[CiRunRow]`;
+  - `.../deployments`: `Page[DeploymentRow]`;
+  - `.../metrics?run_key=&metric=`: `Page[MetricPoint]`.
+- `POST .../tracking/sync` takes an optional `source_id` and returns 202 at once; `tracking.synced` reports the end.
+
+**I17 (knowledge)**
+- `Knowledge` gains `get(project_id, note_id)`.
+- `VectorStore` gains `remove(project_id, note_id)`.
+
+**I19 (proposals)**
+- `ProposalView` gains `result: ApplyResult | None` and `turn_id`, plus `slots: list[{index, label, set: bool}]`.
+- Route `GET .../proposals/by-approval/{apr}`.
+- proposals receives approval events through an `ApprovalObserver` registered with the approvals service (asked, decided, including cancel and expiry), and the approvals service gains `cancel(approval_id)` for superseding.
+- Two proposals of the same kind in one model step: the second gets a tool error.
+- At startup, an approved proposal with no `result` is applied again; `apply` is idempotent.
+- Rejected, superseded, failed and orphaned credential slots are deleted.
+
+**I20 (handoffs)**
+- `GET .../handoff` returns `HandoffView | null` with 200.
+
+**I21 (key failover)**
+- `KeyState` has `key_index`, `state` (`ok`, `limited`, `exhausted_daily`, `billing`, `rejected`) and `since`.
+- `attempt` raises the raw provider exception, and `KeyFailover` classifies it with `providers/errors.classify`.
+- A provider with no keys calls `attempt(None)` once with no failover.
+- `call(..., wait: bool = True)`: with `wait=False` (embedding at turn start), a call that would wait raises `RateLimited` at once instead.
+- One instance per app, built in `build_services`.
+- A wait round lasts at most 60 seconds (until the earliest key clears).
+- `attempt` signals "text already streamed" by raising `StreamedTextFailure`, which `KeyFailover` re-raises without failover.
+
+**Files shared (additions)**
+- rate-limits also owns `graph_run.py`, `approvals/waiting.py` and the stall additions in `approvals/service.py`; the stall additions in `sessions.py` are its only lines there.
+- Provider files:
+  - rate-limits: `providers/errors.py`, `providers/failover.py`;
+  - embedders: `providers/models.py`, `providers/service.py`, `providers/verification.py`.
+- The route table and `Sidebar.tsx` need no edit: each page's `route.tsx` carries its own nav entry.
