@@ -61,7 +61,7 @@ class BothReadBeforeEitherWrites(ApprovalStore):
         return record
 
 
-async def _waiting_approval(
+async def waiting_approval(
     databases: Databases,
     project_id: str,
     *,
@@ -110,7 +110,7 @@ async def test_a_decision_keeps_the_task_the_approval_was_asked_under(
     databases: Databases, tmp_path: Path, current_task: str | None
 ) -> None:
     project_id = "prj_keeptask"
-    apr = await _waiting_approval(databases, project_id, task_id="tsk_asked")
+    apr = await waiting_approval(databases, project_id, task_id="tsk_asked")
     current = (
         TaskRef(id=current_task, title="Other", branch="b", worktree=tmp_path, status="active")
         if current_task is not None
@@ -133,7 +133,7 @@ async def test_two_decisions_that_both_see_the_approval_pending_one_wins_one_get
     databases: Databases,
 ) -> None:
     project_id = "prj_racedecide"
-    apr = await _waiting_approval(databases, project_id)
+    apr = await waiting_approval(databases, project_id)
     fake_sessions = FakeSessionsForApproval(SessionStore(databases))
     service = ApprovalsService(
         databases, fake_sessions, store=BothReadBeforeEitherWrites(databases)
@@ -169,7 +169,7 @@ async def _service_after_restart(
     env = await build_session_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    apr = await _waiting_approval(databases, env.project_id, turn_status="running")
+    apr = await waiting_approval(databases, env.project_id, turn_status="running")
     return ApprovalsService(databases, env.manager), env.project_id, apr
 
 

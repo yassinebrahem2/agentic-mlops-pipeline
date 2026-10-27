@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from mlops_agents.agents.approvals.contract import Approvals, ApprovalView
-from mlops_agents.agents.approvals.settings import get_permission_level
+from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import AgentSessions, ApprovalPart, Part
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
@@ -91,32 +91,16 @@ class ApprovalsService(Approvals):
             project_id, record.session_id, record.message_id, _update_part
         )
 
-        # Audit log entry
-        if self._audit_log is not None:
-            level = await get_permission_level(self._databases, project_id)
-            await self._audit_log.record(
-                project_id,
-                actor="user",
-                action="approval",
-                risk_class=record.risk_class,
-                permission_level=level,
-                decision=status_val,
-                target=record.tool,
-                detail={"approval_id": approval_id, "tool": record.tool, "note": note},
-            )
-
-        # Event log entry
-        if self._event_log is not None:
-            await self._event_log.record(
-                project_id,
-                source="user",
-                type="approval.decided",
-                subject_id=approval_id,
-                payload={
-                    "approval_id": approval_id,
-                    "status": status_val,
-                },
-            )
+        await record_decisions(
+            project_id,
+            [updated_rec],
+            status_val,
+            actor="user",
+            databases=self._databases,
+            audit_log=self._audit_log,
+            event_log=self._event_log,
+            note=note,
+        )
 
         # Check remaining pending approvals for this turn
         step_approvals = await self._store.list_for_step(project_id, record.turn_id)
