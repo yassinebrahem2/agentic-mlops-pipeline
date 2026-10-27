@@ -44,7 +44,7 @@
   - **Cancellation-rate alert** (`cancellation_rate.py`): share of `p_cancel >= 0.5` over the last 7 days of predictions; fires above 0.30.
   - **Drift report** (`drift.py`): for `adults`, `stays_in_week_nights`, `stays_in_weekend_nights` and `children`, the two-sample Kolmogorov-Smirnov statistic of the last 7 days of bookings against the production model's training window; fires when any statistic is above 0.15.
   - **Accuracy alert** (`accuracy.py`): accuracy over the labels released in the last 30 days, joined to their predictions; fires below 0.60.
-- `ops/schedule.toml`: the company's production schedule on its ops host, one entry per job: `name`, `command` (a `hotel-demo` command line), `every` (business days). It lists only `daily`, every day. No scheduled retraining: a person runs `train`, `evaluate` and `deploy` by hand.
+- `ops/schedule.toml`: the company's production schedule on its ops host, one entry per job: `name`, `command` (a `hotel-demo` command line, with `{date}` where the business date goes), `every` (business days). It lists only `daily --date {date}`, every day. No scheduled retraining: a person runs `train`, `evaluate` and `deploy` by hand.
 
 **Tests (stop condition):** `ops/schedule.toml` parses and every command in it is a valid `hotel-demo` command; `daily` on the fixture writes predictions, monitoring and jobs files; a check module added to `checks/` in a test runs on the next `daily`; each check fires on a constructed input that crosses its line and stays quiet on one that does not; the monitoring JSON shape is exactly as above; a bookings file with a missing or extra column fails `score`, names the column, writes no predictions, and the other checks still run. CI green.
 
