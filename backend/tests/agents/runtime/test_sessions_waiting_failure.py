@@ -185,6 +185,12 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
     await approvals.decide(env.project_id, approval.id, approve=True)
     await _until(sub, events, 2, TurnWaiting)
 
+    async def second_wait_observed() -> None:
+        # The observers hear the wait after the stream does; wait for them, not the stream.
+        while sum(c[0] == "waiting" for c in observer.calls) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(second_wait_observed(), timeout=10)
     assert waiting_writes.count(first_turn) == 1
     [second_turn] = [c[3] for c in observer.calls if c[0] == "started" and c[3] != first_turn]
     assert [(c[0], c[3]) for c in observer.calls] == [
