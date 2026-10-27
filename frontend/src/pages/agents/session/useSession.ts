@@ -146,7 +146,9 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
             setState(updated);
           }
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          console.error("Session task refresh failed", error);
+        });
     };
     refreshTaskRef.current = refreshTask;
 

@@ -123,4 +123,19 @@ describe("useSession current task", () => {
     expect(result.current.state?.current_task).toBeNull();
     unmount();
   });
+
+  it("logs a failed task refresh and keeps the task it had", async () => {
+    snapshotTask = task;
+    const { result, unmount } = await renderSession();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    getSpy?.mockImplementation(() => Promise.reject(new Error("network down")));
+
+    emitTaskEvent(taskEvent("task.ended", "orchestrator", 5));
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith("Session task refresh failed", expect.any(Error));
+    });
+    expect(result.current.state?.current_task?.id).toBe("tsk_1");
+    unmount();
+  });
 });
