@@ -95,7 +95,13 @@ export function TaskBar({ task, projectId, onDiscard, className }: TaskBarProps)
         </Button>
       </div>
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(next) => {
+          // Escape and an outside click must not hide a discard that is still in flight.
+          if (!submitting) setConfirmOpen(next);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Discard task</DialogTitle>
