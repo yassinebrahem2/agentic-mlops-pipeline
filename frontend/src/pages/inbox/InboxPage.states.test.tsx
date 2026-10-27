@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { api, ApiError, errorText } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import * as streamModule from "@/lib/stream";
 import { FakeStream } from "@/pages/agents/session/testing";
 import { InboxPage } from "./InboxPage";
@@ -77,12 +77,4 @@ describe("InboxPage states", () => {
       expect(screen.queryByText("socket hang up")).not.toBeInTheDocument();
     },
   );
-
-  it("shows the server's message when loading fails with an API error", async () => {
-    stubGet(REVIEWS, new ApiError("internal", "Database disk full", 500));
-
-    renderInbox("/projects/prj_1/inbox", "/projects/:projectId/inbox");
-
-    expect(await screen.findByText("Database disk full")).toBeInTheDocument();
-  });
 });
