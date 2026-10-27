@@ -565,10 +565,10 @@ async def test_approval_store_update_and_clear_task_id(
     assert cleared is not None
     assert cleared.task_id is None
 
-    # Re-set and clear via decide
+    # A decision keeps the task id
     await store.update_status(project_id, apr.id, "pending", task_id="tsk_200")
-    decided = await store.decide(project_id, apr.id, approve=True, task_id=None)
-    assert decided.task_id is None
+    decided = await store.decide(project_id, apr.id, approve=True)
+    assert decided.task_id == "tsk_200"
 
 
 @pytest.mark.asyncio

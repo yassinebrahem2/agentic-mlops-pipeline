@@ -64,23 +64,9 @@ class ApprovalsService(Approvals):
                 status=409,
             )
 
-        # Task that was current when decided
-        current_task = (
-            await self._workspaces.current(project_id, record.session_id)
-            if self._workspaces is not None
-            else None
-        )
-        task_id = current_task.id if current_task is not None else None
-
-        # Atomic update in store
+        # Atomic update in store; the approval keeps the task it was asked under.
         status_val = "approved" if approve else "rejected"
-        updated_rec = await self._store.decide(
-            project_id,
-            approval_id,
-            approve=approve,
-            note=note,
-            task_id=task_id,
-        )
+        updated_rec = await self._store.decide(project_id, approval_id, approve=approve, note=note)
 
         # Update message part in session
         def _update_part(parts: list[Part]) -> list[Part]:
