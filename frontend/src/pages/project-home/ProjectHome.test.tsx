@@ -1,7 +1,8 @@
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import { useParams } from "react-router";
 import { describe, expect, it } from "vitest";
 import type { PageRoute } from "@/app/routes";
+import { APP_NAME } from "@/config";
 import { renderPage } from "@/test/render";
 import { route as projectHomeRoute } from "./route";
 
@@ -21,6 +22,17 @@ describe("ProjectHome", () => {
     renderPage("/projects/prj_123", { routes: [projectHomeRoute, fakeSettingsRoute] });
 
     expect(await screen.findByText("Project Settings for prj_123")).toBeInTheDocument();
+  });
+
+  it("renders nothing and leads to no project page while no project is known", async () => {
+    const projectlessHome: PageRoute = { path: "/home", element: projectHomeRoute.element };
+    renderPage("/home", { routes: [projectlessHome, fakeSettingsRoute] });
+
+    expect(await screen.findByRole("heading", { name: APP_NAME })).toBeInTheDocument();
+    await act(() => Promise.resolve());
+    expect(screen.queryByText(/Project Settings for/)).not.toBeInTheDocument();
+    expect(screen.queryByText("This page does not exist.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No project pages yet.")).not.toBeInTheDocument();
   });
 
   it("shows fallback message if no project-area route exists", async () => {

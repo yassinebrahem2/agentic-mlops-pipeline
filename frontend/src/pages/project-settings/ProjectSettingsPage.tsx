@@ -10,7 +10,13 @@ import { SandboxSection } from "./SandboxSection";
 import { RemoveProjectDialog } from "./RemoveProjectDialog";
 
 export function ProjectSettingsPage() {
-  const { projectId = "" } = useParams();
+  const { projectId } = useParams<{ projectId: string }>();
+  // Every section loads and saves a project's settings; without a project there is nothing to show.
+  if (!projectId) return null;
+  return <ProjectSettings projectId={projectId} />;
+}
+
+function ProjectSettings({ projectId }: { projectId: string }) {
   const project = useProject(projectId);
   return (
     <div className="container mx-auto max-w-4xl space-y-6 p-6">

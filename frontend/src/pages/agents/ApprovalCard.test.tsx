@@ -84,6 +84,14 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("- return 1")).toBeInTheDocument();
   });
 
+  it("renders nothing, so no decision can be sent, while no project is known", () => {
+    const { container } = render(<ApprovalCard approval={baseApproval} toolName="Write" />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
   it("calls the decision route with approve: true when clicking Approve", async () => {
     const user = userEvent.setup();
     render(<ApprovalCard approval={baseApproval} toolName="Write" projectId="prj_1" />);

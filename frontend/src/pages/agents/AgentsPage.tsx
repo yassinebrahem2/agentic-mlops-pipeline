@@ -16,6 +16,12 @@ import { useSession } from "./session/useSession";
 
 export function AgentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  // Every query, the session and its stream need a project; without one there is nothing to show.
+  if (!projectId) return null;
+  return <Agents projectId={projectId} />;
+}
+
+function Agents({ projectId }: { projectId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const projectQuery = useProject(projectId);
@@ -30,10 +36,8 @@ export function AgentsPage() {
   const selectedAgentName = selectedAgent?.name ?? "";
   const selectedAgentDisplayName = selectedAgent?.display_name ?? selectedAgentName;
 
-  const session = useSession(projectId ?? "", selectedAgentName);
+  const session = useSession(projectId, selectedAgentName);
   const currentTask = session.state?.current_task;
-
-  if (!projectId) return null;
 
   if (agentsQuery.isLoading) {
     return (

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useParams } from "react-router";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,15 +16,12 @@ export type TaskView = components["schemas"]["TaskView"];
 
 export interface TaskBarProps {
   task: TaskView;
-  projectId?: string;
+  projectId: string;
   onDiscard?: () => void;
   className?: string;
 }
 
 export function TaskBar({ task, projectId, onDiscard, className }: TaskBarProps) {
-  const routeParams = useParams<{ projectId: string }>();
-  const activeProjectId = projectId ?? routeParams.projectId ?? "";
-
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +33,7 @@ export function TaskBar({ task, projectId, onDiscard, className }: TaskBarProps)
       const res = await api.POST("/api/projects/{project_id}/tasks/{task_id}/discard", {
         params: {
           path: {
-            project_id: activeProjectId,
+            project_id: projectId,
             task_id: task.id,
           },
         },
