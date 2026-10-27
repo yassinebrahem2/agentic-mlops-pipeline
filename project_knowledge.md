@@ -54,7 +54,8 @@ Anything not listed here is unknown.
 
 ### Data access
 - [AGREED] Data usually does not live with the code. Read-only data connections, managed like a registry; Onboarding suggests them from the code.
-- [USER] 2026-10-27: only a few data locations are supported, raw files first; the others are left out, but the design lets each be added later on its own, following the project rules.
+- [USER] 2026-10-27: only local files are supported as a data location for now; the code is built so PostgreSQL (and later others) can be added as one more kind without changing the rest.
+- [USER] 2026-10-27: evaluation uses three cases: credit card fraud (class imbalance, model performance), synthetic drift and bad data, pipeline failures. The demo is a small project: a Kaggle dataset and a small, quick-to-train model (e.g. LightGBM) in a simple pipeline, enough to show every feature.
 - [AGREED] If predictions or labels are not saved anywhere, an agent opens a PR adding logging to a location a connection can read.
 - [USER] Agents never load whole datasets. Data understanding uses standard notebook commands (head, describe, value counts, top, ...) run as hooks whose output is auto-injected into the agent's context.
 - [AGREED] Hooks run on DuckDB (queries files and databases in place). Output is capped; truncated output carries a result handle the agent can page through or narrow with a new query. Results (never data) are cached per data version, with a size cap and least-recently-used eviction.
@@ -132,7 +133,7 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
-- Data connection kinds: were local folder, S3/GCS/Azure, SQL database and MLflow. Now a few kinds, raw files first (2026-10-27).
+- Data connection kinds: were local folder, S3/GCS/Azure, SQL database and MLflow. Now local files only, built so PostgreSQL can be added (2026-10-27).
 - Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.
