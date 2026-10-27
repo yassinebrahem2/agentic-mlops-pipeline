@@ -240,7 +240,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 
 ## 13. Storage
 
-New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the rate-limit threshold and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. Each plan adds its own numbered migration.
+New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the exhausted-key cooldown and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. Each plan adds its own numbered migration.
 
 ## Changes to the roadmap
 
@@ -263,7 +263,7 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 ## 15. Testing
 
 - Fakes, no real service: `/embeddings` and rate-limit and quota responses on the fake OpenAI server; a fake MLflow REST server; workflow runs on the fake GitHub server; small data folder fixtures.
-- Rate limits (§2), with a fake clock: a 429 moves to the next key at once, without waiting; a key limited again after more than a minute is marked exhausted; with every key limited within the last minute, the call waits only until the earliest clears; per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
+- Rate limits (§2), with a fake clock: a 429 moves to the next key at once, without waiting; a key limited again after more than a minute is marked exhausted; with every key limited within the last minute, the call waits only until the earliest clears; per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a billing signal (402, `insufficient_quota`) or an authentication failure exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
 - Connections: a folder inside the data folder is refused; a link out is resolved and checked; the mount is read-only (a write from Bash fails); denylisted files are listed; changing connections recreates the container.
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
