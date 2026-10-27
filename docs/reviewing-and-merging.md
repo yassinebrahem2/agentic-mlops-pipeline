@@ -15,6 +15,7 @@ Start one background subagent per PR, all at once, on model `sonnet`, each told 
 - the plan and task (`docs/superpowers/plans/...`, the task issue numbers) and the interfaces it produces or consumes (`docs/superpowers/plans/2026-10-16-stage-1-overview.md`, I1 to I7);
 - the diff to review: `git diff origin/main...origin/<head branch>` (only the new task's commits if earlier tasks are already on main);
 - for a re-review: "verify each point of the lead's last review and review only the commits since that head; no new hunt for Minors";
+- for a demo-company PR: the company's planted choices (listed in the demo-world plan) are deliberate and never findings;
 - the merge gate (below), so its verdict follows it; a removed-fix check (revert the fix, the test must fail) only for Important fixes;
 - the checks: AGENTS.md Code quality (DRY and separation of concerns, no swallowed errors, no workarounds, no test-only code in production, comments say why, files under ~400 lines), the plan's full test list, no secrets anywhere, PR body (template, `Closes #<plan issue>`, honest "Not done", no AI attribution, no control characters);
 - to run backend (`uv sync`, `uv run pytest`, `ruff check`, `ruff format --check`, `pyright`, `python -m mlops_agents.api.openapi_export --check`) and/or frontend (`npm ci`, `npm test`, `npm run lint`, `npm run format:check`, `npm run build`) in a new `git worktree` under the scratchpad, never switching the main checkout, and to remove that worktree afterwards;
