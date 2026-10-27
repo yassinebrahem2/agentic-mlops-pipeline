@@ -53,7 +53,8 @@ Anything not listed here is unknown.
 - [AGREED] LLM out of the hot path: checks are deterministic code run by the scheduler; the LLM wakes only when something fires.
 
 ### Data access
-- [AGREED] Data usually does not live with the code. Read-only data connections (local folder, S3/GCS/Azure, SQL database, MLflow), managed like a registry; Onboarding suggests them from the code.
+- [AGREED] Data usually does not live with the code. Read-only data connections, managed like a registry; Onboarding suggests them from the code.
+- [USER] 2026-10-27: only a few data locations are supported, raw files first; the others are left out, but the design lets each be added later on its own, following the project rules.
 - [AGREED] If predictions or labels are not saved anywhere, an agent opens a PR adding logging to a location a connection can read.
 - [USER] Agents never load whole datasets. Data understanding uses standard notebook commands (head, describe, value counts, top, ...) run as hooks whose output is auto-injected into the agent's context.
 - [AGREED] Hooks run on DuckDB (queries files and databases in place). Output is capped; truncated output carries a result handle the agent can page through or narrow with a new query. Results (never data) are cached per data version, with a size cap and least-recently-used eviction.
@@ -67,7 +68,7 @@ Anything not listed here is unknown.
 - [AGREED] Baseline: naive static checks run silently in shadow on the same data (schema, nulls, ranges from training data, per-feature drift test at p<0.05, fixed accuracy threshold, fixed timeouts/failure counts), configurable per project.
 - [AGREED] Ground truth: user verdicts on incidents (real / not an issue / wrong type), baseline alerts the agents stayed silent on that the user marks real, user-reported misses, and automatic confirmation when labels arrive.
 - [AGREED] Metrics per category: detection (precision, catches the baseline missed, false alarms avoided, misses), speed (detection delay, time to resolution), noise (alerts per week, merge ratio), diagnosis (bad data vs drift correctness), human effort (autonomous share, approvals, acceptance rate, PRs opened/merged/closed), model impact (metric before vs after agent actions), cost (tokens and $ per agent, cost per incident), reliability (failed runs, tool errors, sandbox failures). Each number shows how many verdicts it rests on and stays "collecting data" until there are enough.
-- [USER] Developer benchmarking is separate from the product and is the app developer's job, done later: ULB credit card fraud (extreme class imbalance), a synthetic drift dataset, a pipeline telemetry dataset (operational incidents).
+- [USER] Developer benchmarking is separate from the product and is the app developer's job: ULB credit card fraud (extreme class imbalance), a synthetic drift dataset, a pipeline telemetry dataset (operational incidents).
 
 ### Notifications
 - [USER] v1: Discord and email. WhatsApp and Slack later.
@@ -91,6 +92,8 @@ Anything not listed here is unknown.
 - [USER] Agent framework: LangGraph, used in the agent layer only.
 - [USER] LLM access is provider-agnostic (base URL + key) through a models registry supporting hosted, self-hosted (Ollama, vLLM) and local models. [AGREED] Port the core of the registry from D:\SCRIPTS\Multimodal RAG Agent (providers, model entries, URL credential scrubbing, keyring key store, verify step) plus one bridge to an OpenAI-compatible chat model for LangGraph. Agents refuse models without the tool_calling trait. Local model files (GGUF via an app-managed llama.cpp server) are deferred completely; hosted and self-hosted only for now. Groq and Gemini keys from that project work and can be imported.
 - [USER] No Anthropic or OpenAI keys.
+- [USER] 2026-10-27: embeddings come from the models registry like chat models, as in the Multimodal RAG Agent project: any provider, hosted or self-hosted (local servers included), never a fixed list of providers.
+- [USER] 2026-10-27: DuckDB may be upgraded to 2.0.
 - [USER] Install/launch: one command. A Python package (`uv tool install`), `<app> start` runs FastAPI, which serves the built React UI and opens the browser. Same on a cloud VM. Docker required for the sandbox.
 - [USER] App name undecided: placeholder `mlops-agents`, defined in one place.
 - [USER] UI kit: shadcn/ui + Tailwind. [AGREED] shadcn style `radix-vega`, neutral base color (shadcn 4 dropped `new-york`).
@@ -114,6 +117,7 @@ Anything not listed here is unknown.
 ## 3. Open
 - What runs where: whether train/deploy hooks run in the sandbox, on the host, or on the user's infrastructure (GPUs, cloud credentials, network).
 - Deliverable format. (Team of 6 since 2026-10-24. Deadline 2026-11-05, confirmed 2026-10-27; it was 2026-10-29.)
+- [USER] 2026-10-27: the whole project, every stage and the evaluation included, must work on 2026-11-05; the team chooses which evaluation cases to cover.
 - Exact Model Performance, Retraining and Deployment & Rollback behaviors.
 - Fine-tuning: not planned; no decision recorded.
 
@@ -128,6 +132,8 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
+- Data connection kinds: were local folder, S3/GCS/Azure, SQL database and MLflow. Now a few kinds, raw files first (2026-10-27).
+- Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.
 - PRs: were opened automatically when an agent finishes. Now the agent is reminded at the end of each turn and decides, because a stopped agent may still be waiting on something.
