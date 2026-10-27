@@ -115,10 +115,20 @@ export interface ApprovalCardProps {
   className?: string;
 }
 
-export function ApprovalCard({ approval, toolName, projectId, className }: ApprovalCardProps) {
+export function ApprovalCard({ projectId, ...props }: ApprovalCardProps) {
   const routeParams = useParams<{ projectId: string }>();
-  const activeProjectId = projectId ?? routeParams.projectId ?? "";
+  const activeProjectId = projectId ?? routeParams.projectId;
+  // A decision is sent to a project's route; without a project there is no card to act on.
+  if (!activeProjectId) return null;
+  return <ProjectApprovalCard {...props} projectId={activeProjectId} />;
+}
 
+function ProjectApprovalCard({
+  approval,
+  toolName,
+  projectId,
+  className,
+}: Omit<ApprovalCardProps, "projectId"> & { projectId: string }) {
   const [note, setNote] = useState("");
   const submittingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
@@ -133,7 +143,7 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
       const result = await api.POST("/api/projects/{project_id}/approvals/{approval_id}/decision", {
         params: {
           path: {
-            project_id: activeProjectId,
+            project_id: projectId,
             approval_id: approval.approval_id,
           },
         },
