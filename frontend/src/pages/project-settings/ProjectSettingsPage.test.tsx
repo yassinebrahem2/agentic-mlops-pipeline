@@ -110,6 +110,7 @@ function setup(
         return json({ path: "/new", parent: "/", entries: [], roots: ["/"] });
       if (path.endsWith("/settings/permissions")) return json({ level: "ask" });
       if (path.endsWith("/settings/issues")) return json({ min_priority: "medium" });
+      if (path.endsWith("/settings/messaging")) return json({ max_hops: 6, max_tokens: 300000 });
       if (path.endsWith("/sandbox"))
         return json({
           docker: { available: true, version: "27.1", detail: null },
@@ -376,7 +377,7 @@ it("allows cancelling removal without deleting the project", async () => {
   expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
-it("renders the permissions, sandbox and GitHub issues sections", async () => {
+it("renders the permissions, sandbox, GitHub issues and agent messages sections", async () => {
   setup();
   expect(await screen.findByRole("combobox", { name: "Permission level" })).toHaveTextContent(
     "Ask",
@@ -385,7 +386,8 @@ it("renders the permissions, sandbox and GitHub issues sections", async () => {
   expect(await screen.findByRole("combobox", { name: "Minimum priority" })).toHaveTextContent(
     "Medium",
   );
-  for (const name of ["Permissions", "Sandbox", "GitHub issues"]) {
+  expect(await screen.findByRole("spinbutton", { name: "Maximum messages" })).toHaveValue(6);
+  for (const name of ["Permissions", "Sandbox", "GitHub issues", "Agent messages"]) {
     expect(screen.getByRole("region", { name })).toBeInTheDocument();
   }
 });

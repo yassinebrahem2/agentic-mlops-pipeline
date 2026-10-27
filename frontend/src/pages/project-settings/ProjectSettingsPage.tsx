@@ -4,6 +4,7 @@ import { useProject } from "@/lib/useProject";
 import { RepositorySection } from "./RepositorySection";
 import { AgentsSection } from "./AgentsSection";
 import { IssuesSection } from "./IssuesSection";
+import { MessagingSection } from "./MessagingSection";
 import { PermissionsSection } from "./PermissionsSection";
 import { SandboxSection } from "./SandboxSection";
 import { RemoveProjectDialog } from "./RemoveProjectDialog";
@@ -27,6 +28,7 @@ export function ProjectSettingsPage() {
           <PermissionsSection projectId={projectId} />
           <SandboxSection projectId={projectId} />
           <IssuesSection projectId={projectId} />
+          <MessagingSection projectId={projectId} />
           <RemoveProjectDialog project={project.data} />
         </>
       )}
