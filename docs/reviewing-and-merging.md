@@ -4,6 +4,7 @@ How the lead's Claude Code session reviews and merges PRs, locally or in a cloud
 
 ## 1. Find what needs the lead
 
+- Locally, run `scripts/lead-watch.sh` under the Monitor tool (re-arm it when it expires): it prints each new PR head, each head whose CI finished, and each card that needs the lead. `scripts/board-list.sh [open|closed|all]` lists the board.
 - Open PRs: `gh pr list --json number,author,headRefName,reviewDecision,isDraft,headRefOid,updatedAt`.
 - A PR needs the lead when it is not a draft and either has no review yet or has new commits since the last "changes requested".
 - Board: only the open cards in In review and Blocked matter; a closed issue anywhere but Done is a wrong card (step 6).
