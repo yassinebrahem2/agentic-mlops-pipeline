@@ -100,7 +100,7 @@ The spec must answer:
 ### Stage 4: Monitoring loop
 
 Agreed:
-- Checks are deterministic code written by agents and run by the scheduler. The LLM wakes only when a check fires. Schedules live in the app's own tables and are configurable on the Agents page.
+- Checks are deterministic code written by agents and delivered to the team's repository by PR; the team's own scheduler or CI runs them, never the app (the app can be offline). The app reads every result, and the LLM wakes only when one needs attention. A team with no scheduler gets one proposed by PR.
 - Data Quality keeps two test families, validation and drift. It classifies each change as bad data or real drift before acting, and explains every flag.
 - Model Performance uses metrics suited to the problem. For imbalanced data: PR-AUC, recall at a fixed precision, per-class metrics, never accuracy alone. It accounts for label delay.
 - Incidents have a category: data quality, drift, model performance, operational.
@@ -108,14 +108,14 @@ Agreed:
 - Notifications: Discord and email (SMTP) in this stage. WhatsApp and Slack later.
 - Operational telemetry: GitHub Actions run history first. Airflow, cron and other schedulers come in through data connections.
 - Dashboard (one screen, each card linking to its page): pipeline map from Onboarding (stages are not fixed), current model version and metrics, deployment status, data quality, open incidents, agent status.
-- Shadow baseline, recorded silently from the very first check and never notifying anyone: the team's own existing monitoring (the checks, alerts and reports it ran before the agents), found by Onboarding and approved by the user, with a per-check rule for reading "fired / not fired". It runs in the sandbox with no network, so its own alerts never go out. A project with no existing monitoring has no baseline, and Stats says so instead of inventing one.
+- Shadow baseline, recorded silently from the very first result and never notifying anyone: the team's own existing monitoring (the checks, alerts and reports it ran before the agents), found by Onboarding and approved by the user. The app reads its results where they already land and never re-runs it; a per-source parser, approved by the user, turns each result into "ran / fired". A project with no readable existing monitoring has no baseline, and Stats says so instead of inventing one.
 - Verdicts on every incident, one click: real issue / not an issue / wrong type. Also: user-reported misses, baseline alerts the agents stayed silent on that the user marks real, and automatic confirmation when labels prove a metric drop. Verdicts cannot be backfilled, so they ship here.
 
 The spec must answer:
 - The incident data model and lifecycle.
 - How Alert Prioritization ranks (inputs and rules).
 - The scheduler design inside the single process.
-- How checks written by agents are stored, versioned and run (sandbox or not).
+- Where results are read from and how each source's parser is stored and run (that checks live in the team's repository and run on the team's scheduler is decided).
 
 ### Stage 5: Action agents
 

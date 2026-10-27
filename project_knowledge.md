@@ -52,7 +52,8 @@ Anything not listed here is unknown.
 - [AGREED] Each agent task runs in its own git worktree; file claims enforced by the runtime keep two agents from changing the same files.
 - [AGREED] The policy values are in the roadmap (the lead delegated them); a project's level defaults to `ask`. Agent commits are the user's, run no git hooks, and never include a file matching the secret denylist.
 - [USER] Agent-run code executes in a Docker sandbox. Its environment is built from the repo's own dependency files.
-- [AGREED] LLM out of the hot path: checks are deterministic code run by the scheduler; the LLM wakes only when something fires.
+- [USER] 2026-10-27: the app is an automated coding agent specialised in MLOps and production systems (like Claude Code), an extension of the team's system, never the runtime of production monitoring: the app can be shut down with the laptop it runs on, CI cannot. Agents write checks, test them in the sandbox and deliver them by PR; the team's own scheduler or CI runs them; the app reads the results, diagnoses and acts. It reads the team's existing monitoring results and never re-runs them.
+- [AGREED] LLM out of the hot path: checks are deterministic code; the LLM wakes only when a result needs attention.
 
 ### Data access
 - [AGREED] Data usually does not live with the code. Read-only data connections, managed like a registry; Onboarding suggests them from the code.
@@ -141,6 +142,7 @@ Anything not listed here is unknown.
 - Notifications: WhatsApp moved out of v1.
 - Data connection kinds: were local folder, S3/GCS/Azure, SQL database and MLflow. Now local files only, built so PostgreSQL can be added (2026-10-27).
 - Baseline: was naive static checks for every project (schema, nulls, ranges from training data, per-feature drift test at p<0.05, fixed accuracy threshold, fixed timeouts and failure counts). Now the team's own existing monitoring, or none (2026-10-27).
+- Checks: were run by the app's own scheduler, with schedules in the app's tables. Now delivered by PR and run by the team's scheduler or CI; the app reads the results (2026-10-27).
 - Demo story: was a bank call centre (UCI Bank Marketing); dropped because a model without the leaky call-duration column has no skill on it. Now the hotel group (2026-10-27).
 - Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
