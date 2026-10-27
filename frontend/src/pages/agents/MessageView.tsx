@@ -104,11 +104,7 @@ export function MessageView({ message, sessionAgent, className }: MessageViewPro
             const result = message.parts.find(
               (p): p is ToolResultPart => p.type === "tool_result" && p.tool_call_id === part.id,
             );
-            return (
-              <div key={part.id} className="space-y-2">
-                <ToolStep call={part} result={result} />
-              </div>
-            );
+            return <ToolStep key={part.id} call={part} result={result} />;
           }
           if (part.type === "tool_result") {
             return null;

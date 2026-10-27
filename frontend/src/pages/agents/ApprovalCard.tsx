@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams } from "react-router";
 import type { components } from "@/api/schema";
 import { Badge } from "@/components/ui/badge";
@@ -120,10 +120,13 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
   const activeProjectId = projectId ?? routeParams.projectId ?? "";
 
   const [note, setNote] = useState("");
+  const submittingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleDecision = async (approve: boolean) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -141,9 +144,9 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
       });
       unwrap(result);
     } catch (err) {
-      setError(errorText(err));
-    } finally {
+      submittingRef.current = false;
       setSubmitting(false);
+      setError(errorText(err));
     }
   };
 
@@ -188,13 +191,13 @@ export function ApprovalCard({ approval, toolName, projectId, className }: Appro
         {isPending && (
           <div className="flex flex-col gap-2 pt-1 border-t border-border/40">
             <Input
-              placeholder="Optional note for rejection..."
+              placeholder="Optional note (for approval or rejection)..."
               value={note}
               onChange={(e) => {
                 setNote(e.target.value);
               }}
               disabled={submitting}
-              aria-label="Rejection note"
+              aria-label="Optional note"
               className="h-8 text-xs"
             />
             <div className="flex items-center gap-2">
