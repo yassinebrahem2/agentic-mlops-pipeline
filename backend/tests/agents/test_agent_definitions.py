@@ -34,59 +34,10 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
-
-STAGE_2_TOOLS = frozenset(
-    {
-        "Read",
-        "Glob",
-        "Grep",
-        "Write",
-        "Edit",
-        "Bash",
-        "StartTask",
-        "ResumeTask",
-        "OpenPullRequest",
-        "SearchIssues",
-        "OpenIssue",
-        "CommentOnIssue",
-        "ListAgents",
-        "SendMessage",
-        "ScheduleWakeup",
-    }
-)
-
-EXPECTED_TOOL_ORDER = (
-    "Read",
-    "Glob",
-    "Grep",
-    "Write",
-    "Edit",
-    "Bash",
-    "StartTask",
-    "ResumeTask",
-    "OpenPullRequest",
-    "SearchIssues",
-    "OpenIssue",
-    "CommentOnIssue",
-    "ListAgents",
-    "SendMessage",
-    "ScheduleWakeup",
-)
-
-ALERT_PRIORITIZATION_TOOLS = (
-    "Read",
-    "Glob",
-    "Grep",
-    "ListAgents",
-    "SendMessage",
-    "SearchIssues",
-    "OpenIssue",
-    "CommentOnIssue",
-)
 
 NAME_MAP: dict[str, str] = {
     "Orchestrator": "orchestrator",
@@ -102,13 +53,9 @@ NAME_MAP: dict[str, str] = {
 def load_spec_table_data() -> list[dict[str, Any]]:
     spec_path = (
         Path(__file__).resolve().parents[3]
-        / "docs"
-        / "superpowers"
-        / "specs"
-        / "2026-10-24-stage-2-agent-runtime-design.md"
+        / "docs/superpowers/specs/2026-10-24-stage-2-agent-runtime-design.md"
     )
-    content = spec_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
+    lines = spec_path.read_text(encoding="utf-8").splitlines()
     in_section_9 = False
     table_lines: list[str] = []
     for line in lines:
@@ -122,53 +69,81 @@ def load_spec_table_data() -> list[dict[str, Any]]:
             if stripped.startswith("|"):
                 table_lines.append(stripped)
 
-    # table_lines[0]: header, table_lines[1]: divider
-    rows: list[dict[str, Any]] = []
-    for row in table_lines[2:]:
+    data_lines = table_lines[2:]
+    if len(data_lines) != 7:
+        raise AssertionError(f"Expected exactly 7 rows in spec table, got {len(data_lines)}")
+
+    parsed_rows: list[dict[str, Any]] = []
+    for row in data_lines:
         cols = [c.strip() for c in row.split("|")[1:-1]]
         agent_display = cols[0]
         if agent_display not in NAME_MAP:
-            continue
-        name = NAME_MAP[agent_display]
-        chat = cols[1].lower() == "yes"
-        schedules = cols[4].lower() == "yes"
-        raw_msg = cols[3]
-        if raw_msg == "all but Alert Prioritization":
-            can_message = (
-                "onboarding",
-                "data-quality",
-                "model-performance",
-                "retraining",
-                "deployment",
-            )
-        elif raw_msg == "all chat agents":
-            can_message = (
-                "orchestrator",
-                "onboarding",
-                "data-quality",
-                "model-performance",
-                "retraining",
-                "deployment",
-            )
-        else:
-            can_message = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(","))
-
-        tools = (
-            ALERT_PRIORITIZATION_TOOLS if name == "alert-prioritization" else EXPECTED_TOOL_ORDER
+            raise AssertionError(f"Unmapped agent display name: {agent_display!r}")
+        parsed_rows.append(
+            {
+                "display_name": agent_display,
+                "name": NAME_MAP[agent_display],
+                "chat": cols[1].lower() == "yes",
+                "raw_tools": cols[2],
+                "raw_msg": cols[3],
+                "schedules": cols[4].lower() == "yes",
+                "status_board": (NAME_MAP[agent_display] == "orchestrator"),
+            }
         )
 
-        rows.append(
+    all_agents = [r["name"] for r in parsed_rows]
+    chat_agents = [r["name"] for r in parsed_rows if r["chat"]]
+
+    result: list[dict[str, Any]] = []
+    prev_tools: tuple[str, ...] = ()
+    for r in parsed_rows:
+        raw_tools = r["raw_tools"]
+        if raw_tools.lower() == "same":
+            tools = prev_tools
+        elif "all general tools" in raw_tools.lower():
+            base = ("Read", "Glob", "Grep", "Write", "Edit", "Bash", "StartTask", "ResumeTask")
+            rest = (
+                "OpenPullRequest",
+                "SearchIssues",
+                "OpenIssue",
+                "CommentOnIssue",
+                "ListAgents",
+                "SendMessage",
+            )
+            tools = base + rest + (("ScheduleWakeup",) if r["schedules"] else ())
+        else:
+            tools = tuple(t.strip() for t in raw_tools.split(",") if t.strip())
+
+        if not tools or tools[0] != "Read":
+            raise AssertionError(f"Tools for {r['name']} must start with 'Read', got {tools}")
+        prev_tools = tools
+
+        raw_msg = r["raw_msg"]
+        if raw_msg == "all but Alert Prioritization":
+            can_message = tuple(
+                a for a in all_agents if a not in ("alert-prioritization", r["name"])
+            )
+        elif raw_msg == "all chat agents":
+            can_message = tuple(a for a in chat_agents if a != r["name"])
+        else:
+            for p in raw_msg.split(","):
+                p_clean = p.strip()
+                if p_clean and p_clean not in NAME_MAP:
+                    raise AssertionError(f"Unmapped agent in May message: {p_clean!r}")
+            can_message = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(",") if p.strip())
+
+        result.append(
             {
-                "name": name,
-                "display_name": agent_display,
-                "chat": chat,
-                "schedules": schedules,
-                "status_board": (name == "orchestrator"),
+                "name": r["name"],
+                "display_name": r["display_name"],
+                "chat": r["chat"],
+                "schedules": r["schedules"],
+                "status_board": r["status_board"],
                 "tools": tools,
                 "can_message": can_message,
             }
         )
-    return rows
+    return result
 
 
 SPEC_ROWS = load_spec_table_data()
@@ -180,31 +155,25 @@ def _load_definition(name: str) -> AgentDefinition:
     return parse_definition(entry.read_text(encoding="utf-8"), f"{name}.md")
 
 
-@pytest.mark.parametrize("expected", SPEC_ROWS, ids=[r["name"] for r in SPEC_ROWS])
-def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
-    defn = _load_definition(expected["name"])
-
+def _assert_definition_matches_spec(defn: AgentDefinition, expected: dict[str, Any]) -> None:
     assert defn.name == expected["name"]
     assert defn.display_name == expected["display_name"]
     assert defn.chat is expected["chat"]
     assert defn.schedules is expected["schedules"]
     assert defn.status_board is expected["status_board"]
-
-    # Read MUST be the first tool
     assert defn.tools[0] == "Read"
     assert defn.tools == expected["tools"]
-
-    # can_message exact peer list
     assert defn.can_message == expected["can_message"]
 
-    # Prompt line count constraint: strictly under 60 lines
+
+@pytest.mark.parametrize("expected", SPEC_ROWS, ids=[r["name"] for r in SPEC_ROWS])
+def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
+    defn = _load_definition(expected["name"])
+    _assert_definition_matches_spec(defn, expected)
+
     prompt_lines = defn.prompt.splitlines()
     assert len(prompt_lines) < 60, f"{defn.name} prompt exceeds 60 lines: {len(prompt_lines)} lines"
 
-    # Prompt structure: 3 distinct parts
-    # 1. The role
-    # 2. What the agent can do now (and note on what is not available yet)
-    # 3. How to work
     lower_prompt = defn.prompt.lower()
     assert "how to work:" in lower_prompt or "how to work" in lower_prompt, (
         f"{defn.name} prompt missing 'How to work' section"
@@ -220,45 +189,34 @@ def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
     )
 
 
+def test_spec_table_detects_missing_tool() -> None:
+    expected = SPEC_ROWS[0]
+    defn = _load_definition(expected["name"])
+    tampered = defn.model_copy(update={"tools": defn.tools[:-1]})
+    with pytest.raises(AssertionError):
+        _assert_definition_matches_spec(tampered, expected)
+
+
 def test_agent_catalog_loads_stage2_definitions_with_full_tools() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS)
     assert catalog.get("orchestrator").status_board is True
-    for name in (
-        "onboarding",
-        "data-quality",
-        "model-performance",
-        "retraining",
-        "deployment",
-    ):
+    for name in ("onboarding", "data-quality", "model-performance", "retraining", "deployment"):
         defn = catalog.get(name)
-        assert defn.status_board is False
-        assert defn.chat is True
-        assert defn.schedules is True
+        assert not defn.status_board and defn.chat and defn.schedules
 
     alert_defn = catalog.get("alert-prioritization")
-    assert alert_defn.status_board is False
-    assert alert_defn.chat is False
-    assert alert_defn.schedules is False
-    assert alert_defn.tools == ALERT_PRIORITIZATION_TOOLS
+    alert_spec = next(r for r in SPEC_ROWS if r["name"] == "alert-prioritization")
+    assert not alert_defn.status_board and not alert_defn.chat and not alert_defn.schedules
+    assert alert_defn.tools == alert_spec["tools"]
 
 
 def test_alert_prioritization_loads_in_catalog() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS)
     defn = catalog.get("alert-prioritization")
-    assert defn.name == "alert-prioritization"
-    assert defn.display_name == "Alert Prioritization"
-    assert defn.chat is False
-    assert defn.schedules is False
-    assert defn.status_board is False
-    assert defn.tools == ALERT_PRIORITIZATION_TOOLS
-    assert defn.can_message == (
-        "orchestrator",
-        "onboarding",
-        "data-quality",
-        "model-performance",
-        "retraining",
-        "deployment",
-    )
+    alert_spec = next(r for r in SPEC_ROWS if r["name"] == "alert-prioritization")
+    assert defn.name == "alert-prioritization" and defn.display_name == "Alert Prioritization"
+    assert not defn.chat and not defn.schedules and not defn.status_board
+    assert defn.tools == alert_spec["tools"] and defn.can_message == alert_spec["can_message"]
 
 
 async def test_alert_prioritization_derived_as_inactive_on_status_board(
@@ -285,13 +243,7 @@ async def test_alert_prioritization_cannot_chat(
     git_env: dict[str, str],
 ) -> None:
     env = await build_session_env(
-        tmp_path,
-        paths,
-        databases,
-        keystore,
-        fake_openai,
-        model_http,
-        git_env,
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
     with pytest.raises(DomainError) as exc_info:
         await env.manager.send(env.project_id, "alert-prioritization", "Hello")
@@ -309,14 +261,11 @@ def test_no_stage2_agent_may_message_alert_prioritization() -> None:
 
 
 def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
-    # default_registry().names() from main does not yet have messaging tools
     with pytest.raises(DefinitionError) as exc_info:
         AgentCatalog.load(default_registry().names())
     error_msg = str(exc_info.value)
-    assert "ListAgents" in error_msg
-    assert "SendMessage" in error_msg
+    assert "ListAgents" in error_msg and "SendMessage" in error_msg
 
-    # Missing ScheduleWakeup fails for agents that have schedules
     with pytest.raises(DefinitionError) as exc_info_sched:
         AgentCatalog.load(STAGE_2_TOOLS - {"ScheduleWakeup"})
     assert "ScheduleWakeup" in str(exc_info_sched.value)
@@ -365,11 +314,7 @@ async def test_live_orchestrator_adds_line_to_readme(
         await set_permission_level(databases, project.id, "autonomous")
 
         tasks_svc = TasksService(
-            databases=databases,
-            paths=paths,
-            git=runner,
-            events=events,
-            workspace=workspace_svc,
+            databases=databases, paths=paths, git=runner, events=events, workspace=workspace_svc
         )
 
         tools = default_registry(tasks=tasks_svc)
@@ -385,7 +330,6 @@ async def test_live_orchestrator_adds_line_to_readme(
         await providers_svc.verify_model(live_model)
         await agent_settings.set_default_model("orchestrator", live_model)
 
-        status_board = SqliteStatusBoard(catalog, events)
         manager = SessionManager(
             databases=databases,
             workspace=workspace_svc,
@@ -398,7 +342,7 @@ async def test_live_orchestrator_adds_line_to_readme(
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=tasks_svc,
-            status_board=status_board,
+            status_board=SqliteStatusBoard(catalog, events),
         )
 
         start = await manager.get(project.id, "orchestrator")
@@ -422,4 +366,26 @@ async def test_live_orchestrator_adds_line_to_readme(
         text = "".join(p.text for p in agent_msg.parts if p.type == "text")
         print("\nLive model response:", text)
         assert len(text) > 0
+
+        # Chat agent called one of its tools
+        has_tool_call = any(p.type == "tool_call" for m in view.messages for p in m.parts)
+        assert has_tool_call, "Chat agent did not call any tool"
+
+        # Task was started
+        task = await tasks_svc.current(project.id, "orchestrator")
+        assert task is not None, "Task was not started"
+
+        # README.md was changed in the task's worktree
+        worktree_readme = (task.worktree / "README.md").read_text(encoding="utf-8")
+        assert "Updated by orchestrator" in worktree_readme
+
+        # A local review was opened in the Inbox / tasks service
+        task_view = await tasks_svc.view(project.id, task.id)
+        assert task_view.status == "in_review" and task_view.review_kind == "local"
+        open_tasks = await tasks_svc.open_tasks(project.id)
+        assert any(
+            t.id == task.id and t.status == "in_review" and t.review_kind == "local"
+            for t in open_tasks
+        )
+
         await manager.close()
