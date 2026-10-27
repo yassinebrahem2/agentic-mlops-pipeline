@@ -41,6 +41,7 @@ Out:
 - File connections in server mode: they would read the server's disk. The connections section says so in server mode.
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
+- Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
 - Reading monitoring results and checks (stage 4), deploy hooks (stage 5), the Knowledge, Stats, Activity and Usage pages (stage 6). Stage 3 stores what they read.
 - The Data page's quality and drift history: empty until stage 4; the page says so.
 
