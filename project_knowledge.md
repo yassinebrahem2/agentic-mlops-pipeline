@@ -85,7 +85,8 @@ Anything not listed here is unknown.
 
 ### Agent runtime
 - [USER] One shared agent runtime (loop, turn queue + Stop, streaming, persistence, compaction, usage, limits, permission check, audit). Each agent is a definition file (Claude Code subagent style: frontmatter + role prompt) describing only what is special about it. Alert Prioritization = same runtime with chat off.
-- [USER] Tools: Claude Code's standard tools (Read, Write, Edit, Glob, Grep, Bash) for general work; specialized tools for specialized tasks (agent messaging, PRs/issues, data commands).
+- [USER] Tools: Claude Code's standard tools (Read, Write, Edit, Glob, Grep, Bash) for general work; specialized tools for specialized tasks (agent messaging, PRs/issues).
+- [USER] 2026-10-27: a standalone tool needs a really good reason; otherwise Bash is enough.
 - [AGREED] Agent messaging tools modeled on Claude Code: ListAgents (who exists, status) and SendMessage(to, message); the message lands in the recipient's session labeled with the sender, and the reply arrives back in the sender's session.
 - [USER] Stage 1: Orchestrator with read-only Read/Glob/Grep (filters enforced in the tools). Bash + Docker sandbox come in stage 2 (Bash only runs in the sandbox; the sandbox mounts a filtered view of the repo, network off by default).
 - [USER] Safety limits (max steps etc.) are configurable, including off. Keys are verified when added; a key failing mid-work stops the turn with a clear message and flags the provider. Everything (tool errors included) returns to the agent's own context.
@@ -116,6 +117,7 @@ Anything not listed here is unknown.
 - [AGREED] 2026-10-23 (#120): frontend tests are CPU-bound in testing-library's role queries; a page test timing out under heavy concurrent local load is an environment limit, not a defect. testing-library's defaults stay (no raised timeouts); frontend tests run without other suites running alongside.
 - [USER] 2026-10-26: only Critical and Important findings hold a merge (red CI, broken contract, touching the user's repo, secrets, data loss, crash at startup or shutdown, a 500 or wrong answer on a normal path). Minor findings never block: they are filed as a Bug or in the owner's next task in the same step as the merge. Re-reviews check only the last review's points and the new commits. Details in docs/reviewing-and-merging.md.
 - [USER] 2026-10-27: the whole project, every stage and the evaluation included, must work on 2026-11-05; the team chooses which evaluation cases to cover.
+- [USER] 2026-10-27: stages 3 and 4 are designed together. Onboarding's job is to make the monitoring loop (stage 4) ready to run well: explore the project and its production system, record what it learns, grant the other agents what they need, and get the systems ready.
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open
