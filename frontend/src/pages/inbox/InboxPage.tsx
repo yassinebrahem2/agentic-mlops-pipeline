@@ -9,12 +9,19 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { errorText } from "@/lib/api";
 import { ApprovalCard, type ApprovalPart } from "@/pages/agents/ApprovalCard";
 import { LocalReviewCard } from "./LocalReviewCard";
 import { useGithubActivity, useLocalReviews, usePendingApprovals } from "./usePendingApprovals";
 
 export function InboxPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  // Every query and card below needs a project; without one there is nothing to ask for or show.
+  if (!projectId) return null;
+  return <Inbox projectId={projectId} />;
+}
+
+function Inbox({ projectId }: { projectId: string }) {
   const {
     data: approvals,
     isLoading: approvalsLoading,
@@ -63,11 +70,7 @@ export function InboxPage() {
           <Alert variant="destructive">
             <AlertCircle className="size-4" />
             <AlertTitle>Error loading approvals</AlertTitle>
-            <AlertDescription>
-              {approvalsError instanceof Error
-                ? approvalsError.message
-                : "Failed to load approvals"}
-            </AlertDescription>
+            <AlertDescription>{errorText(approvalsError)}</AlertDescription>
           </Alert>
         )}
 
@@ -125,11 +128,7 @@ export function InboxPage() {
           <Alert variant="destructive">
             <AlertCircle className="size-4" />
             <AlertTitle>Error loading local reviews</AlertTitle>
-            <AlertDescription>
-              {reviewsError instanceof Error
-                ? reviewsError.message
-                : "Failed to load local reviews"}
-            </AlertDescription>
+            <AlertDescription>{errorText(reviewsError)}</AlertDescription>
           </Alert>
         )}
 
@@ -142,7 +141,7 @@ export function InboxPage() {
         {!reviewsLoading && !reviewsError && reviews && reviews.length > 0 && (
           <div className="space-y-4">
             {reviews.map((review) => (
-              <LocalReviewCard key={review.task.id} review={review} projectId={projectId ?? ""} />
+              <LocalReviewCard key={review.task.id} review={review} projectId={projectId} />
             ))}
           </div>
         )}
@@ -170,9 +169,7 @@ export function InboxPage() {
           <Alert variant="destructive">
             <AlertCircle className="size-4" />
             <AlertTitle>Error loading activity</AlertTitle>
-            <AlertDescription>
-              {activityError instanceof Error ? activityError.message : "Failed to load activity"}
-            </AlertDescription>
+            <AlertDescription>{errorText(activityError)}</AlertDescription>
           </Alert>
         )}
 

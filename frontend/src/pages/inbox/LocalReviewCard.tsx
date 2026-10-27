@@ -1,14 +1,11 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, errorText, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { reviewsQueryKey } from "./usePendingApprovals";
-
-export type LocalReview = components["schemas"]["LocalReview"];
+import { reviewsQueryKey, type LocalReview } from "./usePendingApprovals";
 
 export interface LocalReviewCardProps {
   review: LocalReview;
