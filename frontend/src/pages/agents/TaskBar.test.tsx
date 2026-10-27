@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/lib/api";
 import { TaskBar, type TaskView } from "./TaskBar";
@@ -96,6 +96,26 @@ describe("TaskBar", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
     expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dialog open on Escape and an outside click while the discard request is pending", async () => {
+    // The open modal sets pointer-events: none on the page behind it; click it anyway.
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.spyOn(api, "POST").mockReturnValue(new Promise(() => {}));
+
+    render(<TaskBar task={baseTask} projectId="prj_1" />);
+
+    await user.click(screen.getByRole("button", { name: "Discard task" }));
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Discard" })).toBeDisabled();
+    });
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Discard task" })).toBeInTheDocument();
+
+    await user.click(document.body);
+    expect(screen.getByRole("dialog", { name: "Discard task" })).toBeInTheDocument();
   });
 
   it("shows 409 error message when discarding is rejected", async () => {

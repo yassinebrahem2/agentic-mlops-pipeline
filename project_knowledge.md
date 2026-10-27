@@ -90,9 +90,11 @@ Anything not listed here is unknown.
 - [USER] One shared agent runtime (loop, turn queue + Stop, streaming, persistence, compaction, usage, limits, permission check, audit). Each agent is a definition file (Claude Code subagent style: frontmatter + role prompt) describing only what is special about it. Alert Prioritization = same runtime with chat off.
 - [USER] Tools: Claude Code's standard tools (Read, Write, Edit, Glob, Grep, Bash) for general work; specialized tools for specialized tasks (agent messaging, PRs/issues).
 - [USER] 2026-10-27: a standalone tool needs a really good reason; otherwise Bash is enough.
+- [USER] 2026-10-27: deploys and rollbacks happen only through the team's deploy and rollback commands registered as deploy hooks, which are deploy-class actions and ask the user; the sandbox may read the tracking server but never write to it (a read-only credential for a real team; for a tracking server without authentication, agents report it as a gap and propose enabling its authentication; until the team does, the gap is accepted and shown to the user, and keeping it open is the team's choice).
 - [AGREED] Agent messaging tools modeled on Claude Code: ListAgents (who exists, status) and SendMessage(to, message); the message lands in the recipient's session labeled with the sender, and the reply arrives back in the sender's session.
 - [USER] Stage 1: Orchestrator with read-only Read/Glob/Grep (filters enforced in the tools). Bash + Docker sandbox come in stage 2 (Bash only runs in the sandbox; the sandbox mounts a filtered view of the repo, network off by default).
-- [USER] Safety limits (max steps etc.) are configurable, including off. Keys are verified when added; a key failing mid-work stops the turn with a clear message and flags the provider. Everything (tool errors included) returns to the agent's own context.
+- [USER] 2026-10-27: rate limits are the provider's business, not the agents': a turn retries and cycles between keys on its own and never stalls unless every key is exhausted (daily limit reached, credits or quota gone, key rejected). Then the agent tells the user it stalled and why, and the user chooses with a button whether to try again. Agents are never throttled or queued by the app to avoid rate limits.
+- [USER] Safety limits (max steps etc.) are configurable, including off. Keys are verified when added; a key failing mid-work is set aside and the next key is used (see the rate-limit entry of 2026-10-27). Everything (tool errors included) returns to the agent's own context.
 
 ### Tech stack
 - [USER] Frontend: React (Vite, TypeScript). Backend: FastAPI (Python). Streaming over server-sent events.
@@ -146,6 +148,7 @@ Anything not listed here is unknown.
 - Baseline: was naive static checks for every project (schema, nulls, ranges from training data, per-feature drift test at p<0.05, fixed accuracy threshold, fixed timeouts and failure counts). Now the team's own existing monitoring, or none (2026-10-27).
 - Checks: were run by the app's own scheduler, with schedules in the app's tables. Now delivered by PR and run by the team's scheduler or CI; the app reads the results (2026-10-27).
 - Demo story: was a bank call centre (UCI Bank Marketing); dropped because a model without the leaky call-duration column has no skill on it. Now the hotel group (2026-10-27).
+- Key failures: a key failing mid-work stopped the turn with a clear message. Now the turn moves to the next key and pauses for the user only when every key is exhausted (2026-10-27).
 - Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.

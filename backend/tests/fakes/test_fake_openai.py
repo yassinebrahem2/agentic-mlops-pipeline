@@ -245,3 +245,50 @@ async def test_fake_write_lifecycle_steps(fake_server: RunningFake) -> None:
                     collected_text4.append(str(delta["content"]))
         text4 = "".join(collected_text4)
         assert "no pull request is needed" in text4
+
+
+async def test_fake_write_ignores_pull_request_text_in_tool_results(
+    fake_server: RunningFake,
+) -> None:
+    # A tool result that mentions a pull request is not the PR reminder: the next step runs.
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "Please start a task and write notes."},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_start",
+                    "type": "function",
+                    "function": {"name": "StartTask", "arguments": '{"title": "Write notes"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_start",
+            "content": "Task started. Open a pull request with OpenPullRequest when done.",
+        },
+    ]
+    async with httpx2.AsyncClient(base_url=fake_server.base_url.removesuffix("/v1")) as client:
+        chunks = await _stream_chunks(
+            client,
+            {
+                "model": "fake-write",
+                "messages": messages,
+                "tools": [
+                    {"type": "function", "function": {"name": "StartTask", "parameters": {}}},
+                    {"type": "function", "function": {"name": "Write", "parameters": {}}},
+                ],
+            },
+        )
+    names: list[str] = []
+    for c in chunks:
+        choices = cast(list[dict[str, Any]], c.get("choices") or [])
+        if not choices:
+            continue
+        delta = cast(dict[str, Any], choices[0].get("delta") or {})
+        for tc in cast(list[dict[str, Any]], delta.get("tool_calls") or []):
+            fn = cast(dict[str, Any], tc.get("function") or {})
+            if "name" in fn:
+                names.append(str(fn["name"]))
+    assert names == ["Write"]
