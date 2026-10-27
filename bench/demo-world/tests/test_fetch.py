@@ -1,3 +1,8 @@
+import http.client
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import pytest
 
 from demo_world import fetch, paths
@@ -44,6 +49,44 @@ def test_a_failed_download_fails_and_leaves_nothing(served: Served) -> None:
     with pytest.raises(fetch.FetchError):
         fetch.fetch(paths.source_dir(), url=served.url + ".missing", sha256=served.sha256)
 
+    assert list(paths.source_dir().iterdir()) == []
+
+
+@pytest.fixture
+def cut_short_url() -> Iterator[str]:
+    """A localhost URL whose chunked body stops in the middle of a chunk."""
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            # One whole chunk, then a chunk that announces 4096 bytes and sends 10.
+            self.wfile.write(b"10\r\n" + b"a" * 16 + b"\r\n" + b"1000\r\n" + b"b" * 10)
+            self.wfile.flush()
+            self.close_connection = True
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/hotels.csv"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_a_body_cut_short_fails_and_leaves_nothing(cut_short_url: str) -> None:
+    with pytest.raises(fetch.FetchError) as raised:
+        fetch.fetch(paths.source_dir(), url=cut_short_url, sha256="0" * 64)
+
+    assert isinstance(raised.value.__cause__, http.client.IncompleteRead)
     assert list(paths.source_dir().iterdir()) == []
 
 

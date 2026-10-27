@@ -50,9 +50,13 @@ def fetch(dest_dir: Path, url: str, sha256: str) -> Path:
             while chunk := response.read(_CHUNK):
                 digest.update(chunk)
                 out.write(chunk)
-    except OSError as error:
+    except BaseException as error:
+        # Any failure (URLError, OSError, http.client.IncompleteRead from a body cut short, ...)
+        # must not leave a partial file behind; an interrupt still propagates as itself.
         partial.unlink(missing_ok=True)
-        raise FetchError(f"downloading {url} failed: {error}") from error
+        if isinstance(error, Exception):
+            raise FetchError(f"downloading {url} failed: {error!r}") from error
+        raise
 
     actual = digest.hexdigest()
     if actual != sha256:
