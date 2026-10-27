@@ -15,6 +15,7 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     StreamEvent,
+    TaskView,
     ToolResultPart,
     TurnEnded,
     TurnWaiting,
@@ -110,6 +111,21 @@ class MutableTaskWorkspaces(FakeWorkspaces):
         if task is not None:
             return RepoFiles(task.worktree, self._git)
         return await super().files(project_id, task)
+
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        task = self.current_task_ref
+        if task is None or task.id != task_id:
+            return await super().view(project_id, task_id)
+        return TaskView(
+            id=task.id,
+            agent="writer",
+            title=task.title,
+            branch=task.branch,
+            status=task.status,
+            review_kind=None,
+            pr_number=None,
+            pr_url=None,
+        )
 
 
 def _write_agent_def(tmp_path: Path) -> Path:

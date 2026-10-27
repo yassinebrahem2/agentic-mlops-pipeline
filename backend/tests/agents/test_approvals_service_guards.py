@@ -12,7 +12,7 @@ import pytest
 from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
-from mlops_agents.agents.runtime.contract import ApprovalPart
+from mlops_agents.agents.runtime.contract import ApprovalPart, TaskView
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools.base import FileAccess, Preview, RiskClass, TaskRef
 from mlops_agents.errors import DomainError
@@ -36,6 +36,9 @@ class OtherTaskCurrent:
         return self._current
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
+        raise NotImplementedError
+
+    async def view(self, project_id: str, task_id: str) -> TaskView:
         raise NotImplementedError
 
 

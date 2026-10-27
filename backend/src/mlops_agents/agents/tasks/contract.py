@@ -36,6 +36,10 @@ class TaskWorkspaces(Protocol):
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess: ...
 
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        """A task's view, read from what is stored: it never recreates a missing worktree."""
+        ...
+
 
 class Tasks(TaskWorkspaces, Protocol):
     async def start(self, project_id: str, session_id: str, agent: str, title: str) -> TaskRef: ...
@@ -43,8 +47,6 @@ class Tasks(TaskWorkspaces, Protocol):
     async def resume(
         self, project_id: str, session_id: str, agent: str, task_id: str
     ) -> TaskRef: ...
-
-    async def view(self, project_id: str, task_id: str) -> TaskView: ...
 
     async def open_tasks(self, project_id: str) -> list[TaskView]: ...
 
