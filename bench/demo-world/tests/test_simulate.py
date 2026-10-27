@@ -286,6 +286,21 @@ def test_restarting_twice_leaves_the_answer_key_unchanged(loaded: pd.DataFrame) 
     assert key.read_bytes() == before
 
 
+def test_a_restart_keeps_answer_key_lines_of_another_shape(loaded: pd.DataFrame) -> None:
+    world = _default_world(loaded)
+    _run(world, end=date(2016, 2, 15))
+    key = world.folder / "answer_key.jsonl"
+    # Other parts of the world (a PR merge, a CI window) record lines of their own shape.
+    with key.open("a", encoding="utf-8", newline="\n") as file:
+        file.write('{"kind": "pr_merged", "pr": 7, "delay_days": 3}\n')
+    before = key.read_bytes()
+
+    (world.folder / "state.json").unlink()
+    _run(world, end=date(2016, 2, 15))
+
+    assert key.read_bytes() == before
+
+
 def test_the_planted_flaws_are_written_to_the_world_folder(loaded: pd.DataFrame) -> None:
     world = _world(loaded)
 

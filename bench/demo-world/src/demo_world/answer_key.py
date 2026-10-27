@@ -93,18 +93,23 @@ PLANTED_FLAWS: tuple[Flaw, ...] = (
 )
 
 
-def _present(path: Path) -> set[Record]:
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True)
+
+
+def _present(path: Path) -> set[str]:
+    # Compared as canonical JSON, not as records: the key also holds lines of other shapes.
     if not path.exists():
         return set()
     lines = path.read_text(encoding="utf-8").splitlines()
-    return {Record(**json.loads(line)) for line in lines}
+    return {_canonical(json.loads(line)) for line in lines}
 
 
 def append_new(world: Path, records: Iterable[Record]) -> None:
     """Append the records the key does not hold yet, so a restart or a rerun adds no line."""
     path = world / ANSWER_KEY_FILE
     present = _present(path)
-    new = [record for record in dict.fromkeys(records) if record not in present]
+    new = [r for r in dict.fromkeys(records) if _canonical(asdict(r)) not in present]
     if not new:
         return
     world.mkdir(parents=True, exist_ok=True)

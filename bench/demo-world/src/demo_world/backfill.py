@@ -10,7 +10,7 @@ from demo_world import paths, source
 
 
 class BackfillError(Exception):
-    """The backfill cannot run: the source is missing or the data folder already has files."""
+    """The backfill cannot run: the data folder already has files."""
 
 
 @dataclass(frozen=True)
