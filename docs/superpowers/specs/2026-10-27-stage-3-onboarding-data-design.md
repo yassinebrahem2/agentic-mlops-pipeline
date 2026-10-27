@@ -73,10 +73,11 @@ backend/src/mlops_agents/
 ## 2. Turns that survive rate limits
 
 A change to the merged model call (`agents/runtime/model_caller.py`), modeled on the key failover engine of the Multimodal RAG Agent project (`providers/retry_engine.py` there):
-- **Error kinds.** Permanent (bad request, a rejected tool call already handled in stage 2) ends the call at once. Transient (a server error, a dropped connection, a timeout) retries with backoff a few times on the same key; a different key would not fix it. Rate limit (the provider's 429, with `Retry-After` when it sends one) is handled below. Quota, credits and authentication failures exhaust that key at once.
-- **Rate limits.** The call waits `max(retry_after, interval)` and retries the same key. Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn. When one key has been continuously rate-limited for longer than a threshold (a provider setting, default 90 seconds), it is treated as exhausted for the day.
-- **Exhausted keys.** An exhausted key is skipped and the call moves to the next key of the provider. The mark is kept by the provider (shared by every turn of the app) until the next UTC day, or until the user tries again.
-- **Every key exhausted.** The turn does not fail. It pauses as `waiting` (stage 2's waiting and resume path, so it survives a restart) with a stalled-turn card in the session: the provider, each key's state and why (daily limit, credits, quota, rejected), and two buttons: Try again (clears the marks and resumes from the checkpoint, so no work is lost) and Stop. The Inbox lists it.
+- **Error kinds.** Permanent (bad request, a rejected tool call already handled in stage 2) ends the call at once. Transient (a server error, a dropped connection, a timeout) retries with backoff a few times on the same key; a different key would not fix it. Every 429 is a rate limit, handled below, whatever its message says: providers such as Gemini word per-minute limits as "quota exceeded". Only an explicit billing signal (HTTP 402, `insufficient_quota`) or an authentication failure exhausts a key at once. The classification in `providers/errors.py` changes accordingly.
+- **Rate limits.** The call waits `max(retry_after, interval)` and retries the same key. Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn. When a key has been continuously rate-limited for longer than a threshold (a provider setting, default 90 seconds), it is treated as exhausted for the day.
+- **Key state is shared.** Each key's rate-limit streak and exhausted mark live in one place per provider in the app, shared by every turn and every call (the four kickoff audits share a key). A success on a key ends its streak.
+- **Exhausted keys.** An exhausted key is skipped and the call moves to the next key of the provider. The mark lasts until the next UTC day, or until the user tries again.
+- **Every key exhausted.** The turn does not fail: it pauses on an approval of a new kind, `stall`, which has no tool call. The model step raises it (keyed by turn and step, so a re-run finds it instead of duplicating it), and the `wait` node pauses on it like any pending approval. So the record, the card, the Inbox entry, surviving a restart and resuming all come from stage 2 unchanged. The card shows the provider and each key's state and why (daily limit, billing, rejected), with Try again (approves: clears the marks and resumes the model step from the checkpoint, so no work is lost) and Stop (cancels: the turn ends `stopped`). A change to the merged approvals and Part interfaces: the approval kind `stall`, and a `stall` preview in the approval part.
 - Stop works at any moment, including while a call is waiting out a rate limit.
 - The app never throttles or queues agents to avoid rate limits.
 
@@ -108,7 +109,7 @@ class ConnectionKind(Protocol):
     def sandbox_mount(self, settings) -> Mount | None: ...        # a read-only bind mount, or None for a network kind
 ```
 
-- `local_folder`: settings `{path}`. A table is one CSV, Parquet or JSON file, or one folder of same-schema files read as one table (as `bookings/*.parquet`). Its data version is its files' sizes and modified times.
+- `local_folder`: settings `{path}`. Its tables: each top-level file in a supported format, and each direct subfolder whose files all share one supported format (read as one table, as `bookings/*.parquet`). Supported formats: CSV, Parquet, JSON and JSON Lines (`.jsonl`). Other files are listed as unsupported. A table's data version is its files' sizes and modified times.
 - Nothing outside `connections/kinds/` knows a connection is a folder. A PostgreSQL kind later implements the same methods (a read-only ATTACH with a secret from the keystore; no mount; reached over the network).
 
 **Rules:**
@@ -119,6 +120,7 @@ class ConnectionKind(Protocol):
 
 ## 5. Data in the sandbox
 
+- Whether a task container can reach a service on the host bound to 127.0.0.1 (Docker Desktop on Windows, `host.docker.internal`, network on) is measured by a named test in this stage's sandbox plan; the demo's MLflow address follows from it.
 - Each connection with a mount is bind-mounted read-only into every task container of the project at `/data/<connection name>`, next to the worktree. A container's fingerprint gains its mounts, so changing connections recreates the project's containers at their next Bash call (today only the image tag and the network flag are compared).
 - The environment image installs DuckDB (the Python package and the CLI) outside `/workspace`, at the app's DuckDB version: 2.0.0, from one constant.
 - Agents explore data with Bash: `duckdb`, pandas, or the project's own code, on `/data/...`. Bash output stays capped as in stage 2, which keeps a whole table out of the context; the container's memory limit (4 GB) stays.
@@ -188,7 +190,7 @@ class ConnectionKind(Protocol):
 
 **Applying the handoff:** stores the profile, roles, pipeline, commands and operations as the project's current handoff (versioned; a later approved handoff replaces it); creates the tracking sources (the credential is already in the keystore); sets network and level; starts the tracking sync; records `handoff.approved`; starts the kickoff. A part that fails is reported and the rest is applied.
 
-**The kickoff.** The app posts one message to each of Data Quality, Model Performance, Retraining and Deployment & Rollback at once, labeled from Onboarding, with the handoff summary and that agent's audit brief. Each audit studies its part (hooks, Bash on `/data`, the tracking record, the repository, the notes), saves what it learns as notes, opens PRs or issues for fixes through the stage 2 tools and gates, and ends with a report: what is good, broken or missing, with evidence. The kickoff is recorded per agent, so a restart neither repeats nor loses it.
+**The kickoff.** The app posts one message to each of Data Quality, Model Performance, Retraining and Deployment & Rollback at once, authored by the system and labeled "handoff", with the handoff summary and that agent's audit brief. It is not an agent-to-agent message: replies stay in each agent's own session, nothing wakes Onboarding, and no hop or token limit applies. The user follows the audits on the status board and in the Inbox, where an audit's requests appear. Each audit studies its part (hooks, Bash on `/data`, the tracking record, the repository, the notes), saves what it learns as notes, opens PRs or issues for fixes through the stage 2 tools and gates, and ends with a report: what is good, broken or missing, with evidence. The kickoff is recorded per agent, so a restart neither repeats nor loses it.
 
 ## 10. Onboarding
 
@@ -253,13 +255,13 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 ## 15. Testing
 
 - Fakes, no real service: `/embeddings` and rate-limit and quota responses on the fake OpenAI server; a fake MLflow REST server; workflow runs on the fake GitHub server; small data folder fixtures.
-- Rate limits (§2), with a fake clock: per-minute limits never end a turn; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
+- Rate limits (§2), with a fake clock: per-minute limits never end a turn, a 429 saying "quota" included; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
 - Connections: a folder inside the data folder is refused; a link out is resolved and checked; the mount is read-only (a write from Bash fails); denylisted files are listed; changing connections recreates the container.
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
 - Knowledge: a keyword match and a meaning match both rank; changing the embedder re-embeds and never mixes dimensions.
 - Proposals: `Propose` asks at every level, `bypass` included; a credential never appears in the approval, audit, events or checkpoint; approving applies every part; a failing part is reported and the rest applied; a newer proposal supersedes the pending one; a handoff cannot set `bypass`.
-- Kickoff: four agents started at once, labeled from Onboarding; a restart neither repeats nor loses one.
+- Kickoff: four agents started at once by a system message labeled "handoff"; Onboarding is not woken by their replies; a restart neither repeats nor loses one.
 - End to end (fake model, a fixture repository and data folder): add the project, Onboarding proposes connections, approve, it proposes the handoff, approve, the connection and tracking appear, a kickoff turn runs with the data summary in its context.
 
 ## Done when

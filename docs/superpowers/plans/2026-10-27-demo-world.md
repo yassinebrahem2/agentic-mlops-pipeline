@@ -15,7 +15,7 @@ What a real mid-size company plausibly gets wrong. The agents' first audit shoul
 4. **Retraining by hand only.** Nothing schedules it, so the decay builds up.
 5. **Drift check blind to categories.** The drift report looks at four numeric columns only, so the late-2016 shift (non-refundable group bookings, in `deposit_type` and `market_segment`) goes unseen.
 6. **Training uses a value known only after the stay (minor).** `train` takes `booking_changes` from the labels (its final value), while bookings are scored with 0. On this data it costs little (PR-AUC 0.661 against 0.665): a finding, not a failure.
-7. **MLflow without authentication.** Anyone who can reach the tracking server can change the production model; the agents should report it and propose enabling MLflow's authentication.
+7. **MLflow without authentication.** Anyone who can reach the tracking server can change the production model; the agents should report it and propose enabling MLflow's authentication. The world starts the server, so a PR to the company cannot close it: this flaw is scored on the audit report only.
 
 ## Tasks
 
