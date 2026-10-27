@@ -5,10 +5,11 @@ import type { MessageView as MessageViewType } from "./session/events";
 
 export interface MessageListProps {
   messages: MessageViewType[];
+  sessionAgent?: string;
   className?: string;
 }
 
-export function MessageList({ messages, className }: MessageListProps) {
+export function MessageList({ messages, sessionAgent, className }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -36,7 +37,7 @@ export function MessageList({ messages, className }: MessageListProps) {
       aria-label="Messages"
     >
       {messages.map((message) => (
-        <MessageView key={message.id} message={message} />
+        <MessageView key={message.id} message={message} sessionAgent={sessionAgent} />
       ))}
       <div ref={bottomRef} />
     </div>

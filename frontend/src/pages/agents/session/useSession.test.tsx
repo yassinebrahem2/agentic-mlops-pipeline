@@ -54,6 +54,53 @@ describe("useSession", () => {
     expect(createdStreams[0]?.close).toHaveBeenCalled();
   });
 
+  it("refreshes current_task on turn.ended", async () => {
+    const updatedSession = {
+      ...initialSession,
+      current_task: {
+        id: "tsk_test",
+        title: "Test Task",
+        branch: "task/test",
+        status: "active",
+        review_kind: "local",
+        pr_number: null,
+        pr_url: null,
+      },
+    };
+    getSpy = vi
+      .spyOn(api, "GET")
+      .mockResolvedValueOnce({
+        data: initialSession,
+        response: new Response(null, { status: 200 }),
+      })
+      .mockResolvedValueOnce({
+        data: updatedSession,
+        response: new Response(null, { status: 200 }),
+      });
+
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
+
+    await waitFor(() => {
+      expect(createdStreams).toHaveLength(1);
+    });
+
+    act(() => {
+      createdStreams[0]?.emitOpen();
+    });
+
+    expect(result.current.state?.current_task).toBeUndefined();
+
+    act(() => {
+      createdStreams[0]?.emit("turn.ended", { turn_id: "trn_1" }, 5);
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.current_task?.id).toBe("tsk_test");
+    });
+
+    unmount();
+  });
+
   it("CONNECTING makes no request and sets connection to reconnecting", async () => {
     getSpy = vi.spyOn(api, "GET").mockResolvedValue({
       data: initialSession,

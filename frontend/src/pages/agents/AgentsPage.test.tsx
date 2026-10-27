@@ -357,4 +357,82 @@ describe("AgentsPage", () => {
       );
     });
   });
+
+  it("renders the bypass warning bar only when permission level is bypass", async () => {
+    setupDefaultMocks({
+      permissionLevel: "bypass",
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(
+      await screen.findByText(/Bypass mode: agents act without asking\./i),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render the bypass warning bar when permission level is ask", async () => {
+    setupDefaultMocks({
+      permissionLevel: "ask",
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    await screen.findByRole("textbox", { name: "Message Orchestrator" });
+    expect(screen.queryByText(/Bypass mode: agents act without asking\./i)).not.toBeInTheDocument();
+  });
+
+  it("renders task bar above composer when session carries current_task", async () => {
+    setupDefaultMocks({
+      currentTask: {
+        id: "tsk_01",
+        title: "Add metrics tracking",
+        branch: "task/metrics",
+        status: "active",
+        review_kind: "local",
+        pr_number: null,
+        pr_url: null,
+      },
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(await screen.findByText("Add metrics tracking")).toBeInTheDocument();
+    expect(screen.getByText("task/metrics")).toBeInTheDocument();
+    expect(screen.getByText("local review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard task" })).toBeInTheDocument();
+
+    const composer = screen.getByRole("textbox", { name: "Message Orchestrator" });
+    expect(composer).toBeInTheDocument();
+  });
+
+  it("renders task bar above composer when agent status carries task", async () => {
+    setupDefaultMocks({
+      currentTask: null,
+      agentsStatus: [
+        {
+          agent: "orchestrator",
+          display_name: "Orchestrator",
+          state: "idle",
+          open_prs: [],
+          last_finished: null,
+          task: {
+            id: "tsk_from_status",
+            title: "Task from status",
+            branch: "task/status-branch",
+            status: "active",
+            review_kind: "local",
+            pr_number: null,
+            pr_url: null,
+          },
+        },
+      ],
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    expect(await screen.findByText("Task from status")).toBeInTheDocument();
+    expect(screen.getByText("task/status-branch")).toBeInTheDocument();
+    expect(screen.getByText("local review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard task" })).toBeInTheDocument();
+  });
 });
