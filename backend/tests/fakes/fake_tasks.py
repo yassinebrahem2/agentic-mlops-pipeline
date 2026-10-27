@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
+from mlops_agents.workspace.refs import RepoRef
 
 _UNUSED = "FakeTasks only implements open_tasks."
 
@@ -41,6 +42,21 @@ class FakeTasks(Tasks):
         raise NotImplementedError(_UNUSED)
 
     async def claim(self, project_id: str, task: TaskRef, paths: Sequence[str]) -> None:
+        raise NotImplementedError(_UNUSED)
+
+    async def repo_ref(self, project_id: str) -> RepoRef | None:
+        raise NotImplementedError(_UNUSED)
+
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
+        raise NotImplementedError(_UNUSED)
+
+    async def decide_review(
+        self,
+        project_id: str,
+        task_id: str,
+        step: Callable[[TaskRef], Awaitable[None]],
+        status: Literal["merged", "closed"],
+    ) -> TaskView:
         raise NotImplementedError(_UNUSED)
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:

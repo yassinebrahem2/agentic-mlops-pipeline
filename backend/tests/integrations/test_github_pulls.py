@@ -134,11 +134,22 @@ async def test_pull_missing_permission_403(fake_github: RunningFakeGitHub) -> No
         )
 
 
-async def test_pull_missing_permission_404(fake_github: RunningFakeGitHub) -> None:
-    fake_github.state.simulate_permission_error["pull requests: write"] = 404
+async def test_get_pull_deleted_pr_is_not_found_not_a_missing_permission(
+    fake_github: RunningFakeGitHub,
+) -> None:
     async with httpx2.AsyncClient() as http:
         with pytest.raises(DomainError) as err:
             await get_pull(http, token="ghp_test_token", repo="octo/repo", number=999)
+        assert err.value.code == "github_pr_not_found"
+        assert err.value.status == 404
+        assert "#999" in err.value.message
+
+
+async def test_get_pull_missing_permission_403(fake_github: RunningFakeGitHub) -> None:
+    fake_github.state.simulate_permission_error["pull requests: write"] = 403
+    async with httpx2.AsyncClient() as http:
+        with pytest.raises(DomainError) as err:
+            await get_pull(http, token="ghp_test_token", repo="octo/repo", number=1)
         assert err.value.code == "github_permission_missing"
         assert err.value.status == 403
         assert (

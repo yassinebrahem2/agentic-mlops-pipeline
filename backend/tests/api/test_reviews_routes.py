@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 
 from mlops_agents.agents.tasks.git import run_safe_git
+from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.integrations.github.git import GitRunner
 from tests.api.conftest import add_local_project
@@ -182,12 +183,37 @@ async def test_reviews_routes_reject(
 
     # Verify session received note
     session_view = await services.sessions.get(project_id, "orchestrator")
-    assert len(session_view.messages) > 0
-    last_msg = session_view.messages[-1]
-    assert last_msg.author_name == "Review"
-    assert last_msg.from_agent == "orchestrator"
-    msg_text = "".join(getattr(p, "text", "") for p in last_msg.parts)
-    assert "Please rework" in msg_text
+    rejections = [
+        m
+        for m in session_view.messages
+        if any("Please rework" in getattr(p, "text", "") for p in m.parts)
+    ]
+    assert len(rejections) == 1
+    assert rejections[0].author_name == "system"
+    assert rejections[0].from_agent == "system"
+
+
+async def test_reviews_routes_reject_with_failing_post_answers_the_error(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await _setup_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Task Reject")
+    await services.tasks.set_review(project_id, task.id, kind="local")
+
+    failing = AsyncMock(side_effect=DomainError("session_unavailable", "Unavailable.", status=503))
+    with patch.object(services.sessions, "post", failing):
+        res = await client.post(
+            f"/api/projects/{project_id}/reviews/{task.id}/decision",
+            json={"approve": False},
+        )
+    assert res.status_code == 503
+    assert res.json()["code"] == "session_unavailable"
+    assert (await services.tasks.view(project_id, task.id)).status == "in_review"
 
 
 async def test_github_activity_route(

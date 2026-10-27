@@ -170,7 +170,7 @@ async def build_services(
         list_agents.bind(catalog, status_board)
     turn_observer = EventTurnObserver(events)
     inbound = SqliteInboundSource(databases)
-    pr_sync = PrSyncObserver(tasks, workspace, github, http)
+    pr_sync = PrSyncObserver(tasks, github, http, events)
     stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
@@ -203,7 +203,6 @@ async def build_services(
         sessions=sessions,
         audit_log=audit,
         event_log=events,
-        workspaces=tasks,
     )
 
     return Services(

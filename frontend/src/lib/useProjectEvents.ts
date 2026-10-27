@@ -15,6 +15,7 @@ export const PROJECT_EVENT_TYPES: readonly ProjectEventType[] = [
   "pr.updated",
   "issue.opened",
   "issue.commented",
+  "issue.updated",
   "approval.requested",
   "approval.decided",
   "message.sent",

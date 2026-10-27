@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import (
     PERMISSION_PULL_REQUESTS_WRITE,
+    permission_missing,
     request,
     unreadable,
 )
@@ -101,8 +102,15 @@ async def get_pull(
         "GET",
         f"/repos/{repo}/pulls/{number}",
         token,
-        permission=PERMISSION_PULL_REQUESTS_WRITE,
     )
+    # A 404 here means the PR was deleted (the sync reads PRs it opened itself), so it is
+    # not reported as a missing permission like the write calls do.
+    if response.status_code == 404:
+        raise DomainError(
+            "github_pr_not_found", f"Pull request #{number} no longer exists.", status=404
+        )
+    if response.status_code == 403:
+        raise permission_missing(PERMISSION_PULL_REQUESTS_WRITE)
     if response.status_code != 200:
         raise DomainError(
             "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502

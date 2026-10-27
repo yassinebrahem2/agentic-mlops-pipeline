@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from mlops_agents.agents.approvals.settings import get_permission_level
+from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
@@ -189,8 +189,7 @@ async def handle_turn_waiting(
 
     await store.set_turn(project_id, turn_id, "waiting")
 
-    if hasattr(sink, "turn_waiting"):
-        await sink.turn_waiting(turn_id)
+    await sink.turn_waiting(turn_id)
 
     for observer in observers:
         await _observed(observer.turn_waiting(project_id, agent, turn_id))
@@ -214,29 +213,15 @@ async def stop_waiting_turn(
     cancelled = await approval_store.cancel_for_turn(project_id, turn_id)
     cancelled_ids = {a.id for a in cancelled}
 
-    if cancelled:
-        if audit_log is not None:
-            level = await get_permission_level(store.databases, project_id)
-            for apr in cancelled:
-                await audit_log.record(
-                    project_id,
-                    actor="user",
-                    action="approval",
-                    risk_class=apr.risk_class,
-                    permission_level=level,
-                    decision="cancelled",
-                    target=apr.tool,
-                    detail={"approval_id": apr.id, "tool": apr.tool},
-                )
-        if event_log is not None:
-            for apr in cancelled:
-                await event_log.record(
-                    project_id,
-                    source="user",
-                    type="approval.decided",
-                    subject_id=apr.id,
-                    payload={"approval_id": apr.id, "status": "cancelled"},
-                )
+    await record_decisions(
+        project_id,
+        cancelled,
+        "cancelled",
+        actor="user",
+        databases=store.databases,
+        audit_log=audit_log,
+        event_log=event_log,
+    )
 
     agent_msg = await store.turn_agent_message(project_id, session_id, turn_id)
     if agent_msg is not None:

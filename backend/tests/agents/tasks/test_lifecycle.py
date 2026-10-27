@@ -292,7 +292,7 @@ async def test_set_review_task(
     assert view2.pr_url == "https://github.com/foo/bar/pull/42"
 
 
-async def test_worktree_recreation_on_current_and_pending_note(
+async def test_worktree_recreation_on_files_and_pending_note(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -320,21 +320,26 @@ async def test_worktree_recreation_on_current_and_pending_note(
     shutil.rmtree(task.worktree)
     assert not task.worktree.exists()
 
-    # Calling current() must recreate the worktree from the branch and record note
+    # current() is a pure read: it finds the task but leaves the worktree missing
     current_ref = await service.current(project_id, session_id)
     assert current_ref is not None
     assert current_ref.id == task.id
+    assert not current_ref.worktree.exists()
+
+    # files() on the turn path recreates the worktree from the branch and records the note
+    files = await service.files(project_id, current_ref)
     assert current_ref.worktree.exists()
     assert (current_ref.worktree / "recreated.py").read_text(
         encoding="utf-8"
     ) == "print('kept in branch')\n"
+    current_ref = await service.current(project_id, session_id)
+    assert current_ref is not None
     assert (
         current_ref.pending_note
         == "[Note: Uncommitted changes were lost because the task worktree was recreated.]"
     )
 
     # Tool execution (ReadTool) consumes the pending note
-    files = await service.files(project_id, current_ref)
     ctx = ToolContext(
         project_id=project_id,
         agent="coder",

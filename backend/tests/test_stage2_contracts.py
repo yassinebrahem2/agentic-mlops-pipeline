@@ -34,7 +34,7 @@ def test_message_bus_exposes_send_and_bind() -> None:
 def test_tasks_protocol_extends_task_workspaces() -> None:
     from mlops_agents.agents.tasks.contract import Tasks, TaskWorkspaces
 
-    assert {"current", "files"} <= _members(TaskWorkspaces)
+    assert {"current", "files", "view"} <= _members(TaskWorkspaces)
     assert _members(TaskWorkspaces) <= _members(Tasks)
     assert {"start", "resume", "commit", "push", "local_merge", "end"} <= _members(Tasks)
 

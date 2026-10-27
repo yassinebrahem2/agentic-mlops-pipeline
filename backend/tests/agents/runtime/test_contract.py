@@ -385,3 +385,12 @@ def test_turn_waiting_is_a_stream_event() -> None:
     event = STREAM_EVENT.validate_json(json.dumps(wire))
     assert isinstance(event, TurnWaiting)
     assert json.loads(STREAM_EVENT.dump_json(event)) == wire
+
+
+def test_approval_statuses_are_pending_or_one_decided_status() -> None:
+    from typing import get_args
+
+    from mlops_agents.agents.runtime.contract import ApprovalStatus, DecidedApprovalStatus
+
+    assert get_args(ApprovalStatus) == ("pending", "approved", "rejected", "cancelled", "expired")
+    assert get_args(DecidedApprovalStatus) == get_args(ApprovalStatus)[1:]

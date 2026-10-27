@@ -9,13 +9,14 @@ import stat
 from pathlib import Path
 
 from mlops_agents.agents.tasks.git import git_dir_for_task, run_safe_git, task_git
+from mlops_agents.agents.tasks.remote import resolve_repo_ref
 from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.agents.tools.base import FileAccess, ToolFailure
 from mlops_agents.agents.tools.files import is_secret, norm_path
 from mlops_agents.config import APP_NAME
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.workspace.models import Project
-from mlops_agents.workspace.refs import github_remote, https_url, repo_ref
+from mlops_agents.workspace.refs import https_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,28 +67,9 @@ async def create_worktree(
     4. Runs `git worktree add -b <branch> <worktree_path> <base_ref>`.
     5. Strips secret files: runs `git update-index --skip-worktree` and removes them.
     """
-    if project.github_full_name:
-        remote_ref = repo_ref(project.github_full_name)
-    else:
-        origin_res = await run_safe_git(
-            runner,
-            args=["config", "--get", "remote.origin.url"],
-            cwd=repo_root,
-            empty_hooks=empty_hooks,
-            check=False,
-        )
-        origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
-        remote_ref = github_remote(project, origin_url)
-        if remote_ref is None:
-            origin_res = await run_safe_git(
-                runner,
-                args=["remote", "get-url", "origin"],
-                cwd=repo_root,
-                empty_hooks=empty_hooks,
-                check=False,
-            )
-            origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
-            remote_ref = github_remote(project, origin_url)
+    remote_ref = await resolve_repo_ref(
+        runner, project=project, repo_root=repo_root, empty_hooks=empty_hooks
+    )
 
     default_branch = project.default_branch or "main"
     if remote_ref is not None:
