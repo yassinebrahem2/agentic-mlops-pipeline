@@ -88,8 +88,8 @@ async def decide_review(self, project_id: str, task_id: str,
 **Implementation notes:**
 - `decide` keeps the approval's stored `task_id`; it never takes the task current at decision time.
 - `waiting.py` uses the typed observer contract, not `hasattr(sink, "turn_waiting")`.
-- `ApprovalsService` takes one events dependency, not `audit_log` and `event_log` separately.
-- `sessions.py` reads the session view through its typed contract, not `getattr`/`inspect.isawaitable` (#261 item 5).
+- One owner for recording an approval decision (#258 item 4, Decision #278): a decision writes an audit record and `approval.decided` in three places (`ApprovalsService.decide`, Stop in `runtime/waiting.py`, recovery expiry in `runtime/store/__init__.py`). One function in `agents/approvals/` writes both and all three use it. The event log and the audit log stay two separate dependencies (separate concerns); no combined events type.
+- `sessions.py` reads the task view through the typed `TaskWorkspaces.view` (added to the overview's I12 by Decision #278), not `getattr`/`inspect.isawaitable` (#261 item 5). `TasksService` already has it; the test fakes that implement `TaskWorkspaces` gain it (`tests/fakes/workspaces.py`, `tests/agents/runtime/graph_env.py`, `hook_fakes.py`, `test_resuming_turns.py`, `tests/test_stage2_contracts.py`). It reads through the same path as task 2's view read, which never recreates a missing worktree.
 - #276: recording `waiting` in `worker._take_turn` goes through the same shielded fallback as every other end (Decision #249): logged, `turn.waiting` published, observers notified, never raises.
 - #273: `turn_states` agrees with `turn.ended`. A session whose turn has ended counts as running only if another turn has started; a worker that is only finishing its loop doesn't count. Fix the state, not the test.
 - `sessions.py`, `worker.py` and `executor.py` each go under 400 lines by moving one concern each into its own module; behaviour unchanged.
