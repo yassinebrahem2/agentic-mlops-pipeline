@@ -172,7 +172,10 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     await expect(page.getByRole("region", { name: "Diff view" })).toBeVisible();
     await page.getByRole("button", { name: "Approve" }).click();
 
-    // 6. The turn ends, and the task bar shows the task.
+    // 6. The agent gives its final reply, the turn ends, and the task bar shows the task.
+    await expect(
+      messages.getByText("I have started the task and written NOTES.md.", { exact: true }),
+    ).toBeVisible();
     await expect(messages.getByRole("status", { name: "Typing..." })).toHaveCount(0);
     await expect(page.getByText("Waiting for your approval")).toHaveCount(0);
 
