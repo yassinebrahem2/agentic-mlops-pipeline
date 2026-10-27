@@ -6,14 +6,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from mlops_agents.agents.pr_reminder import PrReminder
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
-from mlops_agents.agents.runtime.hooks import NoInbound
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelReply
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.graph_env import RecordingSink, make_agent
-from tests.agents.runtime.hook_fakes import RecordingCaller, ScriptedGate
+from tests.agents.runtime.hook_fakes import NoInbound, RecordingCaller, ScriptedGate
 from tests.agents.tasks.helpers import create_session, setup_service
 from tests.conftest import MemoryKeyStore
 

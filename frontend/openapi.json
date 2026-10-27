@@ -1061,6 +1061,27 @@
         "title": "MessageView",
         "type": "object"
       },
+      "MessagingLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "max_hops": {
+            "minimum": 1.0,
+            "title": "Max Hops",
+            "type": "integer"
+          },
+          "max_tokens": {
+            "minimum": 1.0,
+            "title": "Max Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_hops",
+          "max_tokens"
+        ],
+        "title": "MessagingLimits",
+        "type": "object"
+      },
       "ModelCreate": {
         "properties": {
           "context_window": {
@@ -4190,6 +4211,98 @@
         "summary": "Update Issues Settings",
         "tags": [
           "github-work"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/settings/messaging": {
+      "get": {
+        "operationId": "get_messaging_settings_api_projects__project_id__settings_messaging_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingLimits"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Messaging Settings",
+        "tags": [
+          "messaging"
+        ]
+      },
+      "put": {
+        "operationId": "set_messaging_settings_api_projects__project_id__settings_messaging_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessagingLimits"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingLimits"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Messaging Settings",
+        "tags": [
+          "messaging"
         ]
       }
     },

@@ -15,7 +15,6 @@ from sqlalchemy import select
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import ToolFinished
-from mlops_agents.agents.runtime.hooks import NoInbound
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.service import TasksService
@@ -32,7 +31,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import tasks
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.hook_fakes import ScriptedGate
+from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
 from tests.conftest import MemoryKeyStore, make_repo
