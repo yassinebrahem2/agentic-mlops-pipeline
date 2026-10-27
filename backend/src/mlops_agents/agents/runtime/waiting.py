@@ -189,8 +189,7 @@ async def handle_turn_waiting(
 
     await store.set_turn(project_id, turn_id, "waiting")
 
-    if hasattr(sink, "turn_waiting"):
-        await sink.turn_waiting(turn_id)
+    await sink.turn_waiting(turn_id)
 
     for observer in observers:
         await _observed(observer.turn_waiting(project_id, agent, turn_id))
