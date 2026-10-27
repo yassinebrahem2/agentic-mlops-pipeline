@@ -25,7 +25,7 @@
 **Notes:**
 - `paths`: `data_dir()`, `mlflow_dir()`, `tracking_uri()` as the overview says.
 - `features`: `TARGET = "is_canceled"`; `FEATURES`: every booking column (overview) except `booking_id`, `booking_date`, `arrival_date`; the model name `hotel-cancellation` and alias `production`. One definition each.
-- `train(cutoff)`: reads every `bookings/*` file with a date before `cutoff` and every `labels/*` file with a date up to `cutoff`, joins them on `booking_id` (bookings without a released label are left out), and takes `booking_changes` from the labels file (the final value). Fits LightGBM on a random 80% (fixed seed) and keeps the other 20% for `evaluate`; logs params, `FEATURES`, the training window, row counts and the model to MLflow at `tracking_uri()`; registers a new version. It never moves `production`.
+- `train(cutoff)`: reads the `bookings/*` and `labels/*` files, joins them on `booking_id`, and keeps the bookings whose `arrival_date` is on or before `cutoff` (every such booking's label is known by then; selecting on "label known" instead would keep early cancellations of later stays and leak the label). Takes `booking_changes` from the labels file (the final value). Fits LightGBM on a random 80% (fixed seed) and keeps the other 20% for `evaluate`; logs params, `FEATURES`, the training window, row counts and the model to MLflow at `tracking_uri()`; registers a new version. It never moves `production`.
 - `evaluate(version)`: scores that version's held-out 20% and logs PR-AUC, ROC-AUC, precision and recall at the threshold (a parameter, default 0.5) and the Brier score to the version's run.
 - `deploy(version)` moves `production` and records the previous target in the registered model's tags; `rollback()` moves `production` back to it and fails clearly when there is none.
 - The fixture: a data folder of about 60 bookings over five consecutive days, with their labels, including a same-day cancellation.
@@ -34,25 +34,25 @@
 
 ### Task 2: Scoring, the daily job, legacy monitoring
 
-**Files:** `src/hotel_demo/{pipeline,monitoring,daily}.py`, the `score` and `daily` subcommands, tests.
+**Files:** `src/hotel_demo/{pipeline,daily}.py`, `src/hotel_demo/checks/{__init__,cancellation_rate,drift,accuracy}.py`, the `score` and `daily` subcommands, tests.
 
 **Notes:**
 - `score(date)`: reads `bookings/<date>.parquet`, requires exactly the overview's columns, loads `models:/hotel-cancellation@production`, writes `predictions/<date>.parquet`. A missing file, a schema mismatch or no `production` model raises, naming the file and the missing or unexpected columns.
-- `daily(date)`: runs `score`, then the monitoring, appending each run to `jobs/<date>.jsonl` with its status and error; a failed score is logged and the monitoring checks that do not need that day's predictions still run. Exit code non-zero if any step failed.
-- Legacy monitoring; each check appends `{check, fired, value, threshold, detail}` to `monitoring/<date>.json`; the lines live in one constants block:
-  - **Cancellation-rate alert:** share of `p_cancel >= 0.5` over the last 7 days of predictions; fires above 0.45.
-  - **Drift report:** per numeric feature, a two-sample Kolmogorov-Smirnov test of the last 7 days of bookings against the production model's training window; fires on any p < 0.05.
-  - **Accuracy alert:** accuracy over the labels released in the last 30 days, joined to their predictions; fires below 0.75.
+- `daily(date)`: runs `score`, then every check module in `checks/` (each exposes `run(date) -> list[dict]`), appending each run to `jobs/<date>.jsonl` with its status and error; a failed score is logged and the checks that do not need that day's predictions still run. Exit code non-zero if any step failed.
+- The three existing checks; each appends `{check, fired, value, threshold, detail}` to `monitoring/<date>.json`; each check's line lives in its own module as one constant:
+  - **Cancellation-rate alert** (`cancellation_rate.py`): share of `p_cancel >= 0.5` over the last 7 days of predictions; fires above 0.30.
+  - **Drift report** (`drift.py`): for `adults`, `stays_in_week_nights`, `stays_in_weekend_nights` and `children`, the two-sample Kolmogorov-Smirnov statistic of the last 7 days of bookings against the production model's training window; fires when any statistic is above 0.15.
+  - **Accuracy alert** (`accuracy.py`): accuracy over the labels released in the last 30 days, joined to their predictions; fires below 0.60.
 - No scheduled retraining: a person runs `train`, `evaluate` and `deploy` by hand.
 
-**Tests (stop condition):** `daily` on the fixture writes predictions, monitoring and jobs files; each check fires on a constructed input that crosses its line and stays quiet on one that does not; the monitoring JSON shape is exactly as above; a bookings file with a missing or extra column fails `score`, names the column, writes no predictions, and the other checks still run. CI green.
+**Tests (stop condition):** `daily` on the fixture writes predictions, monitoring and jobs files; a check module added to `checks/` in a test runs on the next `daily`; each check fires on a constructed input that crosses its line and stays quiet on one that does not; the monitoring JSON shape is exactly as above; a bookings file with a missing or extra column fails `score`, names the column, writes no predictions, and the other checks still run. CI green.
 
 ### Task 3: CI and the scheduled workflow
 
 **Files:** `.github/workflows/scheduled.yml`, `tests/fixtures/`, README.
 
 **Notes:**
-- A daily scheduled workflow (and `workflow_dispatch` with no inputs) that downloads the sample data folder from the URL in the repository variable `SAMPLE_DATA_URL` (default: the fixture's archive on `main`), then runs `train`, `evaluate`, `deploy` and `daily` on it. A failing download fails the run at the "Fetch sample data" step, as an unavailable upstream source would.
+- A daily scheduled workflow (and `workflow_dispatch` with no inputs, which the world uses to run it at simulation speed) that downloads the sample data folder from the URL in the repository variable `SAMPLE_DATA_URL` (default: the fixture's archive on `main`), then runs `train`, `evaluate`, `deploy` and `daily` on it. A failing download fails the run at the "Fetch sample data" step, as an unavailable upstream source would.
 - The README says how to set the variable.
 
 **Tests (stop condition):** the workflow passes `actionlint` in CI; one manual run on the demo repo succeeds (its link in the PR).

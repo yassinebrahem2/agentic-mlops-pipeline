@@ -11,11 +11,13 @@
 ## Planted flaws (the company's setup, by design)
 
 What a real mid-size company plausibly gets wrong. The agents' first audit should find them. `demo-world` writes this list to `world/planted_flaws.json` (id, category, where, what):
-1. **Training uses a value known only after the stay.** `train` takes `booking_changes` from the labels (its final value), while bookings are scored with 0. Production precision is lower than `evaluate` claims.
-2. **Random validation split.** `evaluate` scores a random 20% of the training window, which overstates skill against later bookings.
-3. **Accuracy-only performance alert.** Accuracy looks fine because most bookings are not cancelled.
-4. **No calibration check.** Nothing checks whether a predicted 30% means 30% cancel, which overbooking depends on.
-5. **Retraining by hand only.** Nothing schedules it, so decay builds up.
+Measured on the data with this exact setup (first model at cutoff 2016-01-01, never retrained):
+1. **Random validation split.** `evaluate` scores a random 20% of the training window: PR-AUC about 0.98, against about 0.66 on later bookings.
+2. **Accuracy-only performance alert.** Accuracy stays between 0.66 and 0.78 while PR-AUC decays (about 0.74 in January 2016 to 0.45 in October), because about 65% of bookings are never cancelled.
+3. **No calibration check.** The model predicts a mean cancellation chance of about 0.15 against a real rate of about 0.35, which is what overbooking depends on.
+4. **Retraining by hand only.** Nothing schedules it, so the decay builds up.
+5. **Drift check blind to categories.** The drift report looks at four numeric columns only, so the late-2016 shift (non-refundable group bookings, in `deposit_type` and `market_segment`) goes unseen.
+6. **Training uses a value known only after the stay (minor).** `train` takes `booking_changes` from the labels (its final value), while bookings are scored with 0. On this data it costs little (PR-AUC 0.661 against 0.665): a finding, not a failure.
 
 ## Tasks
 
@@ -23,13 +25,13 @@ What a real mid-size company plausibly gets wrong. The agents' first audit shoul
 |---|---|---|
 | 1 | Package, fetch, history backfill | now |
 | 2 | The day loop, injected problems, answer key | now |
-| 3 | The company's daily job in the loop, `up`, the CI failure switch | after demo-company merges |
+| 3 | The company's daily job in the loop, the PR merger, `up`, CI runs | after demo-company merges |
 
 ---
 
 ### Task 1: Package, fetch, history backfill
 
-**Files:** `bench/demo-world/pyproject.toml` (its own uv project, console script `demo-world`), `uv.lock`, `bench/demo-world/src/demo_world/{__init__,paths,source,fetch,backfill,cli}.py`, `bench/demo-world/tests/` (with a small source CSV fixture), `bench/demo-world/README.md` (what it is, data credit and licence), `.github/workflows/demo-world.yml` (ruff, format check, pytest; Ubuntu and Windows; runs only on changes under `bench/demo-world/`).
+**Files:** `AGENTS.md` (one line under the commands: how to run `bench/demo-world/`), `bench/demo-world/pyproject.toml` (its own uv project, console script `demo-world`), `uv.lock`, `bench/demo-world/src/demo_world/{__init__,paths,source,fetch,backfill,cli}.py`, `bench/demo-world/tests/` (with a small source CSV fixture), `bench/demo-world/README.md` (what it is, data credit and licence), `.github/workflows/demo-world.yml` (ruff, format check, pytest; Ubuntu and Windows; runs only on changes under `bench/demo-world/`).
 
 **Notes:**
 - `paths`: `data_dir()` (`HOTEL_DEMO_DATA`), `world_dir()` (`HOTEL_DEMO_WORLD`), defaults under `~/hotel-demo/`.
@@ -41,23 +43,25 @@ What a real mid-size company plausibly gets wrong. The agents' first audit shoul
 
 ### Task 2: The day loop, injected problems, answer key
 
-**Files:** `bench/demo-world/src/demo_world/{simulate,scenarios}.py`, `bench/demo-world/scenarios/default.toml`, tests.
+**Files:** `bench/demo-world/src/demo_world/{simulate,scenarios}.py`, `bench/demo-world/scenarios/default.toml`, `.github/workflows/demo-world.yml` (adds the contract test of the overview once demo-company task 2 is on the demo repository's `main`), tests.
 
 **Notes:**
 - `simulate --start 2016-01-01 --end 2017-03-31 --seconds-per-day 120`: state in `world_dir()/state.json` (the last business date done); resumes after it. `--seconds-per-day 0` runs as fast as possible. Each day: write that day's bookings file, then that day's labels file (every written booking whose label is released that day). The step that runs the company's daily job is added in task 3.
-- Scenarios: a TOML file of injected problems, each with a start and end date: `null_spike` (a column set to null for a share of rows), `schema_break` (a column renamed or dropped), `out_of_range` (`adr` multiplied), and `score_failure` and `ci_failure` (acted on in task 3). `default.toml` holds one of each at dates spread over 2016, away from the natural shift of late 2016, and lists the natural shifts to score (the late-2016 non-refundable group bookings; the rise in online travel agent share).
+- Scenarios: a TOML file of injected problems, each with a start and end date: `null_spike` (a column set to null for a share of rows), `schema_break` (a column renamed or dropped), `out_of_range` (`adr` multiplied), and `score_failure` and `ci_failure` (acted on in task 3). `default.toml` holds one of each at dates spread over 2016, away from the natural shift of late 2016, and lists the natural shift to score: the non-refundable group bookings of November and December 2016 (only shifts with a clear start are scored; the gradual rise in online travel agent share is not).
 - Every injection and listed natural shift is appended to `world_dir()/answer_key.jsonl` as `{kind, category, column, start, end}`; `world_dir()/planted_flaws.json` holds the list above. Neither is ever written into the data folder.
 
 **Tests (stop condition):** five fast days on the fixture write the expected files; every written booking's label is released exactly once, never before its booking date; a restart resumes without rewriting files; each injected kind changes exactly the files and dates it should; the answer key lists every injection and natural shift; nothing in the data folder mentions the answer key or the planted flaws.
 
-### Task 3: The company's daily job in the loop, `up`, the CI failure switch
+### Task 3: The company's daily job in the loop, the PR merger, `up`, CI runs
 
 **Files:** `simulate.py`, `bench/demo-world/src/demo_world/{company,up}.py`, tests, README.
 
 **Notes:**
-- `company.py`: the one place the world runs the company's CLI, as a subprocess in a given checkout of the demo repository (`HOTEL_DEMO_COMPANY`, a path), with `HOTEL_DEMO_DATA` and `MLFLOW_TRACKING_URI` passed through. It returns the exit code and output; a failure is logged and never stops the loop.
+- `company.py`: the one place the world runs the company's CLI, as `uv run --project <checkout> hotel-demo ...` in a checkout of the demo repository (`HOTEL_DEMO_COMPANY`, a path), with `HOTEL_DEMO_DATA` and `MLFLOW_TRACKING_URI` passed through. It returns the exit code and output; a failure is logged and never stops the loop. Before each day it updates the checkout to the latest `main` (`git pull --ff-only`), so merged PRs take effect.
+- **PR merger (evaluation runs only, `--merge-after-days N`):** an open PR on the demo repository is merged by the world once N simulated days have passed since it opened (`gh pr merge --merge`); each merge, with its delay, goes in the answer key. Without the option the world never merges (a live demo, where the user merges).
 - Before the first day, if the company has no `production` model: `train --cutoff <start>`, `evaluate`, `deploy`. Each day after the files: `daily --date <day>`. During a `score_failure` window the world withholds the day's bookings file until after `daily` has run, so the company's scoring fails on a missing file, as with a late upstream delivery.
-- `ci_failure`: at the window's start the world sets the demo repo's `SAMPLE_DATA_URL` variable to a missing file (`gh api`), and restores it at the end; both changes go in the answer key.
-- `up`: starts `mlflow server` on the company's store at `HOTEL_DEMO_MLFLOW_PORT`, sets `MLFLOW_TRACKING_URI`, then runs `simulate`; Ctrl+C stops both cleanly.
+- **CI runs at simulation speed:** every `--ci-every N` simulated days (default 7) the world starts the demo repository's scheduled workflow with `workflow_dispatch` (`gh api`), so the Actions history moves with simulated time.
+- `ci_failure`: at the window's start the world sets the demo repository's `SAMPLE_DATA_URL` variable to a missing file and restores it at the end; the answer key records the window in business dates and in real start and end times (the CI adapter sees real times).
+- `up`: starts `mlflow server` from the company's environment on its store at `HOTEL_DEMO_MLFLOW_PORT`, sets `MLFLOW_TRACKING_URI`, then runs `simulate`; Ctrl+C stops both cleanly, on Windows too (process groups).
 
-**Tests (stop condition):** with a fake company CLI (a script recording its calls), the loop bootstraps once and calls `daily` once per day with the right environment; a failing `daily` is logged and the next day runs; a `score_failure` window makes the real company's `daily` fail on that day (one test against the demo repo's CLI, marked to run only when `HOTEL_DEMO_COMPANY` is set); `ci_failure` calls the variable API at start and end (mocked `gh`); `up` starts and stops both processes (a short run).
+**Tests (stop condition):** with a fake company CLI (a script recording its calls), the loop bootstraps once and calls `daily` once per day with the right environment; a failing `daily` is logged and the next day runs; a `score_failure` window makes the real company's `daily` fail on that day (one test against the demo repo's CLI, marked to run only when `HOTEL_DEMO_COMPANY` is set); `ci_failure` and the CI runs call the right APIs at the right days (mocked `gh`); the merger merges a PR after N simulated days and never without the option (mocked `gh`); the checkout is updated before each day; `up` starts and stops both processes (a short run, in the Ubuntu and Windows jobs).
