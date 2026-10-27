@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import re
-import secrets
 from collections.abc import Mapping
 
 import httpx2
-from sqlalchemy import RowMapping, delete, func, insert, select, update
+from sqlalchemy import RowMapping, delete, insert, select, update
 
 from mlops_agents.clock import now_iso
 from mlops_agents.credentials import KeyStore
@@ -16,6 +14,7 @@ from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.providers import listing
 from mlops_agents.providers.errors import ProviderCallError
+from mlops_agents.providers.keys import StoredKeys
 from mlops_agents.providers.models import (
     DetectedKey,
     KeyHint,
@@ -46,9 +45,8 @@ class ProvidersService:
 
     def __init__(self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient) -> None:
         self._dbs = databases
-        self._keys = keystore
+        self._stored_keys = StoredKeys(databases, keystore)
         self._http = http
-        self._cached_secrets: list[str] | None = None
 
     # Providers
 
@@ -105,19 +103,7 @@ class ProvidersService:
 
     async def delete_provider(self, name: str) -> None:
         provider = await self.get_provider(name)
-        engine = await self._dbs.app()
-        async with engine.begin() as conn:
-            refs = list(
-                await conn.scalars(
-                    select(provider_keys.c.keystore_ref).where(
-                        provider_keys.c.provider_id == provider.id
-                    )
-                )
-            )
-            await conn.execute(delete(providers).where(providers.c.id == provider.id))
-        for ref in refs:
-            await asyncio.to_thread(self._keys.delete, ref)
-        self._cached_secrets = None
+        await self._stored_keys.delete_provider(provider.id)
 
     async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
         engine = await self._dbs.app()
@@ -131,31 +117,10 @@ class ProvidersService:
     # Keys
 
     async def keys_for(self, provider_id: str) -> list[str]:
-        engine = await self._dbs.app()
-        async with engine.connect() as conn:
-            refs = list(
-                await conn.scalars(
-                    select(provider_keys.c.keystore_ref)
-                    .where(provider_keys.c.provider_id == provider_id)
-                    .order_by(provider_keys.c.position)
-                )
-            )
-        values = [await asyncio.to_thread(self._keys.get, ref) for ref in refs]
-        return [v for v in values if v]
+        return await self._stored_keys.values_for(provider_id)
 
     async def secret_values(self) -> list[str]:
-        if self._cached_secrets is not None:
-            return list(self._cached_secrets)
-        engine = await self._dbs.app()
-        async with engine.connect() as conn:
-            refs = list(await conn.scalars(select(provider_keys.c.keystore_ref)))
-        values: list[str] = []
-        for ref in refs:
-            val = await asyncio.to_thread(self._keys.get, ref)
-            if val:
-                values.append(val)
-        self._cached_secrets = values
-        return list(values)
+        return await self._stored_keys.all_values()
 
     async def add_key(self, name: str, value: str) -> Provider:
         value = value.strip()
@@ -167,55 +132,12 @@ class ProvidersService:
                 "key_exists", "This key is already saved for this provider.", status=409
             )
         await self._get(provider, "/models", value)  # proves the key works before storing it
-        ref = f"provider/{provider.id}/{secrets.token_hex(8)}"
-        await asyncio.to_thread(self._keys.set, ref, value)
-        engine = await self._dbs.app()
-        try:
-            async with engine.begin() as conn:
-                last = await conn.scalar(
-                    select(func.max(provider_keys.c.position)).where(
-                        provider_keys.c.provider_id == provider.id
-                    )
-                )
-                await conn.execute(
-                    insert(provider_keys).values(
-                        provider_id=provider.id,
-                        position=(last or 0) + 1,
-                        keystore_ref=ref,
-                        hint=mask_key(value),
-                        created_at=now_iso(),
-                    )
-                )
-                await conn.execute(
-                    update(providers)
-                    .where(providers.c.id == provider.id)
-                    .values(status="ok", status_detail=None)
-                )
-        except BaseException as db_err:
-            try:
-                await asyncio.to_thread(self._keys.delete, ref)
-            except Exception as del_err:
-                # The database error is still the one to report; the failed clean-up rides along.
-                db_err.add_note(
-                    f"The new key could not be removed from the key store either: {del_err}"
-                )
-            raise
-        self._cached_secrets = None
+        await self._stored_keys.add(provider.id, value)
         return await self.get_provider(name)
 
     async def remove_key(self, name: str, position: int) -> Provider:
         provider = await self.get_provider(name)
-        engine = await self._dbs.app()
-        where = (provider_keys.c.provider_id == provider.id) & (
-            provider_keys.c.position == position
-        )
-        async with engine.begin() as conn:
-            ref = await conn.scalar(select(provider_keys.c.keystore_ref).where(where))
-            if ref is None:
-                raise DomainError("key_not_found", "That key is not saved.", status=404)
-            await conn.execute(delete(provider_keys).where(where))
-        await asyncio.to_thread(self._keys.delete, ref)
-        self._cached_secrets = None
+        await self._stored_keys.remove(provider.id, position)
         return await self.get_provider(name)
 
     # Remote calls

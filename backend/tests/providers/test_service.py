@@ -275,22 +275,24 @@ async def test_secret_values_caching_and_invalidation(
     assert await svc.secret_values() == [GOOD]
 
     # Verify cached: modifying _cached_secrets directly affects subsequent call
+    owner_attr = "_stored_keys"
+    owner = getattr(svc, owner_attr)
     cache_attr = "_cached_secrets"
-    setattr(svc, cache_attr, ["fake_cached"])
+    setattr(owner, cache_attr, ["fake_cached"])
     assert await svc.secret_values() == ["fake_cached"]
 
     # add_key invalidates cache
     await svc.add_key("groq", GOOD + "_2")
-    assert getattr(svc, cache_attr) is None
+    assert getattr(owner, cache_attr) is None
     secrets = await svc.secret_values()
     assert set(secrets) == {GOOD, GOOD + "_2"}
 
     # remove_key invalidates cache
     await svc.remove_key("groq", 2)
-    assert getattr(svc, cache_attr) is None
+    assert getattr(owner, cache_attr) is None
     assert await svc.secret_values() == [GOOD]
 
     # delete_provider invalidates cache
     await svc.delete_provider("groq")
-    assert getattr(svc, cache_attr) is None
+    assert getattr(owner, cache_attr) is None
     assert await svc.secret_values() == []
