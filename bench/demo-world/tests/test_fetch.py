@@ -1,50 +1,7 @@
-import hashlib
-import threading
-from collections.abc import Iterator
-from dataclasses import dataclass, field
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-
 import pytest
 
 from demo_world import fetch, paths
-from tests.fixture import FIXTURE_CSV
-
-
-@dataclass
-class Served:
-    url: str
-    sha256: str
-    requests: list[str] = field(default_factory=list[str])
-
-
-@pytest.fixture
-def served() -> Iterator[Served]:
-    """Serve the fixture CSV on localhost, recording every request."""
-    # Hash the bytes on disk: a Windows checkout may have converted the CSV's line endings.
-    sha256 = hashlib.sha256(FIXTURE_CSV.read_bytes()).hexdigest()
-    requests: list[str] = []
-
-    class Handler(SimpleHTTPRequestHandler):
-        def do_GET(self) -> None:
-            requests.append(self.path)
-            super().do_GET()
-
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(Handler, directory=str(FIXTURE_CSV.parent))
-    )
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        port = server.server_address[1]
-        yield Served(f"http://127.0.0.1:{port}/{FIXTURE_CSV.name}", sha256, requests)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+from tests.fixture import FIXTURE_CSV, Served
 
 
 def test_fetch_writes_the_source_when_the_hash_matches(served: Served) -> None:

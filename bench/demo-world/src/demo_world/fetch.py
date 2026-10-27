@@ -29,8 +29,8 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def fetch(dest_dir: Path, url: str = SOURCE_URL, sha256: str = SOURCE_SHA256) -> Path:
-    """Return `dest_dir/hotels.csv`, downloading it unless a copy with the right hash is there."""
+def fetch(dest_dir: Path, url: str, sha256: str) -> Path:
+    """Return `dest_dir/hotels.csv`, downloading `url` unless a copy with `sha256` is there."""
     target = dest_dir / SOURCE_FILE
     if target.exists():
         if _sha256(target) == sha256:
