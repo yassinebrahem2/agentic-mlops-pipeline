@@ -26,3 +26,10 @@ if (typeof Element !== "undefined") {
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
 }
+
+// jsdom has no ResizeObserver; Radix primitives that size a form control (Switch) construct one.
+globalThis.ResizeObserver = class implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+};

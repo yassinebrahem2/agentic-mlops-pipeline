@@ -104,7 +104,7 @@ it("shows Docker status and the environment image as the server sent them", asyn
   expect(screen.getByText("Ready")).toBeInTheDocument();
   expect(screen.getByText("mlops-env:abc")).toBeInTheDocument();
   expect(screen.getByText("Built from the lockfile")).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Network access" })).not.toBeChecked();
+  expect(screen.getByRole("switch", { name: "Network access" })).not.toBeChecked();
   expect(screen.getByRole("button", { name: "Rebuild" })).toBeEnabled();
 });
 
@@ -226,7 +226,7 @@ it("ends on the final state when the finished event comes before the rebuild ans
 
 it("saves the network switch", async () => {
   const { user, requests } = setup();
-  const toggle = await screen.findByRole("checkbox", { name: "Network access" });
+  const toggle = await screen.findByRole("switch", { name: "Network access" });
   await user.click(toggle);
   await waitFor(() => {
     expect(toggle).toBeChecked();
@@ -238,7 +238,7 @@ it("saves the network switch", async () => {
 
 it("keeps the stored network value and shows the server's error when saving fails", async () => {
   const { user } = setup({ putFails: true });
-  const toggle = await screen.findByRole("checkbox", { name: "Network access" });
+  const toggle = await screen.findByRole("switch", { name: "Network access" });
   await user.click(toggle);
   expect(await screen.findByRole("alert")).toHaveTextContent("Network setting not saved");
   expect(toggle).not.toBeChecked();

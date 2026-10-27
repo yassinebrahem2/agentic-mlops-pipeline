@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { api, errorText, unwrap } from "@/lib/api";
 import { useProjectEvents } from "@/lib/useProjectEvents";
 
@@ -115,13 +116,12 @@ export function SandboxSection({ projectId }: { projectId: string }) {
             {building ? "Building..." : "Rebuild"}
           </Button>
           <div className="flex items-center gap-2">
-            <input
+            <Switch
               id="sandbox-network"
-              type="checkbox"
               checked={view.network}
               disabled={network.isPending}
-              onChange={(event) => {
-                network.mutate(event.target.checked);
+              onCheckedChange={(enabled) => {
+                network.mutate(enabled);
               }}
             />
             <Label htmlFor="sandbox-network">Network access</Label>

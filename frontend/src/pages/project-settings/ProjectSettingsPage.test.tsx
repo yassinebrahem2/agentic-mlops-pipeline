@@ -286,7 +286,7 @@ it("saves a numeric step limit and No limit as null", async () => {
       body: { max_steps: 7 },
     });
   });
-  await user.click(screen.getByRole("checkbox", { name: "No limit" }));
+  await user.click(screen.getByRole("switch", { name: "No limit" }));
   await user.click(screen.getByRole("button", { name: "Save step limit" }));
   await waitFor(() => {
     expect(requests).toContainEqual({

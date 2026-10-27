@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { api, errorText, unwrap } from "@/lib/api";
 import { hostedModelWarning } from "@/lib/models";
 import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
@@ -202,17 +203,15 @@ function LimitsForm({
           }}
         />
       </div>
-      <label className="flex h-9 items-center gap-2 text-sm">
-        <input
-          type="checkbox"
+      <div className="flex h-9 items-center gap-2">
+        <Switch
+          id={`${agent}-no-limit`}
           checked={noLimit}
           disabled={pending}
-          onChange={(event) => {
-            setNoLimit(event.target.checked);
-          }}
+          onCheckedChange={setNoLimit}
         />
-        No limit
-      </label>
+        <Label htmlFor={`${agent}-no-limit`}>No limit</Label>
+      </div>
       <Button type="submit" variant="outline" disabled={pending}>
         {pending ? "Saving..." : "Save step limit"}
       </Button>
