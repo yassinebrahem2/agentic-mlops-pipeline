@@ -55,6 +55,8 @@ Run from `frontend/`:
 - End-to-end tests (Playwright; starts the app and the fake provider itself, and serves the built UI, so run `npm run build` first): `npm run e2e`
 - Regenerate API types after the backend API changes: `npm run gen:api`
 
+Demo world (`bench/demo-world/`, a developer tool with its own uv project), run from there: `uv sync`, `uv run demo-world --help`, `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`.
+
 ## Team workflow
 
 The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
