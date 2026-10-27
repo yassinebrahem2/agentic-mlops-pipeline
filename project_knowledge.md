@@ -27,6 +27,8 @@ Anything not listed here is unknown.
 - [USER] All agents are full coding agents (read files, write code, run commands) except Alert Prioritization, which is workflow-like and runs in the background with no chat.
 - [USER] Orchestrator is an LLM agent that works like the assistant in a claude.ai Project: the default project-level chat that knows the whole project. It stays informed through a shared status board and event stream; it does not sit between the user and other agents.
 - [USER] Onboarding: reads the project, asks about the model's objectives and use cases, proposes tests and a monitoring plan, suggests data connections, and sets up tracking (connect MLflow, or open a PR adding it).
+- [USER] 2026-10-27: Onboarding sets the app up for the project and hands off: it makes sure every other agent has what it needs to start working correctly. After the handoff, the other agents start on their own work (for example Data Quality explores the data and the checks already in place, such as drift and data quality tests, and finds what is good, broken or missing) and propose what to add.
+- [USER] 2026-10-27: anything an MLOps engineer does, an agent must be able to do, behind permission gates or not. The target is live production systems (assumed, not deployed).
 - [USER] Data Quality: decides first whether a change is bad data (block it) or real drift (inform adaptation); writes its own checks and triggers after studying the data; schedules checks; explains every flag.
 - [USER] Alert Prioritization: deduplicates, ranks and routes alerts to the owner and channel.
 - [USER] Retraining and Deployment act through hooks (train / evaluate / deploy / rollback commands) found or written by agents.
@@ -53,7 +55,9 @@ Anything not listed here is unknown.
 - [AGREED] LLM out of the hot path: checks are deterministic code run by the scheduler; the LLM wakes only when something fires.
 
 ### Data access
-- [AGREED] Data usually does not live with the code. Read-only data connections (local folder, S3/GCS/Azure, SQL database, MLflow), managed like a registry; Onboarding suggests them from the code.
+- [AGREED] Data usually does not live with the code. Read-only data connections, managed like a registry; Onboarding suggests them from the code.
+- [USER] 2026-10-27: only local files are supported as a data location for now; the code is built so PostgreSQL (and later others) can be added as one more kind without changing the rest.
+- [USER] 2026-10-27: evaluation uses three cases: credit card fraud (class imbalance, model performance), synthetic drift and bad data, pipeline failures. The demo is a small project: a Kaggle dataset and a small, quick-to-train model (e.g. LightGBM) in a simple pipeline, enough to show every feature.
 - [AGREED] If predictions or labels are not saved anywhere, an agent opens a PR adding logging to a location a connection can read.
 - [USER] Agents never load whole datasets. Data understanding uses standard notebook commands (head, describe, value counts, top, ...) run as hooks whose output is auto-injected into the agent's context.
 - [AGREED] Hooks run on DuckDB (queries files and databases in place). Output is capped; truncated output carries a result handle the agent can page through or narrow with a new query. Results (never data) are cached per data version, with a size cap and least-recently-used eviction.
@@ -67,7 +71,7 @@ Anything not listed here is unknown.
 - [AGREED] Baseline: naive static checks run silently in shadow on the same data (schema, nulls, ranges from training data, per-feature drift test at p<0.05, fixed accuracy threshold, fixed timeouts/failure counts), configurable per project.
 - [AGREED] Ground truth: user verdicts on incidents (real / not an issue / wrong type), baseline alerts the agents stayed silent on that the user marks real, user-reported misses, and automatic confirmation when labels arrive.
 - [AGREED] Metrics per category: detection (precision, catches the baseline missed, false alarms avoided, misses), speed (detection delay, time to resolution), noise (alerts per week, merge ratio), diagnosis (bad data vs drift correctness), human effort (autonomous share, approvals, acceptance rate, PRs opened/merged/closed), model impact (metric before vs after agent actions), cost (tokens and $ per agent, cost per incident), reliability (failed runs, tool errors, sandbox failures). Each number shows how many verdicts it rests on and stays "collecting data" until there are enough.
-- [USER] Developer benchmarking is separate from the product and is the app developer's job, done later: ULB credit card fraud (extreme class imbalance), a synthetic drift dataset, a pipeline telemetry dataset (operational incidents).
+- [USER] Developer benchmarking is separate from the product and is the app developer's job: ULB credit card fraud (extreme class imbalance), a synthetic drift dataset, a pipeline telemetry dataset (operational incidents).
 
 ### Notifications
 - [USER] v1: Discord and email. WhatsApp and Slack later.
@@ -81,7 +85,8 @@ Anything not listed here is unknown.
 
 ### Agent runtime
 - [USER] One shared agent runtime (loop, turn queue + Stop, streaming, persistence, compaction, usage, limits, permission check, audit). Each agent is a definition file (Claude Code subagent style: frontmatter + role prompt) describing only what is special about it. Alert Prioritization = same runtime with chat off.
-- [USER] Tools: Claude Code's standard tools (Read, Write, Edit, Glob, Grep, Bash) for general work; specialized tools for specialized tasks (agent messaging, PRs/issues, data commands).
+- [USER] Tools: Claude Code's standard tools (Read, Write, Edit, Glob, Grep, Bash) for general work; specialized tools for specialized tasks (agent messaging, PRs/issues).
+- [USER] 2026-10-27: a standalone tool needs a really good reason; otherwise Bash is enough.
 - [AGREED] Agent messaging tools modeled on Claude Code: ListAgents (who exists, status) and SendMessage(to, message); the message lands in the recipient's session labeled with the sender, and the reply arrives back in the sender's session.
 - [USER] Stage 1: Orchestrator with read-only Read/Glob/Grep (filters enforced in the tools). Bash + Docker sandbox come in stage 2 (Bash only runs in the sandbox; the sandbox mounts a filtered view of the repo, network off by default).
 - [USER] Safety limits (max steps etc.) are configurable, including off. Keys are verified when added; a key failing mid-work stops the turn with a clear message and flags the provider. Everything (tool errors included) returns to the agent's own context.
@@ -91,6 +96,8 @@ Anything not listed here is unknown.
 - [USER] Agent framework: LangGraph, used in the agent layer only.
 - [USER] LLM access is provider-agnostic (base URL + key) through a models registry supporting hosted, self-hosted (Ollama, vLLM) and local models. [AGREED] Port the core of the registry from D:\SCRIPTS\Multimodal RAG Agent (providers, model entries, URL credential scrubbing, keyring key store, verify step) plus one bridge to an OpenAI-compatible chat model for LangGraph. Agents refuse models without the tool_calling trait. Local model files (GGUF via an app-managed llama.cpp server) are deferred completely; hosted and self-hosted only for now. Groq and Gemini keys from that project work and can be imported.
 - [USER] No Anthropic or OpenAI keys.
+- [USER] 2026-10-27: embeddings come from the models registry like chat models, as in the Multimodal RAG Agent project: any provider, hosted or self-hosted (local servers included), never a fixed list of providers.
+- [USER] 2026-10-27: DuckDB may be upgraded to 2.0.
 - [USER] Install/launch: one command. A Python package (`uv tool install`), `<app> start` runs FastAPI, which serves the built React UI and opens the browser. Same on a cloud VM. Docker required for the sandbox.
 - [USER] App name undecided: placeholder `mlops-agents`, defined in one place.
 - [USER] UI kit: shadcn/ui + Tailwind. [AGREED] shadcn style `radix-vega`, neutral base color (shadcn 4 dropped `new-york`).
@@ -109,6 +116,8 @@ Anything not listed here is unknown.
 - [AGREED] 2026-10-21: one owner per plan, plans depend on interfaces rather than whole plans, one PR per task into main, a teammate review then the lead's review and merge (details in AGENTS.md).
 - [AGREED] 2026-10-23 (#120): frontend tests are CPU-bound in testing-library's role queries; a page test timing out under heavy concurrent local load is an environment limit, not a defect. testing-library's defaults stay (no raised timeouts); frontend tests run without other suites running alongside.
 - [USER] 2026-10-26: only Critical and Important findings hold a merge (red CI, broken contract, touching the user's repo, secrets, data loss, crash at startup or shutdown, a 500 or wrong answer on a normal path). Minor findings never block: they are filed as a Bug or in the owner's next task in the same step as the merge. Re-reviews check only the last review's points and the new commits. Details in docs/reviewing-and-merging.md.
+- [USER] 2026-10-27: the whole project, every stage and the evaluation included, must work on 2026-11-05; the team chooses which evaluation cases to cover.
+- [USER] 2026-10-27: stages 3 and 4 are designed together. Onboarding's job is to make the monitoring loop (stage 4) ready to run well: explore the project and its production system, record what it learns, grant the other agents what they need, and get the systems ready.
 - [AGREED] A roadmap doc holds the shared contracts (ID scheme, audit/event record shape, project folder layout, permission risk classes) referenced by every sub-spec.
 
 ## 3. Open
@@ -128,8 +137,11 @@ Anything not listed here is unknown.
 - Earlier "2-week MVP" plan (Orchestrator + Onboarding + Data Quality) and early UI page list: superseded by the approved menus; no longer in a rush.
 - ELEC2 dataset and the static HTML prototype: dropped.
 - Notifications: WhatsApp moved out of v1.
+- Data connection kinds: were local folder, S3/GCS/Azure, SQL database and MLflow. Now local files only, built so PostgreSQL can be added (2026-10-27).
+- Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.
+- Onboarding: was "proposes tests and a monitoring plan". Now it prepares the project and hands off; the other agents audit and propose after the handoff (2026-10-27).
 - PRs: were opened automatically when an agent finishes. Now the agent is reminded at the end of each turn and decides, because a stopped agent may still be waiting on something.
 - Frontend test runner: was Vitest 3 (pinned major). Now Vitest 5: vitest 3 depended on packages with critical advisories (tinypool, @vitest/mocker) that no 3.x release fixes.
 

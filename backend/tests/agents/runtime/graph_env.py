@@ -8,16 +8,23 @@ from typing import Any
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
-from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
+from mlops_agents.agents.runtime.contract import (
+    MessageView,
+    TaskView,
+    ToolCallPart,
+    ToolResultPart,
+)
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
+from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.workspace.models import Project
 from tests.agents.runtime.hook_fakes import NoInbound
+from tests.conftest import STAGE_2_TOOLS
 from tests.fakes.turn_end import NoTurnEndCheck
 
 
@@ -32,6 +39,9 @@ class FixedWorkspaces:
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
         return self._files
+
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
 
 
 def stage1_hooks(workspaces: TaskWorkspaces) -> TurnHooks:
@@ -79,7 +89,7 @@ def make_agent(
     tool_names: tuple[str, ...] | None = None,
 ) -> Agent:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     definition = catalog.get("orchestrator")
     project = Project(
         id=project_id,

@@ -15,6 +15,7 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     StreamEvent,
+    TaskView,
     ToolResultPart,
     TurnEnded,
     TurnWaiting,
@@ -38,10 +39,10 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
-from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
+from tests.fakes.workspaces import FakeWorkspaces
 
 
 class DummyArgs(BaseModel):
@@ -96,7 +97,7 @@ def make_tool_reg(*extra_tools: AgentTool[Any]) -> ToolRegistry:
     return reg
 
 
-class MutableTaskWorkspaces(RepositoryOnlyWorkspaces):
+class MutableTaskWorkspaces(FakeWorkspaces):
     """Workspaces double allowing testing task changes between approval and execution."""
 
     def __init__(self, *, workspace: Any, git: Any) -> None:
@@ -111,8 +112,23 @@ class MutableTaskWorkspaces(RepositoryOnlyWorkspaces):
             return RepoFiles(task.worktree, self._git)
         return await super().files(project_id, task)
 
+    async def view(self, project_id: str, task_id: str) -> TaskView:
+        task = self.current_task_ref
+        if task is None or task.id != task_id:
+            return await super().view(project_id, task_id)
+        return TaskView(
+            id=task.id,
+            agent="writer",
+            title=task.title,
+            branch=task.branch,
+            status=task.status,
+            review_kind=None,
+            pr_number=None,
+            pr_url=None,
+        )
 
-def _write_agent_def(tmp_path: Path) -> Path:
+
+def write_agent_def(tmp_path: Path) -> Path:
     def_dir = tmp_path / "definitions"
     def_dir.mkdir(parents=True, exist_ok=True)
     (def_dir / "writer.md").write_text(
@@ -170,7 +186,7 @@ async def test_resuming_turn_approve(
     """1. Approve: Tool runs, turn continues and ends done, message keeps its earlier parts."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -261,7 +277,7 @@ async def test_resuming_turn_reject_with_note(
     """2. Reject with a note: Model receives the rejection and note."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -344,7 +360,7 @@ async def test_resuming_turn_two_asks_in_one_step(
     write_tool = DummyWriteTool()
     run_tool = DummyRunTool()
     tool_reg = make_tool_reg(write_tool, run_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -426,7 +442,7 @@ async def test_resuming_turn_after_rebuilding_manager(
     """
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -475,7 +491,7 @@ async def test_resuming_turn_after_rebuilding_manager(
     from mlops_agents.workspace.service import WorkspaceService
     from tests.integrations.test_github_auth import FakeGh
 
-    catalog = AgentCatalog.load(tool_reg.names(), extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
@@ -495,7 +511,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
     )
     new_approvals_service = ApprovalsService(
         databases=databases,
@@ -541,7 +557,7 @@ async def test_resuming_turn_no_duplicates(
     """5. No duplicates: Resuming creates no second approval record or audit record."""
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -626,7 +642,7 @@ async def test_resuming_turn_task_mismatch(
     """
     write_tool = DummyWriteTool()
     tool_reg = make_tool_reg(write_tool)
-    def_dir = _write_agent_def(tmp_path)
+    def_dir = write_agent_def(tmp_path)
 
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
@@ -644,7 +660,7 @@ async def test_resuming_turn_task_mismatch(
 
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hello"}, git_env)
     providers_svc = ProvidersService(databases, keystore, model_http)
-    catalog = AgentCatalog.load(tool_reg.names(), extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     from mlops_agents.agents.settings import AgentSettingsService
 
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)

@@ -12,6 +12,26 @@ from mlops_agents.sandbox.docker import CliDockerRunner
 from mlops_agents.storage.databases import Databases
 from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
 
+STAGE_2_TOOLS: frozenset[str] = frozenset(
+    {
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "Bash",
+        "StartTask",
+        "ResumeTask",
+        "OpenPullRequest",
+        "SearchIssues",
+        "OpenIssue",
+        "CommentOnIssue",
+        "ListAgents",
+        "SendMessage",
+        "ScheduleWakeup",
+    }
+)
+
 
 @pytest.fixture
 def git_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:

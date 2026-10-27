@@ -217,11 +217,11 @@ class ApprovalStore:
         *,
         approve: bool,
         note: str | None = None,
-        task_id: str | object | None = _UNSET,
     ) -> ApprovalRecord:
-        """Approve or reject an approval with an optional note."""
+        """Approve or reject an approval with an optional note. Its task id is the one it was
+        asked under: a decision never changes it."""
         status: ApprovalStatus = "approved" if approve else "rejected"
-        return await self.update_status(project_id, approval_id, status, note=note, task_id=task_id)
+        return await self.update_status(project_id, approval_id, status, note=note)
 
     async def pending(self, project_id: str) -> list[ApprovalRecord]:
         """List all pending approvals for a project."""

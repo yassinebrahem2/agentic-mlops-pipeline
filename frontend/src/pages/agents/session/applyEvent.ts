@@ -1,6 +1,12 @@
 import type { MessageView, StreamEventData } from "./events";
+import type { TaskView } from "../TaskBar";
 
-export type SessionState = { messages: MessageView[]; busy: boolean; lastSeq: number };
+export type SessionState = {
+  messages: MessageView[];
+  busy: boolean;
+  lastSeq: number;
+  current_task?: TaskView | null;
+};
 export type SequencedEvent = { seq: number } & StreamEventData;
 
 function queued(messages: MessageView[]): boolean {
@@ -85,5 +91,5 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
     case "resync":
       break;
   }
-  return { messages, busy, lastSeq: event.seq };
+  return { messages, busy, lastSeq: event.seq, current_task: state.current_task };
 }

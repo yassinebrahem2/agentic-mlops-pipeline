@@ -32,7 +32,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -88,7 +88,7 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
@@ -158,7 +158,7 @@ async def test_executor_turn_failed_from_caller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)

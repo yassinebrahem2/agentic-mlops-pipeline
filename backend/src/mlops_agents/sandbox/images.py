@@ -98,6 +98,12 @@ def create_build_context(inputs: ImageInputs, target_dir: Path) -> Path:
     return target_dir
 
 
+def build_failure_detail(exc: BaseException) -> str:
+    """The one wording for a failed build; it lives here because service imports images."""
+    err = str(exc).strip() or type(exc).__name__
+    return f"Image build failed: {err}"
+
+
 class ImageManager:
     """Manages Docker image lifecycle for project environments."""
 
@@ -141,7 +147,7 @@ class ImageManager:
                     detail += "\n" + "\n".join(exc.stderr.splitlines()[-FAIL_DETAIL_LINES:])
                 return EnvironmentStatus(state="failed", tag=tag, detail=detail)
             except OSError as exc:
-                return EnvironmentStatus(state="failed", tag=tag, detail=str(exc))
+                return EnvironmentStatus(state="failed", tag=tag, detail=build_failure_detail(exc))
         if res.exit_code != 0:
             detail = "\n".join(
                 (res.stdout + "\n" + res.stderr).strip().splitlines()[-FAIL_DETAIL_LINES:]

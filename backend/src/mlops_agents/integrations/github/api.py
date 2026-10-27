@@ -63,12 +63,16 @@ async def _request(
             status=429,
         )
     if permission is not None and response.status_code in (403, 404):
-        raise DomainError(
-            "github_permission_missing",
-            f"GitHub rejected the request because the token lacks the '{permission}' permission.",
-            status=403,
-        )
+        raise permission_missing(permission)
     return response
+
+
+def permission_missing(permission: str) -> DomainError:
+    return DomainError(
+        "github_permission_missing",
+        f"GitHub rejected the request because the token lacks the '{permission}' permission.",
+        status=403,
+    )
 
 
 request = _request

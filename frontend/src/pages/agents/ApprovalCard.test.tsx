@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api } from "@/lib/api";
@@ -103,7 +103,10 @@ describe("ApprovalCard", () => {
     const user = userEvent.setup();
     render(<ApprovalCard approval={baseApproval} toolName="Write" projectId="prj_1" />);
 
-    const noteInput = screen.getByLabelText("Rejection note");
+    const noteInput = screen.getByLabelText(/note/i);
+    expect(
+      screen.getByPlaceholderText("Optional note (for approval or rejection)..."),
+    ).toBeInTheDocument();
     await user.type(noteInput, "Missing unit tests");
     await user.click(screen.getByRole("button", { name: "Reject" }));
 
@@ -182,5 +185,35 @@ describe("ApprovalCard", () => {
     // Card status does not change optimistically before message.updated
     expect(screen.queryByText("approved")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+
+  it("sends exactly one request on two clicks in one tick and keeps buttons disabled after success until message.updated", async () => {
+    let resolvePost: (value: unknown) => void = () => {};
+    postSpy?.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+
+    render(<ApprovalCard approval={baseApproval} toolName="Write" projectId="prj_1" />);
+
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+    const rejectButton = screen.getByRole("button", { name: "Reject" });
+
+    // Two clicks in one tick
+    fireEvent.click(approveButton);
+    fireEvent.click(approveButton);
+
+    expect(postSpy).toHaveBeenCalledTimes(1);
+
+    // Resolve successful decision
+    resolvePost({ data: {}, response: new Response(null, { status: 200 }) });
+
+    // Buttons remain disabled after success (they wait for message.updated to unmount/change status)
+    await waitFor(() => {
+      expect(approveButton).toBeDisabled();
+    });
+    expect(rejectButton).toBeDisabled();
   });
 });

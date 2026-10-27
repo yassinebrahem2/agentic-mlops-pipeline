@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -12,6 +12,7 @@ from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.claims import claim_paths, get_task_read_hash, record_task_read
 from mlops_agents.agents.tasks.commit import (
     commit_task,
+    has_commits_beyond_base_task,
     has_unpublished_changes_task,
     push_task,
     staged_diff_task,
@@ -19,17 +20,16 @@ from mlops_agents.agents.tasks.commit import (
 from mlops_agents.agents.tasks.contract import CommitResult, Tasks
 from mlops_agents.agents.tasks.git import git_dir_for_task
 from mlops_agents.agents.tasks.lifecycle import (
+    WORKTREE_RECREATED_NOTE,
     end_task,
+    prepare_worktree,
     resume_task,
     set_review_task,
     start_task,
 )
 from mlops_agents.agents.tasks.local_merge import local_merge, local_merge_preview
-from mlops_agents.agents.tasks.worktrees import (
-    TaskFiles,
-    clean_leftover_temp_files,
-    recreate_worktree,
-)
+from mlops_agents.agents.tasks.remote import resolve_repo_ref
+from mlops_agents.agents.tasks.worktrees import TaskFiles
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
 from mlops_agents.agents.tools.file_ops import pause_task
 from mlops_agents.agents.tools.files import RepoFiles
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from mlops_agents.sandbox.contract import Sandbox
-    from mlops_agents.workspace.models import Project
+    from mlops_agents.workspace.refs import RepoRef
 
 
 class TasksService(Tasks):
@@ -124,31 +124,16 @@ class TasksService(Tasks):
         self._current_tasks[(project_id, session_id)] = task_id
         return ref
 
-    async def _get_task_ref(self, project_id: str, row: RowMapping) -> TaskRef:
-        worktree_path = Path(row["worktree"])
-        if not await asyncio.to_thread(worktree_path.is_dir):
-            p = await self._workspace.get(project_id)
-            await recreate_worktree(
-                runner=self._git,
-                repo_root=self._workspace.repo_root(p),
-                worktree_path=worktree_path,
-                empty_hooks=self._paths.empty_hooks,
-                task_id=row["id"],
-                branch=row["branch"],
-            )
-            note = "[Note: Uncommitted changes were lost because the task worktree was recreated.]"
-            self._pending_notes[(project_id, row["id"])] = note
-        else:
-            await asyncio.to_thread(clean_leftover_temp_files, worktree_path)
-            note = self._pending_notes.get((project_id, row["id"]))
-
+    def _get_task_ref(self, project_id: str, row: RowMapping) -> TaskRef:
+        # A pure read: the session view comes through here too, so the worktree is readied
+        # (and recreated when gone) only in `files`, on the turn path.
         return TaskRef(
             id=row["id"],
             title=row["title"],
             branch=row["branch"],
-            worktree=worktree_path,
+            worktree=Path(row["worktree"]),
             status=row["status"],
-            pending_note=note,
+            pending_note=self._pending_notes.get((project_id, row["id"])),
         )
 
     async def current(self, project_id: str, session_id: str) -> TaskRef | None:
@@ -166,7 +151,7 @@ class TasksService(Tasks):
                 and row["status"] in ("active", "in_review")
                 and row["session_id"] == session_id
             ):
-                return await self._get_task_ref(project_id, row)
+                return self._get_task_ref(project_id, row)
             self._current_tasks.pop((project_id, session_id), None)
 
         async with engine.connect() as conn:
@@ -184,7 +169,7 @@ class TasksService(Tasks):
             return None
 
         self._current_tasks[(project_id, session_id)] = row["id"]
-        return await self._get_task_ref(project_id, row)
+        return self._get_task_ref(project_id, row)
 
     def _build_task_view(self, row: RowMapping) -> TaskView:
         return TaskView(
@@ -236,6 +221,14 @@ class TasksService(Tasks):
         repo_root = self._workspace.repo_root(project)
         if task is None:
             return RepoFiles(repo_root, self._git)
+        if await prepare_worktree(
+            runner=self._git,
+            repo_root=repo_root,
+            worktree_path=task.worktree,
+            empty_hooks=self._paths.empty_hooks,
+            task=task,
+        ):
+            self._pending_notes[(project_id, task.id)] = WORKTREE_RECREATED_NOTE
         return TaskFiles(
             root=task.worktree,
             git_dir=git_dir_for_task(repo_root, task.id),
@@ -243,29 +236,49 @@ class TasksService(Tasks):
             runner=self._git,
         )
 
-    async def _task_env(self, project_id: str, task_id: str) -> tuple[Project, Path, AsyncEngine]:
+    async def _task_env(self, project_id: str, task_id: str) -> tuple[Path, AsyncEngine]:
         project = await self._workspace.get(project_id)
         repo_root = self._workspace.repo_root(project)
-        git_dir = git_dir_for_task(repo_root, task_id)
         engine = await self._databases.project(project_id)
-        return project, git_dir, engine
+        return git_dir_for_task(repo_root, task_id), engine
+
+    async def repo_ref(self, project_id: str) -> RepoRef | None:
+        project = await self._workspace.get(project_id)
+        return await resolve_repo_ref(
+            self._git,
+            project=project,
+            repo_root=self._workspace.repo_root(project),
+            empty_hooks=self._paths.empty_hooks,
+        )
+
+    async def has_commits_beyond_base(self, project_id: str, task: TaskRef) -> bool:
+        async with self._task_lock(project_id, task.id):
+            git_dir, engine = await self._task_env(project_id, task.id)
+            return await has_commits_beyond_base_task(
+                runner=self._git,
+                git_dir=git_dir,
+                worktree=task.worktree,
+                empty_hooks=self._paths.empty_hooks,
+                engine=engine,
+                task=task,
+            )
 
     async def has_unpublished_changes(self, project_id: str, task: TaskRef) -> bool:
         async with self._task_lock(project_id, task.id):
-            project, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             return await has_unpublished_changes_task(
                 runner=self._git,
                 git_dir=git_dir,
                 worktree=task.worktree,
                 empty_hooks=self._paths.empty_hooks,
                 engine=engine,
-                project=project,
+                remote=await self.repo_ref(project_id),
                 task=task,
             )
 
     async def staged_diff(self, project_id: str, task: TaskRef) -> str:
         async with self._task_lock(project_id, task.id):
-            _, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             async with pause_task(self._sandbox, project_id, task.id):
                 return await staged_diff_task(
                     runner=self._git,
@@ -278,7 +291,7 @@ class TasksService(Tasks):
 
     async def commit(self, project_id: str, task: TaskRef, message: str) -> CommitResult:
         async with self._task_lock(project_id, task.id):
-            _, git_dir, engine = await self._task_env(project_id, task.id)
+            git_dir, engine = await self._task_env(project_id, task.id)
             async with pause_task(self._sandbox, project_id, task.id):
                 return await commit_task(
                     runner=self._git,
@@ -293,13 +306,13 @@ class TasksService(Tasks):
 
     async def push(self, project_id: str, task: TaskRef) -> None:
         async with self._task_lock(project_id, task.id):
-            project, git_dir, _ = await self._task_env(project_id, task.id)
+            git_dir, _ = await self._task_env(project_id, task.id)
             await push_task(
                 runner=self._git,
                 git_dir=git_dir,
                 worktree=task.worktree,
                 empty_hooks=self._paths.empty_hooks,
-                project=project,
+                remote=await self.repo_ref(project_id),
                 task=task,
             )
 
@@ -348,19 +361,50 @@ class TasksService(Tasks):
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None:
         async with self._task_lock(project_id, task_id):
-            p = await self._workspace.get(project_id)
-            await end_task(
-                runner=self._git,
-                repo_root=self._workspace.repo_root(p),
-                empty_hooks=self._paths.empty_hooks,
-                databases=self._databases,
-                project_id=project_id,
-                task_id=task_id,
-                status=status,
-                sandbox=self._sandbox,
-                events=self._events,
+            await self._end_locked(project_id, task_id, status)
+
+    async def decide_review(
+        self,
+        project_id: str,
+        task_id: str,
+        step: Callable[[TaskRef], Awaitable[None]],
+        status: Literal["merged", "closed"],
+    ) -> TaskView:
+        async with self._task_lock(project_id, task_id):
+            task = await self.view(project_id, task_id)
+            if task.status != "in_review" or task.review_kind != "local":
+                raise DomainError(
+                    "not_in_review", f"Task '{task_id}' is not awaiting local review.", status=409
+                )
+            # Only the id, title and branch matter to a step; the worktree is not touched.
+            await step(
+                TaskRef(
+                    id=task.id,
+                    title=task.title,
+                    branch=task.branch,
+                    worktree=Path(),
+                    status=task.status,
+                )
             )
-            for (pid, sid), tid in list(self._current_tasks.items()):
-                if pid == project_id and tid == task_id:
-                    self._current_tasks.pop((pid, sid), None)
-            self._pending_notes.pop((project_id, task_id), None)
+            await self._end_locked(project_id, task_id, status)
+            return await self.view(project_id, task_id)
+
+    async def _end_locked(
+        self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
+    ) -> None:
+        p = await self._workspace.get(project_id)
+        await end_task(
+            runner=self._git,
+            repo_root=self._workspace.repo_root(p),
+            empty_hooks=self._paths.empty_hooks,
+            databases=self._databases,
+            project_id=project_id,
+            task_id=task_id,
+            status=status,
+            sandbox=self._sandbox,
+            events=self._events,
+        )
+        for (pid, sid), tid in list(self._current_tasks.items()):
+            if pid == project_id and tid == task_id:
+                self._current_tasks.pop((pid, sid), None)
+        self._pending_notes.pop((project_id, task_id), None)

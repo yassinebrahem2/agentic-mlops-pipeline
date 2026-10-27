@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
 from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.events.contract import EventRecord
 from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.events.observer import EventTurnObserver
@@ -18,6 +21,48 @@ from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+
+# A turn_ended observer this slow still ends well within the observer timeout; it makes the
+# session stream's turn.ended arrive long before the event log holds it (#280).
+SLOW_OBSERVER_S = 0.3
+
+
+class SlowEndObserver:
+    """The event log's observer, made slow to hear a turn's end."""
+
+    def __init__(self, inner: EventTurnObserver, delay: float) -> None:
+        self._inner = inner
+        self._delay = delay
+
+    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        await self._inner.turn_started(project_id, agent, turn_id)
+
+    async def turn_waiting(self, project_id: str, agent: str, turn_id: str) -> None:
+        await self._inner.turn_waiting(project_id, agent, turn_id)
+
+    async def turn_ended(
+        self, project_id: str, agent: str, turn_id: str, status: TurnEnd, final_text: str | None
+    ) -> None:
+        await asyncio.sleep(self._delay)
+        await self._inner.turn_ended(project_id, agent, turn_id, status, final_text)
+
+
+async def logged_turn_end(event_log: SqliteEventLog, project_id: str, turn_id: str) -> None:
+    """Wait until the event log holds the turn's end. The session stream's turn.ended does not
+    wait for the observers; the project stream (replayed from the start, then live) emits only
+    what the log has recorded, as the UI reads it (#280)."""
+
+    async def read() -> None:
+        async with aclosing(event_log.subscribe(project_id, after_seq=0)) as stream:
+            async for event in stream:
+                if (
+                    isinstance(event, EventRecord)
+                    and event.type == "turn.ended"
+                    and event.subject_id == turn_id
+                ):
+                    return
+
+    await asyncio.wait_for(read(), timeout=10)
 
 
 @pytest.mark.asyncio
@@ -73,6 +118,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("observer_delay", [0.0, SLOW_OBSERVER_S])
 async def test_turn_on_fake_model_records_turn_events(
     tmp_path: Path,
     paths: DataPaths,
@@ -81,9 +127,10 @@ async def test_turn_on_fake_model_records_turn_events(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    observer_delay: float,
 ) -> None:
     event_log = SqliteEventLog(databases)
-    observer = EventTurnObserver(event_log)
+    observer = SlowEndObserver(EventTurnObserver(event_log), observer_delay)
 
     env = await build_session_env(
         tmp_path,
@@ -108,7 +155,7 @@ async def test_turn_on_fake_model_records_turn_events(
     assert isinstance(ended, TurnEnded)
     turn_id = ended.data.turn_id
 
-    # Check event log records
+    await logged_turn_end(event_log, project_id, turn_id)
     history = await event_log.history(project_id, types=["turn.started", "turn.ended"], limit=10)
     # history is newest first: [turn.ended, turn.started]
     assert len(history) == 2
@@ -129,6 +176,7 @@ async def test_turn_on_fake_model_records_turn_events(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("observer_delay", [0.0, SLOW_OBSERVER_S])
 async def test_failed_turn_records_failed_turn_ended(
     tmp_path: Path,
     paths: DataPaths,
@@ -138,9 +186,10 @@ async def test_failed_turn_records_failed_turn_ended(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    observer_delay: float,
 ) -> None:
     event_log = SqliteEventLog(databases)
-    observer = EventTurnObserver(event_log)
+    observer = SlowEndObserver(EventTurnObserver(event_log), observer_delay)
 
     env = await build_session_env(
         tmp_path,
@@ -181,7 +230,7 @@ async def test_failed_turn_records_failed_turn_ended(
     assert ended.data.status == "failed"
     turn_id = ended.data.turn_id
 
-    # Check event log records
+    await logged_turn_end(event_log, project_id, turn_id)
     history = await event_log.history(project_id, types=["turn.started", "turn.ended"], limit=10)
     assert len(history) == 2
     assert history[0].type == "turn.ended"

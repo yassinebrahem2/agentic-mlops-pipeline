@@ -5,6 +5,7 @@ import logging
 import shutil
 import stat
 import uuid
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,14 +16,14 @@ from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.storage.tables import tasks
-from mlops_agents.workspace.refs import RepoRef, github_remote, https_url, repo_ref
+from mlops_agents.workspace.refs import https_url
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from mlops_agents.agents.tools.base import TaskRef
     from mlops_agents.integrations.github.git import GitRunner
-    from mlops_agents.workspace.models import Project
+    from mlops_agents.workspace.refs import RepoRef
 
 logger = logging.getLogger(__name__)
 
@@ -45,59 +46,17 @@ def _rmtree(path: Path) -> None:
             logger.warning("Failed to remove directory %s: %s", path, exc)
 
 
-async def project_repo_ref(
-    *,
-    runner: GitRunner,
-    git_dir: Path,
-    worktree: Path,
-    empty_hooks: Path,
-    project: Project,
-) -> RepoRef | None:
-    if project.github_full_name:
-        return repo_ref(project.github_full_name)
-
-    origin_res = await task_git(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        args=["config", "--get", "remote.origin.url"],
-        check=False,
-    )
-    origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
-    ref = github_remote(project, origin_url)
-    if ref is None:
-        origin_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["remote", "get-url", "origin"],
-            check=False,
-        )
-        origin_url = origin_res.stdout.strip() if origin_res.code == 0 else None
-        ref = github_remote(project, origin_url)
-    return ref
-
-
 async def push_task(
     *,
     runner: GitRunner,
     git_dir: Path,
     worktree: Path,
     empty_hooks: Path,
-    project: Project,
+    remote: RepoRef | None,
     task: TaskRef,
 ) -> None:
     """Pushes the task branch to remote without modifying user git config or origin/* refs."""
-    repo_ref_val = await project_repo_ref(
-        runner=runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        project=project,
-    )
-    if repo_ref_val is None:
+    if remote is None:
         raise DomainError("no_remote", "Project has no GitHub remote to push to.", status=409)
 
     sha_res = await task_git(
@@ -143,7 +102,7 @@ async def push_task(
             except Exception as exc:
                 logger.warning("Bare repo init failed during cancellation: %s", exc, exc_info=True)
             raise
-        args = ["push", https_url(repo_ref_val), f"{commit_sha}:refs/heads/{task.branch}"]
+        args = ["push", https_url(remote), f"{commit_sha}:refs/heads/{task.branch}"]
         push_fut = asyncio.create_task(
             run_safe_git(
                 runner,
@@ -187,6 +146,68 @@ async def push_task(
     )
 
 
+async def _has_commits_beyond(
+    *,
+    runner: GitRunner,
+    git_dir: Path,
+    worktree: Path,
+    empty_hooks: Path,
+    ref: str,
+    task: TaskRef,
+    check: bool = True,
+) -> bool:
+    """The one place that asks whether the task branch has commits that `ref` lacks.
+
+    With check=False a failing rev-list (an unreachable ref) answers False instead of raising,
+    and the failure is logged.
+    """
+    res = await task_git(
+        runner,
+        git_dir=git_dir,
+        worktree=worktree,
+        empty_hooks=empty_hooks,
+        args=["rev-list", f"{ref}..{task.branch}"],
+        check=check,
+    )
+    if res.code != 0:
+        logger.warning(
+            "rev-list %s..%s failed for task %s: %s",
+            ref,
+            task.branch,
+            task.id,
+            res.stderr.strip(),
+        )
+        return False
+    return bool(res.stdout.strip())
+
+
+async def has_commits_beyond_base_task(
+    *,
+    runner: GitRunner,
+    git_dir: Path,
+    worktree: Path,
+    empty_hooks: Path,
+    engine: AsyncEngine,
+    task: TaskRef,
+) -> bool:
+    async with engine.connect() as conn:
+        base_sha = (
+            await conn.execute(select(tasks.c.base_sha).where(tasks.c.id == task.id))
+        ).scalar_one_or_none()
+    if base_sha is None:
+        return False
+    return await _has_commits_beyond(
+        runner=runner,
+        git_dir=git_dir,
+        worktree=worktree,
+        empty_hooks=empty_hooks,
+        ref=base_sha,
+        task=task,
+        # The PR tool asks this while recovering from a refused commit and must not fail on it.
+        check=False,
+    )
+
+
 async def has_unpublished_changes_task(
     *,
     runner: GitRunner,
@@ -194,7 +215,7 @@ async def has_unpublished_changes_task(
     worktree: Path,
     empty_hooks: Path,
     engine: AsyncEngine,
-    project: Project,
+    remote: RepoRef | None,
     task: TaskRef,
 ) -> bool:
     if await asyncio.to_thread(worktree.exists):
@@ -212,7 +233,6 @@ async def has_unpublished_changes_task(
                 if not is_generated_temp_file(path):
                     return True
 
-    # Read task record from DB
     async with engine.connect() as conn:
         task_row = (
             (
@@ -231,16 +251,17 @@ async def has_unpublished_changes_task(
 
     base_sha = task_row["base_sha"] or "HEAD"
 
-    # Determine project RepoRef
-    repo_ref_val = await project_repo_ref(
-        runner=runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        project=project,
-    )
+    def beyond(ref: str) -> Awaitable[bool]:
+        return _has_commits_beyond(
+            runner=runner,
+            git_dir=git_dir,
+            worktree=worktree,
+            empty_hooks=empty_hooks,
+            ref=ref,
+            task=task,
+        )
 
-    if repo_ref_val is not None:
+    if remote is not None:
         pushed_ref = f"refs/{APP_NAME}/pushed/{task.branch}"
         verify_res = await task_git(
             runner,
@@ -250,34 +271,9 @@ async def has_unpublished_changes_task(
             args=["rev-parse", "--verify", pushed_ref],
             check=False,
         )
-        if verify_res.code != 0:
-            rev_list_res = await task_git(
-                runner,
-                git_dir=git_dir,
-                worktree=worktree,
-                empty_hooks=empty_hooks,
-                args=["rev-list", f"{base_sha}..{task.branch}"],
-            )
-            return bool(rev_list_res.stdout.strip())
+        return await beyond(base_sha if verify_res.code != 0 else pushed_ref)
 
-        rev_list_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["rev-list", f"{pushed_ref}..{task.branch}"],
-        )
-        return bool(rev_list_res.stdout.strip())
-
-    # Project has NO RepoRef
-    rev_list_res = await task_git(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-        args=["rev-list", f"{base_sha}..{task.branch}"],
-    )
-    if not bool(rev_list_res.stdout.strip()):
+    if not await beyond(base_sha):
         return False
-
+    # A local review hands the commits to the user, so nothing is left to publish.
     return not (task_row["status"] == "in_review" and task_row["review_kind"] == "local")

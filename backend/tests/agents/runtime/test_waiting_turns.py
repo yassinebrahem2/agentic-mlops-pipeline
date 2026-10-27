@@ -36,10 +36,10 @@ from mlops_agents.storage.tables import turns
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
-from tests.fakes.workspaces import FakeWorkspaces as RepositoryOnlyWorkspaces
+from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -106,7 +106,7 @@ def _make_manager(
     gate: Gate,
 ) -> SessionManager:
     tool_reg = default_registry()
-    catalog = AgentCatalog.load(tool_reg.names())
+    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
@@ -125,7 +125,7 @@ def _make_manager(
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
-        workspaces=RepositoryOnlyWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
     )
 
 

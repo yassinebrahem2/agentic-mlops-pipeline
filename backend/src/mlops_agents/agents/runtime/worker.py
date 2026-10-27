@@ -45,6 +45,9 @@ class TurnWorkers:
         # turn to stop and is dropped, as in stage 1.
         self._first_look: set[SessionKey] = set()
         self._stop_next: set[SessionKey] = set()
+        # The workers whose turn's end (or wait) is decided and that have not taken another:
+        # from there they only finish their loop, and run no turn (#273).
+        self._turn_over: set[SessionKey] = set()
 
     def running(self, key: SessionKey) -> bool:
         worker = self._workers.get(key)
@@ -54,8 +57,13 @@ class TurnWorkers:
         return self._workers.get(key)
 
     def running_sessions(self, project_id: str) -> set[str]:
-        """Session IDs in project_id with a currently running worker."""
-        return {sid for (p, sid) in self._workers if p == project_id and self.running((p, sid))}
+        """Session IDs in project_id whose worker is running a turn, or about to take its first.
+        A worker whose turn has ended or waits, and that has not taken another, runs none."""
+        return {
+            sid
+            for (p, sid) in self._workers
+            if p == project_id and self.running((p, sid)) and (p, sid) not in self._turn_over
+        }
 
     def start(
         self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
@@ -125,6 +133,7 @@ class TurnWorkers:
             self._workers.pop(k, None)
             self._child_tasks.pop(k, None)
             self._current_turns.pop(k, None)
+        self._turn_over = {k for k in self._turn_over if project_id not in (None, k[0])}
         self._first_look = {k for k in self._first_look if project_id not in (None, k[0])}
         self._stop_next = {k for k in self._stop_next if project_id not in (None, k[0])}
         if project_id is None:
@@ -161,6 +170,7 @@ class TurnWorkers:
                         break
                     turn_id, trigger_msg_id = next_turn
                     self._current_turns[key] = turn_id
+                    self._turn_over.discard(key)
                     if key in self._stop_next:
                         self._stop_next.discard(key)
                         self._stopped_turns.add(turn_id)
@@ -180,6 +190,7 @@ class TurnWorkers:
         finally:
             self._first_look.discard(key)
             self._stop_next.discard(key)
+            self._turn_over.discard(key)
             self._workers.pop(key, None)
 
     async def _take_turn(
@@ -205,15 +216,19 @@ class TurnWorkers:
             ending = await self._run_turn(project_id, session_id, agent, turn_id, hub, lock, resume)
         except asyncio.CancelledError:
             # The turn was taken, so it is reported ended, also when the cancel came first.
+            self._turn_over.add((project_id, session_id))
             interrupted = _Ending("interrupted")
             await self._ends.end(
                 project_id, session_id, agent, turn_id, trigger_msg_id, hub, lock, interrupted
             )
             raise
+        # Its end is decided: from here the turn no longer runs, before `turn.ended` is out.
+        self._turn_over.add((project_id, session_id))
         if ending.status == "waiting":
             # The turn has not ended: the executor stored the wait and told the subscribers and
-            # the observers (`handle_turn_waiting`), and the turn's resume starts a new worker.
-            await self._store.set_turn(project_id, turn_id, "waiting")
+            # the observers (`handle_turn_waiting`, the one writer of `waiting`), and the
+            # turn's resume starts a new worker. Until then the session is busy: no queued turn
+            # runs (Decision #281).
             _raise_worker_cancel()
             return False
         # Nothing suspends between deciding the end and ending: a cancel from here on lands in

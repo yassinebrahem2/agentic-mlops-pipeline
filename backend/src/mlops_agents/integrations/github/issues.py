@@ -22,6 +22,15 @@ class IssueSummary(BaseModel):
     state: str = "open"
     labels: list[str] = Field(default_factory=list)
 
+    def event_payload(self) -> dict[str, Any]:
+        """What every issue.* event carries (overview I11)."""
+        return {
+            "number": self.number,
+            "url": self.html_url,
+            "title": self.title,
+            "state": self.state,
+        }
+
     @field_validator("labels", mode="before")
     @classmethod
     def _normalize_labels(cls, v: object) -> list[str]:

@@ -13,7 +13,7 @@ from mlops_agents.agents.tools.base import RiskClass
 
 EventType = Literal[
     "turn.started", "turn.waiting", "turn.ended", "task.started", "task.ended",
-    "pr.opened", "pr.updated", "issue.opened", "issue.commented",
+    "pr.opened", "pr.updated", "issue.opened", "issue.commented", "issue.updated",
     "approval.requested", "approval.decided", "message.sent", "wakeup.scheduled",
     "sandbox.build.started", "sandbox.build.finished", "sandbox.build.failed",
 ]  # fmt: skip

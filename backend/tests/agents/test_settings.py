@@ -15,13 +15,13 @@ from mlops_agents.errors import DomainError
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from tests.conftest import MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 SECRET_KEY_1 = "gsk_test_key_alpha_111111"
 SECRET_KEY_2 = "gsk_test_key_beta_222222"
 SECRET_KEY_3 = "gsk_test_key_gamma_333333"
-TOOLS = frozenset({"Read", "Glob", "Grep"})
+TOOLS = STAGE_2_TOOLS
 
 
 @pytest.fixture
@@ -150,13 +150,14 @@ async def test_app_default_lifecycle_and_validation(
     view_get = await settings_svc.get("orchestrator")
     assert view_get == view
 
-    # Read back via list_settings (sorted by name: helper then orchestrator)
+    # Read back via list_settings (includes helper, orchestrator, and all packaged agents)
     listing = await settings_svc.list_settings()
-    assert [v.agent for v in listing] == ["helper", "orchestrator"]
-    assert listing[0].display_name == "Helper"
-    assert listing[0].default_model is None
-    assert listing[1].display_name == "Orchestrator"
-    assert listing[1].default_model == untested.address
+    helper = next(v for v in listing if v.agent == "helper")
+    orch = next(v for v in listing if v.agent == "orchestrator")
+    assert helper.display_name == "Helper"
+    assert helper.default_model is None
+    assert orch.display_name == "Orchestrator"
+    assert orch.default_model == untested.address
 
     # 6. Clear with None
     cleared = await settings_svc.set_default_model("orchestrator", None)
@@ -474,8 +475,7 @@ async def test_list_settings_works_with_locked_keystore(
 
         # list_settings must not touch keystore.get, so it succeeds even when keyring is locked
         listing = await settings_svc.list_settings()
-        assert len(listing) == 2
-        assert [v.agent for v in listing] == ["helper", "orchestrator"]
+        assert len(listing) == len(catalog.all())
         orch = next(v for v in listing if v.agent == "orchestrator")
         assert orch.effective_model == model.address
         assert orch.model_problem is None

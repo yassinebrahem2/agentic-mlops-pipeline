@@ -22,6 +22,7 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
   // The specs share one app and database, so this run's provider gets a name of its own.
   const providerName = `fake-${randomBytes(3).toString("hex")}`;
   const modelAddress = `${providerName}:fake-tools`;
+  const writeModelAddress = `${providerName}:fake-write`;
 
   await test.step("sign in with the token link", async () => {
     await page.goto(`${APP_URL}/#token=${ACCESS_TOKEN}`);
@@ -116,5 +117,69 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     await expect(readStep).toBeVisible();
     await readStep.click();
     await expect(messages.getByRole("code").filter({ hasText: README_FIRST_LINE })).toBeVisible();
+  });
+
+  await test.step("the approval flow: StartTask and Write approved, task bar shows the task", async () => {
+    // 1. Level ask: default level, bypass warning banner is absent
+    await expect(page.getByText("Bypass mode: agents act without asking.")).toHaveCount(0);
+
+    // 2. Configure fake-write as the Orchestrator's model
+    await page.getByRole("link", { name: "AI providers" }).click();
+    await expect(page.getByRole("heading", { name: "AI providers", level: 1 })).toBeVisible();
+
+    await page.getByRole("button", { name: "Add model" }).click();
+    const modelDialog = page.getByRole("dialog", { name: "Add a model" });
+    await modelDialog.getByRole("combobox", { name: "Provider" }).click();
+    await page.getByRole("option", { name: providerName }).click();
+    await modelDialog.getByRole("combobox", { name: "Model" }).click();
+    await page.getByRole("option", { name: /fake-write/ }).click();
+    await expect(modelDialog.getByRole("combobox", { name: "Model" })).toHaveValue("fake-write");
+    await modelDialog.getByRole("button", { name: "Add model" }).click();
+    await expect(modelDialog).toBeHidden();
+
+    await page.getByRole("button", { name: `Verify ${writeModelAddress}`, exact: true }).click();
+    const writeModelRow = page.getByRole("row").filter({ hasText: writeModelAddress });
+    await expect(writeModelRow.getByRole("cell")).toHaveText([
+      writeModelAddress,
+      "Yes",
+      "Yes",
+      /^[1-9]\d*$/,
+      "Verified",
+      /.+/,
+      /Verify/,
+    ]);
+
+    const orchestratorModel = page.getByRole("combobox", { name: "Model for Orchestrator" });
+    await orchestratorModel.click();
+    await page.getByRole("option", { name: writeModelAddress }).click();
+    await expect(orchestratorModel).toHaveText(writeModelAddress);
+    await expect(orchestratorModel).toBeEnabled();
+
+    // Return to the project
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/agents/);
+
+    // 3. Ask the Orchestrator on fake-write
+    await page.getByLabel("Message Orchestrator").fill("Please start a task and write notes.");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    // 4. An approval card for StartTask appears; approve it.
+    await expect(page.getByText("StartTask").first()).toBeVisible();
+    await page.getByRole("button", { name: "Approve" }).click();
+
+    // 5. A card with the NOTES.md diff appears; approve it.
+    await expect(page.getByText("Write NOTES.md")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Diff view" })).toBeVisible();
+    await page.getByRole("button", { name: "Approve" }).click();
+
+    // 6. The turn ends, and the task bar shows the task.
+    await expect(messages.getByRole("status", { name: "Typing..." })).toHaveCount(0);
+    await expect(page.getByText("Waiting for your approval")).toHaveCount(0);
+
+    const taskBar = page.getByRole("region", { name: "Current task" });
+    await expect(taskBar).toBeVisible();
+    await expect(taskBar.getByText("Write notes")).toBeVisible();
+    await expect(taskBar.getByText("local review")).toBeVisible();
+    await expect(taskBar.getByRole("button", { name: "Discard task" })).toBeVisible();
   });
 });

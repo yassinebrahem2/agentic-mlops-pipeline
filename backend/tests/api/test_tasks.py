@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import shutil
+import sqlite3
+from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -30,7 +34,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
@@ -175,12 +179,12 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     )
 
     tools = default_registry(tasks=tasks_svc)
-    catalog = AgentCatalog.load(tools.names())
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     base_def = catalog.get("orchestrator")
     custom_def = base_def.model_copy(update={"tools": ("StartTask", "Write", "Read")})
     catalog = AgentCatalog(
         [custom_def if d.name == "orchestrator" else d for d in catalog.all()],
-        tool_names=tools.names(),
+        tool_names=tools.names() | STAGE_2_TOOLS,
     )
     providers_svc = ProvidersService(databases, keystore, model_http)
     agent_settings = AgentSettingsService(databases, providers_svc, catalog)
@@ -261,3 +265,94 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     tool_finished_events = [e for e in events_t3 if isinstance(e, ToolFinished)]
     assert len(tool_finished_events) == 1
     assert "print('wired')" in tool_finished_events[0].data.content
+
+    # Step 4: the worktree is deleted; the next turn's tool step recreates it from the branch
+    shutil.rmtree(current.worktree)
+    fake_openai.state.scripted_tool_calls = [
+        {"id": "call_4", "name": "Read", "arguments": {"file_path": "hello.txt"}},
+    ]
+    sub4 = session_mgr.subscribe(project.id, "orchestrator", after_seq=None)
+    await anext(sub4)
+    await session_mgr.send(project.id, "orchestrator", "Read hello.txt")
+    events_t4 = await collect_until_turn_ended(sub4)
+
+    assert current.worktree.is_dir()
+    finished_t4 = [e for e in events_t4 if isinstance(e, ToolFinished)]
+    assert len(finished_t4) == 1
+    assert "initial" in finished_t4[0].data.content
+    assert "the task worktree was recreated" in finished_t4[0].data.content
+
+
+async def test_discard_of_an_ended_task_is_refused_without_a_second_event(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Merged task")
+    await services.tasks.end(project_id, task.id, "merged")
+
+    res = await client.post(f"/api/projects/{project_id}/tasks/{task.id}/discard")
+
+    assert res.status_code == 409
+    view = await services.tasks.view(project_id, task.id)
+    assert view.status == "merged"
+    ended = await services.events.history(project_id, types=["task.ended"])
+    assert [e.payload for e in ended] == [{"task_id": task.id, "status": "merged"}]
+
+
+def _write_junk(db: Path) -> None:
+    db.write_bytes(b"not a sqlite database" * 100)
+
+
+def _write_newer_schema(db: Path) -> None:
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT)")
+        conn.execute("INSERT INTO schema_version VALUES (9999, '2030-01-01')")
+        conn.commit()
+
+
+@pytest.mark.parametrize("corrupt", [_write_junk, _write_newer_schema], ids=["junk", "newer"])
+async def test_global_discard_skips_a_project_whose_database_is_unreadable(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+    corrupt: Callable[[Path], None],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Found task")
+    broken_repo = make_repo(tmp_path / "broken-repo", {"README.md": "# Broken"}, git_env)
+    broken = await services.workspace.add_local(str(broken_repo))
+    await services.databases.close_project(broken.id)
+    broken_db = services.paths.project_db(broken.id)
+    broken_db.parent.mkdir(parents=True, exist_ok=True)
+    broken_db.unlink(missing_ok=True)
+    corrupt(broken_db)
+    # The scan must meet the broken project before the one holding the task.
+    assert (await services.workspace.list_projects())[0].id == broken.id
+
+    res = await client.post(f"/api/tasks/{task.id}/discard")
+
+    assert res.status_code == 204
+    assert (await services.tasks.view(project_id, task.id)).status == "discarded"
+    assert any(broken.id in r.getMessage() and r.exc_info for r in caplog.records)
+
+
+async def test_reading_a_session_view_does_not_recreate_a_deleted_worktree(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+    session = await services.sessions.get(project_id, "orchestrator")
+    task = await services.tasks.start(project_id, session.id, "orchestrator", "Deleted worktree")
+    shutil.rmtree(task.worktree)
+
+    view = await services.sessions.get(project_id, "orchestrator")
+
+    assert view.current_task is not None
+    assert view.current_task.id == task.id
+    assert not task.worktree.exists()

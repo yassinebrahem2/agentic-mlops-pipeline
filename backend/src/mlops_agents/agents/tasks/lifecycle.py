@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import os
-import shutil
-import stat
+import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import delete, insert, select, update
 
@@ -18,12 +15,15 @@ from mlops_agents.agents.tasks.git import run_safe_git
 from mlops_agents.agents.tasks.worktrees import (
     clean_leftover_temp_files,
     create_worktree,
+    recreate_worktree,
 )
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.clock import now_iso
 from mlops_agents.errors import DomainError
+from mlops_agents.integrations.github.git import GitError
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.storage.tables import file_claims, task_reads, tasks
+from mlops_agents.workspace.fs import rmtree
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -34,23 +34,11 @@ if TYPE_CHECKING:
     from mlops_agents.storage.databases import Databases
     from mlops_agents.workspace.models import Project
 
+logger = logging.getLogger(__name__)
 
-def _make_writable(path: Path) -> None:
-    if os.name == "nt":
-        with suppress(Exception):
-            ctypes.windll.kernel32.SetFileAttributesW(str(path), 128)  # FILE_ATTRIBUTE_NORMAL
-    with suppress(Exception):
-        path.chmod(stat.S_IWRITE | stat.S_IREAD)
-
-
-def _rmtree(path: Path) -> None:
-    def on_exc(func: Any, target: str, exc: Any) -> None:
-        del exc
-        _make_writable(Path(target))
-        func(target)
-
-    if path.exists():
-        shutil.rmtree(path, onexc=on_exc)
+WORKTREE_RECREATED_NOTE = (
+    "[Note: Uncommitted changes were lost because the task worktree was recreated.]"
+)
 
 
 async def start_task(
@@ -110,6 +98,30 @@ async def start_task(
         worktree=worktree_path,
         status="active",
     )
+
+
+async def prepare_worktree(
+    *,
+    runner: GitRunner,
+    repo_root: Path,
+    worktree_path: Path,
+    empty_hooks: Path,
+    task: TaskRef,
+) -> bool:
+    """Readies a task's worktree for its tools: recreates it from the branch when it is gone
+    (returns True), else clears temp files an interrupted write left behind."""
+    if await asyncio.to_thread(worktree_path.is_dir):
+        await asyncio.to_thread(clean_leftover_temp_files, worktree_path)
+        return False
+    await recreate_worktree(
+        runner=runner,
+        repo_root=repo_root,
+        worktree_path=worktree_path,
+        empty_hooks=empty_hooks,
+        task_id=task.id,
+        branch=task.branch,
+    )
+    return True
 
 
 async def resume_task(
@@ -187,6 +199,13 @@ async def end_task(
 
     if row is None:
         raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
+    if row["status"] not in ("active", "in_review"):
+        # An ended task keeps its first outcome: no second cleanup, status change or event.
+        raise DomainError(
+            "task_not_open",
+            f"Task {task_id} has status {row['status']!r} and has already ended.",
+            status=409,
+        )
 
     # 1. Container removal
     if sandbox is not None:
@@ -195,7 +214,7 @@ async def end_task(
 
     # 2. Worktree removal
     worktree_path = Path(row["worktree"])
-    with suppress(Exception):
+    try:
         await run_safe_git(
             runner,
             args=["worktree", "remove", "--force", str(worktree_path)],
@@ -203,7 +222,10 @@ async def end_task(
             empty_hooks=empty_hooks,
             check=False,
         )
-    await asyncio.to_thread(_rmtree, worktree_path)
+    except GitError:
+        # The folder is still deleted below; what git keeps is a stale entry `worktree prune` clears.
+        logger.exception("Could not remove the worktree %s of task %s", worktree_path, task_id)
+    await asyncio.to_thread(rmtree, worktree_path)
 
     # 3. Branch deletion on merged or discarded
     if status in ("merged", "discarded"):
