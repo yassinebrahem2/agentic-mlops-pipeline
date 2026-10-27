@@ -312,10 +312,10 @@ class WakeupService:
                 if current_status != "pending":
                     continue
 
-                target_text = f"Scheduled wake-up: {note}"
+                target_text = f"Scheduled wake-up: {note} [{wak_id}]"
 
                 # Guard: check if a restart or previous pass already posted this message to the
-                # session before crashing prior to the status update.
+                # session before crashing prior to the status update. Key idempotency on wak_id.
                 already_posted = False
                 async with engine.connect() as conn:
                     recent_parts = (
@@ -333,7 +333,7 @@ class WakeupService:
                         .all()
                     )
                     for p in recent_parts:
-                        if target_text in str(p):
+                        if wak_id in str(p):
                             already_posted = True
                             break
 

@@ -12,6 +12,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.wakeups import (
     WakeupService,
 )
+from mlops_agents.agents.runtime.contract import TextPart
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, RiskClass, ToolContext
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
@@ -673,13 +674,17 @@ async def test_fire_due_guard_prevents_double_posting_on_restart(
     res = await tool.invoke(ctx, {"delay_seconds": 60, "note": "Idempotency test note"})
     assert not res.is_error
 
+    pending_before = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending_before) == 1
+    wak_id = pending_before[0].id
+
     # Simulate crash right after post: post the wake-up message to the session, but leave wakeup pending
     await session_env.manager.post(
         session_env.project_id,
         "sched",
         author_name="Scheduled wake-up",
         from_agent="sched",
-        text="Scheduled wake-up: Idempotency test note",
+        text=f"Scheduled wake-up: Idempotency test note [{wak_id}]",
         exchange_id=None,
         hop=None,
     )
@@ -699,5 +704,72 @@ async def test_fire_due_guard_prevents_double_posting_on_restart(
     msgs = await session_env.store.messages(session_env.project_id, session_id)
     wakeup_msgs = [m for m in msgs if m.author_name == "Scheduled wake-up"]
     assert len(wakeup_msgs) == 1
+
+    await session_env.manager.close()
+
+
+async def test_fire_due_two_pending_wakeups_same_note_both_post_and_fire(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    defs_dir = _setup_agent_defs(tmp_path)
+    current_time = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+    wakeups_svc = WakeupService(databases, clock=lambda: current_time)
+    tools = default_registry(wakeups=wakeups_svc)
+
+    session_env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[defs_dir],
+        tools=tools,
+    )
+    catalog = session_env.manager._catalog  # pyright: ignore[reportPrivateUsage]
+    wakeups_svc.use_catalog(catalog)
+    wakeups_svc.bind(session_env.manager)
+
+    session_id = await session_env.store.session_id(session_env.project_id, "sched")
+    ctx = _ctx(session_env.project_id, "sched", session_id=session_id)
+    tool = ScheduleWakeupTool(wakeups_svc, catalog=catalog)
+
+    # Schedule two wakeups with the exact same note ("Check CI")
+    res1 = await tool.invoke(ctx, {"delay_seconds": 60, "note": "Check CI"})
+    assert not res1.is_error
+    res2 = await tool.invoke(ctx, {"delay_seconds": 60, "note": "Check CI"})
+    assert not res2.is_error
+
+    pending_before = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending_before) == 2
+    assert pending_before[0].id != pending_before[1].id
+
+    # Advance clock past due
+    current_time += timedelta(seconds=65)
+
+    # fire_due runs: both fall due in the same pass
+    fired = await wakeups_svc.fire_due()
+    assert fired == 2
+
+    # Both wake-ups end fired (no pending wake-ups left)
+    pending_after = await wakeups_svc.list_pending(session_env.project_id)
+    assert len(pending_after) == 0
+
+    # Both messages must be posted in the session
+    msgs = await session_env.store.messages(session_env.project_id, session_id)
+    wakeup_msgs = [m for m in msgs if m.author_name == "Scheduled wake-up"]
+    assert len(wakeup_msgs) == 2
+
+    # Each message records its respective wakeup id
+    part_texts = ["".join(p.text for p in m.parts if isinstance(p, TextPart)) for m in wakeup_msgs]
+    assert any(pending_before[0].id in t for t in part_texts)
+    assert any(pending_before[1].id in t for t in part_texts)
 
     await session_env.manager.close()
