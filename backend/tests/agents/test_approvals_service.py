@@ -10,7 +10,7 @@ import pytest
 from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.settings import set_permission_level
-from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     MessageView,
@@ -90,6 +90,25 @@ class FakeSessionsForApproval:
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         self.resumed_turns.append((project_id, session_id, turn_id))
+
+
+class BothReadBeforeEitherWrites(ApprovalStore):
+    """Holds the first two reads of an approval until both have been made, so two decisions
+    both see it pending and only the store's own pending-only update can pick the winner."""
+
+    def __init__(self, databases: Databases) -> None:
+        super().__init__(databases)
+        self._readers = 0
+        self._both_read = asyncio.Event()
+
+    async def get(self, project_id: str, approval_id: str) -> ApprovalRecord | None:
+        record = await super().get(project_id, approval_id)
+        if self._readers < 2:
+            self._readers += 1
+            if self._readers == 2:
+                self._both_read.set()
+            await asyncio.wait_for(self._both_read.wait(), timeout=5)
+        return record
 
 
 async def _setup_session_and_turn(
@@ -583,9 +602,11 @@ async def test_concurrent_decisions_on_same_approval_one_wins_other_gets_409(
     audit_log = SqliteAuditLog(databases, secrets=[])
     event_log = SqliteEventLog(databases)
 
+    # Both decisions see the approval pending: only the store's pending-only update picks one.
     service = ApprovalsService(
         databases=databases,
         sessions=fake_sessions,
+        store=BothReadBeforeEitherWrites(databases),
         audit_log=audit_log,
         event_log=event_log,
     )

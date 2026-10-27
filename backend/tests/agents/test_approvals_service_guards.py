@@ -1,15 +1,13 @@
-"""The approvals service's guards: the stored task id, the store's pending-only update under a
-real race, and recovery before listing or deciding (#258)."""
+"""The approvals service's guards: the stored task id, and recovery before listing or deciding
+(#258)."""
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import httpx2
 import pytest
 
-from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.runtime.contract import ApprovalPart, TaskView
@@ -40,25 +38,6 @@ class OtherTaskCurrent:
 
     async def view(self, project_id: str, task_id: str) -> TaskView:
         raise NotImplementedError
-
-
-class BothReadBeforeEitherWrites(ApprovalStore):
-    """Holds the first two reads of an approval until both have been made, so two decisions
-    both see it pending and only the store's own pending-only update can pick the winner."""
-
-    def __init__(self, databases: Databases) -> None:
-        super().__init__(databases)
-        self._readers = 0
-        self._both_read = asyncio.Event()
-
-    async def get(self, project_id: str, approval_id: str) -> ApprovalRecord | None:
-        record = await super().get(project_id, approval_id)
-        if self._readers < 2:
-            self._readers += 1
-            if self._readers == 2:
-                self._both_read.set()
-            await asyncio.wait_for(self._both_read.wait(), timeout=5)
-        return record
 
 
 async def waiting_approval(
@@ -127,32 +106,6 @@ async def test_a_decision_keeps_the_task_the_approval_was_asked_under(
     stored = await ApprovalStore(databases).get(project_id, apr.id)
     assert stored is not None
     assert stored.task_id == "tsk_asked"
-
-
-async def test_two_decisions_that_both_see_the_approval_pending_one_wins_one_gets_409(
-    databases: Databases,
-) -> None:
-    project_id = "prj_racedecide"
-    apr = await waiting_approval(databases, project_id)
-    fake_sessions = FakeSessionsForApproval(SessionStore(databases))
-    service = ApprovalsService(
-        databases, fake_sessions, store=BothReadBeforeEitherWrites(databases)
-    )
-
-    results = await asyncio.gather(
-        service.decide(project_id, apr.id, approve=True, note="approve"),
-        service.decide(project_id, apr.id, approve=False, note="reject"),
-        return_exceptions=True,
-    )
-
-    successes = [r for r in results if isinstance(r, ApprovalView)]
-    errors = [r for r in results if isinstance(r, DomainError)]
-    assert len(successes) == 1
-    assert [(e.code, e.status) for e in errors] == [("approval_not_pending", 409)]
-    stored = await ApprovalStore(databases).get(project_id, apr.id)
-    assert stored is not None
-    assert stored.status == successes[0].status
-    assert len(fake_sessions.resumed_turns) == 1
 
 
 async def _service_after_restart(
