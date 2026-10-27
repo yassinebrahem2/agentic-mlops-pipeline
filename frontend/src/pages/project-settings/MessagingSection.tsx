@@ -104,7 +104,7 @@ function MessagingForm({
 }) {
   const [draft, setDraft] = useState(() => toDraft(stored));
   const [attempted, setAttempted] = useState(false);
-  const unchanged = FIELDS.every(({ name }) => draft[name] === String(stored[name]));
+  const unchanged = FIELDS.every(({ name }) => parseLimit(draft[name]) === stored[name]);
   const submit = (event: SubmitEvent) => {
     event.preventDefault();
     setAttempted(true);

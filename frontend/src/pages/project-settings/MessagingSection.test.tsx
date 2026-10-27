@@ -71,6 +71,14 @@ it("saves both limits as numbers and shows the saved values", async () => {
   expect(tokens).toHaveValue(50000);
 });
 
+it("treats a differently written stored value as unchanged", async () => {
+  const { user } = setup();
+  const hops = await screen.findByRole("spinbutton", { name: "Maximum messages" });
+  await user.clear(hops);
+  await user.type(hops, "06");
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
 it.each([
   ["zero", "0"],
   ["a negative number", "-3"],
