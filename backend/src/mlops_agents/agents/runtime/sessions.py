@@ -23,8 +23,8 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
-from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.session_registry import SessionRegistry
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import stop_waiting_turn
 from mlops_agents.agents.runtime.worker import TurnWorkers
@@ -96,24 +96,12 @@ class SessionManager(AgentSessions):
         )
         self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
 
-        self._hubs: dict[tuple[str, str], SessionHub] = {}
-        self._locks: dict[tuple[str, str], AsyncRLock] = {}
+        self._registry = SessionRegistry(self._store)
         self._recovered_projects: set[str] = set()
         self._recovery_lock = asyncio.Lock()
-        self._session_ids: dict[tuple[str, str], str] = {}
-        self._session_id_lock = asyncio.Lock()
 
         if bus is not None:
             bus.bind(self)
-
-    def _get_lock(self, project_id: str, session_id: str) -> AsyncRLock:
-        return self._locks.setdefault((project_id, session_id), AsyncRLock())
-
-    def _get_hub(self, project_id: str, session_id: str) -> SessionHub:
-        key = (project_id, session_id)
-        if key not in self._hubs:
-            self._hubs[key] = SessionHub(session_id, lock=self._get_lock(project_id, session_id))
-        return self._hubs[key]
 
     async def ensure_recovered(self, project_id: str) -> None:
         """Public method to ensure a project's state is recovered before use."""
@@ -130,17 +118,6 @@ class SessionManager(AgentSessions):
             )
             self._recovered_projects.add(project_id)
 
-    async def _get_session_id(self, project_id: str, agent: str) -> str:
-        key = (project_id, agent)
-        if key in self._session_ids:
-            return self._session_ids[key]
-        async with self._session_id_lock:
-            if key in self._session_ids:
-                return self._session_ids[key]
-            sid = await self._store.session_id(project_id, agent)
-            self._session_ids[key] = sid
-            return sid
-
     def _check_agent(self, agent: str) -> None:
         if not self._catalog.get(agent).chat:
             raise DomainError(
@@ -152,9 +129,9 @@ class SessionManager(AgentSessions):
         await self._ensure_recovered(project_id)
         self._check_agent(agent)
 
-        session_id = await self._get_session_id(project_id, agent)
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
+        session_id = await self._registry.session_id(project_id, agent)
+        lock = self._registry.lock(project_id, session_id)
+        hub = self._registry.hub(project_id, session_id)
 
         async with lock:
             is_busy = await self._busy(project_id, session_id)
@@ -235,9 +212,9 @@ class SessionManager(AgentSessions):
         await self._ensure_recovered(project_id)
         self._check_agent(agent)
 
-        session_id = await self._get_session_id(project_id, agent)
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
+        session_id = await self._registry.session_id(project_id, agent)
+        lock = self._registry.lock(project_id, session_id)
+        hub = self._registry.hub(project_id, session_id)
 
         async with lock:
             is_busy = await self._busy(project_id, session_id)
@@ -283,8 +260,8 @@ class SessionManager(AgentSessions):
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
         await self._message(project_id, session_id, message_id)
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
+        lock = self._registry.lock(project_id, session_id)
+        hub = self._registry.hub(project_id, session_id)
 
         async with lock:
             current = await self._message(project_id, session_id, message_id)
@@ -314,8 +291,8 @@ class SessionManager(AgentSessions):
         if worker is not None and not worker.done():
             await worker
 
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
+        lock = self._registry.lock(project_id, session_id)
+        hub = self._registry.hub(project_id, session_id)
 
         async with lock:
             status = await self._store.turn_status(project_id, turn_id)
@@ -328,7 +305,7 @@ class SessionManager(AgentSessions):
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
         self._check_agent(agent)
-        session_id = await self._get_session_id(project_id, agent)
+        session_id = await self._registry.session_id(project_id, agent)
 
         self._workers.stop((project_id, session_id))
 
@@ -338,11 +315,11 @@ class SessionManager(AgentSessions):
             if worker is not None and not worker.done():
                 await worker
 
-            lock = self._get_lock(project_id, session_id)
+            lock = self._registry.lock(project_id, session_id)
             async with lock:
                 waiting = await self._store.waiting_turn(project_id, session_id)
                 if waiting is not None:
-                    hub = self._get_hub(project_id, session_id)
+                    hub = self._registry.hub(project_id, session_id)
                     await stop_waiting_turn(
                         project_id=project_id,
                         session_id=session_id,
@@ -363,19 +340,14 @@ class SessionManager(AgentSessions):
     ) -> AsyncGenerator[StreamEvent, None]:
         await self._workspace.get(project_id)
         self._check_agent(agent)
-        session_id = await self._get_session_id(project_id, agent)
-        hub = self._get_hub(project_id, session_id)
+        session_id = await self._registry.session_id(project_id, agent)
+        hub = self._registry.hub(project_id, session_id)
         async with aclosing(hub.subscribe(after_seq)) as events:
             async for event in events:
                 yield event
 
     async def _recover_and_clear_project(self, project_id: str) -> None:
-        for (p, s), hub in list(self._hubs.items()):
-            if p == project_id:
-                hub.close()
-                self._hubs.pop((p, s), None)
-        self._locks = {k: v for k, v in self._locks.items() if k[0] != project_id}
-        self._session_ids = {k: v for k, v in self._session_ids.items() if k[0] != project_id}
+        self._registry.forget(project_id)
         self._workers.forget(project_id)
         self._recovered_projects.discard(project_id)
         try:
@@ -396,10 +368,6 @@ class SessionManager(AgentSessions):
         await self._workers.cancel()
         for p in projects:
             await self._recover_and_clear_project(p)
-        for hub in self._hubs.values():
-            hub.close()
-        self._hubs.clear()
+        self._registry.clear()
         self._workers.forget()
-        self._locks.clear()
         self._recovered_projects.clear()
-        self._session_ids.clear()
