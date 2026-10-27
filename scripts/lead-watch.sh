@@ -59,9 +59,10 @@ check_cards() {
     while IFS=$'\t' read -r status num t; do
       [ -z "$status" ] && continue
       printf '%s\n' "$cur" | cut -f1,2 | grep -qxF "$status"$'\t'"$num" && continue
-      [ $((now - t)) -lt $FORGET_AFTER ] && printf '%s\t%s\t%s\n' "$status" "$num" "$t"
+      if [ $((now - t)) -lt $FORGET_AFTER ]; then printf '%s\t%s\t%s\n' "$status" "$num" "$t"; fi
     done <"$state/cards"
-  } >"$state/cards.tmp" && mv "$state/cards.tmp" "$state/cards"
+  } >"$state/cards.tmp"
+  mv "$state/cards.tmp" "$state/cards"
 }
 
 while :; do
