@@ -19,20 +19,22 @@ Stage 3 is built through several plans. This overview holds what they share. Rea
 
 ## Plans
 
-| Plan | Branch | Covers | Consumes (besides merged code) | Starts |
-|---|---|---|---|---|
-| contracts | `plan/stage-3-contracts` | I13 to I19 in code; the stage 3 schema (one migration per database); the `propose` risk class in the policy; the `stall` approval kind and part | none | now |
-| rate-limits | `plan/stage-3-rate-limits` | §2: key failover per key and model, the error classification, the stall (model node, graph routing, card, Try again), the cooldown setting | I13 (stall), I19 | task 1 now (failover engine, pure); the rest after contracts merges |
-| embedders | `plan/stage-3-embedders` | §3: model types, the embedder verify step, type-filtered pickers, the embedder setting, the fake `/embeddings`, `Embedder` | I14 | after contracts task 1 |
-| connections | `plan/stage-3-connections` | §4 and §5: the connection registry and API, the `local_folder` kind, the settings section, the read-only mounts and container fingerprint, DuckDB in the environment image, the host-loopback test | I15 | after contracts task 1 |
-| data-summary | `plan/stage-3-data-summary` | §6: the hook registry and the hook point, `status_board` as a hook, `data_summary` with the DuckDB lock-down, the result cache | I15, I18 | after contracts merges |
-| tracking | `plan/stage-3-tracking` | §7: tracking sources and API, the MLflow and GitHub Actions adapters, the fake MLflow server, the sync loop, `TrackingHistory`, `tracking_summary` | I16, I18 | after contracts merges |
-| knowledge | `plan/stage-3-knowledge` | §8: notes, the `VectorStore` (FTS5 + sqlite-vec), `SaveNote`, `SearchNotes`, the `knowledge` hook, re-embedding | I14, I17, I18 | after contracts merges and embedders task 1 |
-| proposals | `plan/stage-3-proposals` | §9 (the mechanism): `Propose`, proposal records, superseding, the credential endpoint and its lifecycle, the cards for both kinds | I13, I19 | after contracts merges |
-| onboarding | `plan/stage-3-onboarding` | §9 (applying both kinds), §10, §11: the wizard step, `connections` and `handoff` apply, the kickoff, the seven definitions, the end-to-end test | every plan above merged | last |
-| pages | `plan/stage-3-pages` | §12: Models, Data and Runs pages, their routes' frontend, the sidebar entries | the tracking and connections routes on `main` | after tracking and connections merge their routes |
+| Plan | Branch | Covers | Consumes (besides merged code) | Produces | Starts |
+|---|---|---|---|---|---|
+| contracts (claim first) | `plan/stage-3-contracts` | I13 to I20 as models and protocols; the stage 3 schema; the `propose` class; the `stall` kind in the approvals store; the approval-card dispatcher | none | I13 to I20 in code, both migrations, the dispatcher | now |
+| rate-limits | `plan/stage-3-rate-limits` | §2: the key failover engine (per key and model), the error classification, the stall (model node, graph routing, card, Try again), the cooldown setting | task 1 none; the rest contracts task 2 | `KeyFailover` (I21) from task 1 (early PR); the stall | task 1 now; the rest after contracts task 2 |
+| embedders | `plan/stage-3-embedders` | §3: model types, the embedder verify step, type-filtered pickers, the embedder settings, the fake `/embeddings`, the `Embedders` service | I14; I21 | `Embedders` (I14) from task 1 (early PR) | after contracts task 1 and rate-limits task 1 |
+| connections | `plan/stage-3-connections` | §4, §5: the registry and its routes, the `local_folder` kind, the settings section, read-only mounts and the container fingerprint, DuckDB in the environment image, the host-loopback test | I15 | `Connections` (I15) and its routes from task 1 (early PR) | after contracts task 1 |
+| data-summary | `plan/stage-3-data-summary` | §6: the hook registry and the one injection point, `status_board` as a hook, `data_summary` with the DuckDB lock-down, the cache, the table-detail route | I15, I18 | `HookRegistry` (I18) from task 1 (early PR); `GET .../connections/{con}/tables/{table}` | after contracts task 1 and connections task 1 |
+| tracking | `plan/stage-3-tracking` | §7: sources and routes, the MLflow and GitHub Actions adapters, the fake MLflow server, the sync loop, `TrackingHistory`, `tracking_summary` | I16, I18 | `Tracking` (I16) and its routes from task 1 (early PR) | after contracts task 1 and data-summary task 1 |
+| knowledge | `plan/stage-3-knowledge` | §8: notes and routes, the `VectorStore` (FTS5 + sqlite-vec), `SaveNote`, `SearchNotes`, the `knowledge` hook, re-embedding | I14, I17, I18 | `Knowledge` (I17) | after contracts task 1, embedders task 1 and data-summary task 1 |
+| proposals | `plan/stage-3-proposals` | §9's mechanism: `Propose`, proposal records, superseding, the credential slots and their lifecycle, the `Handoffs` store and route, both cards | I13, I19, I20 | `Proposals` (I19) and `Handoffs` (I20) from task 1 (early PR) | after contracts task 2 |
+| onboarding | `plan/stage-3-onboarding` | §9 applying both kinds, §10, §11: the wizard step, `connections` and `handoff` apply, the kickoff, the seven definitions (and removing `status_board:`), the end-to-end test | every plan above | the working flow | after every plan above merges |
+| pages | `plan/stage-3-pages` | §12: Models, Data and Runs pages, their sidebar entries | the tracking, connections, table-detail and handoff routes | three pages | after those routes are on `main` |
 
-Owners claim plans as `AGENTS.md` says. contracts first: other plans start on its early PRs.
+**contracts' tasks:** task 1 (early PR): every model and protocol of I13 to I20, and both migrations (`storage/migrations/app/0002_stage3.sql`, `storage/migrations/project/0004_stage3.sql`) with `tables.py`. Task 2 (early PR): the `propose` class in the policy, the `stall` kind in the approvals store and parts (`kind`, a null `tool_call_id`, keyed by turn and step), and the approval-card dispatcher. Task 3: the regenerated `openapi.json` and frontend types for everything above.
+
+Owners claim plans as `AGENTS.md` says; contracts first, since every other plan starts on its early PRs.
 
 ## Interfaces between plans
 
@@ -52,12 +54,15 @@ ModelType = Literal["chat", "embedder"]
 # ModelEntry gains: model_type: ModelType; dimensions: int | None   (embedders, set by verify)
 # ModelCreate gains: model_type: ModelType = "chat"
 
+class EmbedderUnavailable(Exception): ...   # every key exhausted, or the provider unreachable; the message is user-facing
+
 class Embedder(Protocol):
     address: str
     dimensions: int
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...   # raises EmbedderUnavailable when every key is exhausted
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...   # raises EmbedderUnavailable
 
-async def project_embedder(project_id: str) -> Embedder | None: ...   # the project override, else the app default, else None
+class Embedders(Protocol):            # injected into the services that need it, never looked up
+    async def for_project(self, project_id: str) -> Embedder | None: ...   # the project override, else the app default, else None
 ```
 
 ### I15: connections (`connections/contract.py`)
@@ -65,6 +70,8 @@ async def project_embedder(project_id: str) -> Embedder | None: ...   # the proj
 ```python
 ConnectionStatus = Literal["ok", "unreachable"]
 class TableRef(BaseModel): name: str; files: list[str]; format: Literal["csv", "parquet", "json", "jsonl"]
+class ColumnInfo(BaseModel): name: str; type: str
+class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int; data_version: str; summary: str   # data-summary's cached output for one table
 class Mount(BaseModel): host_path: Path; container_path: str        # always read-only
 class DuckDbSource(BaseModel): sql_from: str; allowed_directories: list[Path]   # the FROM clause, and what the lock-down allows
 class ConnectionView(BaseModel): id: str; name: str; kind: str; settings: dict[str, Any]; status: ConnectionStatus; status_detail: str | None; secret_files: list[str]
@@ -79,14 +86,21 @@ class Connections(Protocol):
     async def mounts(self, project_id: str) -> list[Mount]: ...
 ```
 
-Routes: `GET/POST /api/projects/{id}/connections`, `DELETE /api/projects/{id}/connections/{con}`, `GET /api/projects/{id}/connections/{con}/tables`. Events `connection.created`, `connection.deleted`.
+Routes: `GET/POST /api/projects/{id}/connections`, `DELETE /api/projects/{id}/connections/{con}`, `GET /api/projects/{id}/connections/{con}/tables` (connections); `GET /api/projects/{id}/connections/{con}/tables/{table}` returning `TableDetail` (data-summary). Events `connection.created`, `connection.deleted`.
 
 ### I16: tracking (`tracking/contract.py`)
 
 ```python
 SourceType = Literal["mlflow", "github_actions"]
 class TrackingSourceView(BaseModel): id: str; type: SourceType; settings: dict[str, Any]; auth: Literal["none", "credential"]; credential_set: bool; last_sync: datetime | None; last_error: str | None
-class ModelVersionRow, RunRow, MetricPoint, DeploymentRow, CiRunRow   # the record of §7, each with source_id and source_key
+class ModelVersionRow(BaseModel): source_id: str; model: str; version: str; run_key: str | None; aliases: list[str]; created: datetime
+class RunRow(BaseModel): source_id: str; key: str; experiment: str; status: str; start: datetime | None; end: datetime | None; params: dict[str, str]; tags: dict[str, str]; git_commit: str | None; datasets: list[str]
+class MetricPoint(BaseModel): source_id: str; run_key: str; metric: str; step: int; value: float; time: datetime
+class DeploymentRow(BaseModel): source_id: str; model: str; alias: str; from_version: str | None; to_version: str; seen_at: datetime
+class CiRunRow(BaseModel): source_id: str; key: str; workflow: str; status: str; conclusion: str | None; start: datetime; duration_s: float | None; commit: str; url: str
+class SyncResult(BaseModel): versions: list[ModelVersionRow]; runs: list[RunRow]; metrics: list[MetricPoint]; aliases: dict[str, dict[str, str]]; ci_runs: list[CiRunRow]; error: str | None   # aliases: model -> alias -> version; Tracking turns changes into DeploymentRows
+class TrackingQuery(BaseModel): what: Literal["models", "versions", "runs", "metrics", "deployments", "ci_runs"]; model: str | None = None; run_key: str | None = None; metric: str | None = None; since: datetime | None = None; limit: int = 50
+class TrackingResult(BaseModel): rows: list[dict[str, Any]]; total: int; truncated: bool
 class Tracking(Protocol):
     async def sources(self, project_id: str) -> list[TrackingSourceView]: ...
     async def create_source(self, project_id: str, type: SourceType, settings: dict[str, Any], auth: Literal["none", "credential"]) -> TrackingSourceView: ...
@@ -103,7 +117,9 @@ Routes: `GET/POST /api/projects/{id}/tracking/sources`, `POST /api/projects/{id}
 
 ```python
 NoteType = Literal["fact", "decision", "incident", "runbook", "doc"]
+class NoteDraft(BaseModel): type: NoteType; title: str; text: str; source: str | None = None
 class NoteView(BaseModel): id: str; type: NoteType; title: str; text: str; source: str | None; author: str; created: datetime; updated: datetime
+class SearchResult(BaseModel): notes: list[NoteView]; used_vectors: bool; detail: str | None   # detail says why vectors were not used
 class VectorStore(Protocol):
     async def upsert(self, project_id: str, note_id: str, vector: list[float], embedder: str) -> None: ...
     async def nearest(self, project_id: str, vector: list[float], embedder: str, k: int) -> list[str]: ...
@@ -126,7 +142,7 @@ class ContextHook(Protocol):
 class HookRegistry: def register(self, hook: ContextHook) -> None; def names(self) -> frozenset[str]; async def run(self, names: Sequence[str], ctx: HookContext) -> str
 ```
 
-The registry replaces `KNOWN_HOOKS` in `agents/catalog.py`; the catalog validates `context_hooks` against `registry.names()`. The agent runtime's one injection point (today the status summary in `agents/runtime/agent.py`) calls `HookRegistry.run`; `status_board` is the first registered hook and `AgentDefinition.status_board` is removed (data-summary plan).
+The registry replaces `KNOWN_HOOKS` in `agents/catalog.py`; the catalog validates `context_hooks` against `registry.names()`. The agent runtime's one injection point (today the status summary in `agents/runtime/agent.py`) calls `HookRegistry.run`; `status_board` is the first registered hook. Until onboarding rewrites the definitions, the catalog treats `status_board: true` as the `status_board` hook (data-summary); onboarding then removes the field from every definition and from `AgentDefinition`.
 
 ### I19: proposals (`proposals/contract.py`)
 
@@ -139,10 +155,37 @@ class ProposalKind(Protocol):
     def preview(self, payload: BaseModel) -> Preview: ...
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]: ...   # slot index + label
     async def apply(self, project_id: str, proposal_id: str, payload: BaseModel) -> ApplyResult: ...   # parts applied / failed with reasons
-class ConnectionsPayload, HandoffPayload    # exactly §9's fields, in contracts
+class CredentialSlot(BaseModel): index: int; label: str; source_type: str
+class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # part -> reason
+class ConnectionsPayload, HandoffPayload    # exactly §9's fields (HandoffPayload.operations.checks: check_id, name, category, cadence, results: file | ci | mlflow), in contracts
+class Proposals(Protocol):
+    async def create(self, project_id: str, agent: str, kind: str, payload: dict[str, Any], approval_id: str) -> ProposalView: ...
+    async def decide(self, project_id: str, proposal_id: str, approved: bool) -> ApplyResult | None: ...   # called by the approvals path on decision
+    async def pending(self, project_id: str, kind: str) -> ProposalView | None: ...
 ```
 
 Route: `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}` (keystore only; refused unless the proposal is pending). Events `proposal.created`, `proposal.decided`, `handoff.approved`.
+
+Credentials are written in one place: `credentials/project_secrets.py` (`put`, `move`, `delete` over `KeyStore`, refs `project/<id>/proposal/<prp>/<slot>` and `project/<id>/tracking/<trk>`), used by both the proposal slot route and the tracking source credential route.
+
+### I20: the current handoff (`proposals/handoffs.py`)
+
+```python
+class HandoffView(BaseModel): proposal_id: str; approved: datetime; payload: HandoffPayload
+class Handoffs(Protocol):
+    async def current(self, project_id: str) -> HandoffView | None: ...
+    async def store(self, project_id: str, proposal_id: str, payload: HandoffPayload) -> None: ...   # versioned; called by the handoff kind's apply
+```
+
+Route: `GET /api/projects/{id}/handoff`. Stage 4 reads `operations` from here (the baseline inventory).
+
+### I21: key failover (`providers/failover.py`)
+
+```python
+class KeyFailover:   # one per app, shared by every call; state per (provider, key index, model)
+    async def call[T](self, provider: ProviderView, model: str, attempt: Callable[[int], Awaitable[T]]) -> T: ...   # attempt(key_index); raises AllKeysExhausted
+class AllKeysExhausted(Exception): keys: list[KeyState]   # per key: state ("exhausted_daily" | "billing" | "rejected") and since
+```
 
 ## Files shared by these plans
 
@@ -152,6 +195,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `agents/runtime/agent.py` (the injection point), `agents/catalog.py`: data-summary.
 - `sandbox/containers.py`, `sandbox/templates/*`: connections.
 - `agents/tools/__init__.py` (`default_registry`) and `api/services.py`: each plan adds only its own lines.
+- `frontend/src/pages/agents/ApprovalCard.tsx`: contracts adds a dispatcher on the approval's `kind` (and on the proposal kind); rate-limits (the stall card) and proposals (the two proposal cards) each add their own component file and one line in the dispatcher.
 - `agents/definitions/*.md`: onboarding only.
 - `tests/fakes/fake_openai.py`: embedders (`/embeddings`) and rate-limits (429 and 402 scripts), each its own functions.
 - `frontend/e2e/flow.spec.ts`: onboarding only.

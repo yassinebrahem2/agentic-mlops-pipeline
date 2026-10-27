@@ -241,7 +241,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 
 ## 13. Storage
 
-New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the exhausted-key cooldown and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. Each plan adds its own numbered migration.
+New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the exhausted-key cooldown and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. One plan (the overview's contracts) writes the stage 3 schema, as in stage 2.
 
 ## Changes to the roadmap
 
