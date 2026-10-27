@@ -297,6 +297,18 @@ describe("useProjectEvents", () => {
       expect(latestCallback).toHaveBeenCalledWith(record(1));
     });
 
+    it("closes the old project's stream when its last subscriber switches project", () => {
+      const { rerender } = renderHook(
+        ({ projectId }: { projectId: string }) => useProjectEvents(projectId),
+        { initialProps: { projectId: "prj_1" } },
+      );
+
+      rerender({ projectId: "prj_2" });
+
+      expect(createdStreams[0]?.close).toHaveBeenCalled();
+      expect(createdStreams[1]?.url).toBe("/api/projects/prj_2/events/stream");
+    });
+
     it("opens no stream without a project and moves to the new project's stream on switch", () => {
       const other = renderHook(() => useProjectEvents("prj_1"));
       const initialProps: { projectId: string | undefined } = { projectId: undefined };
