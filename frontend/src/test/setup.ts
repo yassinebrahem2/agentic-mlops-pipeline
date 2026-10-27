@@ -26,3 +26,13 @@ if (typeof Element !== "undefined") {
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
 }
+
+// jsdom has no ResizeObserver. Radix Switch renders a hidden form-bubble input, only inside a <form>,
+// that measures its control with one.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}

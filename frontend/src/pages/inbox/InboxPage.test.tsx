@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import * as streamModule from "@/lib/stream";
 import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "@/pages/agents/session/stream";
 import { project, stubProjects } from "@/test/projects";
@@ -610,7 +610,7 @@ describe("InboxPage and badge", () => {
   it("shows error alert when approvals fetch fails", async () => {
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
       if (path === "/api/projects/{project_id}/approvals") {
-        return Promise.reject(new Error("Network connection lost"));
+        return Promise.reject(new ApiError("internal", "Network connection lost", 500));
       }
       if (path === "/api/projects/{project_id}/reviews") {
         return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
@@ -639,7 +639,7 @@ describe("InboxPage and badge", () => {
         return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
       }
       if (path === "/api/projects/{project_id}/reviews") {
-        return Promise.reject(new Error("Database disk full"));
+        return Promise.reject(new ApiError("internal", "Database disk full", 500));
       }
       if (path === "/api/projects/{project_id}/github/activity") {
         return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
@@ -668,7 +668,7 @@ describe("InboxPage and badge", () => {
         return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
       }
       if (path === "/api/projects/{project_id}/github/activity") {
-        return Promise.reject(new Error("GitHub API rate limited"));
+        return Promise.reject(new ApiError("internal", "GitHub API rate limited", 500));
       }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({

@@ -1,7 +1,8 @@
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as streamModule from "@/lib/stream";
-import { FakeStream } from "@/pages/agents/session/testing";
+import { FakeStream, STREAM_OPEN } from "@/pages/agents/session/testing";
 import { useProjectEvents, type EventRecord } from "./useProjectEvents";
 
 describe("useProjectEvents", () => {
@@ -161,6 +162,33 @@ describe("useProjectEvents", () => {
 
       renderHook(() => useProjectEvents("prj_1"));
       expect(createdStreams).toHaveLength(2);
+    });
+
+    it("opens no stream when the last subscriber unmounts while a reconnect is pending", () => {
+      vi.useFakeTimers();
+      const { unmount } = renderHook(() => useProjectEvents("prj_1"));
+      act(() => {
+        createdStreams[0]?.emitOpen();
+        createdStreams[0]?.onerror?.(new Event("error"));
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(createdStreams).toHaveLength(1);
+    });
+
+    it("ends a StrictMode double mount with exactly one open stream", () => {
+      renderHook(() => useProjectEvents("prj_1"), { wrapper: StrictMode });
+
+      expect(createdStreams).toHaveLength(2);
+      expect(createdStreams[0]?.close).toHaveBeenCalledTimes(1);
+      expect(createdStreams[1]?.close).not.toHaveBeenCalled();
+      expect(createdStreams.filter((stream) => stream.readyState === STREAM_OPEN)).toHaveLength(1);
     });
 
     it("opens a separate stream per project", () => {
