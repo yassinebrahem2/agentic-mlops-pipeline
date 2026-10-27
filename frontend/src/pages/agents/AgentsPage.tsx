@@ -32,6 +32,11 @@ export function AgentsPage() {
 
   const session = useSession(projectId ?? "", selectedAgentName);
 
+  const selectedAgentStatus = (statusQuery.data ?? []).find(
+    (agent) => agent.agent === selectedAgentName,
+  );
+  const currentTask = session.state?.current_task ?? selectedAgentStatus?.task;
+
   if (!projectId) return null;
 
   if (agentsQuery.isLoading) {
@@ -168,11 +173,14 @@ export function AgentsPage() {
 
         <MessageList messages={session.state?.messages ?? []} sessionAgent={selectedAgentName} />
 
-        {session.state?.current_task && (
+        {currentTask && (
           <TaskBar
-            task={session.state.current_task}
+            task={currentTask}
             projectId={projectId}
-            onDiscard={() => void session.reload()}
+            onDiscard={() => {
+              void session.reload();
+              void statusQuery.refetch();
+            }}
           />
         )}
 

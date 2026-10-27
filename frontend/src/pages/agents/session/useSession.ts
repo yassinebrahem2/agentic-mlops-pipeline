@@ -207,6 +207,22 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         stateRef.current = next;
         queryClient.setQueryData(queryKey, next);
         setState(next);
+
+        if (parsed.type === "turn.ended") {
+          void fetchSessionSnapshot()
+            .then((snapshot) => {
+              if (!disposed && stateRef.current) {
+                const updated: SessionState = {
+                  ...stateRef.current,
+                  current_task: snapshot.current_task,
+                };
+                stateRef.current = updated;
+                queryClient.setQueryData(queryKey, updated);
+                setState(updated);
+              }
+            })
+            .catch(() => {});
+        }
       };
 
       for (const name of eventNames) {
