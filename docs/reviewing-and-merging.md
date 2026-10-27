@@ -4,6 +4,7 @@ How the lead's Claude Code session reviews and merges PRs, locally or in a cloud
 
 ## 1. Find what needs the lead
 
+- Locally, run `scripts/lead-watch.sh` under the Monitor tool (re-arm it when it expires): it prints each new PR head, each head whose CI finished, and each card that needs the lead. `scripts/board-list.sh [open|closed|all]` lists the board.
 - Open PRs: `gh pr list --json number,author,headRefName,reviewDecision,isDraft,headRefOid,updatedAt`.
 - A PR needs the lead when it is not a draft and either has no review yet or has new commits since the last "changes requested".
 - Board: only the open cards in In review and Blocked matter; a closed issue anywhere but Done is a wrong card (step 6).
@@ -27,6 +28,10 @@ Verify a Critical finding in the code yourself before acting on it. Reviewers ca
 - Your own PR (`yassinebrahem2` is the author): GitHub refuses approve and request-changes, so `gh pr comment <n> --body-file <file>` and move the cards yourself (`scripts/board-status.sh <n> "In progress"` for the PR and its open issues).
 - Write review bodies to a file and pass `--body-file`; inline backslashes become control characters.
 - **Merge gate.** Only Critical and Important findings hold a merge. They are, however rare: red CI, a broken spec or interface contract, touching the user's repo, refs or config, a secret leak, data loss, a crash at startup or shutdown, a 500 or wrong answer on a normal path. Everything else is Minor (a self-healing race, a rare path that fails loudly, a file a little over 400 lines, a weak test of correct code, duplication, PR description accuracy): approve and merge, and in the same step put the Minors in a Bug issue (template Bug, label `bug`, the stage's milestone, assigned to `yassinebrahem2`) or in the owner's next task's "Review fixes"; say which in the approval. Nothing is dropped, only moved out of the merge.
+- End every review and comment to an owner with: work autonomously, check your PR and Blocked cards about every 10 minutes (rule 7), keep going on your next task meanwhile.
+- A bug filed into a plan or a task's "Review fixes" is reassigned from `yassinebrahem2` to that plan's owner in the same step.
+- Before answering a Decision issue or changing a plan or an interface, get a second review (the advisor in Claude Code), and check the plan's other tasks for clashes with the answer.
+- Commit messages never say "fixes #n" or "closes #n" unless the commit really closes that issue: GitHub closes it on push to `main`.
 
 ## 4. Merge
 
