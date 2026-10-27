@@ -1,7 +1,5 @@
 # Demo Project — Plans Overview
 
-> **Draft.** Missing: an advisor round with no blocking issues.
-
 The demo shows every feature of the app on a hotel group's live ML system, and lets the evaluation measure the agents against the company's own monitoring. It has two parts:
 - **The company**: the repository `yassinebrahem2/hotel-cancellation-demo`. Only what a real company would have: its pipeline, its daily job, its legacy monitoring, its CI. This is the project added to the app.
 - **The world**: `bench/demo-world/` in this repository, a developer tool outside the product. It plays time: it delivers each day's bookings and the late outcomes into the company's data folder, runs the company's daily job, injects problems, and keeps the answer key and the list of planted flaws for the evaluation.
@@ -16,7 +14,7 @@ Facts and the story: `project_knowledge.md` (the demo entries of 2026-10-27).
 - demo-world: an ordinary plan of this repository.
 - Both run CI on Ubuntu and Windows.
 
-**Tech stack.** Python 3.12, uv, pandas, pyarrow, pytest, ruff, `argparse` for CLIs. The company adds LightGBM, scikit-learn (metrics), scipy (its drift test) and MLflow. The world adds `mlflow` only to start the server in `up`.
+**Tech stack.** Python 3.12, uv, pandas, pyarrow, pytest, ruff, `argparse` for CLIs. The company adds LightGBM, scikit-learn (metrics), scipy (its drift test) and MLflow. The world needs no MLflow of its own: it runs MLflow's server from the company's environment.
 
 ## Global constraints
 
@@ -24,7 +22,9 @@ Facts and the story: `project_knowledge.md` (the demo entries of 2026-10-27).
 - **Folders.** Outside both repositories, each overridable by an environment variable, defaults under `~/hotel-demo/`:
   - `HOTEL_DEMO_DATA` (`data/`): the company's production data, written by the world and the company's daily job; what an app data connection points at.
   - `HOTEL_DEMO_MLFLOW` (`mlflow/`): MLflow's SQLite store and artifacts (the company's).
-  - `HOTEL_DEMO_WORLD` (`world/`): the world's own folder: the downloaded CSV, its state, the answer key, the planted-flaws list. Never inside the data folder.
+  - `HOTEL_DEMO_SOURCE` (`source/`): the downloaded CSV, shared by every run.
+  - `HOTEL_DEMO_WORLD` (`world/`): the world's own folder: its state, the answer key, the planted-flaws list. Never inside the data folder.
+  - Each run (`demo-world new-run <name>`) gets its own copy of the company repository and its own data, MLflow and world folders under `runs/<name>/`; the defaults above are for development only.
 - **One tracking URI.** In the company, `paths.tracking_uri()` is the only place MLflow's URI is chosen: `MLFLOW_TRACKING_URI` if set (under `up`, the server), else `sqlite:///<mlflow dir>/mlflow.db`. The port is `HOTEL_DEMO_MLFLOW_PORT`, default 5000.
 - **Business dates.** Every file in the data folder carries its business date (the simulated day) in its name, `YYYY-MM-DD`. Nothing in the data depends on the wall clock.
 - **Labels arrive late.** A booking's label is released on its cancellation date if cancelled, otherwise on its arrival date, and never before its booking date (a booking cancelled the day it was made gets its label that day).
@@ -37,7 +37,7 @@ data/
   bookings/YYYY-MM-DD.parquet      booking_id, booking_date, arrival_date, then the booking columns   (world)
   labels/YYYY-MM-DD.parquet        booking_id, is_canceled, label_date, booking_changes               (world)
   predictions/YYYY-MM-DD.parquet   booking_id, business_date, model_version, p_cancel                 (company)
-  monitoring/YYYY-MM-DD.json       the legacy monitoring's results for that day                       (company)
+  monitoring/YYYY-MM-DD.jsonl      the legacy monitoring's results for that day, one line per check    (company)
   jobs/YYYY-MM-DD.jsonl            one line per job run: job, business_date, started, ended, status, error (company)
 ```
 
@@ -76,14 +76,17 @@ data/
 **`labels/*.parquet`:** `booking_id` int64, `is_canceled` int64 (0 or 1), `label_date` date32, `booking_changes` int64 (the final value).
 
 - The world converts the source's `"NULL"` (`agent`, `company`, `country`), `"NA"` (`children`) and `"Undefined"` (`meal`, `market_segment`, `distribution_channel`) markers to nulls.
-- Every file is written to a temporary name in the same folder and renamed.
-- **Contract test.** The demo-world CI workflow checks out the demo repository's `main`, generates five days with the world, and runs the company's real `daily` on them; a schema disagreement fails it.
+- `bookings`, `labels` and `predictions` files are written to a temporary name in the same folder and renamed, so a reader never sees half a file. `monitoring` and `jobs` files are append-only JSON Lines: each line is one complete record, written in one append.
+- Injected problems (demo-world) break this contract on purpose; the contract test runs with no scenario.
+- **Contract test.** The demo-world CI workflow checks out the demo repository's `main`, generates five days with the world (no scenario), and runs the company's real `daily` on them; a schema disagreement fails it. It runs on changes under `bench/demo-world/` and once a day on a schedule, so a company change that breaks the contract shows within a day.
 
 ## The company's CLI (`hotel-demo`)
 
 `train --cutoff`, `evaluate --version`, `deploy --version`, `rollback`, `score --date`, `daily --date` (score, then every monitoring check). Onboarding finds these as the company's commands; the stage 5 agents use them. Exit code 0 on success, non-zero with a message on failure. The world always runs them, and MLflow's server, from the company's own environment (`uv run --project <company checkout> ...`), so there is one MLflow version.
 
-**Checks are files.** `daily` runs every check module in `src/hotel_demo/checks/`, so an agent's PR that adds a check file takes effect on the next run once merged. The legacy checks write their own result shape; the app reads them through a parser (stage 4). Who merges agents' PRs: the user in a live demo; the world in evaluation runs, after a fixed delay in simulated days recorded with the run.
+**The production schedule is a file.** `ops/schedule.toml` in the company repository lists the company's scheduled jobs (name, command with `{date}` for the business date, every N business days counted from the schedule's first day); the world runs exactly what it lists, as the company's ops host would. `train` prints the new version as its last line of output, so a scheduled retrain can chain into `deploy`. Onboarding records it as the team's scheduler. The scheduled GitHub workflow is only a CI smoke run on sample data.
+
+**Checks are files.** `daily` runs every check module in `src/hotel_demo/checks/`, so an agent's PR that adds a check file takes effect on the next run once merged. The legacy checks write their own result shape; the app reads them through a parser (stage 4). The company's existing monitoring is the three legacy checks plus the failure log in `jobs/*.jsonl` (an ops host notices a failed job): the baseline catches the loud failures and misses the subtle ones. Who merges agents' PRs: the user in a live demo; the world in evaluation runs, after a fixed delay in simulated days recorded with the run.
 
 ## Plans
 

@@ -108,6 +108,7 @@ Anything not listed here is unknown.
 - [USER] GitHub access: reuse the GitHub CLI login if present, otherwise a pasted fine-grained token; stored in the keyring.
 - [USER/AGREED] Storage: SQLite. Layout: `<app data>/app.db` (projects, AI providers registry, connections, settings) and `<app data>/projects/<id>/` with `project.db`, the repo clone and worktrees. Nothing is written into the user's repo.
 - [AGREED] Knowledge store: sqlite-vec + FTS5 (hybrid search) inside SQLite, behind a VectorStore interface. Code is read with file/search tools, not RAG.
+- [AGREED] 2026-10-27: the Knowledge store holds short notes (project facts, decisions, incident history, runbooks, pointers to the team's docs), each with a type, title, text, source, author agent and time. Every agent writes; the user can edit or delete anything on the Knowledge page. One tool saves, updates and searches notes; the most relevant notes are added at the start of each turn.
 - [AGREED] Single backend process (API + background agent work + scheduler); heavy work runs in Docker containers. Database layer written so Postgres is a configuration change.
 - [AGREED] Backups use VACUUM INTO / the SQLite backup API, never a plain file copy. Keys: OS keyring locally; encrypted file with a master key from the environment on headless servers. SQLite files stay on native disk. Schedules live in the app's own tables.
 - Verified on the dev machine (Python 3.12, Windows): sqlite-vec 0.1.9, FTS5, DuckDB 1.5.6, LangGraph AsyncSqliteSaver.
