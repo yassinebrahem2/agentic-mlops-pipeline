@@ -27,6 +27,8 @@ Anything not listed here is unknown.
 - [USER] All agents are full coding agents (read files, write code, run commands) except Alert Prioritization, which is workflow-like and runs in the background with no chat.
 - [USER] Orchestrator is an LLM agent that works like the assistant in a claude.ai Project: the default project-level chat that knows the whole project. It stays informed through a shared status board and event stream; it does not sit between the user and other agents.
 - [USER] Onboarding: reads the project, asks about the model's objectives and use cases, proposes tests and a monitoring plan, suggests data connections, and sets up tracking (connect MLflow, or open a PR adding it).
+- [USER] 2026-10-27: Onboarding sets the app up for the project and hands off: it makes sure every other agent has what it needs to start working correctly. After the handoff, the other agents start on their own work (for example Data Quality explores the data and the checks already in place, such as drift and data quality tests, and finds what is good, broken or missing) and propose what to add.
+- [USER] 2026-10-27: anything an MLOps engineer does, an agent must be able to do, behind permission gates or not. The target is live production systems (assumed, not deployed).
 - [USER] Data Quality: decides first whether a change is bad data (block it) or real drift (inform adaptation); writes its own checks and triggers after studying the data; schedules checks; explains every flag.
 - [USER] Alert Prioritization: deduplicates, ranks and routes alerts to the owner and channel.
 - [USER] Retraining and Deployment act through hooks (train / evaluate / deploy / rollback commands) found or written by agents.
@@ -137,6 +139,7 @@ Anything not listed here is unknown.
 - Developer benchmarks: were done later. Now part of the 2026-11-05 deliverable (2026-10-27).
 - Promise to the user: was "the app never changes your working files or your checked-out branch". Now "never without your explicit approval": approving a local review fast-forwards the default branch (stage 2).
 - File conflicts between agents: were prevented by the Orchestrator. Now file claims enforced in code, so it holds when the Orchestrator is idle or wrong.
+- Onboarding: was "proposes tests and a monitoring plan". Now it prepares the project and hands off; the other agents audit and propose after the handoff (2026-10-27).
 - PRs: were opened automatically when an agent finishes. Now the agent is reminded at the end of each turn and decides, because a stopped agent may still be waiting on something.
 - Frontend test runner: was Vitest 3 (pinned major). Now Vitest 5: vitest 3 depended on packages with critical advisories (tinypool, @vitest/mocker) that no 3.x release fixes.
 
