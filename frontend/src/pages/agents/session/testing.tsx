@@ -57,11 +57,16 @@ export const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 );
 
-export function setupSessionStreamMock(createdStreams: FakeStream[]): MockInstance {
+/** Session streams go to `createdStreams` and project event streams to `eventStreams`, so a
+ * test counts and drives each kind on its own. */
+export function setupSessionStreamMock(
+  createdStreams: FakeStream[],
+  eventStreams: FakeStream[] = [],
+): MockInstance {
   queryClient.clear();
   return vi.spyOn(streamModule, "openStream").mockImplementation((url: string) => {
     const stream = new FakeStream(url);
-    createdStreams.push(stream);
+    (url.includes("/session/stream") ? createdStreams : eventStreams).push(stream);
     return stream;
   });
 }

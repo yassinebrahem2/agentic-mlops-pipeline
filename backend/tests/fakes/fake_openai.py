@@ -118,8 +118,9 @@ def _reply(
     if model == "fake-slow":
         return SLOW_TEXT, None
     if model == "fake-write":
-        last_content = str(last.get("content") or "")
-        if "pull request" in last_content or "OpenPullRequest" in last_content:
+        # Only the user's own message can be the PR reminder; a tool result may mention PRs too.
+        user_text = str(last.get("content") or "") if last.get("role") == "user" else ""
+        if "pull request" in user_text or "OpenPullRequest" in user_text:
             return (
                 "This project is local with no remote repository, so no pull request is needed.",
                 None,

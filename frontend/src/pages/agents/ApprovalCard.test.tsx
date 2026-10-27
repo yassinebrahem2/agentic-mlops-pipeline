@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api } from "@/lib/api";
@@ -82,6 +82,14 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("Edit file.py")).toBeInTheDocument();
     expect(screen.getByText("+ return 2")).toBeInTheDocument();
     expect(screen.getByText("- return 1")).toBeInTheDocument();
+  });
+
+  it("renders nothing, so no decision can be sent, while no project is known", () => {
+    const { container } = render(<ApprovalCard approval={baseApproval} toolName="Write" />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 
   it("calls the decision route with approve: true when clicking Approve", async () => {
@@ -201,9 +209,12 @@ describe("ApprovalCard", () => {
     const approveButton = screen.getByRole("button", { name: "Approve" });
     const rejectButton = screen.getByRole("button", { name: "Reject" });
 
-    // Two clicks in one tick
-    fireEvent.click(approveButton);
-    fireEvent.click(approveButton);
+    // Both clicks in one act(): React re-renders (and disables the button) only after both
+    // have reached the handler, so only the in-flight guard can stop the second request.
+    act(() => {
+      approveButton.click();
+      approveButton.click();
+    });
 
     expect(postSpy).toHaveBeenCalledTimes(1);
 

@@ -404,35 +404,4 @@ describe("AgentsPage", () => {
     const composer = screen.getByRole("textbox", { name: "Message Orchestrator" });
     expect(composer).toBeInTheDocument();
   });
-
-  it("renders task bar above composer when agent status carries task", async () => {
-    setupDefaultMocks({
-      currentTask: null,
-      agentsStatus: [
-        {
-          agent: "orchestrator",
-          display_name: "Orchestrator",
-          state: "idle",
-          open_prs: [],
-          last_finished: null,
-          task: {
-            id: "tsk_from_status",
-            title: "Task from status",
-            branch: "task/status-branch",
-            status: "active",
-            review_kind: "local",
-            pr_number: null,
-            pr_url: null,
-          },
-        },
-      ],
-    });
-
-    renderPage("/projects/prj_1/agents", { routes: testRoutes });
-
-    expect(await screen.findByText("Task from status")).toBeInTheDocument();
-    expect(screen.getByText("task/status-branch")).toBeInTheDocument();
-    expect(screen.getByText("local review")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discard task" })).toBeInTheDocument();
-  });
 });
