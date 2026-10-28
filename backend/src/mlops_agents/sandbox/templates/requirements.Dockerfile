@@ -13,4 +13,6 @@ RUN python -m venv /opt/venv && \
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# @duckdb
+
 WORKDIR /workspace

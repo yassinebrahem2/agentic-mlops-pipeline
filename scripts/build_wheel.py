@@ -20,6 +20,7 @@ def check_wheel(path: Path) -> list[str]:
     required = {
         "mlops_agents/web/index.html",
         "mlops_agents/agents/definitions/orchestrator.md",
+        "mlops_agents/sandbox/templates/_duckdb.fragment",
         *[
             f"mlops_agents/storage/migrations/{migration.relative_to(MIGRATIONS).as_posix()}"
             for migration in MIGRATIONS.rglob("*.sql")

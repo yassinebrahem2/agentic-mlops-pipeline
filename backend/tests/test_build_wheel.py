@@ -13,6 +13,7 @@ def wheel(tmp_path: Path, *, omit: str = "", extra: str = "", tag: str = "py3-no
         "mlops_agents/web/index.html",
         "mlops_agents/web/assets/app.js",
         "mlops_agents/agents/definitions/orchestrator.md",
+        "mlops_agents/sandbox/templates/_duckdb.fragment",
         *[
             f"mlops_agents/storage/migrations/{path.relative_to(MIGRATIONS).as_posix()}"
             for path in MIGRATIONS.rglob("*.sql")
@@ -38,6 +39,7 @@ def test_good_wheel(tmp_path: Path) -> None:
         "mlops_agents/web/index.html",
         "mlops_agents/web/assets/app.js",
         "mlops_agents/agents/definitions/orchestrator.md",
+        "mlops_agents/sandbox/templates/_duckdb.fragment",
         *[
             f"mlops_agents/storage/migrations/{path.relative_to(MIGRATIONS).as_posix()}"
             for path in MIGRATIONS.rglob("*.sql")
@@ -81,3 +83,8 @@ def test_invalid_zip(tmp_path: Path) -> None:
     path = tmp_path / "mlops_agents-0.1.0-py3-none-any.whl"
     path.write_text("not a zip", encoding="utf-8")
     assert check_wheel(path)
+
+
+def test_duckdb_fragment_in_built_wheel(tmp_path: Path) -> None:
+    problem = check_wheel(wheel(tmp_path, omit="mlops_agents/sandbox/templates/_duckdb.fragment"))
+    assert any("mlops_agents/sandbox/templates/_duckdb.fragment" in p for p in problem)
