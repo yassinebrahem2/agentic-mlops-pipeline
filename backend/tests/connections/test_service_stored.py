@@ -159,7 +159,9 @@ async def test_mounts_scrub_an_os_error_of_the_kind(
     service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = service_env[0]
-    await _good_and_bad(service_env, tmp_path, "prj_os", json.dumps({"path": str(tmp_path / "bad")}))
+    await _good_and_bad(
+        service_env, tmp_path, "prj_os", json.dumps({"path": str(tmp_path / "bad")})
+    )
 
     def leaky_mount(self: LocalFolderKind, name: str, settings: BaseModel) -> Mount | None:
         raise OSError(f"mount https://user:{SECRET}@host/x?token={SECRET} failed")
@@ -178,7 +180,9 @@ async def test_mounts_hand_the_kind_only_validated_settings(
     service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = service_env[0]
-    await _good_and_bad(service_env, tmp_path, "prj_val", json.dumps({"path": str(tmp_path / "bad")}))
+    await _good_and_bad(
+        service_env, tmp_path, "prj_val", json.dumps({"path": str(tmp_path / "bad")})
+    )
     calls: list[tuple[str, BaseModel]] = []
     real_validate = LocalFolderKind.validate
     real_mount = LocalFolderKind.sandbox_mount
