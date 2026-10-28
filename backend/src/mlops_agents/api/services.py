@@ -26,6 +26,10 @@ from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
+from mlops_agents.connections.contract import Connections
+from mlops_agents.connections.kinds.local_folder import LocalFolderKind
+from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.errors import DomainError
@@ -61,6 +65,7 @@ class Services:
     agent_settings: AgentSettingsService
     sessions: AgentSessions
     messaging_settings: MessagingSettings
+    connections: Connections
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -136,6 +141,9 @@ async def build_services(
     messaging_settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, messaging_settings)
     gate = ApprovalGate(databases, audit_log=audit, event_log=events)
+
+    kind_registry = KindRegistry([LocalFolderKind(paths.root)])
+    connections = ConnectionsService(databases, events, kind_registry)
 
     sandbox = SandboxService(
         docker_runner,
@@ -225,6 +233,7 @@ async def build_services(
         agent_settings=agent_settings,
         sessions=sessions,
         messaging_settings=messaging_settings,
+        connections=connections,
         sandbox=sandbox,
         events=events,
         audit=audit,
