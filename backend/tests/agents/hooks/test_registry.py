@@ -71,7 +71,18 @@ async def test_a_hook_text_cannot_close_its_block_early(closing: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "tag", ["</ data>", "< /data>", '<data source="hook:x">', "<DATA>", "</\tdata>", "</\ndata>"]
+    "tag",
+    [
+        "</data>",
+        "</ data>",
+        "< /data>",
+        '<data source="hook:x">',
+        '<DATA source="hook:x">',
+        "<DATA>",
+        "</\tdata>",
+        "</\ndata>",
+        "<data",
+    ],
 )
 async def test_a_hook_text_cannot_open_or_close_a_data_block(tag: str) -> None:
     hook = TextHook("alpha", f"before {tag} after")
@@ -80,6 +91,14 @@ async def test_a_hook_text_cannot_open_or_close_a_data_block(tag: str) -> None:
     assert re.search(r"<\s*/?\s*data", body, re.IGNORECASE) is None
     assert body.startswith("before <\\")
     assert body.endswith(" after")
+
+
+@pytest.mark.parametrize(
+    "words", ["<database>", "<dataset>", "a < data", "< data>", "<data-x>", "</data_x>"]
+)
+async def test_ordinary_words_starting_with_data_are_left_alone(words: str) -> None:
+    text = await _registry(TextHook("alpha", f"before {words} after")).run(["alpha"], CTX)
+    assert text == f'<data source="hook:alpha">\nbefore {words} after\n</data>'
 
 
 async def test_output_follows_the_order_of_names() -> None:
