@@ -271,6 +271,8 @@ class Handoffs(Protocol):
 ```
 
 - Route: `GET /api/projects/{id}/handoff` returns `HandoffView` or `null` (200). Stage 4 reads `operations` from it: the baseline inventory.
+- Agents read the current handoff with the tool `ReadHandoff(section?)` (risk class `read`; justified: it is in the app's database), owned by onboarding; a section returns that part of the payload, capped.
+- The payload models validate in code (contracts): IANA time zones, on-call `start` before `end`, a `command` has a `template` and a `ci_dispatch` a `workflow`, every `{placeholder}` in a template is declared, `Cadence` has exactly one field, references between parts (`TableUse`, alias maps, edges) resolve.
 
 ### I21: key failover (`providers/failover.py`; rate-limits task 1)
 
@@ -301,6 +303,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `agents/runtime/agent.py` (the injection point), `agents/catalog.py`: data-summary, which also adds its one line to `agents/runtime/executor.py` and to `agents/runtime/sessions.py` (onboarding later removes the `status_board` field from `catalog.py`).
 - `sandbox/containers.py`, `sandbox/templates/*`: connections.
 - `agents/tools/__init__.py` (`default_registry`) and `api/services.py`: each plan adds only its own lines.
+- `agents/runtime/context.py`: onboarding adds one line (the shared working rules: hard limits and the continuous-PR principle, from packaged files).
 - `agents/definitions/*.md`: onboarding, for stage 3; the stage 4 and 5 plans edit them later, named in their overviews.
 - `tests/fakes/fake_openai.py`: embedders (`/embeddings`), rate-limits (429 and 402 scripts) and onboarding (its scripted models), each in its own functions.
 - `frontend/src/pages/agents/ApprovalCard.tsx`: contracts (the dispatcher and `ApprovalControls`); rate-limits (the stall card) and proposals (the two proposal cards) each add their own component file and one line in the dispatcher.
