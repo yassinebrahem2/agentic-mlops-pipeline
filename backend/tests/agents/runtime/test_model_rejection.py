@@ -96,6 +96,7 @@ async def _setup_rejection_env(
         settings=agent_settings,
         workspace=workspace,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
     store = SessionStore(databases)
     caller = ModelCaller(providers, model_http)

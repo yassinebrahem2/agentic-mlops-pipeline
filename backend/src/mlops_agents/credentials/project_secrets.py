@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.clock import now_iso
@@ -62,6 +62,8 @@ class ProjectSecrets:
         value = await asyncio.to_thread(self._keystore.get, src_ref)
         if value is None:
             raise LookupError(f"No secret is stored under {src_ref}.")
+        if src_ref == dst_ref:
+            return
         await asyncio.to_thread(self._keystore.set, dst_ref, value)
         await self._record(dst_ref, project)
         await self.delete(src_ref)
@@ -79,8 +81,9 @@ class ProjectSecrets:
         async with engine.connect() as conn:
             refs = list(
                 await conn.scalars(
+                    # substr compares exactly; LIKE (startswith) ignores ASCII case in SQLite.
                     select(secret_refs.c.ref).where(
-                        secret_refs.c.ref.startswith(prefix, autoescape=True)
+                        func.substr(secret_refs.c.ref, 1, len(prefix)) == prefix
                     )
                 )
             )

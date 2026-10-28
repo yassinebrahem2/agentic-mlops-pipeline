@@ -4,6 +4,7 @@ from typing import NoReturn
 import httpx2
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.settings import (
@@ -15,6 +16,7 @@ from mlops_agents.errors import DomainError
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import agent_model_defaults
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -751,3 +753,59 @@ async def test_setters_accept_model_when_provider_needs_attention(
     assert err.value.status == 409
     assert err.value.code == "provider_needs_attention"
     assert err.value.message == expected_msg
+
+
+async def test_embedder_model_rejected_for_agents(
+    databases: Databases,
+    settings_svc: AgentSettingsService,
+    providers_svc: ProvidersService,
+    fake_openai: RunningFake,
+) -> None:
+    # 1. Add self-hosted provider and verified embedder model
+    await providers_svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    model = await providers_svc.add_model(
+        ModelCreate(provider="fake", wire_model_id="fake-embed", model_type="embedder")
+    )
+    await providers_svc.verify_model(model.address)
+
+    # 2. set_default_model refuses embedder with 409 model_not_usable
+    with pytest.raises(DomainError) as err:
+        await settings_svc.set_default_model("orchestrator", model.address)
+    assert err.value.status == 409
+    assert err.value.code == "model_not_usable"
+    assert "is an embedder model, not a chat model. Choose a chat model." in err.value.message
+
+    # 3. set_project_model refuses embedder with 409 model_not_usable
+    with pytest.raises(DomainError) as err:
+        await settings_svc.set_project_model("prj_1", "orchestrator", model.address)
+    assert err.value.status == 409
+    assert err.value.code == "model_not_usable"
+    assert "is an embedder model, not a chat model. Choose a chat model." in err.value.message
+
+    # 4. If an agent's default in DB was pointing to an embedder, get and resolve report the problem
+    engine = await databases.app()
+    async with engine.begin() as conn:
+        await conn.execute(
+            sqlite_insert(agent_model_defaults)
+            .values(agent="orchestrator", model_address=model.address)
+            .on_conflict_do_update(
+                index_elements=[agent_model_defaults.c.agent],
+                set_={"model_address": model.address},
+            )
+        )
+
+    view = await settings_svc.get("orchestrator")
+    assert view.model_problem == (
+        f"{model.address} is an embedder model, not a chat model. Choose a chat model."
+    )
+
+    with pytest.raises(DomainError) as err:
+        await settings_svc.resolve("prj_1", "orchestrator")
+    assert err.value.status == 409
+    assert err.value.code == "model_not_usable"
+    assert (
+        f"{model.address} is an embedder model, not a chat model. Choose a chat model."
+        in err.value.message
+    )

@@ -41,6 +41,7 @@ const agent: Agent = {
 };
 const good: Model = {
   address: "cloud/good",
+  model_type: "chat",
   provider_name: "cloud",
   provider_id: "provider_id",
   wire_model_id: "good",

@@ -1367,6 +1367,14 @@
             ],
             "title": "Context Window"
           },
+          "model_type": {
+            "enum": [
+              "chat",
+              "embedder"
+            ],
+            "title": "Model Type",
+            "type": "string"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -1420,6 +1428,26 @@
               }
             ],
             "title": "Context Window"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "model_type": {
+            "default": "chat",
+            "enum": [
+              "chat",
+              "embedder"
+            ],
+            "title": "Model Type",
+            "type": "string"
           },
           "problem": {
             "anyOf": [

@@ -83,6 +83,7 @@ async def _setup_executor_env(
         settings=agent_settings,
         workspace=workspace,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
     store = SessionStore(databases)
     executor = TurnExecutor(
