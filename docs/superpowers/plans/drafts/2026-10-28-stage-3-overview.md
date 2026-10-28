@@ -317,7 +317,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `agents/runtime/hooks.py`: contracts (`GateDecision`) and rate-limits (`TurnObserver`), each its own lines.
 - `frontend/src/pages/project-settings/ProjectSettingsPage.tsx`: embedders, connections and pages each add one line (their section).
 - `workspace/service.py`: contracts (the project removal's secret cleanup) and connections (lifting the server-mode refusal in `browse`), each its own lines.
-- New package `__init__.py` files (`tracking/`, `connections/`, `knowledge/`, `proposals/`, `onboarding/`, `agents/hooks/`): created by contracts task 1; later plans add modules, never recreate them.
+- New package `__init__.py` files: `tracking/`, `connections/`, `knowledge/`, `agents/hooks/` by contracts task 1, `proposals/` by contracts task 2, `onboarding/` by onboarding; other plans add modules, never recreate them. Sub-packages (`connections/kinds/`, `tracking/adapters/`, `data/`) belong to the plan that creates them.
 - `frontend/src/pages/inbox/InboxPage.test.tsx`: contracts and rate-limits, each its own tests.
 - `backend/tests/agents/test_catalog.py`: data-summary and onboarding, each its own tests.
 - `frontend/src/pages/agents/MessageView.tsx`: contracts (the part dispatch) and rate-limits (Try again on `error_kind`), each its own lines.
