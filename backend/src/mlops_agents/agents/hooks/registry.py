@@ -12,13 +12,13 @@ from mlops_agents.credentials.scrub import error_text
 
 logger = logging.getLogger(__name__)
 
-# Hook output is untrusted data: a closing tag inside it, in any letter case, must not end its
-# block early, so its "</" becomes "<\/".
-_CLOSING_TAG = re.compile(r"</(?=data)", re.IGNORECASE)
+# Hook output is untrusted data: a data tag inside it, opening or closing, in any letter case or
+# spacing, must not end its block early or forge another, so its "<" becomes "<\".
+_DATA_TAG = re.compile(r"<(?=\s*/?\s*data)", re.IGNORECASE)
 
 
 def _block(name: str, text: str) -> str:
-    return f'<data source="hook:{name}">\n{_CLOSING_TAG.sub(r"<\\/", text)}\n</data>'
+    return f'<data source="hook:{name}">\n{_DATA_TAG.sub(r"<\\", text)}\n</data>'
 
 
 class HookRegistry:

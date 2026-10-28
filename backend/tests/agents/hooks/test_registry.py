@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import pytest
 
@@ -66,6 +67,18 @@ async def test_a_hook_text_cannot_close_its_block_early(closing: str) -> None:
     body = text.removeprefix('<data source="hook:alpha">\n').removesuffix("\n</data>")
     assert "</data" not in body.lower()
     assert body.startswith("before <\\/")
+    assert body.endswith(" after")
+
+
+@pytest.mark.parametrize(
+    "tag", ["</ data>", "< /data>", '<data source="hook:x">', "<DATA>", "</\tdata>", "</\ndata>"]
+)
+async def test_a_hook_text_cannot_open_or_close_a_data_block(tag: str) -> None:
+    hook = TextHook("alpha", f"before {tag} after")
+    text = await _registry(hook).run(["alpha"], CTX)
+    body = text.removeprefix('<data source="hook:alpha">\n').removesuffix("\n</data>")
+    assert re.search(r"<\s*/?\s*data", body, re.IGNORECASE) is None
+    assert body.startswith("before <\\")
     assert body.endswith(" after")
 
 
