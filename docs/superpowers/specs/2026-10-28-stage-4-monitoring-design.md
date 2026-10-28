@@ -181,7 +181,7 @@ All ask at every level, `bypass` included, as stage 3 decided.
 
 ## 11. UI
 
-- **Dashboard** (one screen): the pipeline map from the handoff (stages, with their latest status), the production model and its latest metrics, open incidents by severity, expectations at risk, and what each agent is doing.
+- **Dashboard** (one screen): the pipeline map from the handoff (stages, with their latest status), each production model and its latest metrics, open incidents by severity, expectations at risk, and what each agent is doing.
 - **Inbox:** incidents ranked by severity, with acknowledge, snooze, verdict; approvals as today.
 - **Incident page:** timeline, signals, cause, actions, related PRs and issues, verdict.
 - **Integrations:** Discord and email with Test.
@@ -204,7 +204,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
   |---|---|---|
   | deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
   | a pipeline run that deploys, where the handoff makes the team's gate the promotion authority (stage 5) | runs without asking at `ask` and above within an approved training policy | asks |
-  | train | runs without asking at `ask` and above within an approved training policy (stage 5) | asks |
+  | train, evaluate | run without asking at `ask` and above within an approved training policy (stage 5) | ask |
   | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
   | hold | runs without asking at every level except `suggest` (tier 1); at `suggest` the alert recommends the hold and the person applies it in one click through the approval path | same |
 - Stage 5's "train/deploy hooks" become the action hooks of this stage. Stage 5 keeps Retraining's and Deployment & Rollback's behavior (when to propose a retrain, evaluating a candidate against production, promotion) and the Deployments page.
