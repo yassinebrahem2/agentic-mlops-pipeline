@@ -47,9 +47,13 @@ export const StallCard: ApprovalCardComponent = ({ approval, projectId, classNam
     >
       <CardHeader className="gap-1 pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm font-medium text-foreground">
-            {approval.preview.title}
-          </CardTitle>
+          <div className="space-y-0.5">
+            <div className="text-xs font-medium text-amber-700 dark:text-amber-300">Stalled</div>
+            {/* The title names the provider and the model that has no usable key. */}
+            <CardTitle className="text-sm font-medium text-foreground">
+              {approval.preview.title}
+            </CardTitle>
+          </div>
           {approval.status !== "pending" && (
             <Badge variant="outline" className="text-[10px] px-1.5 py-0">
               {SETTLED_LABEL[approval.status]}

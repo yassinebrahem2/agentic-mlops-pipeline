@@ -10,7 +10,7 @@ const stall: ApprovalPart = {
   tool_call_id: null,
   status: "pending",
   preview: {
-    title: "Stalled: no usable key",
+    title: "groq: no usable key for llama-3.3-70b",
     kind: "text",
     body: "Key 1: daily limit reached (since 12:00 UTC). Key 2: billing, out of credit. Key 3: rejected by the provider.",
   },
@@ -37,10 +37,11 @@ describe("StallCard", () => {
     postSpy.mockRestore();
   });
 
-  it("shows the title and one row per key with its state and reason, never the raw body", () => {
+  it("shows the provider and model under a Stalled label, one row per key, never the raw body", () => {
     render(<ApprovalCard approval={stall} projectId="prj_1" />);
 
-    expect(screen.getByText("Stalled: no usable key")).toBeInTheDocument();
+    expect(screen.getByText("Stalled")).toBeInTheDocument();
+    expect(screen.getByText("groq: no usable key for llama-3.3-70b")).toBeInTheDocument();
     const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Key 1");

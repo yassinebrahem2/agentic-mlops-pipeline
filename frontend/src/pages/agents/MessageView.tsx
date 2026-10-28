@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { useParams } from "react-router";
 import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { errorText } from "@/lib/api";
+import { api, errorText, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ApprovalCard } from "./ApprovalCard";
 import { ToolStep } from "./ToolStep";
@@ -24,8 +25,6 @@ import type {
 export interface MessageViewProps {
   message: MessageViewType;
   sessionAgent?: string;
-  /** Re-sends the turn's trigger message; offered on an answer whose keys were exhausted. */
-  onTryAgain?: () => Promise<void>;
   className?: string;
 }
 
@@ -52,7 +51,7 @@ const markdownComponents: Components = {
   ),
 };
 
-export function MessageView({ message, sessionAgent, onTryAgain, className }: MessageViewProps) {
+export function MessageView({ message, sessionAgent, className }: MessageViewProps) {
   if (message.author_kind === "system") {
     return (
       <div
@@ -160,28 +159,41 @@ export function MessageView({ message, sessionAgent, onTryAgain, className }: Me
             Interrupted: the app stopped during this answer
           </div>
         )}
-        {message.error_kind === "keys_exhausted" && onTryAgain && (
-          <TryAgain onTryAgain={onTryAgain} />
+        {message.error_kind === "keys_exhausted" && message.turn_id && sessionAgent && (
+          <TryAgain agent={sessionAgent} turnId={message.turn_id} />
         )}
       </div>
     </div>
   );
 }
 
-/** Try again on a turn that failed because every key of its provider was exhausted. */
-function TryAgain({ onTryAgain }: { onTryAgain: () => Promise<void> }) {
-  const [sending, setSending] = useState(false);
+/** Try again on a turn that failed because every key of its provider was exhausted: the turn
+ * runs again on its own trigger message (the retry route), never re-sent as the user. */
+function TryAgain({ agent, turnId }: { agent: string; turnId: string }) {
+  const { projectId } = useParams<{ projectId: string }>();
+  const pendingRef = useRef(false);
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A retry is sent to a project's route; without a project there is nothing to try again.
+  if (!projectId) return null;
+
   const handleClick = async () => {
-    setSending(true);
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
     setError(null);
     try {
-      await onTryAgain();
+      const result = await api.POST(
+        "/api/projects/{project_id}/agents/{agent}/turns/{turn_id}/retry",
+        { params: { path: { project_id: projectId, agent, turn_id: turnId } } },
+      );
+      unwrap(result);
     } catch (caught) {
       setError(errorText(caught));
     } finally {
-      setSending(false);
+      pendingRef.current = false;
+      setPending(false);
     }
   };
 
@@ -191,7 +203,7 @@ function TryAgain({ onTryAgain }: { onTryAgain: () => Promise<void> }) {
         type="button"
         size="sm"
         variant="outline"
-        disabled={sending}
+        disabled={pending}
         onClick={() => void handleClick()}
       >
         Try again

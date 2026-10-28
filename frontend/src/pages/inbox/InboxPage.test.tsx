@@ -790,7 +790,7 @@ describe("InboxPage and badge", () => {
       step: 2,
       proposal_kind: null,
       preview: {
-        title: "Stalled: no usable key",
+        title: "groq: no usable key for llama-3.3-70b",
         kind: "text",
         body: "Key 1: daily limit reached (since 12:00 UTC). Key 2: billing, out of credit.",
       },
@@ -831,7 +831,8 @@ describe("InboxPage and badge", () => {
 
     renderPage("/projects/prj_1/inbox");
 
-    expect(await screen.findByText("Stalled: no usable key")).toBeInTheDocument();
+    expect(await screen.findByText("groq: no usable key for llama-3.3-70b")).toBeInTheDocument();
+    expect(screen.getByText("Stalled")).toBeInTheDocument();
     expect(screen.getByText("daily limit reached (since 12:00 UTC)")).toBeInTheDocument();
     expect(screen.getByText("billing, out of credit")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();

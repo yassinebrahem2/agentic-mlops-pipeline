@@ -171,11 +171,7 @@ function Agents({ projectId }: { projectId: string }) {
           }}
         />
 
-        <MessageList
-          messages={session.state?.messages ?? []}
-          sessionAgent={selectedAgentName}
-          onSend={(text) => session.send(text)}
-        />
+        <MessageList messages={session.state?.messages ?? []} sessionAgent={selectedAgentName} />
 
         {currentTask && (
           <TaskBar
