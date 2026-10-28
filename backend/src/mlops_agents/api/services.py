@@ -47,6 +47,7 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -75,6 +76,7 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     tracking: TrackingService
+    tracking_loop: TrackingLoop
 
 
 async def _app_secrets(
@@ -235,6 +237,16 @@ async def build_services(
     )
     stack.push_async_callback(tracking.close)
 
+    async def _list_project_ids() -> list[str]:
+        return [p.id for p in await workspace.list_projects()]
+
+    tracking_loop = TrackingLoop(
+        tracking=tracking,
+        projects=_list_project_ids,
+    )
+    stack.push_async_callback(tracking_loop.close)
+    await tracking_loop.start()
+
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers above this line. Close is registered
@@ -265,4 +277,5 @@ async def build_services(
         wakeups=wakeups,
         failover=KeyFailover(),
         tracking=tracking,
+        tracking_loop=tracking_loop,
     )

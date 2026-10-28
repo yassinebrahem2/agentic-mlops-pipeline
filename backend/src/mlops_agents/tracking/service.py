@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
@@ -16,8 +18,14 @@ from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import projects, tracking_sources
-from mlops_agents.tracking.constants import ERROR_MAX_CHARS, QUERY_LIMIT_MAX
+from mlops_agents.storage.tables import project_settings, projects, tracking_sources
+from mlops_agents.tracking.constants import (
+    DEFAULT_SYNC_INTERVAL_S,
+    ERROR_MAX_CHARS,
+    MIN_SYNC_INTERVAL_S,
+    QUERY_LIMIT_MAX,
+    SYNC_INTERVAL_KEY,
+)
 from mlops_agents.tracking.contract import (
     Page,
     SourceType,
@@ -349,6 +357,43 @@ class TrackingService(Tracking):
                 return await query_evaluations(conn, q)
 
         raise DomainError("tracking_bad_query", f"Unknown query target: {q.what!r}.", status=422)
+
+    async def sync_interval(self, project_id: str) -> int:
+        await self._check_project(project_id)
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(project_settings.c.value).where(
+                        project_settings.c.key == SYNC_INTERVAL_KEY
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return DEFAULT_SYNC_INTERVAL_S
+        try:
+            val = int(json.loads(str(row)))
+            return val if val >= MIN_SYNC_INTERVAL_S else DEFAULT_SYNC_INTERVAL_S
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return DEFAULT_SYNC_INTERVAL_S
+
+    async def set_sync_interval(self, project_id: str, interval_s: int) -> int:
+        await self._check_project(project_id)
+        if interval_s < MIN_SYNC_INTERVAL_S:
+            raise DomainError(
+                "tracking_invalid_interval",
+                f"Sync interval must be at least {MIN_SYNC_INTERVAL_S} seconds.",
+                status=422,
+            )
+        engine = await self._databases.project(project_id)
+        encoded = json.dumps(interval_s)
+        async with engine.begin() as conn:
+            await conn.execute(
+                sqlite_insert(project_settings)
+                .values(key=SYNC_INTERVAL_KEY, value=encoded)
+                .on_conflict_do_update(index_elements=["key"], set_={"value": encoded})
+            )
+        return interval_s
 
     async def close(self) -> None:
         """Cancels background sync tasks."""
