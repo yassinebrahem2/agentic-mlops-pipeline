@@ -36,6 +36,7 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
@@ -65,6 +66,7 @@ class Services:
     tasks: Tasks
     approvals: Approvals
     wakeups: WakeupService
+    failover: KeyFailover
 
 
 async def _app_secrets(
@@ -225,4 +227,5 @@ async def build_services(
         tasks=tasks,
         approvals=approvals,
         wakeups=wakeups,
+        failover=KeyFailover(),
     )

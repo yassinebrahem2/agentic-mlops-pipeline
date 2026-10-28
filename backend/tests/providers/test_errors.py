@@ -33,6 +33,55 @@ def test_quota() -> None:
     assert classify(err).kind is ProviderErrorKind.QUOTA
 
 
+def test_a_429_worded_quota_exceeded_is_a_rate_limit() -> None:
+    err = openai.RateLimitError(
+        "Quota exceeded for metric: generate_content requests per minute",
+        response=_response(429),
+        body={"error": {"message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}},
+    )
+    assert classify(err).kind is ProviderErrorKind.RATE_LIMIT
+
+
+def test_a_429_with_nested_insufficient_quota_is_quota() -> None:
+    err = openai.RateLimitError(
+        "out of credit",
+        response=_response(429),
+        body={"error": {"message": "out of credit", "code": "insufficient_quota"}},
+    )
+    assert classify(err).kind is ProviderErrorKind.QUOTA
+
+
+def test_payment_required_is_quota() -> None:
+    err = openai.APIStatusError("payment required", response=_response(402), body=None)
+    assert classify(err).kind is ProviderErrorKind.QUOTA
+
+
+def test_forbidden_is_auth() -> None:
+    err = openai.PermissionDeniedError("forbidden", response=_response(403), body=None)
+    assert classify(err).kind is ProviderErrorKind.AUTH
+
+
+def test_server_error_is_transient() -> None:
+    err = openai.InternalServerError("boom", response=_response(500), body=None)
+    assert classify(err).kind is ProviderErrorKind.TRANSIENT
+
+
+def test_retry_after_as_an_http_date_is_none() -> None:
+    err = openai.RateLimitError(
+        "slow down",
+        response=_response(429, {"retry-after": "Wed, 28 Oct 2026 14:03:00 GMT"}),
+        body=None,
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.RATE_LIMIT
+    assert result.retry_after is None
+
+
+def test_rate_limit_without_retry_after_is_none() -> None:
+    err = openai.RateLimitError("slow down", response=_response(429), body=None)
+    assert classify(err).retry_after is None
+
+
 def test_overloaded_is_transient() -> None:
     err = openai.InternalServerError("high demand", response=_response(503), body=None)
     assert classify(err).kind is ProviderErrorKind.TRANSIENT
