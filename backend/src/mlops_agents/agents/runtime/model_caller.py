@@ -147,9 +147,9 @@ class _Call:
 
 class _Stream:
     """The text of one `call`, across its attempts, its stale-keys restart and its corrective
-    retries. An attempt that fails after text has its text taken back (`on_restart`) before the
-    failure reaches the failover, so the next attempt starts on a clean step and a wait for a
-    key shows no stale text."""
+    retries. Each attempt starts by taking back the text the previous one streamed
+    (`on_restart`, Decision #410): only a next attempt takes it back, so a failure with no next
+    attempt keeps its text, and text taken back never returns."""
 
     def __init__(
         self,
@@ -170,7 +170,8 @@ class _Stream:
             raise _OnTextCallbackError() from cb_exc
 
     async def take_back(self) -> None:
-        """After a failed attempt: take back the text it streamed, if any."""
+        """At the start of an attempt: take back the text the previous attempt streamed, if
+        any."""
         if not self._sent:
             return
         self._sent = False
@@ -198,8 +199,8 @@ class ModelCaller:
         on_text: Callable[[str], Awaitable[None]],
         on_restart: Callable[[], Awaitable[None]] | None = None,
     ) -> ModelReply:
-        """`on_restart` takes back the text an attempt streamed before it failed; None (a call
-        whose text is not shown) takes nothing back."""
+        """`on_restart` takes back, when the next attempt starts, the text a failed attempt
+        streamed; None (a call whose text is not shown) takes nothing back."""
         stream = _Stream(on_text, on_restart)
         call_messages = list(messages)
         rejected_retries = 0
@@ -285,9 +286,9 @@ class ModelCaller:
         tools: list[dict[str, Any]],
         stream: _Stream,
     ) -> ModelReply:
-        """One request with one key (None: the keyless provider). It raises the provider's raw
-        exception once the text it streamed is taken back. A cancel takes nothing back: a
-        stopped step keeps its text."""
+        """One request with one key (None: the keyless provider), started by taking back the
+        text a previous attempt streamed. It raises the provider's raw exception."""
+        await stream.take_back()
         keys = call.model.keys
         if (key_index is None and keys) or (key_index is not None and key_index >= len(keys)):
             raise _StaleKeys()
@@ -299,23 +300,12 @@ class ModelCaller:
         )
         total_chunk: AIMessageChunk | None = None
         last_chunk: AIMessageChunk | None = None
-        failure: Exception | None = None
-        try:
-            async for chunk in runnable.astream(messages):
-                aim_chunk = cast(AIMessageChunk, chunk)
-                last_chunk = aim_chunk
-                total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
-                for delta in _extract_text_deltas(aim_chunk.content):
-                    await stream.text(delta)
-        except _OnTextCallbackError:
-            raise
-        except Exception as exc:
-            failure = exc
-        if failure is not None:
-            # Outside the handler, so an error of the take-back does not chain to the provider's
-            # error, which the classification would read through it.
-            await stream.take_back()
-            raise failure
+        async for chunk in runnable.astream(messages):
+            aim_chunk = cast(AIMessageChunk, chunk)
+            last_chunk = aim_chunk
+            total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
+            for delta in _extract_text_deltas(aim_chunk.content):
+                await stream.text(delta)
         return _reply(total_chunk, last_chunk)
 
     async def _flag_if_unfixable(

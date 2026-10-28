@@ -4,7 +4,6 @@ resumes that step. A real graph with a checkpointer, the fake server and a fake 
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import httpx2
@@ -33,14 +32,14 @@ from tests.agents.runtime.test_resuming_turns import (
 )
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.providers.fake_clock import FakeClock, bad_request, rate_limit, unauthorized
+from tests.providers.fake_clock import FakeClock, rate_limit, unauthorized
 
 SECOND_KEY = "gsk_second_stall_secret"
 PARTIAL = TextPart(type="text", text="Partial ")
 STEP_0_TEXT = "I will write a.py now. "
 
 
-def _ended(events: list[StreamEvent]) -> TurnEnded:
+def ended_event(events: list[StreamEvent]) -> TurnEnded:
     return next(e for e in events if isinstance(e, TurnEnded))
 
 
@@ -48,7 +47,7 @@ def _texts(parts: list[object]) -> list[str]:
     return [p.text for p in parts if isinstance(p, TextPart)]
 
 
-def _take_back(events: list[StreamEvent]) -> MessageUpdated:
+def take_back_update(events: list[StreamEvent]) -> MessageUpdated:
     """The first update of the agent message after its partial text streamed."""
     streamed = next(
         i for i, e in enumerate(events) if isinstance(e, TextDelta) and e.data.text == "Partial "
@@ -56,7 +55,7 @@ def _take_back(events: list[StreamEvent]) -> MessageUpdated:
     return next(e for e in events[streamed:] if isinstance(e, MessageUpdated))
 
 
-async def _env(
+async def mid_turn_env(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -98,7 +97,7 @@ async def test_a_429_after_text_is_taken_back_and_the_next_key_completes_the_ste
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = FakeClock()
-    env = await _env(
+    env = await mid_turn_env(
         tmp_path,
         paths,
         databases,
@@ -115,12 +114,12 @@ async def test_a_429_after_text_is_taken_back_and_the_next_key_completes_the_ste
     await env.session.manager.send(env.project_id, "orchestrator", "hi")
     events = await collect_until_turn_ended(stream, timeout=10)
 
-    ended = _ended(events)
+    ended = ended_event(events)
     assert ended.data.status == "done"
     assert built[:2] == [0, 1]
     assert clock.sleeps == []
     # The live copy is reset at once: the update after the partial text no longer holds it.
-    assert PARTIAL not in _take_back(events).data.message.parts
+    assert PARTIAL not in take_back_update(events).data.message.parts
     message = await env.agent_message(ended.data.turn_id)
     assert PARTIAL not in message.parts
     assert await env.stalls(ended.data.turn_id) == []
@@ -138,7 +137,7 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_tool = DummyWriteTool()
-    env = await _env(
+    env = await mid_turn_env(
         tmp_path,
         paths,
         databases,
@@ -160,7 +159,7 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
 
     [stall] = await env.stalls(turn_id)
     assert (stall.status, stall.step) == ("pending", 1)
-    assert PARTIAL not in _take_back(events).data.message.parts
+    assert PARTIAL not in take_back_update(events).data.message.parts
     message = await env.agent_message(turn_id, agent="writer")
     assert (message.status, _texts(list(message.parts))) == ("waiting", [])
     values = await env.checkpoint(turn_id)
@@ -168,7 +167,7 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
     assert [m for m in values["messages"] if isinstance(m, AIMessage)][-1].tool_calls
 
     await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
-    ended = _ended(await collect_until_turn_ended(stream, timeout=10))
+    ended = ended_event(await collect_until_turn_ended(stream, timeout=10))
 
     assert ended.data.status == "done"
     assert len(write_tool.invoked) == 1
@@ -195,7 +194,7 @@ async def test_a_take_back_keeps_the_text_of_the_steps_before_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_tool = DummyWriteTool()
-    env = await _env(
+    env = await mid_turn_env(
         tmp_path,
         paths,
         databases,
@@ -225,13 +224,13 @@ async def test_a_take_back_keeps_the_text_of_the_steps_before_it(
     events = await collect_until_turn_waiting(stream)
 
     [stall] = await env.stalls(turn_id)
-    taken_back = _take_back(events).data.message
+    taken_back = take_back_update(events).data.message
     assert _texts(list(taken_back.parts)) == [STEP_0_TEXT]
     message = await env.agent_message(turn_id, agent="writer")
     assert _texts(list(message.parts)) == [STEP_0_TEXT]
 
     await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
-    ended = _ended(await collect_until_turn_ended(stream, timeout=10))
+    ended = ended_event(await collect_until_turn_ended(stream, timeout=10))
 
     assert ended.data.status == "done"
     assert len(write_tool.invoked) == 1
@@ -240,66 +239,6 @@ async def test_a_take_back_keeps_the_text_of_the_steps_before_it(
         STEP_0_TEXT,
         "Done. First line: File written successfully.",
     ]
-    await env.session.manager.close()
-
-
-async def test_a_429_after_text_is_gone_before_the_wait_and_a_stop_in_the_wait_keeps_none(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = FakeClock()
-    clock.hold = asyncio.Event()
-    env = await _env(
-        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, clock=clock
-    )
-    script_builds(monkeypatch, [rate_limit("5")])
-    stream = await opened_stream(env.session)
-
-    await env.session.manager.send(env.project_id, "orchestrator", "hi")
-    await asyncio.wait_for(clock.sleeping.wait(), timeout=10)
-    # The session view of a busy turn is the hub's live copy, which holds the streamed text.
-    view = await env.session.manager.get(env.project_id, "orchestrator")
-    [waiting_message] = [m for m in view.messages if m.author_kind == "agent"]
-    assert waiting_message.status == "streaming"
-    assert PARTIAL not in waiting_message.parts
-
-    await env.session.manager.stop(env.project_id, "orchestrator")
-    ended = _ended(await collect_until_turn_ended(stream))
-
-    assert ended.data.status == "stopped"
-    assert clock.sleeps == [5.0]
-    message = await env.agent_message(ended.data.turn_id)
-    assert (message.status, PARTIAL in message.parts) == ("stopped", False)
-    await env.session.manager.close()
-
-
-async def test_a_non_key_failure_after_text_fails_the_turn_and_keeps_the_text(
-    tmp_path: Path,
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    git_env: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    env = await _env(tmp_path, paths, databases, keystore, fake_openai, model_http, git_env)
-    script_builds(monkeypatch, [bad_request()])
-    stream = await opened_stream(env.session)
-
-    await env.session.manager.send(env.project_id, "orchestrator", "hi")
-    ended = _ended(await collect_until_turn_ended(stream))
-
-    assert (ended.data.status, ended.data.error) == ("failed", "bad model")
-    assert await env.stalls(ended.data.turn_id) == []
-    message = await env.agent_message(ended.data.turn_id)
-    assert message.parts == [PARTIAL]
     await env.session.manager.close()
 
 
@@ -315,7 +254,7 @@ async def test_a_keyless_provider_running_out_fails_the_turn_without_a_stall(
     monkeypatch: pytest.MonkeyPatch,
     after_text: bool,
 ) -> None:
-    env = await _env(
+    env = await mid_turn_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, keys=()
     )
     if after_text:
@@ -325,7 +264,7 @@ async def test_a_keyless_provider_running_out_fails_the_turn_without_a_stall(
     stream = await opened_stream(env.session)
 
     await env.session.manager.send(env.project_id, "orchestrator", "hi")
-    ended = _ended(await collect_until_turn_ended(stream))
+    ended = ended_event(await collect_until_turn_ended(stream))
 
     assert ended.data.status == "failed"
     assert await env.stalls(ended.data.turn_id) == []

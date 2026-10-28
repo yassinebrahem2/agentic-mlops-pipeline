@@ -172,8 +172,6 @@ def create_turn_graph(
         # The text of the step's current attempt: stored only when the step succeeds, or as the
         # partial answer of a failed or stopped step.
         streamed_chunks: list[str] = []
-        # The text of the last attempt taken back, which a step failing for good keeps.
-        taken_back: list[str] = []
 
         async def on_text(delta: str) -> None:
             streamed_chunks.append(delta)
@@ -183,7 +181,6 @@ def create_turn_graph(
         async def take_back() -> None:
             """Take back the attempt's text: the stored message and its live copy (in the hub
             and the client) go back to the step's finished parts."""
-            taken_back[:] = streamed_chunks
             streamed_chunks.clear()
             async with lock:
                 updated = await store.update_message(project_id, message_id, parts=current_parts)
@@ -194,6 +191,7 @@ def create_turn_graph(
             reply = await caller.call(agent.model, request, tool_schemas, on_text, take_back)
         except (Exception, asyncio.CancelledError) as error:
             if isinstance(error, ModelKeysExhausted):
+                # No attempt follows the last one, so its text is still shown.
                 if streamed_chunks:
                     await take_back()
                 stall = await record_stall(
@@ -209,11 +207,9 @@ def create_turn_graph(
                 # The step is taken again after Try again: no message and no step spent. The
                 # inbound messages are this turn's now (taken), so they stay in its state.
                 return {"messages": inbound, "stall": stall}
-            # A stop keeps only text still shown: one taken back before it is gone already.
-            stopped = isinstance(error, asyncio.CancelledError)
-            partial = streamed_chunks or ([] if stopped else taken_back)
-            if partial:
-                current_parts.append(TextPart(type="text", text="".join(partial)))
+            # A failure with no next attempt, and a Stop, keep the text still shown.
+            if streamed_chunks:
+                current_parts.append(TextPart(type="text", text="".join(streamed_chunks)))
                 await _update_parts()
             raise
         latency_ms = int((time.monotonic() - t0) * 1000)
