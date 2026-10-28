@@ -263,8 +263,11 @@ describe("ApprovalCard dispatch", () => {
     step: 2,
   };
 
+  // The stall card registered in the app; a test that replaces or removes it puts it back.
+  const registeredStallCard = CARD_FOR_KIND.stall;
+
   afterEach(() => {
-    delete CARD_FOR_KIND.stall;
+    CARD_FOR_KIND.stall = registeredStallCard;
     delete CARD_FOR_PROPOSAL.handoff;
   });
 
@@ -276,6 +279,8 @@ describe("ApprovalCard dispatch", () => {
   });
 
   it("renders the generic card for a stall while no stall card is registered", () => {
+    delete CARD_FOR_KIND.stall;
+
     render(<ApprovalCard approval={stall} projectId="prj_1" />);
 
     expect(screen.getByText("Stalled: no usable key")).toBeInTheDocument();

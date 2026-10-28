@@ -710,6 +710,7 @@ describe("InboxPage and badge", () => {
         ].join("|")}
       </div>
     );
+    const registeredStallCard = CARD_FOR_KIND.stall;
     CARD_FOR_KIND.stall = ShowsPart;
     CARD_FOR_PROPOSAL.handoff = ShowsPart;
     const common = {
@@ -773,8 +774,76 @@ describe("InboxPage and badge", () => {
         "tool|null|handoff|call_9|Propose|prj_1",
       );
     } finally {
-      delete CARD_FOR_KIND.stall;
+      CARD_FOR_KIND.stall = registeredStallCard;
       delete CARD_FOR_PROPOSAL.handoff;
     }
+  });
+
+  it("lists a stall with its key rows, Try again and Stop", async () => {
+    const stallView: ApprovalView = {
+      id: "appr_stall",
+      agent: "orchestrator",
+      kind: "stall",
+      tool: null,
+      tool_call_id: null,
+      risk_class: null,
+      step: 2,
+      proposal_kind: null,
+      preview: {
+        title: "Stalled: no usable key",
+        kind: "text",
+        body: "Key 1: daily limit reached (since 12:00 UTC). Key 2: billing, out of credit.",
+      },
+      status: "pending",
+      note: null,
+      session_id: "ses_1",
+      turn_id: "trn_1",
+      created_at: "2026-10-28T12:00:00Z",
+      decided_at: null,
+    };
+    getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects/{project_id}/approvals") {
+        return Promise.resolve({
+          data: [stallView],
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/reviews") {
+        return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
+      }
+      if (path === "/api/projects/{project_id}/github/activity") {
+        return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
+      }
+      if (path === "/api/projects/{project_id}") {
+        return Promise.resolve({
+          data: projectStub,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    postSpy = vi
+      .spyOn(api, "POST")
+      .mockImplementation(() =>
+        Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) }),
+      );
+    const user = userEvent.setup();
+
+    renderPage("/projects/prj_1/inbox");
+
+    expect(await screen.findByText("Stalled: no usable key")).toBeInTheDocument();
+    expect(screen.getByText("daily limit reached (since 12:00 UTC)")).toBeInTheDocument();
+    expect(screen.getByText("billing, out of credit")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/projects/{project_id}/approvals/{approval_id}/decision",
+      expect.objectContaining({
+        params: { path: { project_id: "prj_1", approval_id: "appr_stall" } },
+        body: { approve: true, note: null },
+      }),
+    );
   });
 });

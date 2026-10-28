@@ -1,6 +1,8 @@
+import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -9,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { errorText } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ApprovalCard } from "./ApprovalCard";
 import { ToolStep } from "./ToolStep";
@@ -21,6 +24,8 @@ import type {
 export interface MessageViewProps {
   message: MessageViewType;
   sessionAgent?: string;
+  /** Re-sends the turn's trigger message; offered on an answer whose keys were exhausted. */
+  onTryAgain?: () => Promise<void>;
   className?: string;
 }
 
@@ -47,7 +52,7 @@ const markdownComponents: Components = {
   ),
 };
 
-export function MessageView({ message, sessionAgent, className }: MessageViewProps) {
+export function MessageView({ message, sessionAgent, onTryAgain, className }: MessageViewProps) {
   if (message.author_kind === "system") {
     return (
       <div
@@ -155,7 +160,47 @@ export function MessageView({ message, sessionAgent, className }: MessageViewPro
             Interrupted: the app stopped during this answer
           </div>
         )}
+        {message.error_kind === "keys_exhausted" && onTryAgain && (
+          <TryAgain onTryAgain={onTryAgain} />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** Try again on a turn that failed because every key of its provider was exhausted. */
+function TryAgain({ onTryAgain }: { onTryAgain: () => Promise<void> }) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleClick = async () => {
+    setSending(true);
+    setError(null);
+    try {
+      await onTryAgain();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={sending}
+        onClick={() => void handleClick()}
+      >
+        Try again
+      </Button>
+      {error && (
+        <span role="alert" className="text-xs text-destructive">
+          {error}
+        </span>
+      )}
     </div>
   );
 }
