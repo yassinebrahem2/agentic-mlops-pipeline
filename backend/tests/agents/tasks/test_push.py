@@ -528,7 +528,11 @@ async def test_push_logs_a_failed_cleanup_of_its_temp_folder(
         )
 
     assert len(temp_dirs) == 1
-    failures = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    failures = [
+        r
+        for r in caplog.records
+        if r.name == "mlops_agents.agents.tasks.push" and r.levelno >= logging.ERROR
+    ]
     assert len(failures) == 1
     assert str(temp_dirs[0]) in failures[0].getMessage()
     assert failures[0].exc_info is not None
