@@ -49,7 +49,7 @@ No task has an early PR: nothing consumes these pages.
 - Produces `RUNS_PAGE_LIMIT = 200` and `VERSIONS_PAGE_LIMIT = 100` (the pages' `limit` values, within the route max of 500), exported from `useTracking.ts`.
 - Produces `trackingKey(projectId, part)`, `part` being `"sources" | "models" | "versions" | "runs" | "ci-runs" | "deployments" | "metrics"`; hooks `useTrackingSources`, `useTrackedModels`, `useModelVersions(projectId, sourceId, model)`, `useTrackedRuns(projectId)` and `useRunByKey(projectId, runKey, enabled)` (the `/runs?run_key=` lookup), `useCiRuns`, `useDeployments(projectId, sourceId, model)`, `useRunMetrics(projectId, runKey)` (always `latest=true`: the highest-step value per metric), all refreshed on `tracking.synced` (one invalidation of the `["projects", id, "tracking"]` prefix); `useSyncNow(projectId)`, a mutation on `POST .../tracking/sync` without `source_id` (every source); `useCreateSource(projectId)` (`POST .../tracking/sources`, invalidates the sources key) and `useSetSourceCredential(projectId)` (`PUT .../tracking/sources/{trk}/credential`, invalidates the sources key; its result and error never carry the value back).
 - The list hooks return the route's `Page<T>` (`rows`, `total`, `truncated`) unchanged.
-- Produces `useConnections(projectId)` (prefix `["projects", id, "connections"]`, refreshed on `connection.created`, `connection.updated`, `connection.deleted`), `useTables(projectId, connectionId)`, `useTableDetail(projectId, connectionId, table, enabled)` (enabled only when a row is expanded), `useHandoff(projectId)` returning `HandoffView | null` (refreshed on `handoff.approved`).
+- Produces `useConnections(projectId)` (prefix `["projects", id, "connections"]`, refreshed on `connection.created`, `connection.updated`, `connection.deleted`), `useTables(projectId, connectionId)`, `useHandoff(projectId)` returning `HandoffView | null` (refreshed on `handoff.approved`).
 - Types are re-exported from `components["schemas"][...]` only; none is written by hand.
 
 **Implementation notes:**
@@ -121,9 +121,9 @@ No task has an early PR: nothing consumes these pages.
 
 ### Task 4: Data page
 
-**Files:** new `frontend/src/pages/data/route.tsx`, `DataPage.tsx`, `ConnectionCard.tsx`, `TableRow.tsx`, `TableDetailPanel.tsx`, `roles.ts`, tests.
+**Files:** new `frontend/src/pages/data/route.tsx`, `DataPage.tsx`, `ConnectionCard.tsx`, `TableRow.tsx`, `TableDetailPanel.tsx`, `roles.ts`, `frontend/src/lib/useConnections.ts` (adds `useTableDetail`), tests.
 
-**Interfaces:** Consumes `useConnections`, `useTables`, `useTableDetail`, `useHandoff` (task 1) and `ConnectionFindings` (connections task 1; imported, never copied). Produces `roleFor(handoff: HandoffView | null, connectionName: string, table: string): DataRole | null` (the first entry of `payload.data_roles` with that `connection` and `table`) and `modelsUsing(handoff, connectionName, table): { model: string; as: "predictions" | "labels" }[]` (the `ModelSpec`s whose `predictions` or `labels` `TableUse` names the table). These two are the only readers of the handoff on this page.
+**Interfaces:** Consumes `useConnections`, `useTables`, `useHandoff` (task 1). Produces `useTableDetail(projectId, connectionId, table, enabled)` in `frontend/src/lib/useConnections.ts` (enabled only when a row is expanded; it is added by this task because the route's types exist only once data-summary's PR has merged). Also consumes `ConnectionFindings` (connections task 1; imported, never copied). Produces `roleFor(handoff: HandoffView | null, connectionName: string, table: string): DataRole | null` (the first entry of `payload.data_roles` with that `connection` and `table`) and `modelsUsing(handoff, connectionName, table): { model: string; as: "predictions" | "labels" }[]` (the `ModelSpec`s whose `predictions` or `labels` `TableUse` names the table). These two are the only readers of the handoff on this page.
 
 **Implementation notes:**
 - Route: path `/projects/:projectId/data`, `nav: { area: "project", label: "Data", order: 30, icon: Database }`.

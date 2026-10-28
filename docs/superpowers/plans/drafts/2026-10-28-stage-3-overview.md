@@ -329,6 +329,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `agents/tools/__init__.py` (`default_registry`) and `api/services.py`: each plan adds only its own lines.
 - `agents/runtime/context.py`: data-summary changes `build_messages` (the injection point); onboarding adds one line (the shared working rules: hard limits and the continuous-PR principle, from packaged files).
 - `agents/runtime/hooks.py`: contracts (`GateDecision`) and rate-limits (`TurnObserver`), each its own lines.
+- The five `ApprovalStore(` construction sites (`approvals/gate.py`, `approvals/service.py`, `agents/runtime/graph.py`, `agents/runtime/store/__init__.py`, `agents/runtime/waiting.py`): contracts task 3 replaces each with the injected instance, its only lines in the rate-limits-owned files.
 - `frontend/src/pages/project-settings/ProjectSettingsPage.tsx`: embedders, connections and pages each add one line (their section).
 - `workspace/service.py`: contracts (the project removal's secret cleanup) and connections (lifting the server-mode refusal in `browse`), each its own lines.
 - New package `__init__.py` files: `tracking/`, `connections/`, `knowledge/`, `agents/hooks/` by contracts task 1, `proposals/` by contracts task 2, `onboarding/` by onboarding; other plans add modules, never recreate them. Sub-packages (`connections/kinds/`, `tracking/adapters/`, `data/`) belong to the plan that creates them.
