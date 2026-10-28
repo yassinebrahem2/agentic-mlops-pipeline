@@ -1,12 +1,14 @@
 """The stage 3 contract modules import cleanly (no cycles) and expose the I13 to I18 names."""
 
 import importlib
+import importlib.util
 import inspect
 import json
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar, get_args, get_type_hints
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
@@ -15,6 +17,8 @@ from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, To
 from mlops_agents.storage.migrate import migrate
 
 MODULES = [
+    "mlops_agents.proposals.payloads",
+    "mlops_agents.proposals.contract",
     "mlops_agents.connections.contract",
     "mlops_agents.tracking.contract",
     "mlops_agents.knowledge.contract",
@@ -254,3 +258,62 @@ def test_duckdb_version_and_sqlite_vec() -> None:
 
     assert duckdb.__version__ == DUCKDB_VERSION
     assert callable(sqlite_vec.load)
+
+
+def test_proposal_protocols() -> None:
+    from mlops_agents.proposals.contract import (
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        Handoffs,
+        ProposalKind,
+        Proposals,
+    )
+
+    assert _methods(ProposalKind) == {"key", "preview", "warnings", "credentials_needed", "apply"}
+    assert _attributes(ProposalKind) == {"name", "payload_model"}
+    assert _methods(Proposals) == {
+        "create",
+        "attach",
+        "get_by_approval",
+        "pending",
+        "latest_for_turn",
+    }
+    assert _methods(Handoffs) == {"current", "store"}
+    assert (CONNECTIONS_KIND, HANDOFF_KIND) == ("connections", "handoff")
+
+
+def test_proposal_models_have_the_overview_fields() -> None:
+    from mlops_agents.proposals.contract import (
+        ApplyResult,
+        CredentialSlot,
+        HandoffView,
+        ProposalStatus,
+        ProposalView,
+        SlotState,
+    )
+
+    assert get_args(ProposalStatus) == ("pending", "approved", "rejected", "superseded")
+    assert list(CredentialSlot.model_fields) == ["index", "label", "source_type"]
+    assert list(SlotState.model_fields) == ["index", "label", "set"]
+    assert list(ApplyResult.model_fields) == ["applied", "failed"]
+    assert list(ProposalView.model_fields) == [
+        "id",
+        "kind",
+        "key",
+        "payload",
+        "warnings",
+        "status",
+        "agent",
+        "approval_id",
+        "turn_id",
+        "tool_call_id",
+        "result",
+        "slots",
+        "created",
+    ]
+    assert list(HandoffView.model_fields) == ["proposal_id", "version", "approved", "payload"]
+
+
+def test_tzdata_supplies_the_zone_database() -> None:
+    assert importlib.util.find_spec("tzdata") is not None
+    assert ZoneInfo("Europe/Paris").key == "Europe/Paris"
