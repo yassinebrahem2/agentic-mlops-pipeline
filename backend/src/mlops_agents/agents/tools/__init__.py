@@ -16,7 +16,9 @@ from mlops_agents.agents.tools.issues import (
 from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
+from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
+from mlops_agents.agents.tools.search_notes import SearchNotes
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.write import WriteTool
 
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
+    from mlops_agents.knowledge.contract import Knowledge
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
     from mlops_agents.workspace.service import WorkspaceService
@@ -44,8 +47,10 @@ __all__ = [
     "OpenPullRequestTool",
     "ReadTool",
     "ResumeTaskTool",
+    "SaveNote",
     "ScheduleWakeupTool",
     "SearchIssuesTool",
+    "SearchNotes",
     "StartTaskTool",
     "ToolRegistry",
     "WriteTool",
@@ -66,6 +71,7 @@ def default_registry(
     events: EventLog | None = None,
     http: httpx2.AsyncClient | None = None,
     databases: Databases | None = None,
+    knowledge: Knowledge | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -119,4 +125,7 @@ def default_registry(
     if wakeups is not None:
         effective_catalog = catalog if catalog is not None else getattr(wakeups, "catalog", None)
         registry.register(ScheduleWakeupTool(wakeups, catalog=effective_catalog))
+    if knowledge is not None:
+        registry.register(SaveNote(knowledge))
+        registry.register(SearchNotes(knowledge))
     return registry
