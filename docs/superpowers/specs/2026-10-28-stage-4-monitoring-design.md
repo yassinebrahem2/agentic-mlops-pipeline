@@ -186,7 +186,7 @@ All ask at every level, `bypass` included, as stage 3 decided.
 
 ## 12. Storage
 
-New in `project.db`: results, sources and cursors, parsers (versioned), expectations, scheduler jobs, signals, incidents and their timeline, verdicts, rules, action hooks, maintenance windows, on-call people, notification log. App settings: Discord and email. One plan (the stage 4 contracts plan) writes the schema.
+New in `project.db`: results, sources and cursors, parsers (versioned), expectations, scheduler jobs, registered checks, signals, incidents (their timeline is events), verdicts, rules, action hooks, maintenance windows, on-call people, notification log. App settings: Discord and email. One plan (the stage 4 contracts plan) writes the schema.
 
 ## Changes to the roadmap
 
