@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
@@ -24,6 +24,7 @@ from mlops_agents.agents.tools.base import Preview
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.caller_env import fail_after_text
+from tests.agents.runtime.hook_fakes import ScriptedInbound
 from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
 from tests.agents.runtime.stall_env import (
     KEY,
@@ -154,6 +155,47 @@ async def test_try_again_resumes_the_turn_from_its_checkpoint(
     ]
     assert [r for r in await env.audit_rows() if r["action"] == "approval"] == []
     assert await env.checkpoint(turn_id) is None
+    await env.session.manager.close()
+
+
+async def test_a_stall_keeps_the_inbound_messages_its_step_took(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    # Taken messages are marked read by the turn: dropped here, a turn ending done loses them.
+    inbound = HumanMessage(content="Message from writer:\nhello")
+    env = await build_stall_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        inbound=ScriptedInbound([[inbound]]),
+    )
+    fake_openai.state.script_for_key(KEY, ["401"])
+    stream, _, turn_id = await send_until_waiting(env, "hi")
+    values = await env.checkpoint(turn_id)
+    assert values is not None
+    assert values["messages"][-1].content == inbound.content
+    [stall] = await env.stalls(turn_id)
+    resumed_request = len(fake_openai.state.requests)
+
+    await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    ended = _ended(await collect_until_turn_ended(stream))
+
+    assert ended.data.status == "done"
+    # The second take hands out nothing: only the kept state can still send the message.
+    assert fake_openai.state.requests[resumed_request]["messages"][-1] == {
+        "content": inbound.content,
+        "role": "user",
+    }
     await env.session.manager.close()
 
 

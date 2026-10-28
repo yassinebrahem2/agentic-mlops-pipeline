@@ -1,21 +1,25 @@
-"""A stalled turn across a restart, and a re-run of the model node that already stalled: the
-stall is an interrupted graph like any waiting turn, and its approval is never duplicated."""
+"""A stalled turn across a restart, its provider deleted while it waits, and a re-run of the
+model node that already stalled: the stall is an interrupted graph like any waiting turn, and its
+approval is never duplicated."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import httpx2
+import pytest
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.runtime.agent import TurnRefused
 from mlops_agents.agents.runtime.contract import TurnEnded
 from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.stall import record_stall
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.config import RunMode, load_settings
@@ -127,6 +131,37 @@ async def test_a_stalled_turn_survives_a_restart_and_try_again_resumes_it(
     assert await env.event_payloads("turn.resumed") == [{"turn_id": turn_id}]
     assert await env.checkpoint(turn_id) is None
     await manager.close()
+
+
+async def test_try_again_after_the_provider_was_deleted_fails_the_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env = await build_stall_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    fake_openai.state.script_for_key(KEY, ["401"])
+    stream, _, turn_id = await send_until_waiting(env, "hi")
+    [stall] = await env.stalls(turn_id)
+    await env.session.providers.delete_provider(env.session.provider)
+
+    await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    events = await collect_until_turn_ended(stream, timeout=10)
+
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert (ended.data.status, ended.data.error) == ("failed", UNEXPECTED_FAILURE_TEXT)
+    # The resume builds the agent before its graph runs: the deleted provider fails it there.
+    [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
+    assert logged.exc_info is not None
+    assert isinstance(logged.exc_info[1], TurnRefused)
+    assert await env.event_payloads("turn.resumed") == []
+    await env.session.manager.close()
 
 
 async def test_a_rerun_of_the_model_node_finds_its_pending_stall(databases: Databases) -> None:

@@ -22,6 +22,7 @@ from mlops_agents.agents.runtime.contract import (
     TurnWaiting,
 )
 from mlops_agents.agents.runtime.graph import turn_checkpointer
+from mlops_agents.agents.runtime.hooks import InboundSource
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import EventType
@@ -100,6 +101,7 @@ async def build_stall_env(
     clock: Clock | None = None,
     tools: ToolRegistry | None = None,
     extra_dirs: list[Path] | None = None,
+    inbound: InboundSource | None = None,
 ) -> StallEnv:
     events = SqliteEventLog(databases)
     audit_log = SqliteAuditLog(databases, secrets=[])
@@ -114,6 +116,7 @@ async def build_stall_env(
         git_env,
         tools=tools,
         extra_dirs=extra_dirs,
+        inbound=inbound,
         gate=ApprovalGate(databases, store=store, audit_log=audit_log, event_log=events),
         audit_log=audit_log,
         approval_store=store,
