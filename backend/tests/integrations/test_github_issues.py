@@ -13,6 +13,7 @@ from mlops_agents.integrations.github.issues import (
     comment_issue,
     create_issue,
     ensure_labels,
+    get_issue,
     search_issues,
 )
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
@@ -148,6 +149,29 @@ async def test_issues_missing_permission_404(fake_github: RunningFakeGitHub) -> 
             err.value.message
             == "GitHub rejected the request because the token lacks the 'issues: write' permission."
         )
+
+
+async def test_get_issue_on_a_deleted_issue_raises_issue_gone(
+    fake_github: RunningFakeGitHub,
+) -> None:
+    async with httpx2.AsyncClient() as http:
+        issue = await create_issue(
+            http, token="ghp_test_token", repo="octo/repo", title="Gone soon", body="Body"
+        )
+        fake_github.state.delete_issue("octo/repo", issue.number)
+        with pytest.raises(DomainError) as err:
+            await get_issue(http, token="ghp_test_token", repo="octo/repo", number=issue.number)
+    assert err.value.code == "issue_gone"
+
+
+async def test_get_issue_on_a_404_still_raises_the_permission_error(
+    fake_github: RunningFakeGitHub,
+) -> None:
+    # GitHub answers 404 both for an issue that never existed and one the token cannot see.
+    async with httpx2.AsyncClient() as http:
+        with pytest.raises(DomainError) as err:
+            await get_issue(http, token="ghp_test_token", repo="octo/repo", number=42)
+    assert err.value.code == "github_permission_missing"
 
 
 async def test_ensure_labels_missing_permission(fake_github: RunningFakeGitHub) -> None:

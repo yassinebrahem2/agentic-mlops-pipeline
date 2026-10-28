@@ -16,4 +16,6 @@ RUN echo 'export PATH="/opt/venv/bin:$PATH"' >> /etc/profile.d/00-venv.sh && \
 COPY environment.y* /tmp/
 RUN micromamba create -y -p /opt/venv -f /tmp/environment.y* && micromamba clean --all --yes
 
+# @duckdb
+
 WORKDIR /workspace

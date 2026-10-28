@@ -143,6 +143,10 @@ class PrSyncObserver:
             try:
                 issue = await get_issue(self._http, token, repo_slug, number)
             except DomainError as exc:
+                if exc.code == "issue_gone":
+                    # Its last recorded state stands; nothing is left to refresh.
+                    logger.debug("PR sync skipped deleted issue #%s in %s", number, repo_slug)
+                    continue
                 logger.warning(
                     "PR sync could not check issue #%s in %s: %s", number, repo_slug, exc
                 )
