@@ -394,6 +394,12 @@ async def test_adapter_version_window_and_alias_filter() -> None:
         # Version 3 is within the 7-day window, so it IS returned
         assert "3" in returned_versions
 
+        # Assert on state.requests that /get-artifact was only called for r_alias and r_recent
+        artifact_req_queries = [r["query"] for r in state.requests if r["path"] == "/get-artifact"]
+        assert any("run_uuid=r_alias" in q for q in artifact_req_queries)
+        assert any("run_uuid=r_recent" in q for q in artifact_req_queries)
+        assert not any("run_uuid=r_old" in q for q in artifact_req_queries)
+
 
 @pytest.mark.asyncio
 async def test_adapter_first_sync_150_versions() -> None:
@@ -530,3 +536,110 @@ async def test_e2e_tracking_service_with_fake_mlflow(tracking_env: TrackingEnv) 
             TrackingQuery(what="deployments", model="ModelA"),
         )
         assert dep_page_after_err.total == 2
+
+
+@pytest.mark.asyncio
+async def test_adapter_credential_sent_as_bearer_and_not_in_url() -> None:
+    token = "secret_credential_token_12345"
+    state = FakeMlflowState(required_token=token)
+    app = create_fake_mlflow_app(state)
+
+    state.add_experiment("Default")
+    state.add_run(experiment_id="0", run_id="r1")
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        adapter = MlflowAdapter(http=client)
+        source = _make_source_view()
+        result = await adapter.sync(source, credential=token, since=None)
+
+    assert result.error is None
+    assert len(state.requests) > 0
+    for req in state.requests:
+        # Authorization header is Bearer <token>
+        assert req["headers"].get("authorization") == f"Bearer {token}"
+        # Token is never in path or query
+        assert token not in req["path"]
+        assert token not in req["query"]
+
+
+@pytest.mark.asyncio
+async def test_adapter_older_version_retains_evaluation_and_updates_alias(
+    tracking_env: TrackingEnv,
+) -> None:
+    state = FakeMlflowState()
+    app = create_fake_mlflow_app(state)
+
+    state.add_experiment("Default")
+    t0_ms = 1700000000000
+
+    # Old version 1 with evaluation (10 days old)
+    state.add_run(experiment_id="0", run_id="r_old", start_time=t0_ms)
+    state.register_version("model_ret", "1", run_id="r_old", creation_timestamp=t0_ms)
+    state.put_artifact(
+        "r_old", "mlops_agents/evaluation.json", b'{"schema_version": 1, "score": 0.85}'
+    )
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        real_adapter = MlflowAdapter(http=client)
+        service = TrackingService(
+            databases=tracking_env.databases,
+            keystore=tracking_env.keystore,
+            secrets=tracking_env.secrets,
+            events=tracking_env.events,
+            adapters={"mlflow": real_adapter},
+            github_token=tracking_env.get_github_token,
+            clock=tracking_env.clock,
+        )
+
+        source_view = await service.create_source(
+            tracking_env.project_id,
+            type="mlflow",
+            settings={"url": "http://testserver"},
+            auth="none",
+        )
+
+        # 1. Initial sync stores version 1 with evaluation="present"
+        await service.run_sync(tracking_env.project_id, source_view.id)
+
+        v1_page = await service.query(
+            tracking_env.project_id,
+            TrackingQuery(what="versions", model="model_ret", version="1"),
+        )
+        assert v1_page.total == 1
+        assert v1_page.rows[0].evaluation == "present"
+        assert v1_page.rows[0].aliases == []
+
+        # 2. Advance clock 10 days, add recent version 2 and set alias 'champion' to version 2
+        t_recent_ms = t0_ms + 10 * 86400 * 1000
+        state.add_run(experiment_id="0", run_id="r_new", start_time=t_recent_ms)
+        state.register_version("model_ret", "2", run_id="r_new", creation_timestamp=t_recent_ms)
+        state.set_alias("model_ret", "champion", "2")
+        state.put_artifact(
+            "r_new", "mlops_agents/evaluation.json", b'{"schema_version": 1, "score": 0.95}'
+        )
+
+        # Set clock and run second sync
+        tracking_env.clock.set(datetime.fromtimestamp(t_recent_ms / 1000.0, tz=UTC))
+        await service.run_sync(tracking_env.project_id, source_view.id)
+
+        # Version 1 was not returned in the second sync (outside 7-day window and has no alias),
+        # but its stored evaluation remains "present" and its stored aliases remain valid
+        v1_page_after = await service.query(
+            tracking_env.project_id,
+            TrackingQuery(what="versions", model="model_ret", version="1"),
+        )
+        assert v1_page_after.total == 1
+        assert v1_page_after.rows[0].evaluation == "present"
+        assert v1_page_after.rows[0].aliases == []
+
+        # Version 1's evaluation record is still present in the database
+        eval_v1 = await service.query(
+            tracking_env.project_id,
+            TrackingQuery(what="evaluations", model="model_ret", version="1"),
+        )
+        assert eval_v1.total == 1
+        assert eval_v1.rows[0].payload["score"] == 0.85

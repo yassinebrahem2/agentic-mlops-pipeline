@@ -221,6 +221,7 @@ def create_fake_mlflow_app(state: FakeMlflowState) -> FastAPI:
                 "method": request.method,
                 "path": request.url.path,
                 "query": str(request.url.query),
+                "headers": dict(request.headers),
             }
         )
         err = _check_common(request)
@@ -284,6 +285,14 @@ def create_fake_mlflow_app(state: FakeMlflowState) -> FastAPI:
         max_results: int | None = None,
         page_token: str | None = None,
     ) -> Response:
+        if run_id and run_id not in state.runs:
+            return JSONResponse(
+                {
+                    "error_code": "RESOURCE_DOES_NOT_EXIST",
+                    "message": f"Run '{run_id}' not found",
+                },
+                status_code=404,
+            )
         key = (run_id, metric_key)
         points = state.metric_history.get(key, [])
         limit = min(max_results or state.page_size, state.page_size)

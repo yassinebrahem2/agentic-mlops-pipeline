@@ -122,6 +122,14 @@ async def test_fake_mlflow_paging() -> None:
                 break
         assert seen_steps == list(range(5))
 
+        # Unknown run returns 404
+        res_unknown_run = await client.get(
+            "/api/2.0/mlflow/metrics/get-history",
+            params={"run_id": "nonexistent_run", "metric_key": "val_loss"},
+        )
+        assert res_unknown_run.status_code == 404
+        assert res_unknown_run.json().get("error_code") == "RESOURCE_DOES_NOT_EXIST"
+
 
 @pytest.mark.asyncio
 async def test_fake_mlflow_bearer_auth() -> None:

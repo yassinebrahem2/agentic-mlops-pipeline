@@ -7,9 +7,10 @@ artifacts from an MLflow tracking server using REST. No MLflow package dependenc
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import httpx2
 
@@ -35,6 +36,8 @@ MLFLOW_VERSION_CAP: Final[int] = 1000
 MLFLOW_EVAL_WINDOW: Final[timedelta] = timedelta(days=7)
 MLFLOW_FETCH_CONCURRENCY: Final[int] = 8
 EVALUATION_MAX_BYTES: Final[int] = 262144  # 256 KB
+
+EvaluationStatus = Literal["present", "absent", "fetch_failed"]
 
 
 class _SyncAbortError(Exception):
@@ -118,12 +121,14 @@ class MlflowAdapter(TrackingAdapter):
         experiments = await self._fetch_experiments(base_url, headers)
 
         # 2. runs/search over all experiment IDs, newest first, at most MLFLOW_RUN_CAP
-        runs, changed_run_keys = await self._fetch_runs(
+        runs, changed_run_keys, run_metric_keys = await self._fetch_runs(
             source, base_url, headers, experiments, since_utc
         )
 
         # 3. metric history per metric key of changed runs
-        metrics = await self._fetch_metrics(source, base_url, headers, runs, changed_run_keys)
+        metrics = await self._fetch_metrics(
+            source, base_url, headers, runs, changed_run_keys, run_metric_keys
+        )
 
         # 4. registered-models/search & model-versions/search
         aliases_map, versions_by_model = await self._fetch_models_and_versions(
@@ -171,9 +176,9 @@ class MlflowAdapter(TrackingAdapter):
         headers: dict[str, str],
         experiments: dict[str, str],
         since_utc: datetime | None,
-    ) -> tuple[list[RunRow], set[str]]:
+    ) -> tuple[list[RunRow], set[str], dict[str, list[str]]]:
         if not experiments:
-            return [], set()
+            return [], set(), {}
 
         all_runs_data: list[dict[str, Any]] = []
         page_token: str | None = None
@@ -198,6 +203,7 @@ class MlflowAdapter(TrackingAdapter):
 
         run_rows: list[RunRow] = []
         changed_run_keys: set[str] = set()
+        run_metric_keys: dict[str, list[str]] = {}
 
         for item in all_runs_data[:MLFLOW_RUN_CAP]:
             info = item.get("info", {})
@@ -243,7 +249,8 @@ class MlflowAdapter(TrackingAdapter):
             # Git commit from mlflow.source.git.commit tag
             git_commit: str | None = None
             tags_dict: dict[str, str] = {}
-            for t in data.get("tags", []):
+            tags_list: list[dict[str, Any]] = cast(list[dict[str, Any]], data.get("tags") or [])
+            for t in tags_list:
                 key = str(t.get("key", ""))
                 val = str(t.get("value", ""))[:500]
                 if key == "mlflow.source.git.commit":
@@ -253,23 +260,28 @@ class MlflowAdapter(TrackingAdapter):
 
             # Params
             params_dict: dict[str, str] = {}
-            for p in data.get("params", []):
+            params_list: list[dict[str, Any]] = cast(list[dict[str, Any]], data.get("params") or [])
+            for p in params_list:
                 key = str(p.get("key", ""))
                 val = str(p.get("value", ""))[:500]
                 params_dict[key] = val
 
             # Datasets
             datasets: list[str] = []
-            for inp in inputs.get("dataset_inputs", []):
-                ds = inp.get("dataset", {})
+            dataset_inputs: list[dict[str, Any]] = cast(
+                list[dict[str, Any]], inputs.get("dataset_inputs") or []
+            )
+            for inp in dataset_inputs:
+                ds: dict[str, Any] = cast(dict[str, Any], inp.get("dataset") or {})
                 ds_name = ds.get("name")
                 if ds_name and ds_name not in datasets:
                     datasets.append(str(ds_name))
 
-            # Store metrics list on item for step 3
-            item["_parsed_metric_keys"] = [
-                str(m.get("key")) for m in data.get("metrics", []) if m.get("key")
-            ]
+            # Metric keys
+            metrics_list: list[dict[str, Any]] = cast(
+                list[dict[str, Any]], data.get("metrics") or []
+            )
+            run_metric_keys[run_id] = [str(m.get("key")) for m in metrics_list if m.get("key")]
 
             run_rows.append(
                 RunRow(
@@ -286,13 +298,7 @@ class MlflowAdapter(TrackingAdapter):
                 )
             )
 
-        # Cache parsed raw runs for metric extraction
-        self._last_raw_runs = {
-            str(r.get("info", {}).get("run_id") or r.get("info", {}).get("run_uuid")): r
-            for r in all_runs_data
-        }
-
-        return run_rows, changed_run_keys
+        return run_rows, changed_run_keys, run_metric_keys
 
     async def _fetch_metrics(
         self,
@@ -301,19 +307,15 @@ class MlflowAdapter(TrackingAdapter):
         headers: dict[str, str],
         runs: list[RunRow],
         changed_run_keys: set[str],
+        run_metric_keys: dict[str, list[str]],
     ) -> list[MetricPoint]:
         metric_points: list[MetricPoint] = []
-        raw_runs = getattr(self, "_last_raw_runs", {})
 
         for run in runs:
             if run.key not in changed_run_keys:
                 continue
 
-            raw_run = raw_runs.get(run.key)
-            if not raw_run:
-                continue
-
-            metric_keys: list[str] = raw_run.get("_parsed_metric_keys", [])
+            metric_keys: list[str] = run_metric_keys.get(run.key, [])
             for m_key in metric_keys:
                 page_token: str | None = None
                 pages_read = 0
@@ -335,15 +337,15 @@ class MlflowAdapter(TrackingAdapter):
                     )
                     points = data.get("metrics", [])
                     for pt in points:
-                        ts_ms = pt.get("timestamp", 0)
+                        ts_ms = int(pt.get("timestamp") or 0)
                         pt_time = datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC)
                         metric_points.append(
                             MetricPoint(
                                 source_id=source.id,
                                 run_key=run.key,
                                 metric=m_key,
-                                step=int(pt.get("step", 0)),
-                                value=float(pt.get("value", 0.0)),
+                                step=int(pt.get("step") or 0),
+                                value=float(pt.get("value") or 0.0),
                                 time=pt_time,
                             )
                         )
@@ -383,7 +385,10 @@ class MlflowAdapter(TrackingAdapter):
                 model_names.append(name)
                 # Parse aliases
                 model_aliases: dict[str, str] = {}
-                for alias_item in m.get("aliases", []):
+                aliases_list: list[dict[str, Any]] = cast(
+                    list[dict[str, Any]], m.get("aliases") or []
+                )
+                for alias_item in aliases_list:
                     a_name = str(alias_item.get("alias", ""))
                     a_ver = str(alias_item.get("version", ""))
                     if a_name and a_ver:
@@ -421,7 +426,7 @@ class MlflowAdapter(TrackingAdapter):
                 # Every version, bounded by MLFLOW_VERSION_CAP, newest first
                 sorted_vers = sorted(
                     m_versions,
-                    key=lambda v: int(v.get("creation_timestamp", 0)),
+                    key=lambda v: int(v.get("creation_timestamp") or 0),
                     reverse=True,
                 )
                 versions_by_model[m_name] = sorted_vers[:MLFLOW_VERSION_CAP]
@@ -431,7 +436,7 @@ class MlflowAdapter(TrackingAdapter):
                 filtered_vers: list[dict[str, Any]] = []
                 for v in m_versions:
                     v_str = str(v.get("version", ""))
-                    ts_ms = int(v.get("creation_timestamp", 0))
+                    ts_ms = int(v.get("creation_timestamp") or 0)
                     created_dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC)
                     if v_str in alias_versions or created_dt >= cutoff:
                         filtered_vers.append(v)
@@ -453,33 +458,35 @@ class MlflowAdapter(TrackingAdapter):
 
         async def fetch_one_evaluation(
             run_key: str,
-        ) -> tuple[str, dict[str, Any] | None, bool]:
+        ) -> tuple[EvaluationStatus, dict[str, Any] | None, bool]:
             async with sem:
                 try:
-                    resp = await self._http.request(
+                    async with self._http.stream(
                         "GET",
                         f"{base_url}/get-artifact",
                         headers=headers,
                         params={"run_uuid": run_key, "path": "mlops_agents/evaluation.json"},
                         follow_redirects=False,
                         timeout=30.0,
-                    )
+                    ) as resp:
+                        if resp.status_code in (401, 403):
+                            raise _SyncAbortError("The tracker rejected the credential")
+                        if resp.status_code == 404:
+                            return "absent", None, False
+                        if resp.status_code != 200:
+                            return "fetch_failed", None, True
+
+                        body_bytes = bytearray()
+                        async for chunk in resp.aiter_bytes():
+                            body_bytes.extend(chunk)
+                            if len(body_bytes) > EVALUATION_MAX_BYTES:
+                                return "fetch_failed", None, True
+
                 except httpx2.HTTPError as exc:
                     raise _SyncAbortError(error_text(exc)) from exc
 
-                if resp.status_code in (401, 403):
-                    raise _SyncAbortError("The tracker rejected the credential")
-                if resp.status_code == 404:
-                    return "absent", None, False
-                if resp.status_code != 200:
-                    return "fetch_failed", None, True
-
-                # Check body length
-                if len(resp.content) > EVALUATION_MAX_BYTES:
-                    return "fetch_failed", None, True
-
                 try:
-                    raw_payload: Any = resp.json()
+                    raw_payload: Any = json.loads(body_bytes.decode("utf-8"))
                 except Exception:
                     return "fetch_failed", None, True
 
@@ -497,7 +504,7 @@ class MlflowAdapter(TrackingAdapter):
             for v in v_list:
                 v_str = str(v.get("version", ""))
                 r_key = str(v.get("run_id", "")).strip() or None
-                ts_ms = int(v.get("creation_timestamp", 0))
+                ts_ms = int(v.get("creation_timestamp") or 0)
                 items_to_fetch.append((m_name, v_str, r_key, ts_ms, v))
 
         # Run artifact fetches concurrently
@@ -506,7 +513,7 @@ class MlflowAdapter(TrackingAdapter):
             for _, _, r_key, _, _ in items_to_fetch
         ]
 
-        results: list[tuple[str, dict[str, Any] | None, bool]] = await asyncio.gather(
+        results: list[tuple[EvaluationStatus, dict[str, Any] | None, bool]] = await asyncio.gather(
             *(t for t in fetch_tasks if t is not None), return_exceptions=False
         )
 
@@ -519,6 +526,7 @@ class MlflowAdapter(TrackingAdapter):
             m_aliases = aliases_map.get(m_name, {})
             v_aliases = sorted([a for a, ver in m_aliases.items() if ver == v_str])
 
+            evaluation_status: EvaluationStatus
             if r_key is None:
                 evaluation_status = "absent"
             else:
@@ -547,7 +555,7 @@ class MlflowAdapter(TrackingAdapter):
                     run_key=r_key,
                     aliases=v_aliases,
                     created=created_dt,
-                    evaluation=evaluation_status,  # type: ignore[arg-type]
+                    evaluation=evaluation_status,
                 )
             )
 
