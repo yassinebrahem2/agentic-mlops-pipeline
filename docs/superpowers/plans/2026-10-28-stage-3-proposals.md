@@ -1,8 +1,6 @@
-> **Draft.** Missing: the lead's advisor review.
-
 # Stage 3 — Proposals Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Shared context: `docs/superpowers/plans/drafts/2026-10-28-stage-3-overview.md`.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Shared context: `docs/superpowers/plans/2026-10-28-stage-3-overview.md`.
 
 **Goal:** the mechanism of spec §9, which onboarding's two kinds plug into:
 - a `Propose` tool that is a stage 2 approval, never skipped;

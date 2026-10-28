@@ -1,8 +1,6 @@
-> **Draft.** Missing: the lead's advisor review.
-
 # Stage 3 — Embedders Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Read the stage overview first: `docs/superpowers/plans/drafts/2026-10-28-stage-3-overview.md`.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Read the stage overview first: `docs/superpowers/plans/2026-10-28-stage-3-overview.md`.
 
 **Goal:** the AI providers registry holds two kinds of model, chat and embedder (spec §3):
 - an embedder is added, verified (one `/embeddings` call that records its dimensions), and chosen as the app default or a project override;

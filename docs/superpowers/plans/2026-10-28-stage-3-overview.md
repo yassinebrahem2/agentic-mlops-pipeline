@@ -1,7 +1,5 @@
 # Stage 3: Onboarding and Data Access — Plans Overview
 
-> **Draft.** Missing: an advisor round with no blocking issues; the plans it lists.
-
 Stage 3 is built through several plans. This overview holds what they share. Read it, `docs/roadmap.md` and the stage 3 spec before starting any plan.
 
 **Goal:** after one conversation with Onboarding and two approvals, the app knows a project's data, tracking, pipeline, operations and existing monitoring; the four specialist agents start their first audits. Turns survive rate limits.

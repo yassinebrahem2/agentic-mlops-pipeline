@@ -1,8 +1,6 @@
-> **Draft.** Missing: the lead's advisor review.
-
 # Stage 3 — Knowledge Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Shared context: `docs/superpowers/plans/drafts/2026-10-28-stage-3-overview.md` (or its place on `main`).
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Shared context: `docs/superpowers/plans/2026-10-28-stage-3-overview.md` (or its place on `main`).
 
 **Goal:** the project's Knowledge store (spec §8):
 - notes in `project.db` with hybrid search: FTS5 on title and text, sqlite-vec on embeddings, merged by reciprocal rank fusion, behind one `VectorStore`;

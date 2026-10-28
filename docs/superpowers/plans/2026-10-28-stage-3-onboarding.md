@@ -1,8 +1,6 @@
-> **Draft.** Missing: the lead's advisor review.
-
 # Stage 3 — Onboarding Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; no task gets an early PR (nothing consumes this plan). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Read the stage 3 overview (`docs/superpowers/plans/drafts/2026-10-28-stage-3-overview.md`, on `main` once reviewed) first: it holds I13 to I21 and the shared-file rules.
+> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; no task gets an early PR (nothing consumes this plan). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Read the stage 3 overview (`docs/superpowers/plans/2026-10-28-stage-3-overview.md`, on `main` once reviewed) first: it holds I13 to I21 and the shared-file rules.
 
 **Goal:** after one conversation with Onboarding and two approvals, the project is set up and the four specialists start their first audits (spec §9 applying both kinds, §10, §11):
 - approving a `connections` proposal creates the connections; approving a `handoff` proposal stores the handoff, creates the tracking sources, sets network and level, starts the sync and starts the kickoff;
