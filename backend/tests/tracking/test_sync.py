@@ -410,13 +410,32 @@ async def test_concurrent_syncs_absorb(tracking_env: TrackingEnv) -> None:
         settings={"url": "https://mlflow.example.com"},
         auth="none",
     )
-    env.adapters["mlflow"].delay_s = 0.05
+    started = asyncio.Event()
+    proceed = asyncio.Event()
 
-    # Run two syncs concurrently
-    await asyncio.gather(
-        env.service.run_sync(env.project_id, source.id),
-        env.service.run_sync(env.project_id, source.id),
-    )
+    original_sync = env.adapters["mlflow"].sync
+
+    async def controlled_sync(
+        source: Any, credential: str | None = None, since: Any = None
+    ) -> SyncResult:
+        started.set()
+        await proceed.wait()
+        return await original_sync(source, credential, since=since)
+
+    env.adapters["mlflow"].sync = controlled_sync  # type: ignore[method-assign]
+
+    # Task 1 starts and waits inside controlled_sync, holding the source lock
+    t1 = asyncio.create_task(env.service.run_sync(env.project_id, source.id))
+    await started.wait()
+
+    # Task 2 starts while task 1 is syncing -> finds lock held and absorbs
+    t2 = asyncio.create_task(env.service.run_sync(env.project_id, source.id))
+    # Yield control to let task 2 run and observe the held lock
+    await asyncio.sleep(0.01)
+
+    # Let task 1 finish
+    proceed.set()
+    await asyncio.gather(t1, t2)
 
     # Adapter should have been called only once!
     assert len(env.adapters["mlflow"].calls) == 1
