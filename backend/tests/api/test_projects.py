@@ -215,10 +215,10 @@ async def test_server_mode_disables_local_projects(
         assert res.status_code == 403
         assert res.json()["code"] == "local_projects_disabled"
 
-        # GET /folders -> 403 local_projects_disabled
+        # GET /folders -> 200 in server mode
         res = await server_client.get("/api/folders")
-        assert res.status_code == 403
-        assert res.json()["code"] == "local_projects_disabled"
+        assert res.status_code == 200
+        assert "entries" in res.json()
 
         # POST /projects/{id}/relink -> 403 local_projects_disabled
         res = await server_client.post(
