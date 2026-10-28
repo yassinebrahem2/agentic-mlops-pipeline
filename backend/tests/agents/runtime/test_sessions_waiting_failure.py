@@ -193,6 +193,7 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "print(1)"}}
     ]
     approvals = ApprovalsService(databases, env.manager, store=env.approval_store)
+    env.manager.bind_approvals(approvals)
     sub = await opened_stream(env, "writer")
     await env.manager.send(env.project_id, "writer", "Write a.py")
     queued = await env.manager.send(env.project_id, "writer", "Write b.py")

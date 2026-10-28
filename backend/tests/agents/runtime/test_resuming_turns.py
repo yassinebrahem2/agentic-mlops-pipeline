@@ -218,6 +218,7 @@ async def test_resuming_turn_approve(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "print(1)"}}
@@ -310,6 +311,7 @@ async def test_resuming_turn_reject_with_note(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "bad code"}}
@@ -394,6 +396,7 @@ async def test_resuming_turn_two_asks_in_one_step(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py"}},
@@ -534,6 +537,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         audit_log=audit_log,
         event_log=event_log,
     )
+    new_manager.bind_approvals(new_approvals_service)
 
     # Approve using the rebuilt manager directly, calling decide first without subscribing
     await new_approvals_service.decide(
@@ -602,6 +606,7 @@ async def test_resuming_turn_no_duplicates(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "nodup.py"}}
@@ -727,6 +732,7 @@ async def test_resuming_turn_task_mismatch(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "task_check.py"}}
