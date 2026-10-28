@@ -4,6 +4,7 @@ import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { api, errorText, unwrap } from "@/lib/api";
 import { useAppInfo } from "@/lib/useAppInfo";
+import { EmbedderSection } from "./EmbedderSection";
 
 type AppInfo = components["schemas"]["AppInfo"];
 
@@ -23,6 +24,7 @@ export function AppSettingsPage() {
       {app.data && (
         <>
           <AboutApp app={app.data} />
+          <EmbedderSection />
           <Backup />
         </>
       )}
