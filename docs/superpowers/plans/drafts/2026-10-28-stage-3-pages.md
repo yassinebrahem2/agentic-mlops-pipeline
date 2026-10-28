@@ -4,18 +4,18 @@
 
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; a task gets an early PR only when its issue says so (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, its tests (the task's stop condition) and the checks that prove it works. Read the [stage 3 overview](2026-10-28-stage-3-overview.md) first.
 
-**Goal:** The user sees what the agents now know (spec §12): a Models page (tracked models, versions side by side, the production alias, lineage), a Data page (connections, their tables, schema, rows, data version, roles from the handoff) and a Runs page (tracked runs and CI runs in one list, Sync now). All three read the backend routes and refresh live from the project event stream.
+**Goal:** The user sees what the agents now know and manages where tracking data comes from (spec §12): a Models page (tracked models, versions side by side, the production alias, lineage), a Data page (connections, their tables, schema, rows, data version, roles from the handoff) and a Runs page (tracked runs and CI runs in one list, Sync now); and, in project settings, the tracking sources section (list, add, credential, last sync and error). All read the backend routes and refresh live from the project event stream.
 
 **Branch:** `plan/stage-3-pages`.
 
 **Consumes** (generated types in `frontend/src/api/schema.d.ts`, after contracts task 3 and the owning plans merged; names from the overview):
-- I16 routes: `GET /api/projects/{id}/tracking/sources`; `POST .../tracking/sync` (optional `source_id`, 202); `GET .../tracking/models` (`Page[ModelSummary]`), `.../versions` (`model`, `source_id`; `Page[ModelVersionRow]`), `.../runs` (`run_key`; `Page[RunRow]`), `.../ci-runs` (`Page[CiRunRow]`), `.../deployments` (`model`, `source_id`; `Page[DeploymentRow]`), `.../metrics` (`run_key`, `metric`, `latest`; `Page[MetricPoint]`); every list route takes `limit` (default 50, max 500) and `offset`; models `TrackingSourceView`, `RunStatus`; event `tracking.synced`. The `/evaluations` route is stage 5's and unused here.
+- I16 routes: `GET /api/projects/{id}/tracking/sources`; `POST .../tracking/sync` (optional `source_id`, 202); `GET/POST .../tracking/sources` (`POST` body: `type`, `settings`, `auth`); `PUT .../tracking/sources/{trk}/credential` (keystore only); `GET .../tracking/models` (`Page[ModelSummary]`), `.../versions` (`model`, `source_id`; `Page[ModelVersionRow]`), `.../runs` (`run_key`; `Page[RunRow]`), `.../ci-runs` (`Page[CiRunRow]`), `.../deployments` (`model`, `source_id`; `Page[DeploymentRow]`), `.../metrics` (`run_key`, `metric`, `latest`; `Page[MetricPoint]`); every list route takes `limit` (default 50, max 500) and `offset`; models `TrackingSourceView`, `RunStatus`; event `tracking.synced`. The `/evaluations` route is stage 5's and unused here. Behaviors relied on, owned by the tracking plan: `latest=true` returns the highest-`step` point per metric of the run; `/versions` is ordered newest first; a source's `settings` are `{url}` for `mlflow` and `{repository, workflows}` for `github_actions` (tracking's `MlflowSettings` and `GithubActionsSettings`, `extra="forbid"`); the credential route answers 422 for a source with `auth="none"`.
 - I15 routes: `GET /api/projects/{id}/connections`, `GET .../connections/{con}/tables`, `GET .../connections/{con}/tables/{table}`; models `ConnectionView` (with `findings: Findings`), `TableRef`, `TableDetail`, `ColumnInfo`; events `connection.created`, `connection.updated`, `connection.deleted`.
 - I20 route: `GET /api/projects/{id}/handoff` (`HandoffView` or `null`, 200); I19 `HandoffPayload`, of which the pages read `data_roles: list[DataRole]` (`connection`, `table`, `role`, `id_column`, `time_column`) and `models: list[ModelSpec]` (`name`, `profile.primary_metric`, `predictions` and `labels` as `TableUse | None`); event `handoff.approved`. A project has several models and several data roles, so both pages work on lists.
 - All five event types are in the backend `EventType` and the frontend `PROJECT_EVENT_TYPES`, written by contracts task 1 ("Shared by contracts"); this plan does not edit `useProjectEvents.ts`.
 - Frontend: `PageRoute` and the `import.meta.glob` route table (`app/routes.ts`), `useProjectEvents`, `api` / `unwrap` / `errorText`, `components/ui/*`.
 
-**Produces:** nothing other plans use. The `onboarding` plan's end-to-end test may visit these pages; this plan does not edit `frontend/e2e/flow.spec.ts` (onboarding's file).
+**Produces:** nothing other plans use (the proposals plan's cards say where to set a tracking credential; this section is that place). The `onboarding` plan's end-to-end test may visit these pages; this plan does not edit `frontend/e2e/flow.spec.ts` (onboarding's file).
 
 **Read first:** spec §7 and §12; `frontend/src/pages/inbox/` (page, route and live-refresh hook), `frontend/src/pages/providers/ModelsTable.tsx` (table, alert and empty-state style), `frontend/src/lib/useProjectEvents.ts`.
 
@@ -27,10 +27,11 @@
 | 2 | Runs page | task 1 |
 | 3 | Models page | tasks 1 and 2 (the status badge) |
 | 4 | Data page | task 1 |
+| 5 | Tracking sources section in project settings | task 1 (hooks); the tracking sources and credential routes |
 
 No task has an early PR: nothing consumes these pages.
 
-**Nav.** Each page's `route.tsx` carries its own `nav` entry and `import.meta.glob` finds it, so `Sidebar.tsx` and `app/routes.ts` need no edit, and an entry exists exactly when its page does. Orders: Agents 0, Inbox 10, Models 20, Data 30, Runs 40, Project settings 100.
+**Nav.** The settings section (task 5) is not a page: `ProjectSettingsPage.tsx` gains one import and one line for it (overview, shared files). Each page's `route.tsx` carries its own `nav` entry and `import.meta.glob` finds it, so `Sidebar.tsx` and `app/routes.ts` need no edit, and an entry exists exactly when its page does. Orders: Agents 0, Inbox 10, Models 20, Data 30, Runs 40, Project settings 100.
 
 ---
 
@@ -46,7 +47,7 @@ No task has an early PR: nothing consumes these pages.
 **Interfaces:**
 - Produces `useInvalidateOnEvents(projectId: string | undefined, queryKey: readonly unknown[], types: readonly ProjectEventType[]): void`. On a listed event or `onResync` it invalidates the key after a 150 ms debounce and clears the timer on unmount.
 - Produces `RUNS_PAGE_LIMIT = 200` and `VERSIONS_PAGE_LIMIT = 100` (the pages' `limit` values, within the route max of 500), exported from `useTracking.ts`.
-- Produces `trackingKey(projectId, part)`, `part` being `"sources" | "models" | "versions" | "runs" | "ci-runs" | "deployments" | "metrics"`; hooks `useTrackingSources`, `useTrackedModels`, `useModelVersions(projectId, sourceId, model)`, `useTrackedRuns(projectId)` and `useRunByKey(projectId, runKey, enabled)` (the `/runs?run_key=` lookup), `useCiRuns`, `useDeployments(projectId, sourceId, model)`, `useRunMetrics(projectId, runKey)` (always `latest=true`: the highest-step value per metric), all refreshed on `tracking.synced` (one invalidation of the `["projects", id, "tracking"]` prefix); `useSyncNow(projectId)`, a mutation on `POST .../tracking/sync` without `source_id` (every source).
+- Produces `trackingKey(projectId, part)`, `part` being `"sources" | "models" | "versions" | "runs" | "ci-runs" | "deployments" | "metrics"`; hooks `useTrackingSources`, `useTrackedModels`, `useModelVersions(projectId, sourceId, model)`, `useTrackedRuns(projectId)` and `useRunByKey(projectId, runKey, enabled)` (the `/runs?run_key=` lookup), `useCiRuns`, `useDeployments(projectId, sourceId, model)`, `useRunMetrics(projectId, runKey)` (always `latest=true`: the highest-step value per metric), all refreshed on `tracking.synced` (one invalidation of the `["projects", id, "tracking"]` prefix); `useSyncNow(projectId)`, a mutation on `POST .../tracking/sync` without `source_id` (every source); `useCreateSource(projectId)` (`POST .../tracking/sources`, invalidates the sources key) and `useSetSourceCredential(projectId)` (`PUT .../tracking/sources/{trk}/credential`, invalidates the sources key; its result and error never carry the value back).
 - The list hooks return the route's `Page<T>` (`rows`, `total`, `truncated`) unchanged.
 - Produces `useConnections(projectId)` (prefix `["projects", id, "connections"]`, refreshed on `connection.created`, `connection.updated`, `connection.deleted`), `useTables(projectId, connectionId)`, `useTableDetail(projectId, connectionId, table, enabled)` (enabled only when a row is expanded), `useHandoff(projectId)` returning `HandoffView | null` (refreshed on `handoff.approved`).
 - Types are re-exported from `components["schemas"][...]` only; none is written by hand.
@@ -58,6 +59,7 @@ No task has an early PR: nothing consumes these pages.
 
 **Tests (stop condition):**
 - `useInvalidateOnEvents`: a listed event invalidates once after a burst of three; an unlisted event does nothing; a resync invalidates; unmount cancels a pending invalidation.
+- `useCreateSource` posts `type`, `settings`, `auth` and refreshes the sources; `useSetSourceCredential` puts the value to the credential route only, and the value appears in no query key, cache entry or error text.
 - Each hook calls its route with the project id (and its query parameters) and returns the stubbed page; `tracking.synced` refetches a tracking hook; `useHandoff` returns `null` for a null body and surfaces a 500.
 - `formatDuration` table cases (`null`, 0, 59, 60, 3665, 7260); `shortCommit` takes the first 7 characters and passes `null` through.
 - The existing Inbox tests still pass.
@@ -144,6 +146,29 @@ No task has an early PR: nothing consumes these pages.
 
 ---
 
-## Interface gaps
+### Task 5: Tracking sources section in project settings
 
-None open. I16 (typed pages, `limit` and `offset`, `run_key`, `source_id`, `model`, `latest`) and I19 (`HandoffPayload`, `DataRole`, `ModelSpec`) cover everything these pages read. Two behaviors to confirm when the tracking plan lands, because this plan relies on them: `latest=true` returns the highest-`step` point per metric of the run, and `/versions` is ordered newest first (the page sorts only within the page it received).
+**Files:** new `frontend/src/pages/project-settings/TrackingSourcesSection.tsx`, `AddTrackingSourceDialog.tsx`, `SourceCredentialForm.tsx`, tests beside them; `frontend/src/pages/project-settings/ProjectSettingsPage.tsx` (one import and one line, shared with the embedders and connections plans).
+
+**Interfaces:** Consumes `useTrackingSources`, `useCreateSource`, `useSetSourceCredential` (task 1), `TrackingSourceView` and `SourceType` (generated), `formatTime`. Produces nothing.
+
+**Implementation notes:**
+- One list, one row per source: type label (MLflow, GitHub Actions), its target (`settings.url` for `mlflow`; `settings.repository` plus the workflow names, or "all workflows", for `github_actions`), the auth state ("No authentication", "Credential set", or "Credential missing" for `auth="credential"` with `credential_set` false), "Last sync <time>" or "Never synced", and `last_error` in a destructive `Alert` when set. The list refreshes on `tracking.synced` (task 1's prefix invalidation). No route removes or edits a source, so the section offers neither.
+- Add: a dialog with a type `Select`.
+  - `mlflow`: URL, and a switch "Needs a credential" (sets `auth`).
+  - `github_actions`: repository (`owner/name`) and workflow file names, comma separated, optional; `auth` is `none` and says it uses the app's GitHub login.
+  - The form builds exactly the settings keys of the tracking plan's models. The server's 422 message is shown as given (`errorText`, `fieldErrors` for a field), never re-validated here beyond non-empty.
+- Credential: for an `auth="credential"` source, `SourceCredentialForm` has one `type="password"` input (`autoComplete="off"`) and Set. The value is held only in the input's state, sent in the `PUT`, and cleared on success or failure; it is never put in a query key, a toast, a log or the DOM after saving. Setting it again replaces it. After the add dialog creates a credential source it sends the credential in a second call; if that call fails, the source stays listed as "Credential missing" with the form open on its row, with the server's error shown (no rollback, no hidden retry).
+- Warnings about an open tracker belong to the backend (the proposal kind's `warnings`); this section adds no sentence of its own about authentication.
+- States: loading, error (`errorText`), and no sources ("No tracking source yet. Onboarding adds them when you approve the handoff, or add one here.").
+
+**Tests (stop condition):** with stubbed routes:
+- Sources render with target, auth state, last sync and error; the three auth states; empty state; route error.
+- Adding an `mlflow` source with a credential posts `{type, settings: {url}, auth: "credential"}` then puts the credential; a `github_actions` source posts `{repository, workflows}` with `auth: "none"` and shows no credential form; a 422 shows its message and keeps the dialog open.
+- A failing credential put leaves the source listed as "Credential missing" with the error shown.
+- The credential value is absent from every recorded URL and from the DOM after saving, and the input is cleared; the credential input is `type="password"`.
+- A `tracking.synced` event refreshes last sync.
+- Checks as task 1, and `ProjectSettingsPage.test.tsx` still passes.
+
+---
+

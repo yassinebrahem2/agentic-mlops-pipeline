@@ -9,13 +9,13 @@
 - proposal records, superseding by kind and key, and the path from an approval decision to the kind's `apply()`;
 - credential slots: a secret goes from the card to the keystore and never through a proposal, and no orphan stays;
 - the current handoff (`Handoffs`) and its route;
-- the two cards that render the payloads, the credential field and the network sentence.
+- the two cards that render the payloads, the credential field and the kinds' warnings (such as the network sentence), shown as the backend gives them.
 
 **Branch:** `plan/stage-3-proposals`. **Consumes:** I13 (the `propose` class, `kind`, `step` and `proposal_kind` on approvals, set by the gate; `Approvals.cancel`, `Approvals.add_observer`, `ApprovalObserver` with `asked(view)` and `decided(view)`, observers awaited before the turn resumes; `ApprovalControls`; the dispatcher), I19 (all models, `ConnectionsPayload`, `HandoffPayload`, `ProposalKind`, `Proposals`) and I20 as contracts writes them, "Shared by contracts" (`prp` prefix, event types, `project_secrets` with `secret_refs`, `handoff_versions`, the other tables), and from connections the `POST .../connections/inspect` route (I15). **Produces:** `Proposals` (I19), `ProposalKinds`, `Handoffs` (I20) from task 1 (early PR); the `Propose` tool; the routes `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}`, `GET /api/projects/{id}/proposals/by-approval/{apr}` and `GET /api/projects/{id}/handoff`; the events `proposal.created` and `proposal.decided` (`handoff.approved` is onboarding's); the two proposal cards.
 
-**Read first:** spec §9, §7 (the network sentence), §12; the overview's I13, I15 (`inspect`, `Findings`), I19, I20 and "Shared by contracts"; `agents/approvals/` (`gate.py`, `service.py`, `decisions.py`, `store.py`, `contract.py`, as contracts task 2 leaves them), `agents/runtime/tool_step.py` (preview runs in `ToolStep.decide` and again in `ApprovalGate.decide`, and a `ToolFailure` from it becomes the call's tool error), `agents/tools/base.py`, `credentials/project_secrets.py` (contracts), `frontend/src/pages/agents/ApprovalCard.tsx` and `ApprovalControls`.
+**Read first:** spec §9, §7, §12; the overview's I13, I15 (`inspect`, `Findings`), I19, I20 and "Shared by contracts"; `agents/approvals/` (`gate.py`, `service.py`, `decisions.py`, `store.py`, `contract.py`, as contracts task 2 leaves them), `agents/runtime/tool_step.py` (preview runs in `ToolStep.decide` and again in `ApprovalGate.decide`, and a `ToolFailure` from it becomes the call's tool error), `agents/tools/base.py`, `credentials/project_secrets.py` (contracts: the only builder of secret refs), `frontend/src/pages/agents/ApprovalCard.tsx` and `ApprovalControls`.
 
-**Out of scope:** each kind's `apply()`, `preview` and `credentials_needed` bodies, `handoff.approved`, the wizard, the kickoff, the definitions (onboarding). Here they are tested with a test kind.
+**Out of scope:** each kind's `apply()`, `preview`, `warnings` and `credentials_needed` bodies, `handoff.approved`, the wizard, the kickoff, the definitions (onboarding). Here they are tested with a test kind.
 
 ## How a proposal flows
 
@@ -32,8 +32,8 @@
 | 1 | The proposal store and service, `ProposalKinds`, `Handoffs`, the three routes | contracts tasks 1 and 2 | yes |
 | 2 | The approval observer, superseding and restart recovery | task 1 | no |
 | 3 | The `Propose` tool | tasks 1 and 2 | no |
-| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 2, connections task 1 | no |
-| 5 | The handoff card: every section, credential field, network sentence | task 4 | no |
+| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 2, connections task 1 (`inspect`) | no |
+| 5 | The handoff card: every section, the credential field, the warnings | task 4 | no |
 
 Task 1 gets an early PR from `plan/stage-3-proposals-task1`: onboarding consumes `Proposals`, `ProposalKinds` and `Handoffs`. It leaves `main` working: nothing creates a proposal yet, so the routes answer 404 and `null`.
 
@@ -42,32 +42,34 @@ Task 1 gets an early PR from `plan/stage-3-proposals-task1`: onboarding consumes
 ### Task 1: The proposal store and service, `ProposalKinds`, `Handoffs`, the three routes
 
 **Files:**
-- new `backend/src/mlops_agents/proposals/store.py` (the `proposals` table and `handoff_versions`, SQL only), `proposals/kinds.py` (`ProposalKinds`), `proposals/service.py` (`ProposalsService`), `proposals/slots.py` (slot refs, state, sweep), `proposals/handoffs.py` (`SqliteHandoffs`);
-- new `backend/src/mlops_agents/api/routers/proposals.py` (slot route, by-approval route, handoff route), registered by one line;
+- new `backend/src/mlops_agents/proposals/store.py` (the `proposals` table and `handoff_versions`, SQL only), `proposals/kinds.py` (`ProposalKinds`), `proposals/service.py` (`ProposalsService`), `proposals/slots.py` (slot state and sweep; refs come from `project_secrets` only), `proposals/handoffs.py` (`SqliteHandoffs`);
+- new `backend/src/mlops_agents/api/routers/proposals.py` (slot route, by-approval route, handoff route; `include_routers` discovers it, no registration line);
 - `api/services.py`: the `proposals`, `proposal_kinds` and `handoffs` fields and their construction (own lines only);
-- `frontend/openapi.json` and `frontend/src/api/schema.d.ts` regenerated (`uv run python -m mlops_agents.api.openapi_export`, `npm run gen:api`): CI's `openapi_export --check` fails the early PR otherwise;
+- `frontend/openapi.json` regenerated and committed (`uv run python -m mlops_agents.api.openapi_export`): CI's `openapi_export --check` fails the early PR otherwise. `schema.d.ts` is gitignored: run `npm run gen:api` locally, never commit it;
 - tests under `backend/tests/proposals/` and `backend/tests/api/test_proposals_routes.py`.
 
 **Interfaces:**
-- Consumes: `ProposalView`, `ProposalStatus`, `SlotState`, `CredentialSlot`, `ApplyResult`, `ProposalKind`, `Proposals`, `HandoffView`, `HandoffPayload`, `Handoffs`; `project_secrets` (`put`, `move`, `delete`, `delete_prefix`); `EventLog`; `Databases`.
-- Produces: `ProposalsService` implementing `Proposals` exactly as I19 has it (`create(project_id, agent, kind, key, payload, turn_id, tool_call_id)`, `attach(project_id, proposal_id, approval_id) -> None`, `get_by_approval`, `pending`, `latest_for_turn`) plus `decide(project_id, proposal_id, approved) -> ApplyResult | None` `for_call(project_id, turn_id, tool_call_id) -> ProposalView | None` (not in the I19 protocol; the observer and the tool use it to find their own draft) and `recover(project_id)` (used by tasks 2 and 3); `ProposalKinds` (`register`, `get`; a duplicate name raises, an unknown one is a `DomainError` 422); `SqliteHandoffs`.
+- Consumes: `ProposalView`, `ProposalStatus`, `SlotState`, `CredentialSlot`, `ApplyResult`, `ProposalKind` (with `warnings`), `Proposals`, `HandoffView`, `HandoffPayload`, `Handoffs`, `CONNECTIONS_KIND` and `HANDOFF_KIND`; `project_secrets` (`put`, `move`, `delete`, `delete_prefix`); `EventLog`; `Databases`.
+- Produces: `ProposalsService` implementing `Proposals` exactly as I19 has it (`create(project_id, agent, kind, key, payload, turn_id, tool_call_id)`, `attach(project_id, proposal_id, approval_id) -> None`, `get_by_approval`, `pending`, `latest_for_turn`) plus `decide(project_id, proposal_id, approved) -> ApplyResult | None`, `for_call(project_id, turn_id, tool_call_id) -> ProposalView | None` (not in the I19 protocol; the observer and the tool use it to find their own draft) and `recover(project_id)` (used by tasks 2 and 3); `ProposalKinds` (`register`, `get`, no kind-name literals: the registered names are checked against `CONNECTIONS_KIND` and `HANDOFF_KIND` in tests; a duplicate name raises, an unknown one is a `DomainError` 422); `SqliteHandoffs`.
 
 **Implementation notes:**
-- **Store:** a `proposals` row holds the validated payload as JSON, `kind`, `key`, status, agent, `approval_id` (null until attached), `turn_id`, `tool_call_id`, `created`, `decided_at`, `result` (JSON `ApplyResult` or null). A row never holds a secret: payload models have no secret field (a test asserts it on both). Status changes are conditional (`WHERE status = 'pending'`, or `'approved'` for the result), as `ApprovalStore.update_status`. `ProposalView.slots` is filled when a view is read, from `KeyStore.get(ref) is not None` through `asyncio.to_thread` in `slots.py` (a read; `project_secrets` stays the only writer), never stored.
+- **Store:** a `proposals` row holds the validated payload as JSON, `kind`, `key`, status, agent, `approval_id` (null until attached), `turn_id`, `tool_call_id`, `created`, `decided_at`, `result` (JSON `ApplyResult` or null). A row never holds a secret: payload models have no secret field (a test asserts it on both). Status changes are conditional (`WHERE status = 'pending'`, or `'approved'` for the result), as `ApprovalStore.update_status`. `ProposalView.warnings` is filled when a view is read from `ProposalKind.warnings(payload)` (the kind's text, as onboarding writes it); `ProposalView.slots` is filled when a view is read, from `KeyStore.get(project_secrets.proposal_slot_ref(...)) is not None` through `asyncio.to_thread` in `slots.py` (a read; `project_secrets` stays the only writer and the only builder of refs), never stored.
 - **Concurrency:** one `asyncio.Lock` per project id serializes `create`, `attach`, `decide`, the slot route and `recover`, so a slot write racing an approval is applied before the apply (and used or swept) or refused.
 - **`create(...)`:** a draft, idempotent by `(turn_id, tool_call_id)` (a second call returns the existing row, writes nothing and emits nothing). It validates `payload` with the kind's `payload_model` (a failure is `DomainError` 422, nothing stored) and inserts `pending` with a null `approval_id`. If a pending proposal of the same `kind`, `key` and `turn_id` exists under another `tool_call_id`, the new row is stored as a duplicate: status `rejected` with `result = ApplyResult(applied=[], failed={"proposal": "Another proposal of this kind was already made in this step."})`, and nothing supersedes. Emits `proposal.created {proposal_id, kind}` for a pending draft (never the payload).
 - **`attach(proposal_id, approval_id)`,** under the lock: sets `approval_id` on the draft, a duplicate included (so `get_by_approval` finds its card). Only when the draft is `pending` does it then supersede any other pending proposal of the same `kind` and `key` that already has an approval (conditional update to `superseded`, sweep its slots) and, **after the lock is released**, call `Approvals.cancel` on that approval (the cancel fires `decided`, whose observer calls `decide`, which takes the same non-reentrant lock: cancelling inside it would deadlock).
 - **`decide(approved)`, under the lock:** a proposal not `pending` returns `None` (a second call never applies twice). Rejection: `rejected`, sweep, emit `proposal.decided {proposal_id, kind, status}`. Approval: set `approved` first (so a slot write is refused from now on), run `kind.apply(project, proposal_id, payload)`, then in a `finally` sweep the slots (`move` already emptied the ones the kind used), store the result, emit `proposal.decided`, return it. A kind that raises is the one place a broad `except Exception` is allowed: `logger.exception`, store `ApplyResult(applied=[], failed={"apply": credentials.scrub.error_text(exc)})`, sweep. Every stored `failed` reason goes through `error_text`.
-- **Sweep (`slots.sweep`):** `project_secrets.delete` for each index of `kind.credentials_needed(payload)`; one function serves reject, supersede, cancel, expiry, failed apply and leftovers after a partial apply. A `KeyStoreError` is logged and added to the result as `failed["credential <i>"]`, never silent. Slot refs are built in `slots.py` only, in the shape `project/<id>/proposal/<prp>/<slot>`.
-- **`recover(project_id)`,** called for every project of `WorkspaceService.list_projects()` at startup (task 2 wires it; no turn runs yet): every `approved` proposal with no `result` is applied again (`apply` is idempotent, I19), then swept; `project_secrets.delete_prefix("project/<id>/proposal/<prp>/")` removes the secrets of every non-pending proposal; every `pending` proposal with a null `approval_id` is marked `rejected` and swept.
+- **Sweep (`slots.sweep`):** `project_secrets.delete` for each index of `kind.credentials_needed(payload)`; one function serves reject, supersede, cancel, expiry, failed apply and leftovers after a partial apply. A `KeyStoreError` is logged and added to the result as `failed["credential <i>"]`, never silent. Refs come from `project_secrets.proposal_slot_ref(project, proposal, slot)`; this plan writes no ref string.
+- **`recover(project_id)`,** called for every project of `WorkspaceService.list_projects()` at startup (task 2 wires it; no turn runs yet): every `approved` proposal with no `result` is applied again (`apply` is idempotent, I19), then swept; `project_secrets.delete_prefix(project_secrets.proposal_prefix(project, proposal))` removes the secrets of every non-pending proposal; every `pending` proposal with a null `approval_id` is marked `rejected` and swept.
 - **Slot route** `PUT /api/projects/{project_id}/proposals/{proposal_id}/credentials/{slot}`: body `CredentialBody(value: SecretStr, min_length=1, max_length=8192, extra="forbid")`; under the lock: 404 for an unknown proposal or a slot not in `credentials_needed`, 409 `proposal_not_pending` otherwise; `project_secrets.put`; the response is `SlotState` (never the value). `GET .../proposals/by-approval/{apr}` returns `ProposalView` (with `slots`) or 404. Neither route logs its body.
-- **`SqliteHandoffs.store`** inserts a `handoff_versions` row (`proposal_id`, `approved = now`, payload JSON) in one transaction; `current` returns the newest or `None`. `GET /api/projects/{project_id}/handoff` returns `HandoffView | None` with status 200.
+- **`SqliteHandoffs.store(project_id, proposal_id, payload) -> int`** inserts a `handoff_versions` row (`proposal_id`, `approved = now`, payload JSON) in one transaction and returns its version; it is idempotent by proposal (the table's `UNIQUE proposal_id`): a second call for the same proposal inserts nothing and returns the same version, which onboarding's kickoff keys by. `current` returns the newest or `None`. `GET /api/projects/{project_id}/handoff` returns `HandoffView | None` with status 200.
 
 **Tests (stop condition):**
 - Service, with a test kind (two slots, scripted `apply`) and contracts' fake keystore: `create` stores a `pending` draft with no approval and emits the event without the payload; a second `create` with the same turn and tool call ID returns the same row and emits nothing; `attach` sets the approval, and a later attach of the same kind and key supersedes the older proposal, sweeps its slots and cancels its approval after the lock is released; a different kind or key leaves it alone; a same-kind `create` in the same turn with another tool call ID is stored `rejected` with the duplicate result, and its `attach` sets the approval and supersedes nothing; `for_call` finds each by its tool call ID; approve applies once and a second `decide` returns `None` without a second apply; reject sweeps; an `apply` that moves slot 0 and fails slot 1 leaves no slot in the keystore; an `apply` that raises stores `failed["apply"]`, sweeps and does not propagate; an invalid payload is 422 and stores nothing; two concurrent decides apply once; `latest_for_turn` returns the newest of the turn and kind.
-- `recover`: an approved proposal without result is applied again and swept; an orphan slot of a rejected proposal is deleted; a pending proposal's slots are kept; a pending proposal with no approval is rejected.
+- `recover`: an approved proposal without result is applied again and swept; an orphan slot of a rejected proposal is deleted; a pending proposal's slots are kept; a pending proposal with no approval is rejected; re-applying an approved handoff proposal (test kind storing a handoff) leaves one version.
 - Routes: PUT writes the keystore and returns `set: true` without the value; PUT on an approved, rejected or superseded proposal is 409 and writes nothing; an unknown slot is 404; PUT racing with approve leaves the keystore empty afterwards unless the kind moved it; the value is absent from the response, the proposal row, the events and captured logs; by-approval returns the view with `slots`, and 404 for none; `GET handoff` is `null`, then the stored one, then the newer after a second `store`, history kept.
 - `ProposalKinds`: a duplicate registration raises, an unknown name is 422.
+- `Handoffs.store`: storing one proposal twice returns the same version and adds no row; another proposal gets the next version; `current` is the newest.
+- `warnings`: the test kind's `warnings` text appears on the by-approval view, and the proposal row stores none of it (computed when a view is read).
 - `uv run ruff check`, `ruff format --check`, `pyright`, `pytest` (full suite); CI green, Windows job included (the keystore is faked).
 
 **PR:** early PR into `main` from `plan/stage-3-proposals-task1` (`Closes #<task issue>`), as the overview's Starts column requires.
@@ -95,11 +97,11 @@ Task 1 gets an early PR from `plan/stage-3-proposals-task1`: onboarding consumes
 
 **Files:** new `backend/src/mlops_agents/agents/tools/propose.py`; `agents/tools/__init__.py` (`default_registry` gains its own keyword and lines); `api/services.py` (own line); tests `backend/tests/agents/tools/test_propose.py`.
 
-**Interfaces:** Consumes `ToolContext.tool_call_id` (contracts), `RiskClass.PROPOSE`, `ProposalKinds`, `Proposals.create`, `ProposalsService.for_call`, `ConnectionsPayload`, `HandoffPayload`, `ApplyResult`, the kind-name constants of `proposals/contract.py`. Produces `ProposeTool` (name `Propose`, risk `propose`) and `PROPOSE_TOOL_NAME`.
+**Interfaces:** Consumes `ToolContext.tool_call_id` (contracts), `RiskClass.PROPOSE`, `ProposalKinds`, `Proposals.create`, `ProposalsService.for_call`, `ConnectionsPayload`, `HandoffPayload`, `ApplyResult`, `CONNECTIONS_KIND` and `HANDOFF_KIND` of `proposals/contract.py`. Produces `ProposeTool` (name `Propose`, risk `propose`) and `PROPOSE_TOOL_NAME`.
 
 ```python
 class ProposeArgs(BaseModel):   # extra="forbid"
-    kind: Literal["connections", "handoff"]            # the contract's constants
+    kind: str    # a field validator accepts only CONNECTIONS_KIND or HANDOFF_KIND (Literal cannot take names under pyright strict); its error names both
     payload: ConnectionsPayload | HandoffPayload
     # the gate reads `kind` to set the approval's proposal_kind
 ```
@@ -116,7 +118,7 @@ class ProposeArgs(BaseModel):   # extra="forbid"
 
 ### Task 4: The shared proposal card parts and the connections card
 
-**Files:** new `frontend/src/pages/agents/proposals/useProposal.ts` (TanStack Query over the by-approval route), `ProposalShell.tsx` (title, status badge, loading and error fallback showing `preview.body` text, result lines; `ApprovalControls` keyed on the approval part's status, not the proposal's, with the proposal's failure reason shown above them), `ConnectionsProposalCard.tsx`, tests; one line in contracts' dispatcher in `ApprovalCard.tsx` (`proposal_kind` `connections`).
+**Files:** new `frontend/src/pages/agents/proposals/useProposal.ts` (TanStack Query over the by-approval route), `ProposalShell.tsx` (title, status badge, loading and error fallback showing `preview.body` text, result lines, the proposal's `warnings` as given; `ApprovalControls` keyed on the approval part's status, not the proposal's, with the proposal's failure reason shown above them), `ConnectionsProposalCard.tsx`, tests; one line in contracts' dispatcher in `ApprovalCard.tsx` (`proposal_kind` `connections`).
 
 **Interfaces:** Consumes the generated `ProposalView`, `ConnectionsPayload`, `Findings` and the by-approval and `POST /api/projects/{id}/connections/inspect` routes, `ApprovalControls`, the dispatcher. Produces `ProposalShell` and `useProposal` (task 5 reuses them).
 
@@ -130,11 +132,11 @@ class ProposeArgs(BaseModel):   # extra="forbid"
 
 ---
 
-### Task 5: The handoff card: every section, credential field, network sentence
+### Task 5: The handoff card: every section, the credential field, the warnings
 
-**Files:** new `frontend/src/pages/agents/proposals/HandoffProposalCard.tsx`, `HandoffSections.tsx` (one small component per section, to keep files short), `CredentialField.tsx`, `networkSentence.ts` (one function, the one source of the text), tests; one line in the dispatcher (`proposal_kind` `handoff`).
+**Files:** new `frontend/src/pages/agents/proposals/HandoffProposalCard.tsx`, `HandoffSections.tsx` (one small component per section, to keep files short), `CredentialField.tsx`, tests; one line in the dispatcher (`proposal_kind` `handoff`).
 
-**Interfaces:** Consumes `ProposalShell`, `useProposal`, `ProposalView.slots`, the slot route and the generated `HandoffPayload` types (I19: `models`, `commands`, `data_roles`, `tracking`, `pipeline`, `edges`, `operations`, `gaps`, `grants`). Produces nothing others use.
+**Interfaces:** Consumes `ProposalShell`, `useProposal`, `ProposalView.slots` and `warnings`, the slot route and the generated `HandoffPayload` types (I19: `models`, `commands`, `data_roles`, `tracking`, `pipeline`, `edges`, `operations`, `gaps`, `grants`). Produces nothing others use.
 
 **Implementation notes:**
 - **Every section of the payload renders**, in this order, from the typed payload:
@@ -148,13 +150,7 @@ class ProposeArgs(BaseModel):   # extra="forbid"
   - **Grants:** network on or off, permission level (the type excludes `bypass`).
   A cadence renders as its cron or "every N minutes". A null or empty section renders "none".
 - **Credential field**, one per entry of `slots`: label from the slot, `<input type="password" autoComplete="off">`; Save posts `{value}` to the slot route and clears local state at once (also on error); then it shows only "credential set: yes" or "no" from the response and the refetched view; never the value or a mask of it. Save is disabled when empty or when the proposal is not pending. The value lives only in component state, never in the query cache, a URL or the console.
-- **Network sentence:** when `grants.network` is on and a tracking source of type `mlflow` has `auth: "none"` (a `github_actions` source has `auth: "none"` too but uses the app's GitHub login, so it never gets the sentence), one sentence per such source above the controls: "Network access lets agents reach <url>, which has no authentication: anyone who can reach it can change it, agents included at autonomous and bypass levels; every command is in the audit log." The URL comes from the source's settings. None when the network is off or no MLflow source lacks a credential.
-- Approving with a slot unset is allowed and says so next to the field ("the source is created without a credential; add one in settings").
+- **Warnings:** `ProposalView.warnings` renders as given, above the controls, one line each, with no frontend text of its own (the network sentence for an MLflow source with `auth: "none"` is onboarding's `ProposalKind.warnings`; there is no `networkSentence.ts`). No warnings, no block.
+- Approving with a slot unset is allowed and says so next to the field: "the source is created without a credential; add one under Tracking sources in the project settings" (the settings section is the pages plan's).
 
-**Tests (stop condition):** a full-payload fixture (two models, every command kind, feeds, on-call, all three result kinds, gaps, grants) renders every field of every section, found by label, and a minimal payload renders the empty sections as "none"; the credential field posts the value once and clears it, and the value is found nowhere in the DOM or the query cache afterwards; a failed save shows the error and still clears the field; Save is disabled for a non-pending proposal; the sentence shows for network on with an `auth: "none"` MLflow source (its URL named) and not for network off, a credentialed source, or a `github_actions` source; a decided card shows `result`. `npm test`, lint, format check, build; the whole plan: backend suite, ruff, pyright, `npm run e2e` still green on the existing flows; CI green on every job.
-
----
-
-## Interface gaps
-
-None open: G1 and G2 are settled in I13 and I19.
+**Tests (stop condition):** a full-payload fixture (two models, every command kind, feeds, on-call, all three result kinds, gaps, grants) renders every field of every section, found by label, and a minimal payload renders the empty sections as "none"; the credential field posts the value once and clears it, and the value is found nowhere in the DOM or the query cache afterwards; a failed save shows the error and still clears the field; Save is disabled for a non-pending proposal; `warnings` render as given above the controls and nothing renders for an empty list; a decided card shows `result`. `npm test`, lint, format check, build; the whole plan: backend suite, ruff, pyright, `npm run e2e` still green on the existing flows; CI green on every job.

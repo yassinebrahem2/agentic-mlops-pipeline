@@ -23,6 +23,7 @@
 - **A note's author is who created it**; an update by someone else keeps the author and moves `updated`.
 - **Notes are scrubbed before they are stored** with the app's secret sources (`credentials/scrub.py`: `scrub_url_secrets`, `scrub_values`), since agents write them from repository and tracker content. The title is scrubbed too.
 - **Events.** `save` records `note.saved` and `delete` records `note.deleted` through `EventLog.record(project_id, source=<author>, type=..., subject_id=<note id>, payload={"note_id", "type", "title"})` (delete: `note_id` and `type`). The text is never put in an event. The background embedding records none.
+- **The schema is contracts' and this plan asks no more of it:** `delete` goes through `VectorStore.remove` and never relies on a foreign-key cascade, the pending query is `notes LEFT JOIN note_embeddings`, and FTS5 uses its default tokenizer. Task 2's tests (an index rebuild and a `VACUUM INTO` copy leave results unchanged, non-ASCII words match) guard the schema from this side.
 - **Limits live in one module**, `knowledge/limits.py`: title 200 characters, text 8,000, `RRF_K = 60`, 50 candidates per ranking, embed batch 16, query cut at 2,000 characters and 32 distinct tokens for FTS, search `limit` at most 20.
 
 ## Tasks
@@ -146,7 +147,7 @@ No early PR: `Knowledge` is first consumed by the onboarding plan, after every p
 
 ### Task 4: The notes routes and the wiring
 
-**Files:** new `backend/src/mlops_agents/api/routers/notes.py`; the router registration line in `api/app.py`; `api/services.py` (a `knowledge: Knowledge` field and its construction lines, `stack.push_async_callback(knowledge.close)`); regenerated `frontend/openapi.json` and `frontend/src/api/schema.d.ts` (`npm run gen:api`); tests `tests/api/test_notes.py` (beside the other router tests).
+**Files:** new `backend/src/mlops_agents/api/routers/notes.py`; (no registration line: `include_routers` discovers the router); `api/services.py` (a `knowledge: Knowledge` field and its construction lines, `stack.push_async_callback(knowledge.close)`); regenerated `frontend/openapi.json` only (`npm run gen:api`; `schema.d.ts` is gitignored and never committed); tests `tests/api/test_notes.py` (beside the other router tests).
 
 **Interfaces:** Consumes task 3 and the `Embedders` instance the embedders plan puts in `build_services`; `SqliteVectorStore`; `secret_source`. Produces `GET /api/projects/{id}/notes?q=&type=&limit=` returning `SearchResult`, `POST /notes` (body `NoteDraft`, author `user`, 201 with `NoteView`), `PATCH /notes/{kno}` (body `NoteUpdate`: every `NoteDraft` field optional, at least one present; router-local model like `DecisionRequest`), `DELETE /notes/{kno}` (204).
 
@@ -156,9 +157,9 @@ No early PR: `Knowledge` is first consumed by the onboarding plan, after every p
 - Errors are `DomainError`s the app's handler already renders; a malformed `kno` id is a 404 like an unknown one.
 - Construction order in `build_services`: `SqliteVectorStore(databases)`, then `KnowledgeService(databases, embedders, vectors, events, secret_source)`; the `knowledge` hook is registered in task 5, after data-summary's registry exists and before `AgentCatalog.load` (I18).
 
-**Tests (stop condition):** through the app (`TestClient` pattern of the other router tests, fake embedder): create, list newest first, search with `q` and `type`, patch one field, delete, each with the expected status and body; a note in project A is invisible in project B; 404 for an unknown project, unknown note, a malformed id; 422 for an empty title, an over-long text, an empty patch; the secret-scrubbing case through the route; `npm run gen:api` leaves no diff after the regeneration commit; full suite; CI green on Linux and Windows.
+**Tests (stop condition):** through the app (`TestClient` pattern of the other router tests, fake embedder): create, list newest first, search with `q` and `type`, patch one field, delete, each with the expected status and body; a note in project A is invisible in project B; 404 for an unknown project, unknown note, a malformed id; 422 for an empty title, an over-long text, an empty patch; the secret-scrubbing case through the route; `npm run gen:api` leaves no diff in `openapi.json` after the regeneration commit; full suite; CI green on Linux and Windows.
 
-**Checks:** backend checks as task 1, plus from `frontend/`: `npm run gen:api` (then no diff), `npm run lint`, `npm run build`.
+**Checks:** backend checks as task 1, plus from `frontend/`: `npm run gen:api` (then no diff in `frontend/openapi.json`), `npm run lint`, `npm run build`.
 
 ---
 
@@ -172,7 +173,7 @@ No early PR: `Knowledge` is first consumed by the onboarding plan, after every p
 - `SaveNote(type, title, text, source?, note_id?)`: `args_model` forbids extra fields, `type` is `NoteType`. Calls `knowledge.save(ctx.project_id, ctx.agent, NoteDraft(...), note_id)`. Output: `Saved note <id> (<type>): <title>` or `Updated note <id>`; a `DomainError` becomes a `ToolFailure` with its message. The description says what belongs (facts, decisions, incidents, runbooks, documents the team wrote), what does not (code: read it with the file tools; secrets; whole tables), and that updating needs the `note_id` from a search.
 - `SearchNotes(query, type?, limit?)`: `limit` default 5, at most `SEARCH_MAX_LIMIT`. Output: one block per note with its id, type, title, source and text cut at 500 characters, the whole output cut at 12,000 characters with a line saying how many notes were left out; when `used_vectors` is false and `detail` is set, a last line `Note: <detail>`; no matches: `No notes match.` plus the same line.
 - `KnowledgeHook.render(ctx)`: nothing to say (blank `trigger_text`, or no notes) returns `""`; otherwise a heading line and the five best notes for `ctx.trigger_text` (`search(..., limit=5)`), each as `- [type] title (id): text cut at 300 characters`, the whole text capped at 2,500 characters. It never prints the search `detail` (the tool does; a context line on every turn with no embedder is noise). It raises nothing: `DomainError` and `SQLAlchemyError` become one line `Knowledge notes are unavailable: <message>`, per I18.
-- The hook is the main caller of `kick` after an embedder change, since it runs at every turn start.
+- The hook is the main caller of `kick` after an embedder change, since hooks run at every turn start and when a waiting turn resumes (data-summary's injection point); the hook is stateless, so it needs nothing for the resume case.
 
 **Tests (stop condition):**
 - `SaveNote`: creates and updates through the real service; invalid args (unknown type, missing title) return the tool error; a too-long text returns the cap in the error; the author is the calling agent; both tools are `read` class, and the policy gives `allow` at every level for them (`policy.decide`).
@@ -182,9 +183,3 @@ No early PR: `Knowledge` is first consumed by the onboarding plan, after every p
 - Full suite, checks; CI green on Linux and Windows; at the end of the plan, `GET /notes`, both tools and the hook work against one running app in a smoke test with the fake provider's `/embeddings` (embedders plan) and without any embedder.
 
 **Checks:** as task 1.
-
----
-
-## Interface gaps
-
-None open. The overview settles the schema this plan reads: `notes` (integer `seq` primary key, text `id`), `notes_fts` as an FTS5 external-content table on `notes(title, text)` with `content_rowid='seq'` and insert, update and delete triggers, and `note_embeddings` keyed by `note_id` (note, embedder, dimensions). The plan does not depend on anything more: it never relies on a foreign-key cascade (it removes a note's vector with `VectorStore.remove` before deleting the note, and the pending query is `notes LEFT JOIN note_embeddings`), and it uses no tokenizer option beyond the FTS5 default. Task 2's tests (a rebuild of the FTS index and a `VACUUM INTO` copy leave results unchanged, non-ASCII words match) guard the contracts schema from this side.
