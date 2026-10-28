@@ -6,12 +6,14 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.errors import DomainError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.keys import StoredKeys
 from mlops_agents.providers.models import ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import provider_keys, providers
 from tests.conftest import MemoryKeyStore
+from tests.providers.fake_clock import FakeClock
 
 HOSTED = ProviderCreate(name="groq", kind="hosted", base_url="https://api.groq.com/openai/v1")
 
@@ -44,7 +46,7 @@ async def service(
         return httpx2.Response(200, json={"object": "list", "data": []})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(accept_all)) as client:
-        yield ProvidersService(databases, counting_keystore, client)
+        yield ProvidersService(databases, counting_keystore, client, KeyFailover(FakeClock()))
 
 
 async def _insert_provider(databases: Databases, provider_id: str, name: str) -> None:

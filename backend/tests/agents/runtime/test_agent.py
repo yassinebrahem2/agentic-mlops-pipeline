@@ -20,6 +20,7 @@ from mlops_agents.events.contract import AgentStatus, StatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -29,6 +30,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_proj
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 async def _set_project_status(
@@ -75,7 +77,8 @@ async def _setup_services(
 ) -> tuple[AgentBuilder, WorkspaceService, AgentSettingsService, str]:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
@@ -208,7 +211,8 @@ async def test_agent_builder_keystore_error_refusal(
 ) -> None:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     git = GitRunner(paths.bin)
@@ -290,7 +294,8 @@ async def test_agent_builder_custom_agent_in_extra_dir(
 
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
@@ -389,7 +394,8 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
 
     tools = default_registry()
     catalog = AgentCatalog([d_orch, d_other], tool_names=tools.names())
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))

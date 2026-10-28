@@ -21,6 +21,7 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import ResolvedModel
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -30,6 +31,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_proj
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -77,7 +79,8 @@ async def _setup_rejection_env(
     )
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers = ProvidersService(databases, keystore, model_http, failover)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     github = GitHubAuth(databases, keystore, httpx2.AsyncClient(), FakeGh(None))
     workspace = WorkspaceService(
@@ -98,7 +101,7 @@ async def _setup_rejection_env(
         workspaces=workspaces,
     )
     store = SessionStore(databases)
-    caller = ModelCaller(providers, model_http)
+    caller = ModelCaller(providers, model_http, failover)
     executor = TurnExecutor(
         store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )

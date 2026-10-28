@@ -34,6 +34,7 @@ from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog, StatusBoard
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -56,6 +57,7 @@ class SessionManager(AgentSessions):
         settings: AgentSettingsService,
         providers: ProvidersService,
         http: httpx2.AsyncClient,
+        failover: KeyFailover,
         gate: Gate,
         inbound: InboundSource,
         turn_end: TurnEndCheck,
@@ -81,7 +83,7 @@ class SessionManager(AgentSessions):
         self._approval_store = approval_store
 
         self._store = SessionStore(databases, audit_log=self._audit_log, event_log=self._event_log)
-        self._caller = ModelCaller(providers=providers, http=http)
+        self._caller = ModelCaller(providers=providers, http=http, failover=failover)
         self._builder = AgentBuilder(
             workspace=workspace,
             catalog=catalog,

@@ -12,11 +12,13 @@ from mlops_agents.agents.settings import (
 )
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.errors import DomainError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.providers.fake_clock import FakeClock
 
 SECRET_KEY_1 = "gsk_test_key_alpha_111111"
 SECRET_KEY_2 = "gsk_test_key_beta_222222"
@@ -50,7 +52,7 @@ async def providers_svc(
     keystore: MemoryKeyStore,
     model_http: httpx2.AsyncClient,
 ) -> ProvidersService:
-    return ProvidersService(databases, keystore, model_http)
+    return ProvidersService(databases, keystore, model_http, KeyFailover(FakeClock()))
 
 
 @pytest.fixture
@@ -455,7 +457,8 @@ async def test_list_settings_works_with_locked_keystore(
 ) -> None:
     broken_keystore = BrokenKeyStore()
     client = httpx2.AsyncClient()
-    providers_svc = ProvidersService(databases, broken_keystore, client)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, broken_keystore, client, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
     try:

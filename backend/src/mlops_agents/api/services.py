@@ -127,7 +127,9 @@ async def build_services(
     # The one instance: every consumer of project secrets gets it through its constructor.
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
-    providers = ProvidersService(databases, keystore, http)
+    # The one key failover: every model and embedder call shares its key states.
+    failover = KeyFailover()
+    providers = ProvidersService(databases, keystore, http, failover)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
@@ -190,6 +192,7 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
+        failover=failover,
         gate=gate,
         inbound=inbound,
         turn_end=PrReminder(tasks),
@@ -237,5 +240,5 @@ async def build_services(
         tasks=tasks,
         approvals=approvals,
         wakeups=wakeups,
-        failover=KeyFailover(),
+        failover=failover,
     )

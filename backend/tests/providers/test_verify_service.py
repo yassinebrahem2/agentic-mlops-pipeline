@@ -2,11 +2,13 @@ import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.providers.fake_clock import FakeClock
 
 
 async def _service(
@@ -15,7 +17,8 @@ async def _service(
     fake: RunningFake,
     http: httpx2.AsyncClient,
 ) -> ProvidersService:
-    svc = ProvidersService(databases, keystore, http)
+    failover = KeyFailover(FakeClock())
+    svc = ProvidersService(databases, keystore, http, failover)
     await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
     )

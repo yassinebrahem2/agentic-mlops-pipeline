@@ -29,6 +29,7 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -39,6 +40,7 @@ from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 STAGE_2_TOOLS = frozenset(
     {
@@ -377,7 +379,8 @@ async def test_live_orchestrator_adds_line_to_readme(
 
         tools = default_registry(tasks=tasks_svc)
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-        providers_svc = ProvidersService(databases, keystore, http)
+        failover = KeyFailover(FakeClock())
+        providers_svc = ProvidersService(databases, keystore, http, failover)
         agent_settings = AgentSettingsService(databases, providers_svc, catalog)
 
         prov = await providers_svc.create_provider(
@@ -398,6 +401,7 @@ async def test_live_orchestrator_adds_line_to_readme(
             settings=agent_settings,
             providers=providers_svc,
             http=http,
+            failover=failover,
             gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),

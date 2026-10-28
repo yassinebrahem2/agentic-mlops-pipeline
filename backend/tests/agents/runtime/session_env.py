@@ -29,6 +29,7 @@ from mlops_agents.events.contract import AuditLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -39,6 +40,7 @@ from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,8 @@ async def build_session_env(
 
     tool_reg = tools if tools is not None else default_registry()
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=extra_dirs or ())
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -104,6 +107,7 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate if gate is not None else ApprovalGate(databases, store=approvals),
         inbound=inbound if inbound is not None else NoInbound(),
         turn_end=NoTurnEndCheck(),

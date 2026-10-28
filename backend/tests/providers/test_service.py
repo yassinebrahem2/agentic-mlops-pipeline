@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
+from tests.providers.fake_clock import FakeClock, Script, statuses, unauthorized
 
 GOOD = "gsk_good_key_123456"
 Handler = Callable[[httpx2.Request], httpx2.Response]
@@ -40,7 +42,7 @@ async def make_service(
     def make(handler: Handler = _handler) -> ProvidersService:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
         clients.append(client)
-        return ProvidersService(databases, keystore, client)
+        return ProvidersService(databases, keystore, client, KeyFailover(FakeClock()))
 
     yield make
     for client in clients:
@@ -296,3 +298,38 @@ async def test_secret_values_caching_and_invalidation(
     await svc.delete_provider("groq")
     assert getattr(owner, cache_attr) is None
     assert await svc.secret_values() == []
+
+
+async def test_a_key_change_clears_the_providers_failover_state(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    def any_key(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"object": "list", "data": []})
+
+    failover = KeyFailover(FakeClock())
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(any_key)) as client:
+        svc = ProvidersService(databases, keystore, client, failover)
+        await svc.create_provider(HOSTED)
+        await svc.add_key("groq", GOOD)
+
+        async def exhaust() -> list[str]:
+            provider = await svc.get_provider("groq")
+            with pytest.raises(AllKeysExhausted):
+                attempt = Script(*(unauthorized() for _ in provider.keys))
+                await failover.call(provider, "m1", attempt, cooldown_minutes=15)
+            return [state.status for state in failover.states(provider, "m1")]
+
+        assert await exhaust() == ["rejected"]
+        provider = await svc.add_key("groq", "gsk_second_key_654321")
+        assert statuses(failover.states(provider, "m1")) == ["ok", "ok"]
+
+        assert await exhaust() == ["rejected", "rejected"]
+        provider = await svc.remove_key("groq", 1)
+        assert statuses(failover.states(provider, "m1")) == ["ok"]
+
+        assert await exhaust() == ["rejected"]
+        await svc.delete_provider("groq")
+        await svc.create_provider(HOSTED)
+        await svc.add_key("groq", GOOD)
+        assert statuses(failover.states(provider, "m1")) == ["ok"]
+

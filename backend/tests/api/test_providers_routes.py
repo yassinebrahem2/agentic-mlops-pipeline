@@ -153,7 +153,7 @@ async def test_env_keys_detection_and_import(
     try:
         services = app.state.services
         app.state.services.providers = ProvidersService(
-            services.databases, services.keystore, mock_client
+            services.databases, services.keystore, mock_client, services.failover
         )
 
         # 3. POST /api/env-keys/GROQ_API_KEY/import -> 200 Provider
@@ -173,3 +173,4 @@ async def test_env_keys_detection_and_import(
         assert test_key not in res.text
     finally:
         await mock_client.aclose()
+

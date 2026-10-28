@@ -14,6 +14,7 @@ from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.providers import listing
 from mlops_agents.providers.errors import ProviderCallError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.keys import StoredKeys
 from mlops_agents.providers.models import (
     DetectedKey,
@@ -41,12 +42,21 @@ _ENV_VAR = re.compile(r"^(?P<base>[A-Z0-9_]+?)(?:_\d+)?$")
 class ProvidersService:
     """`http` is the app's one client for provider calls, model calls included. Its owner (the
     app factory) closes it. langchain-openai's default client must never be used: it is cached
-    for the whole process and bound to the first event loop that uses it."""
+    for the whole process and bound to the first event loop that uses it. `failover` is the
+    app's one key failover: a change to a provider's keys clears its key states, because key
+    indices shift."""
 
-    def __init__(self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient) -> None:
+    def __init__(
+        self,
+        databases: Databases,
+        keystore: KeyStore,
+        http: httpx2.AsyncClient,
+        failover: KeyFailover,
+    ) -> None:
         self._dbs = databases
         self._stored_keys = StoredKeys(databases, keystore)
         self._http = http
+        self._failover = failover
 
     # Providers
 
@@ -104,6 +114,7 @@ class ProvidersService:
     async def delete_provider(self, name: str) -> None:
         provider = await self.get_provider(name)
         await self._stored_keys.delete_provider(provider.id)
+        self._failover.clear(provider)
 
     async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
         engine = await self._dbs.app()
@@ -133,11 +144,13 @@ class ProvidersService:
             )
         await self._get(provider, "/models", value)  # proves the key works before storing it
         await self._stored_keys.add(provider.id, value)
+        self._failover.clear(provider)
         return await self.get_provider(name)
 
     async def remove_key(self, name: str, position: int) -> Provider:
         provider = await self.get_provider(name)
         await self._stored_keys.remove(provider.id, position)
+        self._failover.clear(provider)
         return await self.get_provider(name)
 
     # Remote calls

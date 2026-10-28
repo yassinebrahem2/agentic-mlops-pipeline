@@ -36,6 +36,7 @@ from mlops_agents.config import RunMode, load_settings
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
@@ -43,6 +44,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
+from tests.providers.fake_clock import FakeClock
 
 
 class DummyArgs(BaseModel):
@@ -495,7 +497,8 @@ async def test_resuming_turn_after_rebuilding_manager(
     from tests.integrations.test_github_auth import FakeGh
 
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -517,6 +520,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate,
         approval_store=store,
         inbound=NoInbound(),
@@ -671,7 +675,8 @@ async def test_resuming_turn_task_mismatch(
     from tests.integrations.test_github_auth import FakeGh
 
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hello"}, git_env)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     from mlops_agents.agents.settings import AgentSettingsService
 
@@ -698,6 +703,7 @@ async def test_resuming_turn_task_mismatch(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate,
         approval_store=store,
         inbound=NoInbound(),
