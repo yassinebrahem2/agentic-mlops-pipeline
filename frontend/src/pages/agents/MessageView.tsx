@@ -1,9 +1,6 @@
-import { useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { useParams } from "react-router";
 import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -12,7 +9,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorText, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ApprovalCard } from "./ApprovalCard";
 import { ToolStep } from "./ToolStep";
@@ -159,60 +155,7 @@ export function MessageView({ message, sessionAgent, className }: MessageViewPro
             Interrupted: the app stopped during this answer
           </div>
         )}
-        {message.error_kind === "keys_exhausted" && message.turn_id && sessionAgent && (
-          <TryAgain agent={sessionAgent} turnId={message.turn_id} />
-        )}
       </div>
-    </div>
-  );
-}
-
-/** Try again on a turn that failed because every key of its provider was exhausted: the turn
- * runs again on its own trigger message (the retry route), never re-sent as the user. */
-function TryAgain({ agent, turnId }: { agent: string; turnId: string }) {
-  const { projectId } = useParams<{ projectId: string }>();
-  const pendingRef = useRef(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // A retry is sent to a project's route; without a project there is nothing to try again.
-  if (!projectId) return null;
-
-  const handleClick = async () => {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    setPending(true);
-    setError(null);
-    try {
-      const result = await api.POST(
-        "/api/projects/{project_id}/agents/{agent}/turns/{turn_id}/retry",
-        { params: { path: { project_id: projectId, agent, turn_id: turnId } } },
-      );
-      unwrap(result);
-    } catch (caught) {
-      setError(errorText(caught));
-    } finally {
-      pendingRef.current = false;
-      setPending(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-2">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={pending}
-        onClick={() => void handleClick()}
-      >
-        Try again
-      </Button>
-      {error && (
-        <span role="alert" className="text-xs text-destructive">
-          {error}
-        </span>
-      )}
     </div>
   );
 }
