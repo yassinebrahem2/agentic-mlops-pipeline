@@ -19,6 +19,7 @@ from mlops_agents.agents.approvals.decisions import record_decisions
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
+    ErrorKind,
     Part,
     ToolCallPart,
     TurnEnd,
@@ -98,16 +99,20 @@ async def delete_checkpoint_thread(db_path: str | Path, turn_id: str) -> None:
 class _Ending:
     """How a taken turn ended, or that it waits for approval, decided before anything of it is
     stored. `failure_notice` is the system message of a failure still to be written: None when
-    there is none left to write (no failure, written already, or recorded by the executor)."""
+    there is none left to write (no failure, written already, or recorded by the executor).
+    `error_kind` is why a failed turn failed, when the UI offers a remedy for it."""
 
     status: TurnEnd | Literal["waiting"]
     error: str | None = None
     failure_notice: str | None = None
+    error_kind: ErrorKind | None = None
 
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
 # A failure no part of the turn recorded: its system message is written with the end.
-_UNEXPECTED_FAILURE = _Ending("failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT)
+_UNEXPECTED_FAILURE = _Ending(
+    "failed", UNEXPECTED_FAILURE_TEXT, UNEXPECTED_FAILURE_TEXT, error_kind=None
+)
 
 
 def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
@@ -116,8 +121,8 @@ def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
     if error is not None:
         logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
         return _UNEXPECTED_FAILURE
-    end_status, end_error = child_task.result()
-    return _Ending(end_status, end_error)
+    end_status, end_error, error_kind = child_task.result()
+    return _Ending(end_status, end_error, error_kind=error_kind)
 
 
 async def _observed(call: Awaitable[None]) -> None:
@@ -243,4 +248,4 @@ async def stop_waiting_turn(
     await executor.delete_checkpoint(project_id, turn_id)
 
     for observer in observers:
-        await _observed(observer.turn_ended(project_id, agent, turn_id, "stopped", None))
+        await _observed(observer.turn_ended(project_id, agent, turn_id, "stopped", None, None))

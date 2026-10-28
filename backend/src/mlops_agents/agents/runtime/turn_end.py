@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import replace
 
-from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
+from mlops_agents.agents.runtime.contract import ErrorKind, TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
@@ -64,13 +64,13 @@ class TurnEnds:
                 ending = await self._write_notice(
                     project_id, session_id, turn_id, hub, lock, ending
                 )
-                await self._store_end(project_id, turn_id, hub, status, ending.error)
+                await self._store_end(project_id, turn_id, hub, status, ending)
             except Exception:
                 # As "disk full": the end is still recorded once more, with the writes it needs,
                 # and reported. It keeps its own status.
                 logger.exception("Could not store how turn %s ended; it ends %s", turn_id, status)
                 await self._record_end(project_id, session_id, turn_id, hub, lock, status, ending)
-        await self._turn_ended(project_id, session_id, agent, turn_id, status)
+        await self._turn_ended(project_id, session_id, agent, turn_id, status, ending.error_kind)
 
     async def settle_trigger(
         self,
@@ -146,11 +146,15 @@ class TurnEnds:
         except Exception:
             logger.exception("Could not write the failure notice of turn %s", turn_id)
         try:
-            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
+            await self._store.set_turn(
+                project_id, turn_id, status, error=ending.error, error_kind=ending.error_kind
+            )
         except Exception:
             logger.exception("Could not record turn %s %s", turn_id, status)
         try:
-            await hub.turn_ended(turn_id, status=status, error=ending.error)
+            await hub.turn_ended(
+                turn_id, status=status, error=ending.error, error_kind=ending.error_kind
+            )
         except Exception:
             logger.exception("Could not publish the end of turn %s", turn_id)
 
@@ -172,14 +176,21 @@ class TurnEnds:
         return replace(ending, failure_notice=None)
 
     async def _store_end(
-        self, project_id: str, turn_id: str, hub: SessionHub, status: TurnEnd, error: str | None
+        self, project_id: str, turn_id: str, hub: SessionHub, status: TurnEnd, ending: _Ending
     ) -> None:
         """Store a turn's decided end, other than interrupted, and publish it."""
-        await self._store.set_turn(project_id, turn_id, status, error=error)
-        await hub.turn_ended(turn_id, status=status, error=error)
+        error, error_kind = ending.error, ending.error_kind
+        await self._store.set_turn(project_id, turn_id, status, error=error, error_kind=error_kind)
+        await hub.turn_ended(turn_id, status=status, error=error, error_kind=error_kind)
 
     async def _turn_ended(
-        self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str,
+        status: TurnEnd,
+        error_kind: ErrorKind | None,
     ) -> None:
         """Every observer hears the end, one after another. It runs inside `end`'s shielded
         task, so a cancel of the worker waits for the last of them."""
@@ -192,7 +203,9 @@ class TurnEnds:
             logger.exception("Could not read the final text of turn %s", turn_id)
             final_text = None
         for observer in self._observers:
-            await _observed(observer.turn_ended(project_id, agent, turn_id, status, final_text))
+            await _observed(
+                observer.turn_ended(project_id, agent, turn_id, status, final_text, error_kind)
+            )
 
     async def _final_text(self, project_id: str, session_id: str, turn_id: str) -> str | None:
         """The last text the agent wrote in the turn, or None when it wrote none."""

@@ -6,7 +6,7 @@ import asyncio
 
 from sqlalchemy import select
 
-from mlops_agents.agents.runtime.contract import TurnEnd
+from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import turns
 
@@ -32,6 +32,7 @@ class RecordingObserver:
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,
     ) -> None:
         self.calls.append(("ended", project_id, agent, turn_id, status, str(final_text)))
         self.ended.put_nowait(status)
@@ -70,8 +71,9 @@ class HangingObserver(RecordingObserver):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,
     ) -> None:
-        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        await super().turn_ended(project_id, agent, turn_id, status, final_text, error_kind)
         if self._hang_in == "ended":
             await self._hang()
 
@@ -106,8 +108,9 @@ class HeldEndObserver(RecordingObserver):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,
     ) -> None:
-        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        await super().turn_ended(project_id, agent, turn_id, status, final_text, error_kind)
         if not self.entered.is_set():
             self.entered.set()
             await self.release.wait()
@@ -143,8 +146,9 @@ class SelfCancellingObserver(RecordingObserver):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,
     ) -> None:
-        await super().turn_ended(project_id, agent, turn_id, status, final_text)
+        await super().turn_ended(project_id, agent, turn_id, status, final_text, error_kind)
         raise asyncio.CancelledError
 
 

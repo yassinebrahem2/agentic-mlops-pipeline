@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy import insert, select, update
 
+from mlops_agents.agents.runtime.contract import ErrorKind
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store.base import StoreBase
 from mlops_agents.clock import now_iso
@@ -42,9 +43,15 @@ class TurnsStore(StoreBase):
 
     @shielded
     async def set_turn(
-        self, project_id: str, turn_id: str, status: str, *, error: str | None = None
+        self,
+        project_id: str,
+        turn_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        error_kind: ErrorKind | None = None,
     ) -> None:
-        """Update turn status and error, setting started_at/ended_at appropriately."""
+        """Update turn status, error and error kind, setting started_at/ended_at appropriately."""
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
             current = (
@@ -56,6 +63,8 @@ class TurnsStore(StoreBase):
             values: dict[str, Any] = {"status": status}
             if error is not None:
                 values["error"] = error
+            if error_kind is not None:
+                values["error_kind"] = error_kind
 
             now = now_iso()
             if status == "running" and current["started_at"] is None:
@@ -64,6 +73,16 @@ class TurnsStore(StoreBase):
                 values["ended_at"] = now
 
             await conn.execute(update(turns).where(turns.c.id == turn_id).values(**values))
+
+    @shielded
+    async def set_error_kind(self, project_id: str, turn_id: str, error_kind: ErrorKind) -> None:
+        """Record why a turn failed before its end is stored, so the failed agent message that is
+        published first carries it. Only that column: the status changes with the turn's end."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(turns).where(turns.c.id == turn_id).values(error_kind=error_kind)
+            )
 
     async def next_queued_turn(self, project_id: str, session_id: str) -> tuple[str, str] | None:
         """Find the oldest queued turn for session_id. Returns (turn_id, trigger_message_id) or None."""

@@ -13,7 +13,7 @@ import pytest
 from langgraph.types import interrupt
 
 from mlops_agents.agents.approvals.service import ApprovalsService
-from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
+from mlops_agents.agents.runtime.contract import ErrorKind, StreamEvent, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.hooks import GateCall, GateDecision
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
@@ -91,12 +91,18 @@ async def test_a_wait_that_cannot_be_stored_fails_the_turn_and_the_next_turn_run
     waiting_writes: list[str] = []
 
     async def failing_set_turn(
-        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
+        self: SessionStore,
+        project_id: str,
+        turn_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        error_kind: ErrorKind | None = None,
     ) -> None:
         if status == "waiting":
             waiting_writes.append(turn_id)
             raise RuntimeError("disk full writing waiting")
-        await set_turn(self, project_id, turn_id, status, error=error)
+        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
 
     monkeypatch.setattr(SessionStore, "set_turn", failing_set_turn)
     observer = RecordingObserver()
@@ -154,13 +160,19 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
     waiting_writes: list[str] = []
 
     async def second_wait_write_fails(
-        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
+        self: SessionStore,
+        project_id: str,
+        turn_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        error_kind: ErrorKind | None = None,
     ) -> None:
         if status == "waiting":
             waiting_writes.append(turn_id)
             if waiting_writes.count(turn_id) > 1:
                 raise RuntimeError("disk full writing waiting again")
-        await set_turn(self, project_id, turn_id, status, error=error)
+        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
 
     monkeypatch.setattr(SessionStore, "set_turn", second_wait_write_fails)
     observer = WaitRecordingObserver()

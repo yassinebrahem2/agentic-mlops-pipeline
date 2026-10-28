@@ -161,7 +161,7 @@ async def test_invalid_tool_call_turn_shows_error_and_continues(
 
     fake_openai.state.requests.clear()
     sink = RecordingSink()
-    end_status, error_text = await env.executor.run(
+    end_status, error_text, _ = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 
@@ -229,7 +229,7 @@ async def test_mixed_valid_and_invalid_tool_calls_order(
     fake_openai.state.requests.clear()
 
     sink = RecordingSink()
-    end_status, error_text = await env.executor.run(
+    end_status, error_text, _ = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 

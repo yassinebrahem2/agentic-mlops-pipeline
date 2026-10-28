@@ -52,6 +52,7 @@ class SessionEnv:
     project_id: str
     provider: str
     approval_store: ApprovalStore  # the one the manager (and the default gate) were given
+    providers: ProvidersService  # the one the manager was given, on the same key failover
 
 
 def _settings(paths: DataPaths) -> Settings:
@@ -136,6 +137,7 @@ async def build_session_env(
         project_id=project.id,
         provider=prov.name,
         approval_store=approvals,
+        providers=providers_svc,
     )
 
 

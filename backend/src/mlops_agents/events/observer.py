@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mlops_agents.agents.runtime.contract import TurnEnd
+from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.events.contract import LAST_FINISHED_MAX_CHARS, EventLog
 
@@ -40,6 +40,7 @@ class EventTurnObserver(TurnObserver):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,
     ) -> None:
         capped_text = final_text[:LAST_FINISHED_MAX_CHARS] if final_text is not None else None
         await self._events.record(
@@ -47,5 +48,10 @@ class EventTurnObserver(TurnObserver):
             source=agent,
             type="turn.ended",
             subject_id=turn_id,
-            payload={"turn_id": turn_id, "status": status, "final_text": capped_text},
+            payload={
+                "turn_id": turn_id,
+                "status": status,
+                "final_text": capped_text,
+                "error_kind": error_kind,
+            },
         )

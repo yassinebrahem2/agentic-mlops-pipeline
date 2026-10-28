@@ -175,7 +175,7 @@ async def test_executor_refusals(
     # 1. Project missing refusal
     await _set_project_status(databases, project_id, status="missing", detail="Missing repo")
     sink = RecordingSink()
-    status, err = await executor.run(
+    status, err, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
     assert status == "failed"
@@ -186,7 +186,7 @@ async def test_executor_refusals(
     # 2. Project empty refusal
     await _set_project_status(databases, project_id, status="empty", detail=None)
     sink = RecordingSink()
-    status, err = await executor.run(
+    status, err, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
     assert status == "done"
@@ -201,7 +201,7 @@ async def test_executor_refusals(
     await _set_project_status(databases, project_id, status="ok", detail=None)
     await settings_svc.set_default_model("orchestrator", None)
     sink = RecordingSink()
-    status, err = await executor.run(
+    status, err, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
     assert status == "failed"

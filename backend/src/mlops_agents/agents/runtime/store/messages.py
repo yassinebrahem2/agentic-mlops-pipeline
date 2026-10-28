@@ -4,10 +4,11 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import RowMapping, and_, insert, select, update
+from sqlalchemy import RowMapping, Select, and_, insert, select, update
 
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
+    ErrorKind,
     MessageStatus,
     MessageView,
     Part,
@@ -16,21 +17,31 @@ from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store.base import StoreBase
 from mlops_agents.clock import now_iso
 from mlops_agents.ids import new_id
-from mlops_agents.storage.tables import messages
+from mlops_agents.storage.tables import messages, turns
 
 _PARTS_ADAPTER: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
 
 
+def _select_views() -> Select[Any]:
+    """Message rows with their turn's error kind, which a failed turn's agent message shows."""
+    return select(messages, turns.c.error_kind).select_from(
+        messages.outerjoin(turns, turns.c.id == messages.c.turn_id)
+    )
+
+
 def _view(row: RowMapping) -> MessageView:
+    author_kind = cast(AuthorKind, row["author_kind"])
+    error_kind = cast(ErrorKind | None, row["error_kind"]) if author_kind == "agent" else None
     return MessageView(
         id=str(row["id"]),
         turn_id=cast(str | None, row["turn_id"]),
-        author_kind=cast(AuthorKind, row["author_kind"]),
+        author_kind=author_kind,
         author_name=cast(str, row["author_name"]),
         from_agent=cast(str | None, row["from_agent"]),
         parts=_PARTS_ADAPTER.validate_json(cast(str, row["parts"])),
         status=cast(MessageStatus, row["status"]),
         created_at=cast(str, row["created_at"]),
+        error_kind=error_kind,
     )
 
 
@@ -113,7 +124,7 @@ class MessagesStore(StoreBase):
                     update(messages).where(messages.c.id == message_id).values(**values)
                 )
             row = (
-                (await conn.execute(select(messages).where(messages.c.id == message_id)))
+                (await conn.execute(_select_views().where(messages.c.id == message_id)))
                 .mappings()
                 .first()
             )
@@ -127,7 +138,7 @@ class MessagesStore(StoreBase):
     ) -> MessageView | None:
         """Return one message of session_id, or None; a message of another session is None."""
         engine = await self._databases.project(project_id)
-        query = select(messages).where(
+        query = _select_views().where(
             messages.c.id == message_id, messages.c.session_id == session_id
         )
         async with engine.connect() as conn:
@@ -140,7 +151,7 @@ class MessagesStore(StoreBase):
         """Return the agent's message of a turn of session_id, or None when it wrote none."""
         engine = await self._databases.project(project_id)
         query = (
-            select(messages)
+            _select_views()
             .where(
                 messages.c.session_id == session_id,
                 messages.c.turn_id == turn_id,
@@ -159,7 +170,7 @@ class MessagesStore(StoreBase):
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             query = (
-                select(messages)
+                _select_views()
                 .where(messages.c.session_id == session_id)
                 .order_by(messages.c.seq.asc())
             )

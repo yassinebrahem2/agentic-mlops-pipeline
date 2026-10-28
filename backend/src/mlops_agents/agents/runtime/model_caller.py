@@ -44,7 +44,7 @@ class TurnFailed(Exception):  # message is safe to show and is stored as the tur
     def __init__(self, message: str, error_kind: ErrorKind | None = None) -> None:
         super().__init__(message)
         self.message = message
-        self.error_kind = error_kind
+        self.error_kind: ErrorKind | None = error_kind
 
 
 class ModelKeysExhausted(TurnFailed):

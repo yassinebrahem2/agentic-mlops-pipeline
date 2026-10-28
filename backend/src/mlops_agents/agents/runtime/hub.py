@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from typing import Any, Final
 
 from mlops_agents.agents.runtime.contract import (
+    ErrorKind,
     MessageCreated,
     MessageData,
     MessageUpdated,
@@ -222,12 +223,20 @@ class SessionHub:
                 )
             self._publish_raw(ev)
 
-    async def turn_ended(self, turn_id: str, status: TurnEnd, error: str | None = None) -> None:
+    async def turn_ended(
+        self,
+        turn_id: str,
+        status: TurnEnd,
+        error: str | None = None,
+        error_kind: ErrorKind | None = None,
+    ) -> None:
         async with self._lock:
             ev = TurnEnded(
                 seq=self._next_seq(),
                 type="turn.ended",
-                data=TurnEndedData(turn_id=turn_id, status=status, error=error),
+                data=TurnEndedData(
+                    turn_id=turn_id, status=status, error=error, error_kind=error_kind
+                ),
             )
             self._publish_raw(ev)
 

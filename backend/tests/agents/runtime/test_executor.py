@@ -169,7 +169,7 @@ async def test_executor_fake_tools_on_orchestrator(
     )
     sink = RecordingSink()
 
-    end_status, error_text = await executor.run(
+    end_status, error_text, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
@@ -247,7 +247,7 @@ async def test_executor_secret_and_untracked_error_handled(
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "Read", {"file_path": ".env"})
 
     sink = RecordingSink()
-    end_status, error_text = await executor.run(
+    end_status, error_text, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
@@ -272,7 +272,7 @@ async def test_executor_secret_and_untracked_error_handled(
     )
     turn_id2 = await _store.add_turn(project_id, session_id, user_msg2.id, "running")
     sink2 = RecordingSink()
-    end_status2, error_text2 = await executor.run(
+    end_status2, error_text2, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id2, sink2, AsyncRLock()
     )
 
@@ -310,7 +310,7 @@ async def test_executor_step_limit_override(
     )
 
     sink = RecordingSink()
-    end_status, _error_text = await executor.run(
+    end_status, _error_text, _ = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 

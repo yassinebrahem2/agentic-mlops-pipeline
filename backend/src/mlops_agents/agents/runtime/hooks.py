@@ -12,7 +12,7 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 
-from mlops_agents.agents.runtime.contract import TurnEnd
+from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd
 from mlops_agents.agents.tools.base import AgentTool, Preview, ToolContext
 
 
@@ -66,4 +66,5 @@ class TurnObserver(Protocol):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
+        error_kind: ErrorKind | None,  # why it failed, when the UI offers a remedy; else None
     ) -> None: ...
