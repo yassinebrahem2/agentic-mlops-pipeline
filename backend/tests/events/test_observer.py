@@ -10,7 +10,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd, TurnEnded
+from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.events.contract import EventRecord
 from mlops_agents.events.hub import EventHub
@@ -41,16 +41,10 @@ class SlowEndObserver:
         await self._inner.turn_waiting(project_id, agent, turn_id)
 
     async def turn_ended(
-        self,
-        project_id: str,
-        agent: str,
-        turn_id: str,
-        status: TurnEnd,
-        final_text: str | None,
-        error_kind: ErrorKind | None,
+        self, project_id: str, agent: str, turn_id: str, status: TurnEnd, final_text: str | None
     ) -> None:
         await asyncio.sleep(self._delay)
-        await self._inner.turn_ended(project_id, agent, turn_id, status, final_text, error_kind)
+        await self._inner.turn_ended(project_id, agent, turn_id, status, final_text)
 
 
 async def logged_turn_end(event_log: SqliteEventLog, project_id: str, turn_id: str) -> None:
@@ -101,7 +95,7 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
 
     # 3. turn_ended with final_text > 200 chars
     long_text = "A" * 350
-    await observer.turn_ended(project_id, agent, turn_id, "done", long_text, None)
+    await observer.turn_ended(project_id, agent, turn_id, "done", long_text)
     history = await event_log.history(project_id, types=["turn.ended"])
     assert len(history) == 1
     assert history[0].source == agent
@@ -112,21 +106,15 @@ async def test_observer_records_lifecycle_and_caps_final_text(databases: Databas
     assert payload["status"] == "done"
     assert len(payload["final_text"]) == 200
     assert payload["final_text"] == "A" * 200
-    assert payload["error_kind"] is None
 
-    # 4. turn_ended with None final_text, failed for want of a usable key
+    # 4. turn_ended with None final_text
     turn_id_2 = "trn_test2"
-    await observer.turn_ended(project_id, agent, turn_id_2, "failed", None, "keys_exhausted")
+    await observer.turn_ended(project_id, agent, turn_id_2, "failed", None)
     history = await event_log.history(project_id, types=["turn.ended"], limit=10)
     assert len(history) == 2
     # Newest first
     assert history[0].subject_id == turn_id_2
-    assert history[0].payload == {
-        "turn_id": turn_id_2,
-        "status": "failed",
-        "final_text": None,
-        "error_kind": "keys_exhausted",
-    }
+    assert history[0].payload == {"turn_id": turn_id_2, "status": "failed", "final_text": None}
 
 
 @pytest.mark.asyncio
@@ -248,12 +236,7 @@ async def test_failed_turn_records_failed_turn_ended(
     assert history[0].type == "turn.ended"
     assert history[0].source == agent
     assert history[0].subject_id == turn_id
-    assert history[0].payload == {
-        "turn_id": turn_id,
-        "status": "failed",
-        "final_text": None,
-        "error_kind": None,
-    }
+    assert history[0].payload == {"turn_id": turn_id, "status": "failed", "final_text": None}
 
     assert history[1].type == "turn.started"
     assert history[1].source == agent

@@ -11,12 +11,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind, TextPart, TurnEnded
-from mlops_agents.agents.runtime.executor import (
-    UNEXPECTED_FAILURE_TEXT,
-    TurnExecutor,
-    TurnOutcome,
-)
+from mlops_agents.agents.runtime.contract import TextPart, TurnEnd, TurnEnded
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
@@ -49,17 +45,11 @@ async def test_a_failing_end_write_keeps_the_end_and_the_next_turn_runs(
     failures = ["disk full"]
 
     async def set_turn_failing_once(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         if status == "done" and failures:
             raise RuntimeError(failures.pop())
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", set_turn_failing_once)
     observer = HeldObserver()
@@ -119,18 +109,12 @@ async def test_a_failing_fallback_is_logged_and_the_worker_ends_normally(
     end_writes: list[str] = []
 
     async def set_turn_failing_at_the_end(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         if status in ("done", "failed"):
             end_writes.append(status)
             raise RuntimeError(f"disk full writing {status}")
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", set_turn_failing_at_the_end)
     observer = WorkerCapturingObserver()
@@ -166,7 +150,7 @@ async def _escaping_run(
     turn_id: str,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
-) -> TurnOutcome:
+) -> tuple[TurnEnd, str | None]:
     raise RuntimeError("an error that escapes the executor")
 
 
@@ -178,10 +162,10 @@ async def _self_recording_run(
     turn_id: str,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
-) -> TurnOutcome:
+) -> tuple[TurnEnd, str | None]:
     # As `fail()` and `TurnRefused` do: the executor writes its own notice, then returns failed.
     await self.record_failure(project_id, session_id, turn_id, sink, lock, "model said no")
-    return ("failed", "model said no", None)
+    return ("failed", "model said no")
 
 
 @pytest.mark.parametrize(
@@ -200,25 +184,19 @@ async def test_the_fallback_writes_no_second_failure_notice(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
-    failing_run: Callable[..., Awaitable[TurnOutcome]],
+    failing_run: Callable[..., Awaitable[tuple[TurnEnd, str | None]]],
     notice: str,
 ) -> None:
     set_turn = SessionStore.set_turn
     failures = ["disk full"]
 
     async def set_turn_failing_once(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         # The failure notice is written by then: the fallback must not write it again.
         if status == "failed" and failures:
             raise RuntimeError(failures.pop())
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(TurnExecutor, "run", failing_run)
     monkeypatch.setattr(SessionStore, "set_turn", set_turn_failing_once)

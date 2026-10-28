@@ -12,6 +12,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from mlops_agents.agents.runtime.contract import (
+    ApprovalPart,
     MessageUpdated,
     StreamEvent,
     TextDelta,
@@ -176,6 +177,9 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
     assert last_request[-1]["role"] == "tool"
     message = await env.agent_message(turn_id, agent="writer")
     assert _texts(list(message.parts)) == ["Done. First line: File written successfully."]
+    # Step 0's call, its approval and result are intact, then the stall card, then step 1.
+    kinds = [p.kind if isinstance(p, ApprovalPart) else p.type for p in message.parts]
+    assert kinds == ["tool_call", "tool", "tool_result", "stall", "text"]
     await env.session.manager.close()
 
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from mlops_agents.agents.runtime.contract import ErrorKind, TextPart, TurnEnd
+from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
 from mlops_agents.agents.runtime.hooks import InboundSource, TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
@@ -93,7 +93,6 @@ class SqliteInboundSource(InboundSource, TurnObserver):
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
-        error_kind: ErrorKind | None,
     ) -> None:
         """When a turn does not end done (failed, stopped, interrupted), re-deliver messages
         taken mid-turn by creating new queued turns for them."""

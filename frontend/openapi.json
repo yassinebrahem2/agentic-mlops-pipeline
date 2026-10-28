@@ -1083,18 +1083,6 @@
             "title": "Created At",
             "type": "string"
           },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
-          },
           "from_agent": {
             "anyOf": [
               {
@@ -2296,18 +2284,6 @@
               }
             ],
             "title": "Error"
-          },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
           },
           "status": {
             "enum": [

@@ -8,7 +8,6 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -44,18 +43,12 @@ def fail_every_interrupted_write(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     failed: list[str] = []
 
     async def failing_set_turn(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         if status == "interrupted":
             failed.append(turn_id)
             raise RuntimeError("database is locked")
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", failing_set_turn)
     return failed

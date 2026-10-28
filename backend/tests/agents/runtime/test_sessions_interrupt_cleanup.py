@@ -8,7 +8,6 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
@@ -46,26 +45,14 @@ async def test_a_cancel_during_the_running_write_interrupts_the_turn(
 
     @shielded
     async def held_write(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None,
-        error_kind: ErrorKind | None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None
     ) -> None:
         write_entered.set()
         await release_write.wait()
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     async def holding_set_turn(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         # The second turn's "running" write is held, as a write the cancel lands in.
         nonlocal running_writes
@@ -75,11 +62,9 @@ async def test_a_cancel_during_the_running_write_interrupts_the_turn(
                 task = asyncio.current_task()
                 assert task is not None
                 workers.append(task)
-                await held_write(
-                    self, project_id, turn_id, status, error=error, error_kind=error_kind
-                )
+                await held_write(self, project_id, turn_id, status, error=error)
                 return
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", holding_set_turn)
     held = HeldObserver()

@@ -251,7 +251,6 @@ async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_th
         await env.caller.call(env.model, HI, [], _noop)
 
     assert not isinstance(raised.value, ModelKeysExhausted)
-    assert raised.value.error_kind is None
     assert provider_message in raised.value.message
     assert keys_used(fake_openai) == [KEYLESS]
     provider = await env.providers.get_provider_by_id(env.model.provider_id)

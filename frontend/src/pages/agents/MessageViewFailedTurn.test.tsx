@@ -5,7 +5,7 @@ import { MessageView } from "./MessageView";
 import type { MessageView as MessageViewType } from "./session/events";
 
 describe("MessageView on a failed turn", () => {
-  it("a failed agent message (error_kind keys_exhausted) shows no Try again", async () => {
+  it("a failed agent message shows no Try again", async () => {
     const failedAnswer: MessageViewType = {
       id: "a1",
       turn_id: "trn_1",
@@ -14,7 +14,6 @@ describe("MessageView on a failed turn", () => {
       from_agent: null,
       parts: [{ type: "text", text: "Partial answer" }],
       status: "complete",
-      error_kind: "keys_exhausted",
       created_at: "2026-01-01T00:00:01Z",
     };
     // Rendered on a project's Agents page, where the project id is known.

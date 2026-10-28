@@ -11,7 +11,6 @@ from typing import Any, cast
 import httpx2
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 
-from mlops_agents.agents.runtime.contract import ErrorKind
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderErrorKind, classify
 from mlops_agents.providers.failover import (
@@ -38,10 +37,9 @@ class ModelReply:
 
 
 class TurnFailed(Exception):  # message is safe to show and is stored as the turn's error
-    def __init__(self, message: str, error_kind: ErrorKind | None = None) -> None:
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
-        self.error_kind: ErrorKind | None = error_kind
 
 
 class ModelKeysExhausted(Exception):

@@ -12,7 +12,7 @@ import httpx2
 import pytest
 from langchain_core.messages import BaseMessage
 
-from mlops_agents.agents.runtime.contract import ErrorKind, Part, TextPart, TurnEnded
+from mlops_agents.agents.runtime.contract import Part, TextPart, TurnEnded
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply, TurnFailed
@@ -69,7 +69,6 @@ def hold_the_first_failure_record(monkeypatch: pytest.MonkeyPatch) -> asyncio.Ev
         text: str,
         *,
         parts: list[Part] | None = None,
-        error_kind: ErrorKind | None = None,
     ) -> None:
         if not entered.is_set():
             entered.set()
@@ -83,7 +82,6 @@ def hold_the_first_failure_record(monkeypatch: pytest.MonkeyPatch) -> asyncio.Ev
             lock,
             text,
             parts=parts,
-            error_kind=error_kind,
         )
 
     monkeypatch.setattr(TurnExecutor, "record_failure", held_once)

@@ -13,7 +13,6 @@ from sqlalchemy import RowMapping, select
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
-    ErrorKind,
     MessageUpdated,
     StreamEvent,
     TurnEnd,
@@ -98,7 +97,6 @@ class RecordingObserver:
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
-        error_kind: ErrorKind | None,
     ) -> None:
         self.ended.append((project_id, agent, turn_id, status, final_text))
 

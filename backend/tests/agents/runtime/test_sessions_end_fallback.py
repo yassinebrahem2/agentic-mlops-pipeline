@@ -12,7 +12,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd, TurnEnded
+from mlops_agents.agents.runtime.contract import TurnEnd, TurnEnded
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.store import SessionStore
@@ -51,13 +51,7 @@ def fail_the_first_turns_end_writes(
     set_turn = SessionStore.set_turn
 
     async def failing_set_turn(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        status: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, status: str, *, error: str | None = None
     ) -> None:
         if status == "running" and not writes.first_turn:
             writes.first_turn.append(turn_id)
@@ -67,7 +61,7 @@ def fail_the_first_turns_end_writes(
                 writes.held.set()
                 await writes.release.wait()
             raise RuntimeError(f"disk full writing {status}")
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", failing_set_turn)
     return writes

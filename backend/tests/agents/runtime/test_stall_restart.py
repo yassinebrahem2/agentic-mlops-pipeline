@@ -286,7 +286,7 @@ async def test_try_again_clears_the_needs_attention_mark_even_when_the_call_then
     events = await collect_until_turn_ended(stream, timeout=10)
 
     ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert (ended.data.status, ended.data.error_kind) == ("failed", None)
+    assert ended.data.status == "failed"
     assert (await providers.get_provider(env.session.provider)).status == "ok"
     await env.session.manager.close()
 
@@ -322,11 +322,7 @@ async def test_try_again_after_switching_models_and_deleting_the_provider_fails_
     events = await collect_until_turn_ended(stream, timeout=10)
 
     ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert (ended.data.status, ended.data.error, ended.data.error_kind) == (
-        "failed",
-        UNEXPECTED_FAILURE_TEXT,
-        None,
-    )
+    assert (ended.data.status, ended.data.error) == ("failed", UNEXPECTED_FAILURE_TEXT)
     [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
     assert logged.exc_info is not None
     error = logged.exc_info[1]

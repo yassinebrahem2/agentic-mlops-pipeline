@@ -184,7 +184,7 @@ async def test_server_error_retries_twice_on_the_same_key_then_fails(
         await env.caller.call(env.model, [HumanMessage(content="hi")], [], _noop)
     assert env.clock.sleeps == list(TRANSIENT_BACKOFFS)
     assert keys_used(fake_openai) == ["key-one"] * 3
-    assert failed.value.error_kind is None
+    assert isinstance(failed.value, TurnFailed)
 
 
 async def test_auth_failure_marks_provider_needs_attention(
@@ -242,8 +242,6 @@ async def test_error_after_streaming_started_fails_at_once_with_partial_text(
     # No retries occurred
     assert env.clock.sleeps == []
     assert len(fake_openai.state.requests) == 1
-    # A keyless provider has no key states to add to the explanation
-    assert failed.value.error_kind is None
     assert not failed.value.message.endswith(" ")
 
 

@@ -168,7 +168,7 @@ async def test_first_request_rejected_retries_with_corrective_message_and_comple
     fake_openai.state.bad_generation_message = "Tool call validation failed"
 
     sink = RecordingSink()
-    end_status, error_text, _ = await env.executor.run(
+    end_status, error_text = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 
@@ -251,7 +251,7 @@ async def test_three_rejections_fails_turn_after_three_requests(
     fake_openai.state.bad_generation_message = "Tool call validation failed repeatedly"
 
     sink = RecordingSink()
-    end_status, error_text, _ = await env.executor.run(
+    end_status, error_text = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 
@@ -278,7 +278,7 @@ async def test_sse_error_event_after_role_chunk_retried_and_completes_done(
     fake_openai.state.sse_error_message = "Tool call validation failed in SSE"
 
     sink = RecordingSink()
-    end_status, error_text, _ = await env.executor.run(
+    end_status, error_text = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 
@@ -312,7 +312,7 @@ async def test_different_400_fails_on_first_request(
     fake_openai.state.bad_generation_message = "Invalid model parameter"
 
     sink = RecordingSink()
-    end_status, error_text, _ = await env.executor.run(
+    end_status, error_text = await env.executor.run(
         env.project_id, env.session_id, "orchestrator", env.turn_id, sink, AsyncRLock()
     )
 

@@ -10,7 +10,6 @@ from typing import Any, Literal
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
-    ErrorKind,
     MessageStatus,
     MessageView,
     Part,
@@ -33,8 +32,7 @@ __all__ = [
     "TurnSink",
 ]
 
-# How a turn ended: its end, error text and error kind; or that it waits for approval.
-TurnOutcome = tuple[TurnEnd, str | None, ErrorKind | None] | tuple[Literal["waiting"], None, None]
+TurnOutcome = tuple[TurnEnd, str | None] | tuple[Literal["waiting"], None]
 
 
 @dataclass
@@ -71,7 +69,6 @@ class TurnExecutor:
         text: str,
         *,
         parts: list[Part] | None = None,
-        error_kind: ErrorKind | None = None,
     ) -> None:
         """Leave a failed turn's visible end state: its message complete, plus a system message.
 
@@ -81,13 +78,8 @@ class TurnExecutor:
         A turn has one failure notice: a call made after an earlier one stored it (whose
         publish failed, say) writes no second one. A client reloads the turn's messages when
         the turn ends, so it still shows the stored one.
-
-        `error_kind` is stored on the turn first, so the agent message published here carries
-        it; the turn's end stores it again with the status.
         """
         async with lock:
-            if error_kind is not None:
-                await self._store.set_error_kind(project_id, turn_id, error_kind)
             notice_stored = False
             for message in await self._store.messages(project_id, session_id):
                 if message.turn_id != turn_id:
@@ -153,9 +145,9 @@ class TurnExecutor:
                 text_part: list[Part] = [TextPart(type="text", text=exc.text)]
                 if exc.end == "done":
                     await add_message("agent", agent, text_part, "complete")
-                    return ("done", None, None)
+                    return ("done", None)
                 await add_message("system", "system", text_part, "complete")
-                return ("failed", exc.text, None)
+                return ("failed", exc.text)
 
             agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             message.id = agent_msg.id
@@ -239,26 +231,15 @@ class TurnExecutor:
 
         A cancel (Stop, close) marks the agent message stopped wherever it lands, also inside
         the failure handlers: a cancel raised from one of them is not caught by its siblings.
-        A turn so stopped did not fail, so it takes back an error kind its failure record stored,
-        before the stopped message is published.
         """
-        recorded_kind: ErrorKind | None = None
         try:
             try:
                 return await body()
             except TurnFailed as err:
-                recorded_kind = err.error_kind
                 await self.record_failure(
-                    project_id,
-                    session_id,
-                    turn_id,
-                    sink,
-                    lock,
-                    err.message,
-                    parts=message.parts,
-                    error_kind=err.error_kind,
+                    project_id, session_id, turn_id, sink, lock, err.message, parts=message.parts
                 )
-                return ("failed", err.message, err.error_kind)
+                return ("failed", err.message)
             except Exception:
                 logger.exception("Turn %s failed unexpectedly", turn_id)
                 await self.record_failure(
@@ -270,10 +251,8 @@ class TurnExecutor:
                     UNEXPECTED_FAILURE_TEXT,
                     parts=message.parts,
                 )
-                return ("failed", UNEXPECTED_FAILURE_TEXT, None)
+                return ("failed", UNEXPECTED_FAILURE_TEXT)
         except asyncio.CancelledError:
-            if recorded_kind is not None:
-                await self._store.set_error_kind(project_id, turn_id, None)
             if message.id is not None:
                 await self._finish_message(
                     project_id, sink, lock, message.id, message.parts, "stopped"
@@ -326,6 +305,6 @@ class TurnExecutor:
             lock=lock,
         )
         if waits:
-            return ("waiting", None, None)
+            return ("waiting", None)
         await self._finish_message(project_id, sink, lock, message_id, parts, "complete")
-        return ("done", None, None)
+        return ("done", None)

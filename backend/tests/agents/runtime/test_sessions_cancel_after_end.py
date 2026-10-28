@@ -11,7 +11,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd
+from mlops_agents.agents.runtime.contract import TurnEnd
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.shielded import shielded
@@ -47,30 +47,19 @@ def hold_end_write(monkeypatch: pytest.MonkeyPatch, status: str) -> HeldEndWrite
 
     @shielded
     async def held_write(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        *,
-        error: str | None,
-        error_kind: ErrorKind | None,
+        self: SessionStore, project_id: str, turn_id: str, *, error: str | None
     ) -> None:
         held.entered.set()
         await held.release.wait()
-        await set_turn(self, project_id, turn_id, status, error=error, error_kind=error_kind)
+        await set_turn(self, project_id, turn_id, status, error=error)
 
     async def holding_set_turn(
-        self: SessionStore,
-        project_id: str,
-        turn_id: str,
-        to: str,
-        *,
-        error: str | None = None,
-        error_kind: ErrorKind | None = None,
+        self: SessionStore, project_id: str, turn_id: str, to: str, *, error: str | None = None
     ) -> None:
         if to != status:
-            await set_turn(self, project_id, turn_id, to, error=error, error_kind=error_kind)
+            await set_turn(self, project_id, turn_id, to, error=error)
             return
-        await held_write(self, project_id, turn_id, error=error, error_kind=error_kind)
+        await held_write(self, project_id, turn_id, error=error)
 
     monkeypatch.setattr(SessionStore, "set_turn", holding_set_turn)
     return held

@@ -14,7 +14,7 @@ from mlops_agents.integrations.github.pulls import get_pull
 if TYPE_CHECKING:
     import httpx2
 
-    from mlops_agents.agents.runtime.contract import ErrorKind, TurnEnd
+    from mlops_agents.agents.runtime.contract import TurnEnd
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
@@ -59,7 +59,6 @@ class PrSyncObserver:
         turn_id: str,
         status: TurnEnd,
         final_text: str | None,
-        error_kind: ErrorKind | None,
     ) -> None:
         pass
 

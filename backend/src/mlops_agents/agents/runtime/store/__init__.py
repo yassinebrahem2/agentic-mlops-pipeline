@@ -124,8 +124,7 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
                 await conn.execute(
                     update(turns)
                     .where(turns.c.id.in_(running_turn_ids))
-                    # A kind a failure record stored is no longer true: the turn did not fail.
-                    .values(status="interrupted", ended_at=now, error_kind=None)
+                    .values(status="interrupted", ended_at=now)
                 )
                 await conn.execute(
                     update(messages)

@@ -137,7 +137,7 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
     monkeypatch.setattr(builder, "build", failing_build)
 
     sink = RecordingSink()
-    status, error, _ = await executor.run(
+    status, error = await executor.run(
         project.id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
@@ -222,7 +222,7 @@ async def test_executor_turn_failed_from_caller(
     monkeypatch.setattr(caller, "call", fail_call)
 
     sink = RecordingSink()
-    status, err, _ = await executor.run(
+    status, err = await executor.run(
         project.id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
