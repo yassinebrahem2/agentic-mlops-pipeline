@@ -1,6 +1,6 @@
 # Stage 4: The monitoring loop
 
-Date: 2026-10-28. Status: approved by the lead on 2026-10-28.
+Date: 2026-10-28. Status: approved by the lead on 2026-10-28; amended with the stage 5 spec (training policies, fix requests, one evaluation implementation), pending that spec's approval.
 Contracts (IDs, folder layout, SQLite rules, agent definitions, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and decisions: `project_knowledge.md` (entries of 2026-10-27 and 2026-10-28). Stages 1 to 3 stay as their specs say, unless changed here.
 
 ## Goal
@@ -129,13 +129,13 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
   3. hold or quarantine;
   4. roll back or fall back;
   5. rerun a job that is safe to rerun;
-  6. retrain or deploy something new.
-- **Action hooks.** Responses 3 to 6 run only the team's commands from the handoff, registered as action hooks (`hok`), each with its kind (rollback, rerun, hold, fall back, train, deploy) and command. Running a hook is risk class `deploy`.
+  6. request a fix from Retraining (stage 5: re-threshold, recalibrate or retrain, then evaluation and a promotion a person decides).
+- **Action hooks.** Responses 3 to 5, and stage 5's training and promotion, run only the team's commands from the handoff, registered as action hooks (`hok`), each with its kind (rollback, rerun, hold, fall back, train, deploy) and command. Running a hook is risk class `deploy`.
 - **Hook credentials.** A hook that writes to the team's systems (a rollback moving the tracker's production alias) has its own credential, entered by the user through a keystore route like a tracker credential. It is injected only into that hook's own container run, never into the agent's Bash, so the sandbox still never writes to the tracker on its own (stage 3).
 - **Hold** is tier 1: the app records the hold on the incident and, when the team registered a hold or quarantine command, runs it (blocking a promotion, quarantining a batch) without asking. When the team has no such command, a hold is a notification only; the first audit reports the missing command as a gap.
 - **Pre-approved rules** (`rul`), proposed by agents and approved by the user (proposal kind `rule`, §9): a condition over standard result records (check IDs, values, thresholds, a time window), the hook it allows (only kinds rollback, rerun, fall back), and limits (at most once per incident, per day). When an agent runs a hook citing a rule, **the gate evaluates the rule's condition in code against the stored records**; only when it holds, and the limits allow, does the hook run without asking (at any level except `suggest`). The agent can cite a rule; it can never certify one. The incident's timeline records the rule and the records that satisfied it. Otherwise the hook asks as `deploy` does.
-- **A human always decides** a train or deploy hook (tier 3): it always asks, `bypass` included, like `propose`. At night it waits for the person; the morning report lists it.
-- After a deploy, the deployment agent compares the new version with the previous one on recent production inputs (both loaded from the tracker, scored in the sandbox) and on early labels with their counts; clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
+- **A human always decides** a deploy hook (tier 3): it always asks, `bypass` included, like `propose`. At night it waits for the person; the morning report lists it. A train hook runs without asking only within an approved training policy (stage 5); otherwise it asks.
+- After a deploy, the deployment agent compares the new version with the previous one using stage 5's evaluation (one implementation: parity, replay on recent production inputs, early labels with their counts); clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
 
 ## 7. Severity and routing (Alert Prioritization)
 
@@ -200,7 +200,8 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
   | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
   |---|---|---|
-  | train, deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
+  | deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
+  | train | runs without asking at `ask` and above within an approved training policy (stage 5) | asks |
   | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
   | hold | runs without asking at every level except `suggest` (tier 1); at `suggest` the alert recommends the hold and the person applies it in one click through the approval path | same |
 - Stage 5's "train/deploy hooks" become the action hooks of this stage. Stage 5 keeps Retraining's and Deployment & Rollback's behavior (when to propose a retrain, evaluating a candidate against production, promotion) and the Deployments page.
@@ -222,7 +223,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 - Times: a cadence across a daylight-saving change fires once, at the right local time.
 - Untrusted text: instructions planted in a result's detail or a data value never trigger an action.
 - Severity and routing: each rule; critical notifies at night with every provider key exhausted and before any diagnosis, and escalates when unacknowledged; high waits for the person's hours; the morning report lists the night.
-- Response: a hook runs only through an approved rule or an approval; train and deploy always ask; a rule's limits hold.
+- Response: a hook runs only through an approved rule, a training policy or an approval; deploy always asks; a rule's and a policy's limits hold.
 - Verdicts: labels confirm automatically past the minimum sample; the baseline record links team checks to incidents and never notifies.
 - End to end (fake model, fixture project): a fired team check and an agent's check, a silent feed at night, one incident per cause, the right agent diagnoses, a rollback through an approved rule, a critical message to the fake Discord, the morning report, a verdict.
 
@@ -230,7 +231,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
 - The end-to-end test passes and CI is green on every job.
 - After a simulated night with the app stopped halfway, restarting it catches up with no missed and no duplicated incident.
-- No train or deploy hook runs without a person's approval; no hook runs outside an approval or an approved rule.
+- No deploy hook runs without a person's approval; no hook runs outside an approval, an approved rule or an approved training policy.
 
 ## Build order
 
