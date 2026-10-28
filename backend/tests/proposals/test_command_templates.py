@@ -68,16 +68,20 @@ def test_template_grammar_rejects(template: str) -> None:
     assert "}}" in text
 
 
-def test_the_grammar_error_names_the_replacement_field() -> None:
+@pytest.mark.parametrize(
+    ("spec", "field"),
+    [
+        (command(template="run --end {window_end}"), "{window_end}"),
+        (command(template="run {model:>{width}}"), "{model:>{width}}"),
+        (command(template="run {model!r}"), "{model!r}"),
+        (command(template="run {model:%Y}"), "{model:%Y}"),
+        (ci_dispatch(inputs={"day": "{window_end}", "date": "{run_date}"}), "{run_date}"),
+    ],
+)
+def test_the_grammar_error_names_the_replacement_field(spec: dict[str, Any], field: str) -> None:
     with pytest.raises(ValidationError) as err:
-        CommandSpec.model_validate(command(template="run --end {window_end}"))
-    assert "{window_end}" in error_text(err)
-    with pytest.raises(ValidationError) as err2:
-        CommandSpec.model_validate(command(template="run {model:>{width}}"))
-    assert "{model:>{width}}" in error_text(err2)
-    with pytest.raises(ValidationError) as err3:
-        CommandSpec.model_validate(command(template="run {model!r}"))
-    assert "{model!r}" in error_text(err3)
+        CommandSpec.model_validate(spec)
+    assert field in error_text(err)
 
 
 @pytest.mark.parametrize("value", ["{run_date}", "{window_end!r}", "{window_end:%Y}", "{", "a } b"])
