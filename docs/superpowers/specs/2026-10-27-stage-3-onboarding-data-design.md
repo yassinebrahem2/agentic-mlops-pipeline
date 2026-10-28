@@ -162,7 +162,7 @@ class ConnectionKind(Protocol):
 **For agents:**
 - `tracking_summary` hook: the production model and version, its latest metrics, the last runs and CI runs; capped.
 - `TrackingHistory` tool (`read`; justified: the record is in the app's database): models, versions, runs, metrics over time, deployments and CI runs, filtered, with a row cap.
-- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox gets a read-only credential only if the user grants one, so it can read and never write. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
+- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox holds no credential in this stage (see Out); agents read its history through the app. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
 
 ## 8. The Knowledge store
 

@@ -223,9 +223,9 @@ class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # par
 class ProposalView(BaseModel): id: str; kind: str; key: str; payload: ConnectionsPayload | HandoffPayload; warnings: list[str]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime   # contracts task 2 (it needs the payloads); typed so the cards read it from schema.d.ts
 
 # Payloads (contracts), extra="forbid" everywhere
-LOCAL_FOLDER_KIND = "local_folder"   # connections/contract.py (contracts task 1): the one source of the kind name
+LocalFolderKindName = Literal["local_folder"]; LOCAL_FOLDER_KIND: LocalFolderKindName = "local_folder"   # connections/contract.py (contracts task 1): one source; a test pins the two together
 class LocalFolderSettings(BaseModel): path: str   # connections/contract.py (contracts task 1), extra="forbid"
-class ConnectionSpec(BaseModel): kind: Literal["local_folder"]; name: str; settings: LocalFolderSettings; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1); settings typed per kind, so no secret can ride in a free-form dict
+class ConnectionSpec(BaseModel): kind: LocalFolderKindName; name: str; settings: LocalFolderSettings; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1); settings typed per kind, so no secret can ride in a free-form dict
 class ConnectionsPayload(BaseModel): connections: list[ConnectionSpec]
 
 class TableUse(BaseModel): connection: str; table: str                                        # a reference to a DataRole
@@ -279,9 +279,9 @@ class Proposals(Protocol):          # proposals
 ```
 
 - **A duplicate never gets an approval.** A second `Propose` of the same kind in the same turn step fails in `preview` with a tool error, so the gate creates no approval for it.
-- **The record before the approval.** `Propose.preview` (run by the gate before it creates the approval) calls `create`, which writes a draft keyed by `(turn_id, tool_call_id)`: a re-run of the same call finds its draft. `asked(view)` then calls `attach` with the approval ID (the approval carries the tool call ID). A second `Propose` of the same kind in the same turn step, with a different tool call ID, is marked a duplicate by `create`, and its `run` returns a tool error.
+- **The record before the approval.** `Propose.preview` (run by the gate before it creates the approval) calls `create`, which writes a draft keyed by `(turn_id, tool_call_id)`: a re-run of the same call finds its draft. `asked(view)` then calls `attach` with the approval ID (the approval carries the tool call ID).
 - `ToolContext` gains `tool_call_id: str` (contracts, in `agents/tools/base.py`).
-- proposals registers an `ApprovalObserver`: on `decided` it marks the proposal, applies it on approval, and deletes its credential slots on reject, cancel or expiry. A newer proposal of the same kind cancels the pending one (`Approvals.cancel`). A second proposal of the same kind in one model step gets a tool error. At startup, an approved proposal with no `result` is applied again, and orphaned slots are deleted.
+- proposals registers an `ApprovalObserver`: on `decided` it marks the proposal, applies it on approval, and deletes its credential slots on reject, cancel or expiry. A newer proposal of the same kind cancels the pending one (`Approvals.cancel`). At startup, an approved proposal with no `result` is applied again, and orphaned slots are deleted.
 - Routes: `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}` (keystore only; refused unless pending); `GET .../proposals/by-approval/{apr}`. Events `proposal.created`, `proposal.decided`, `handoff.approved`.
 
 ### I20: the current handoff (types in `proposals/contract.py` by contracts; `SqliteHandoffs` in `proposals/handoffs.py` by proposals)
@@ -313,7 +313,7 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 
 - `attempt(key_index)` raises the provider's raw exception; `KeyFailover` classifies it with `providers/errors.classify`. A provider with no keys gets `attempt(None)` once, with no failover.
 - `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider) -> None` (Try again) and `describe_keys(states) -> str` (the one wording, used by the stall card and the embedder's message). Its clock is injected (`Clock` protocol: `now()`, `async sleep(seconds)`).
-- `TurnHooks` gains `approvals: Approvals` and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
+- `TurnHooks` gains `approvals: Approvals`, `approval_store: ApprovalStore` (the one shared store, which `graph.py` uses instead of constructing its own) and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
 - The one `KeyFailover` instance is built in `build_services` by rate-limits task 1 (its early PR), so embedders task 1 can use it.
 - `KeyFailover` takes the cooldown per call (`cooldown_minutes` argument), so task 1 does not depend on contracts; task 2 passes `Provider.cooldown_minutes`.
 - The rules are the spec's §2. A wait round lasts at most until the earliest key clears, never more than 60 seconds.
@@ -329,7 +329,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `agents/tools/__init__.py` (`default_registry`) and `api/services.py`: each plan adds only its own lines.
 - `agents/runtime/context.py`: data-summary changes `build_messages` (the injection point); onboarding adds one line (the shared working rules: hard limits and the continuous-PR principle, from packaged files).
 - `agents/runtime/hooks.py`: contracts (`GateDecision`) and rate-limits (`TurnObserver`), each its own lines.
-- The five `ApprovalStore(` construction sites (`approvals/gate.py`, `approvals/service.py`, `agents/runtime/graph.py`, `agents/runtime/store/__init__.py`, `agents/runtime/waiting.py`): contracts task 3 replaces each with the injected instance, its only lines in the rate-limits-owned files.
+- The five `ApprovalStore(` construction sites (`approvals/gate.py`, `approvals/service.py`, `agents/runtime/graph.py`, `agents/runtime/store/__init__.py`, `agents/runtime/waiting.py`): contracts task 3 replaces each with the injected instance (graph.py receives it through `TurnHooks.approval_store`), its only lines in the rate-limits-owned files; tests that construct `ApprovalGate`, `ApprovalsService` or `SessionManager` pass an explicit store (a shared test helper builds one), and task 3 lists those test files by grep.
 - `frontend/src/pages/project-settings/ProjectSettingsPage.tsx`: embedders, connections and pages each add one line (their section).
 - `workspace/service.py`: contracts (the project removal's secret cleanup) and connections (lifting the server-mode refusal in `browse`), each its own lines.
 - New package `__init__.py` files: `tracking/`, `connections/`, `knowledge/`, `agents/hooks/` by contracts task 1, `proposals/` by contracts task 2, `onboarding/` by onboarding; other plans add modules, never recreate them. Sub-packages (`connections/kinds/`, `tracking/adapters/`, `data/`) belong to the plan that creates them.
