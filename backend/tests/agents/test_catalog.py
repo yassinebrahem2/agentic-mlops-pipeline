@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
+from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.errors import DomainError
 
 TOOLS = frozenset({"Read", "Glob", "Grep"})
@@ -137,6 +139,34 @@ def test_status_board_listed_and_declared_appears_once() -> None:
         _with("context_hooks: [profile, status_board]\nstatus_board: true"), "a.md"
     )
     assert definition.hook_names == ("profile", STATUS_BOARD_HOOK)
+
+
+class _CountingHook:
+    name = STATUS_BOARD_HOOK
+
+    def __init__(self) -> None:
+        self.renders = 0
+
+    async def render(self, ctx: HookContext) -> str:
+        self.renders += 1
+        return "board"
+
+
+async def test_status_board_listed_and_declared_loads_and_runs_once() -> None:
+    """Not a duplicate: the duplicate check counts only `context_hooks`."""
+    definition = parse_definition(
+        _with("context_hooks: [status_board]\nstatus_board: true"), "a.md"
+    )
+    catalog = AgentCatalog([definition], TOOLS, hook_names=frozenset({STATUS_BOARD_HOOK}))
+    hook = _CountingHook()
+    hooks = HookRegistry()
+    hooks.register(hook)
+
+    ctx = HookContext(project_id="prj_1", agent="helper", trigger_text="")
+    text = await hooks.run(catalog.get("helper").hook_names, ctx)
+
+    assert hook.renders == 1
+    assert text == '<data source="hook:status_board">\nboard\n</data>'
 
 
 def test_an_agent_without_hooks_has_no_hook_names() -> None:
