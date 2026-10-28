@@ -23,7 +23,6 @@ from mlops_agents.providers.failover import (
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 
-_EXHAUSTED: ErrorKind = "keys_exhausted"
 # No key in these states works until someone fixes it, so the provider needs attention.
 _NEEDS_FIXING = ("billing", "rejected")
 
@@ -45,14 +44,15 @@ class TurnFailed(Exception):  # message is safe to show and is stored as the tur
         self.error_kind: ErrorKind | None = error_kind
 
 
-class ModelKeysExhausted(TurnFailed):
-    """Every key of the provider is exhausted for the model, before any text streamed."""
+class ModelKeysExhausted(Exception):
+    """Every key of the provider is exhausted for the model. Never a turn's failure: the turn
+    graph catches it only to stall the turn (stall.py), which Try again resumes."""
 
     def __init__(
         self, *, provider: Provider, model: str, keys: list[KeyState], description: str
     ) -> None:
         headline = no_usable_key(provider.name, model)
-        super().__init__(f"{headline}. {description}", _EXHAUSTED)
+        super().__init__(f"{headline}. {description}")
         self.headline = headline
         self.provider_id = provider.id
         self.model = model
@@ -264,14 +264,14 @@ class ModelCaller:
         except _StaleKeys:
             raise
         except AllKeysExhausted as exhausted:
-            failed = ModelKeysExhausted(
+            stalled = ModelKeysExhausted(
                 provider=provider,
                 model=wire_model,
                 keys=exhausted.keys,
                 description=self._failover.describe_keys(exhausted.keys),
             )
-            await self._flag_if_unfixable(provider, exhausted.keys, failed.message)
-            raise failed from exhausted
+            await self._flag_if_unfixable(provider, exhausted.keys, str(stalled))
+            raise stalled from exhausted
         except Exception as exc:
             error = classify(exc, secrets=call.secrets)
             if error.kind is ProviderErrorKind.BAD_GENERATION:

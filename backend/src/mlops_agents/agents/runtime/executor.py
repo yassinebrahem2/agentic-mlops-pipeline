@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
-from mlops_agents.agents.runtime.compaction import compact_if_needed
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
     ErrorKind,
@@ -19,7 +17,7 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnd,
 )
-from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink, TurnState
+from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink
 from mlops_agents.agents.runtime.graph_run import run_turn_graph
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
@@ -162,47 +160,8 @@ class TurnExecutor:
             agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             message.id = agent_msg.id
 
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            history = await self._store.messages(project_id, session_id)
-            history_for_compaction = [m for m in history if m.id != message.id]
-            system_msg = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                [],
-                hook_context=built_agent.hook_context,
-            )[0]
-            await compact_if_needed(
-                self._store,
-                self._caller,
-                built_agent.model,
-                project_id,
-                session_id,
-                history_for_compaction,
-                str(system_msg.content),
-                turn_id=turn_id,
-                agent_name=built_agent.definition.name,
-            )
-
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            active_history = await self._store.messages(
-                project_id, session_id, after=compacted_through
-            )
-            active_history = [m for m in active_history if m.id != message.id]
-            initial_messages = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                active_history,
-                hook_context=built_agent.hook_context,
-            )
-            initial_state: TurnState = {
-                "messages": initial_messages,
-                "step_count": 0,
-                "stopped_reason": None,
-            }
+            # The graph's `prepare` node compacts the session and builds the messages.
+            initial_state: dict[str, Any] = {"step_count": 0, "stopped_reason": None}
             return await self._execute_graph(
                 built_agent,
                 project_id,

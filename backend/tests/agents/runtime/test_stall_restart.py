@@ -14,15 +14,17 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.runtime.agent import TurnRefused
 from mlops_agents.agents.runtime.contract import TurnEnded
 from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted
 from mlops_agents.agents.runtime.sessions import SessionManager
-from mlops_agents.agents.runtime.stall import record_stall
+from mlops_agents.agents.runtime.stall import StallState, record_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
@@ -44,6 +46,13 @@ from tests.agents.runtime.stall_env import (
     send_until_waiting,
     stall_parts,
 )
+from tests.agents.runtime.test_executor_hooks import ChangingHook
+from tests.agents.runtime.test_resuming_turns import (
+    DummyWriteTool,
+    collect_until_turn_waiting,
+    make_tool_reg,
+)
+from tests.agents.runtime.test_stall_prepare import add_long_history
 from tests.agents.test_approvals_service import FakeSessionsForApproval
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
@@ -59,10 +68,18 @@ def _restarted(
     databases: Databases,
     keystore: MemoryKeyStore,
     model_http: httpx2.AsyncClient,
+    *,
+    tools: ToolRegistry | None = None,
+    extra_dirs: list[Path] | None = None,
+    hooks: HookRegistry | None = None,
 ) -> tuple[SessionManager, ApprovalsService]:
     """A new app over the same databases: a fresh key failover, sessions and approvals."""
-    tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+    tools = tools if tools is not None else default_registry()
+    catalog = AgentCatalog.load(
+        tools.names() | STAGE_2_TOOLS,
+        extra_dirs=extra_dirs or (),
+        hook_names=hooks.names() if hooks is not None else frozenset(),
+    )
     failover = KeyFailover(FakeClock())
     providers = ProvidersService(databases, keystore, model_http, failover)
     http = httpx2.AsyncClient()
@@ -92,6 +109,7 @@ def _restarted(
         workspaces=FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin)),
         approval_store=store,
         event_log=env.events,
+        hooks=hooks,
     )
     approvals = ApprovalsService(databases, manager, store=store, event_log=env.events)
     manager.bind_approvals(approvals)
@@ -133,6 +151,83 @@ async def test_a_stalled_turn_survives_a_restart_and_try_again_resumes_it(
     assert (ended.data.turn_id, ended.data.status) == (turn_id, "done")
     assert await env.event_payloads("turn.resumed") == [{"turn_id": turn_id}]
     assert await env.checkpoint(turn_id) is None
+    await manager.close()
+
+
+def _hooked_writer(tmp_path: Path) -> Path:
+    folder = tmp_path / "hooked"
+    folder.mkdir()
+    (folder / "writer.md").write_text(
+        "---\nname: writer\ndisplay_name: writer\ndescription: Test agent\n"
+        "tools:\n  - write_code_tool\ncontext_hooks: [spy]\n---\nPrompt\n",
+        encoding="utf-8",
+    )
+    return folder
+
+
+async def test_a_turn_stalled_in_prepare_resumes_there_after_a_restart_with_fresh_hooks(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    hook = ChangingHook()
+    hooks = HookRegistry()
+    hooks.register(hook)
+    write_tool = DummyWriteTool()
+    tools = make_tool_reg(write_tool)
+    extra_dirs = [_hooked_writer(tmp_path)]
+    env = await build_stall_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        tools=tools,
+        extra_dirs=extra_dirs,
+        hooks=hooks,
+    )
+    await env.session.settings.set_default_model("writer", f"{env.session.provider}:fake-tools")
+    await add_long_history(env, "writer")
+    fake_openai.state.script_for_key(KEY, ["401"])
+    _, _, turn_id = await send_until_waiting(env, "Please write a.py", agent="writer")
+    [stall] = await env.stalls(turn_id)
+    values = await env.checkpoint(turn_id)
+    assert values is not None
+    assert isinstance(values["stall"], StallState)
+    assert values["stall"].node == "prepare"
+    await env.session.manager.close()
+    fake_openai.state.requests.clear()
+
+    manager, approvals = _restarted(
+        env, paths, databases, keystore, model_http, tools=tools, extra_dirs=extra_dirs, hooks=hooks
+    )
+    await manager.get(env.project_id, "writer")
+    stream = manager.subscribe(env.project_id, "writer", after_seq=None)
+    await anext(stream)
+    await approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    await collect_until_turn_waiting(stream)
+
+    # prepare ran again: compaction, then the model step with the hook text the resume rendered.
+    compaction, first_step = fake_openai.state.requests
+    assert "Provide a concise summary" in str(compaction["messages"])
+    system = str(first_step["messages"][0]["content"])
+    assert system.endswith('<data source="hook:spy">\nhook text 2\n</data>')
+    # A tool approval after the resolved stall: approving it runs the tool, not prepare again.
+    [tool_approval] = [a for a in await approvals.pending(env.project_id) if a.kind == "tool"]
+    await approvals.decide(env.project_id, tool_approval.id, approve=True, note=None)
+    events = await collect_until_turn_ended(stream, timeout=10)
+
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert (ended.data.turn_id, ended.data.status) == (turn_id, "done")
+    assert len(write_tool.invoked) == 1
+    summaries = [r for r in fake_openai.state.requests if "concise summary" in str(r["messages"])]
+    assert len(summaries) == 1
     await manager.close()
 
 
@@ -266,6 +361,7 @@ async def test_a_rerun_of_the_model_node_finds_its_pending_stall(databases: Data
             turn_id="trn_1",
             step=3,
             exhausted=exhausted,
+            node="model",
         )
         for _ in range(2)
     ]

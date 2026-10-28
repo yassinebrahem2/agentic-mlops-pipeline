@@ -205,7 +205,7 @@ async def test_auth_failure_marks_provider_needs_attention(
     )
     fake_openai.state.auth_fail = True
 
-    with pytest.raises(TurnFailed) as exc_info:
+    with pytest.raises(ModelKeysExhausted) as exc_info:
         await env.caller.call(env.model, [HumanMessage(content="hi")], [], _noop)
 
     err_msg = str(exc_info.value)

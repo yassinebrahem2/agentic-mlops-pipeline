@@ -1,13 +1,14 @@
-"""The stall (stage 3 spec, section 2): a model step whose provider has no usable key pauses the
+"""The stall (stage 3 spec, section 2): a model call whose provider has no usable key pauses the
 turn on a `stall` approval, and Try again (approving it) resumes the turn from its checkpoint.
 
-The model node records the stall (`record_stall`), the wait node waits on it (`await_stall`),
-and the turn's waiting card is built here (`stall_part`)."""
+The node whose call ran out of keys (`prepare`, for compaction, or `model`) records the stall
+(`record_stall`), the wait node waits on it (`await_stall`) and returns to that node, and the
+turn's waiting card is built here (`stall_part`)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 from langgraph.types import interrupt
 
@@ -20,12 +21,17 @@ from mlops_agents.events.contract import EventLog
 
 __all__ = [
     "LateApprovals",
+    "StallNode",
     "StallState",
     "await_stall",
     "pending_stall",
     "record_stall",
     "stall_part",
 ]
+
+
+# The graph nodes whose model call can stall: Try again runs that node again.
+StallNode = Literal["prepare", "model"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,7 @@ class StallState:
     step: int
     preview: Preview
     resolved: bool = False
+    node: StallNode = "model"  # a default: stalls checkpointed before `prepare` existed
 
 
 def pending_stall(stall: StallState | None) -> StallState | None:
@@ -74,10 +81,11 @@ async def record_stall(
     turn_id: str,
     step: int,
     exhausted: ModelKeysExhausted,
+    node: StallNode,
 ) -> StallState:
-    """The model node's stall: the step's pending stall approval, found again on a re-run of the
-    node, and its `turn.stalled` event. A re-run (a crash before the checkpoint) records the
-    event again: it is informational."""
+    """The stall of `node`'s model call: the step's pending stall approval, found again on a
+    re-run of the node, and its `turn.stalled` event. A re-run (a crash before the checkpoint)
+    records the event again: it is informational."""
     approval = await approvals.create_stall(project_id, turn_id, step, _stall_preview(exhausted))
     if events is not None:
         await events.record(
@@ -97,6 +105,7 @@ async def record_stall(
         model=exhausted.model,
         step=step,
         preview=approval.preview,
+        node=node,
     )
 
 
@@ -111,8 +120,8 @@ async def await_stall(
     turn_id: str,
 ) -> dict[str, Any]:
     """The wait node on a pending stall: pause while it is pending; once approved (Try again),
-    forget the provider's key states and mark the stall resolved, so the graph calls the model
-    again. A crash after the reset and before the checkpoint records `turn.resumed` again."""
+    forget the provider's key states and mark the stall resolved, so the graph runs the stalled
+    node again. A crash after the reset and before the checkpoint records `turn.resumed` again."""
     approval = await store.get(project_id, stall.approval_id)
     status = None if approval is None else approval.status
     if status == "pending":

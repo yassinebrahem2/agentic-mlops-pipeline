@@ -109,7 +109,8 @@ async def test_every_key_exhausted_before_text_raises_model_keys_exhausted(
         await env.caller.call(env.model, HI, [], _noop)
 
     exhausted = raised.value
-    assert exhausted.error_kind == "keys_exhausted"
+    # Caught only to stall the turn, never failing it (the user's rule, 2026-10-28).
+    assert not isinstance(exhausted, TurnFailed)
     assert exhausted.provider_id == env.model.provider_id
     assert exhausted.model == "fake-no-tools"
     assert [key.status for key in exhausted.keys] == ["rejected", "billing"]
@@ -117,13 +118,13 @@ async def test_every_key_exhausted_before_text_raises_model_keys_exhausted(
         "Key 1: rejected by the provider. Key 2: billing, out of credit."
     )
     assert exhausted.headline == "groq: no usable key for fake-no-tools"
-    assert exhausted.message == ("groq: no usable key for fake-no-tools. " + exhausted.description)
+    assert str(exhausted) == ("groq: no usable key for fake-no-tools. " + exhausted.description)
     for key in KEYS:
-        assert key not in exhausted.message
+        assert key not in str(exhausted)
     # No key can work until someone fixes it: the provider is flagged, as before.
     provider = await env.providers.get_provider_by_id(env.model.provider_id)
     assert provider.status == "needs_attention"
-    assert provider.status_detail == exhausted.message
+    assert provider.status_detail == str(exhausted)
 
 
 async def test_daily_limits_exhaust_the_keys_without_flagging_the_provider(
@@ -136,7 +137,7 @@ async def test_daily_limits_exhaust_the_keys_without_flagging_the_provider(
         await env.caller.call(env.model, HI, [], _noop)
 
     assert [key.status for key in raised.value.keys] == ["exhausted_daily", "exhausted_daily"]
-    assert "Key 1: daily limit reached (since 14:04 UTC)." in raised.value.message
+    assert "Key 1: daily limit reached (since 14:04 UTC)." in str(raised.value)
     provider = await env.providers.get_provider_by_id(env.model.provider_id)
     assert provider.status == "ok"
 

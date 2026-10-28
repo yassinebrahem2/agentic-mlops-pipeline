@@ -281,35 +281,6 @@ async def test_exhausted_again_after_try_again_asks_a_second_stall(
     await env.session.manager.close()
 
 
-async def test_compaction_out_of_keys_fails_the_turn_without_a_stall(
-    env: StallEnv, fake_openai: RunningFake
-) -> None:
-    # Three earlier turns past 75% of the model's context window: the turn compacts first.
-    session_id = await env.session.store.session_id(env.project_id, "orchestrator")
-    for _ in range(3):
-        await env.session.store.add_message(
-            env.project_id,
-            session_id,
-            author_kind="user",
-            author_name="user",
-            parts=[TextPart(type="text", text="x" * 40_000)],
-            status="complete",
-        )
-    fake_openai.state.script_for_key(KEY, ["401"])
-    stream = await opened_stream(env.session)
-
-    await env.session.manager.send(env.project_id, "orchestrator", "hi")
-    ended = _ended(await collect_until_turn_ended(stream))
-
-    assert (ended.data.status, ended.data.error_kind) == ("failed", "keys_exhausted")
-    assert "Provide a concise summary" in str(fake_openai.state.requests[-1]["messages"])
-    assert await env.stalls(ended.data.turn_id) == []
-    assert await env.event_payloads("turn.stalled") == []
-    message = await env.agent_message(ended.data.turn_id)
-    assert (message.status, message.error_kind) == ("complete", "keys_exhausted")
-    await env.session.manager.close()
-
-
 async def test_a_tool_approval_and_a_stall_in_one_turn_do_not_interfere(
     tmp_path: Path,
     paths: DataPaths,
