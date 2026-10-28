@@ -20,7 +20,7 @@ from mlops_agents.storage.tables import integrations
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.tasks.helpers import FakeEventLog, cmd, create_session, settings
 from tests.agents.tools.test_pull_request import git_instead_of, make_bare_remote
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
 from tests.integrations.test_github_auth import FakeGh
 
@@ -67,7 +67,9 @@ async def setup_sync_test(
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     runner = GitRunner(paths.bin, github.token)
-    workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(
+        settings(paths), paths, databases, runner, github, http, memory_project_secrets(databases)
+    )
     project = await workspace.add_local(str(repo))
     events = events or FakeEventLog()
 

@@ -657,7 +657,18 @@
               "wakeup.scheduled",
               "sandbox.build.started",
               "sandbox.build.finished",
-              "sandbox.build.failed"
+              "sandbox.build.failed",
+              "connection.created",
+              "connection.updated",
+              "connection.deleted",
+              "tracking.synced",
+              "proposal.created",
+              "proposal.decided",
+              "handoff.approved",
+              "turn.stalled",
+              "turn.resumed",
+              "note.saved",
+              "note.deleted"
             ],
             "title": "Type",
             "type": "string"
@@ -979,6 +990,18 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "error_kind": {
+            "anyOf": [
+              {
+                "const": "keys_exhausted",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Kind"
           },
           "from_agent": {
             "anyOf": [
@@ -1403,6 +1426,11 @@
           "base_url": {
             "title": "Base Url",
             "type": "string"
+          },
+          "cooldown_minutes": {
+            "default": 15,
+            "title": "Cooldown Minutes",
+            "type": "integer"
           },
           "id": {
             "title": "Id",
@@ -2130,6 +2158,18 @@
               }
             ],
             "title": "Error"
+          },
+          "error_kind": {
+            "anyOf": [
+              {
+                "const": "keys_exhausted",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Kind"
           },
           "status": {
             "enum": [

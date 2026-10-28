@@ -14,7 +14,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -88,6 +88,7 @@ async def _harness(paths: DataPaths, databases: Databases, bare: Path) -> Harnes
         GitRunner(paths.bin, github.token),
         github,
         http,
+        memory_project_secrets(databases),
         remote_url=lambda _: bare.as_uri(),
     )
     return Harness(service, github, gh, keystore, revoked)

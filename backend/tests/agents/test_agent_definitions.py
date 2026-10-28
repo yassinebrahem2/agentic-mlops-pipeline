@@ -34,7 +34,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
@@ -49,72 +49,73 @@ NAME_MAP: dict[str, str] = {
     "Alert Prioritization": "alert-prioritization",
 }
 
-_CHAT_AGENTS: tuple[str, ...] = (
-    "orchestrator",
-    "onboarding",
-    "data-quality",
-    "model-performance",
-    "retraining",
-    "deployment",
-)
-
 
 def load_spec_table_data() -> list[dict[str, Any]]:
     spec_path = (
         Path(__file__).resolve().parents[3]
         / "docs/superpowers/specs/2026-10-24-stage-2-agent-runtime-design.md"
     )
-    sec = (
-        spec_path.read_text(encoding="utf-8")
-        .split("## 9. The seven agents", 1)[1]
-        .split("\n## ", 1)[0]
-    )
-    data_lines = [ln.strip() for ln in sec.splitlines() if ln.strip().startswith("|")][2:]
+    lines = spec_path.read_text(encoding="utf-8").splitlines()
+    in_s9 = False
+    table_lines: list[str] = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("## 9. The seven agents"):
+            in_s9 = True
+            continue
+        if in_s9:
+            if s.startswith("## "):
+                break
+            if s.startswith("|"):
+                table_lines.append(s)
+
+    data_lines = table_lines[2:]
     if len(data_lines) != 7:
         raise AssertionError(f"Expected exactly 7 rows in spec table, got {len(data_lines)}")
 
-    rows: list[dict[str, Any]] = [
-        {
-            "display_name": c[0],
-            "name": NAME_MAP[c[0]],
-            "chat": c[1].lower() == "yes",
-            "raw_tools": c[2],
-            "raw_msg": c[3],
-            "schedules": c[4].lower() == "yes",
-            "status_board": (NAME_MAP[c[0]] == "orchestrator"),
-        }
-        for c in ([col.strip() for col in r.split("|")[1:-1]] for r in data_lines)
-    ]
+    parsed_rows: list[dict[str, Any]] = []
+    for row in data_lines:
+        cols = [c.strip() for c in row.split("|")[1:-1]]
+        agent_display = cols[0]
+        if agent_display not in NAME_MAP:
+            raise AssertionError(f"Unmapped agent display name: {agent_display!r}")
+        parsed_rows.append(
+            {
+                "display_name": agent_display,
+                "name": NAME_MAP[agent_display],
+                "chat": cols[1].lower() == "yes",
+                "raw_tools": cols[2],
+                "raw_msg": cols[3],
+                "schedules": cols[4].lower() == "yes",
+                "status_board": (NAME_MAP[agent_display] == "orchestrator"),
+            }
+        )
 
-    all_agents = [r["name"] for r in rows]
-    chat_agents = [r["name"] for r in rows if r["chat"]]
+    all_agents = [r["name"] for r in parsed_rows]
+    chat_agents = [r["name"] for r in parsed_rows if r["chat"]]
+
     result: list[dict[str, Any]] = []
     prev_tools: tuple[str, ...] = ()
-    base_tools = (
-        "Read",
-        "Glob",
-        "Grep",
-        "Write",
-        "Edit",
-        "Bash",
-        "StartTask",
-        "ResumeTask",
-        "OpenPullRequest",
-        "SearchIssues",
-        "OpenIssue",
-        "CommentOnIssue",
-        "ListAgents",
-        "SendMessage",
-    )
-    for r in rows:
+    for r in parsed_rows:
         raw_tools = r["raw_tools"]
         if raw_tools.lower() == "same":
             tools = prev_tools
         elif "all general tools" in raw_tools.lower():
-            tools = base_tools + (("ScheduleWakeup",) if r["schedules"] else ())
+            base = ("Read", "Glob", "Grep", "Write", "Edit", "Bash", "StartTask", "ResumeTask")
+            rest = (
+                "OpenPullRequest",
+                "SearchIssues",
+                "OpenIssue",
+                "CommentOnIssue",
+                "ListAgents",
+                "SendMessage",
+            )
+            tools = base + rest + (("ScheduleWakeup",) if r["schedules"] else ())
         else:
             tools = tuple(t.strip() for t in raw_tools.split(",") if t.strip())
-        assert tools and tools[0] == "Read", f"Tools for {r['name']} must start with 'Read'"
+
+        if not tools or tools[0] != "Read":
+            raise AssertionError(f"Tools for {r['name']} must start with 'Read', got {tools}")
         prev_tools = tools
 
         raw_msg = r["raw_msg"]
@@ -123,6 +124,10 @@ def load_spec_table_data() -> list[dict[str, Any]]:
         elif raw_msg == "all chat agents":
             can_msg = tuple(a for a in chat_agents if a != r["name"])
         else:
+            for p in raw_msg.split(","):
+                p_clean = p.strip()
+                if p_clean and p_clean not in NAME_MAP:
+                    raise AssertionError(f"Unmapped agent in May message: {p_clean!r}")
             can_msg = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(",") if p.strip())
         result.append({**r, "tools": tools, "can_message": can_msg})
     return result
@@ -152,8 +157,10 @@ def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
     assert len(defn.prompt.splitlines()) < 60, f"{defn.name} prompt exceeds 60 lines"
     low = defn.prompt.lower()
     assert "how to work:" in low or "how to work" in low, f"{defn.name} missing 'How to work'"
-    guidance = "starttask" if defn.chat else "monitoring loop"
-    assert guidance in low or "stage 4" in low, f"{defn.name} missing task/loop guidance"
+    if defn.chat:
+        assert "starttask" in low, f"{defn.name} missing StartTask guidance"
+    else:
+        assert "monitoring loop" in low or "stage 4" in low, f"{defn.name} missing loop guidance"
     assert "not available yet" in low, f"{defn.name} missing 'not available yet'"
 
 
@@ -246,6 +253,7 @@ _BASE_URLS = {
 
 
 @pytest.mark.live
+@pytest.mark.timeout(300)
 async def test_live_agent_definitions(
     tmp_path: Path,
     paths: DataPaths,
@@ -260,7 +268,7 @@ async def test_live_agent_definitions(
     provider_name, separator, wire_id = live_model.partition(":")
     if not separator or not wire_id:
         pytest.fail(
-            "MLOPS_AGENTS_LIVE_MODEL must be 'provider:model', e.g. groq:openai/gpt-oss-20b"
+            "MLOPS_AGENTS_LIVE_MODEL must be 'provider:model', e.g. groq:llama-3.3-70b-versatile"
         )
     base_url = _BASE_URLS.get(provider_name)
     if base_url is None:
@@ -273,10 +281,12 @@ async def test_live_agent_definitions(
     repo = make_repo(tmp_path / "repo", {"README.md": "Initial README\n"}, git_env)
     app_settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
 
-    async with httpx2.AsyncClient(timeout=60.0) as http:
+    async with httpx2.AsyncClient(timeout=120.0) as http:
         github = GitHubAuth(databases, keystore, http, FakeGh(None))
         runner = GitRunner(paths.bin, github.token)
-        workspace_svc = WorkspaceService(app_settings, paths, databases, runner, github, http)
+        workspace_svc = WorkspaceService(
+            app_settings, paths, databases, runner, github, http, memory_project_secrets(databases)
+        )
         events = SqliteEventLog(databases)
         project = await workspace_svc.add_local(str(repo))
         await set_permission_level(databases, project.id, "autonomous")
@@ -296,7 +306,9 @@ async def test_live_agent_definitions(
         await providers_svc.add_key(prov.name, key_val)
         await providers_svc.add_model(ModelCreate(provider=provider_name, wire_model_id=wire_id))
         await providers_svc.verify_model(live_model)
-        for agent in _CHAT_AGENTS:
+
+        chat_agents = [d.name for d in catalog.all() if d.chat]
+        for agent in chat_agents:
             await agent_settings.set_default_model(agent, live_model)
 
         manager = SessionManager(
@@ -314,7 +326,7 @@ async def test_live_agent_definitions(
             status_board=SqliteStatusBoard(catalog, events),
         )
 
-        for agent in _CHAT_AGENTS:
+        for agent in chat_agents:
             start = await manager.get(project.id, agent)
             sub = manager.subscribe(project.id, agent, after_seq=start.last_seq)
             prompt = (
@@ -338,10 +350,15 @@ async def test_live_agent_definitions(
             print(f"\nLive model response from {agent}:\n{text}\n")
             assert len(text) > 0
 
-        # Chat agent called one of its tools
+        # Tool-using agent called one of its own tools
+        orch_defn = catalog.get("orchestrator")
         orch_view = await manager.get(project.id, "orchestrator")
-        has_tool_call = any(p.type == "tool_call" for m in orch_view.messages for p in m.parts)
-        assert has_tool_call, "Chat agent did not call any tool"
+        has_tool_call = any(
+            p.type == "tool_call" and p.name in orch_defn.tools
+            for m in orch_view.messages
+            for p in m.parts
+        )
+        assert has_tool_call, "Orchestrator did not call any of its own tools"
 
         # Task was started
         task = await tasks_svc.current(project.id, "orchestrator")
@@ -361,6 +378,3 @@ async def test_live_agent_definitions(
         )
 
         await manager.close()
-
-
-test_live_orchestrator_adds_line_to_readme = test_live_agent_definitions

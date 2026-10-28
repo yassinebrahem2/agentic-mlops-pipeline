@@ -27,6 +27,7 @@ from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
 from mlops_agents.credentials import KeyStore, open_keystore
+from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import StatusBoard
@@ -51,6 +52,7 @@ class Services:
     paths: DataPaths
     databases: Databases
     keystore: KeyStore
+    project_secrets: ProjectSecrets
     providers: ProvidersService
     github: GitHubAuth
     workspace: WorkspaceService
@@ -121,7 +123,9 @@ async def build_services(
 
     github = GitHubAuth(databases, keystore, http, gh if gh is not None else GhCli())
     git = GitRunner(paths.bin, token_provider=github.token)
-    workspace = WorkspaceService(settings, paths, databases, git, github, http)
+    # The one instance: every consumer of project secrets gets it through its constructor.
+    project_secrets = ProjectSecrets(keystore, databases)
+    workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
     providers = ProvidersService(databases, keystore, http)
 
     async def secret_source() -> list[str]:
@@ -212,6 +216,7 @@ async def build_services(
         paths=paths,
         databases=databases,
         keystore=keystore,
+        project_secrets=project_secrets,
         providers=providers,
         github=github,
         workspace=workspace,
