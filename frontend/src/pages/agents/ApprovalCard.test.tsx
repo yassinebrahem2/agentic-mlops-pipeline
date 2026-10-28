@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api } from "@/lib/api";
 import { ApprovalCard, type ApprovalPart } from "./ApprovalCard";
+import { CARD_FOR_KIND, CARD_FOR_PROPOSAL, type ApprovalCardComponent } from "./approvalCards";
 
 describe("ApprovalCard", () => {
   let postSpy: MockInstance | undefined;
@@ -28,6 +29,7 @@ describe("ApprovalCard", () => {
     },
     note: null,
     type: "approval",
+    kind: "tool",
   };
 
   it("renders text kind preview", () => {
@@ -226,5 +228,90 @@ describe("ApprovalCard", () => {
       expect(approveButton).toBeDisabled();
     });
     expect(rejectButton).toBeDisabled();
+  });
+});
+
+describe("ApprovalCard dispatch", () => {
+  const RegisteredCard: ApprovalCardComponent = ({ approval, projectId }) => (
+    <div>
+      Registered card for {approval.approval_id} in {projectId}
+    </div>
+  );
+
+  const toolApproval: ApprovalPart = {
+    type: "approval",
+    approval_id: "apr_tool",
+    tool_call_id: "tc_1",
+    status: "pending",
+    preview: { title: "Write NOTES.md", kind: "text", body: "Sample note text" },
+    note: null,
+    kind: "tool",
+  };
+  const stall: ApprovalPart = {
+    type: "approval",
+    approval_id: "apr_stall",
+    tool_call_id: null,
+    status: "pending",
+    preview: { title: "Stalled: no usable key", kind: "text", body: "key 1: limited" },
+    note: null,
+    kind: "stall",
+    step: 2,
+  };
+
+  afterEach(() => {
+    delete CARD_FOR_KIND.stall;
+    delete CARD_FOR_PROPOSAL.handoff;
+  });
+
+  it("renders the generic card for a tool approval", () => {
+    render(<ApprovalCard approval={toolApproval} toolName="Write" projectId="prj_1" />);
+
+    expect(screen.getByText("Write NOTES.md")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+
+  it("renders the generic card for a stall while no stall card is registered", () => {
+    render(<ApprovalCard approval={stall} projectId="prj_1" />);
+
+    expect(screen.getByText("Stalled: no usable key")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+
+  it("renders the registered card for a stall", () => {
+    CARD_FOR_KIND.stall = RegisteredCard;
+
+    render(<ApprovalCard approval={stall} projectId="prj_1" />);
+
+    expect(screen.getByText("Registered card for apr_stall in prj_1")).toBeInTheDocument();
+    expect(screen.queryByText("Stalled: no usable key")).not.toBeInTheDocument();
+  });
+
+  it("renders the card registered for a proposal kind, and the generic card for another", () => {
+    CARD_FOR_PROPOSAL.handoff = RegisteredCard;
+
+    const { rerender } = render(
+      <ApprovalCard
+        approval={{ ...toolApproval, approval_id: "apr_h", proposal_kind: "handoff" }}
+        projectId="prj_1"
+      />,
+    );
+    expect(screen.getByText("Registered card for apr_h in prj_1")).toBeInTheDocument();
+
+    rerender(
+      <ApprovalCard
+        approval={{ ...toolApproval, approval_id: "apr_c", proposal_kind: "connections" }}
+        projectId="prj_1"
+      />,
+    );
+    expect(screen.getByText("Write NOTES.md")).toBeInTheDocument();
+    expect(screen.queryByText(/Registered card/)).not.toBeInTheDocument();
+  });
+
+  it("renders nothing for a registered card while no project is known", () => {
+    CARD_FOR_KIND.stall = RegisteredCard;
+
+    const { container } = render(<ApprovalCard approval={stall} />);
+
+    expect(container).toBeEmptyDOMElement();
   });
 });
