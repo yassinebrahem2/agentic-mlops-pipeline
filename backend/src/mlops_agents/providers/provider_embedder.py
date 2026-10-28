@@ -10,7 +10,12 @@ import httpx2
 from mlops_agents.providers.bridge import build_embeddings
 from mlops_agents.providers.embedder import EmbedderUnavailable
 from mlops_agents.providers.errors import classify
-from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover, RateLimited
+from mlops_agents.providers.failover import (
+    AllKeysExhausted,
+    KeyFailover,
+    RateLimited,
+    no_usable_key,
+)
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 
@@ -63,9 +68,8 @@ class ProviderEmbedder:
             )
         except AllKeysExhausted as exc:
             desc = self._failover.describe_keys(exc.keys)
-            raise EmbedderUnavailable(
-                f"{self._provider.name}: no usable key for {self._wire_model_id}. {desc}"
-            ) from exc
+            headline = no_usable_key(self._provider.name, self._wire_model_id)
+            raise EmbedderUnavailable(f"{headline}. {desc}") from exc
         except RateLimited as exc:
             raise EmbedderUnavailable(
                 f"Every key of {self._provider.name} is rate-limited right now; search uses full text."

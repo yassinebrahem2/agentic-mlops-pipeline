@@ -39,6 +39,12 @@ class KeyState(BaseModel):
     since: datetime | None  # when the key became exhausted, or was last limited; None when ok
 
 
+def no_usable_key(provider_name: str, model: str) -> str:
+    """The one wording of the headline when no key of a provider works for a model: the failed
+    turn's text, the stall card's title and the embedder's error (Decision #398)."""
+    return f"{provider_name}: no usable key for {model}"
+
+
 class AllKeysExhausted(Exception):
     def __init__(self, keys: list[KeyState]) -> None:
         super().__init__("Every key of the provider is exhausted for this model.")

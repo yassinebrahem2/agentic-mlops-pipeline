@@ -19,6 +19,7 @@ from mlops_agents.providers.failover import (
     KeyFailover,
     KeyState,
     StreamedTextFailure,
+    no_usable_key,
 )
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
@@ -53,7 +54,9 @@ class ModelKeysExhausted(TurnFailed):
     def __init__(
         self, *, provider: Provider, model: str, keys: list[KeyState], description: str
     ) -> None:
-        super().__init__(f"{provider.name}: no usable key for {model}. {description}", _EXHAUSTED)
+        headline = no_usable_key(provider.name, model)
+        super().__init__(f"{headline}. {description}", _EXHAUSTED)
+        self.headline = headline
         self.provider_id = provider.id
         self.model = model
         self.keys = keys

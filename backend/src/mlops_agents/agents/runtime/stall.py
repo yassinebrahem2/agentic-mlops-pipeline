@@ -27,8 +27,6 @@ __all__ = [
     "stall_part",
 ]
 
-_STALL_TITLE = "Stalled: no usable key"
-
 
 @dataclass(frozen=True)
 class StallState:
@@ -48,7 +46,8 @@ def pending_stall(stall: StallState | None) -> StallState | None:
 
 
 def _stall_preview(exhausted: ModelKeysExhausted) -> Preview:
-    return Preview(kind="text", title=_STALL_TITLE, body=exhausted.description)
+    # The title names the provider and the model (Decision #398); the body is the key lines.
+    return Preview(kind="text", title=exhausted.headline, body=exhausted.description)
 
 
 def stall_part(stall: StallState) -> ApprovalPart:

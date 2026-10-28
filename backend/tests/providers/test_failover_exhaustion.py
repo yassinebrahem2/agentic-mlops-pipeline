@@ -15,6 +15,7 @@ from mlops_agents.providers.failover import (
     KeyState,
     KeyStatus,
     RateLimited,
+    no_usable_key,
 )
 from mlops_agents.providers.models import Provider
 from tests.api.conftest import started_app
@@ -242,6 +243,10 @@ def test_describe_keys_names_keys_by_position_never_by_value(failover: KeyFailov
         "Key 5: ok."
     )
     assert not any(value in text for value in KEY_VALUES)
+
+
+def test_no_usable_key_names_the_provider_and_the_model() -> None:
+    assert no_usable_key("groq", "llama-3.3-70b") == "groq: no usable key for llama-3.3-70b"
 
 
 async def test_all_keys_exhausted_names_no_key_value(failover: KeyFailover) -> None:

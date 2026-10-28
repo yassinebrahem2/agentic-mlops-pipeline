@@ -118,6 +118,7 @@ async def test_every_key_exhausted_before_text_raises_model_keys_exhausted(
     assert exhausted.description == (
         "Key 1: rejected by the provider. Key 2: billing, out of credit."
     )
+    assert exhausted.headline == "groq: no usable key for fake-no-tools"
     assert exhausted.message == ("groq: no usable key for fake-no-tools. " + exhausted.description)
     for key in KEYS:
         assert key not in exhausted.message

@@ -85,7 +85,8 @@ async def test_every_key_exhausted_pauses_the_turn_on_one_stall(
     _, events, turn_id = await send_until_waiting(env, "hi")
 
     [stall] = await env.stalls(turn_id)
-    preview = Preview(kind="text", title="Stalled: no usable key", body=REJECTED)
+    # The title names the provider and the model (Decision #398).
+    preview = Preview(kind="text", title="fake: no usable key for fake-tools", body=REJECTED)
     assert (stall.status, stall.step, stall.tool_call_id, stall.preview) == (
         "pending",
         0,
