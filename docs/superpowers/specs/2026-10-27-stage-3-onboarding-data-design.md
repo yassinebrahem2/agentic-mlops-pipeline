@@ -131,7 +131,7 @@ class ConnectionKind(Protocol):
 
 - Whether a task container can reach a service on the host bound to 127.0.0.1 (Docker Desktop on Windows, `host.docker.internal`, network on) is measured by a named test in this stage's sandbox plan; the demo's MLflow address follows from it.
 - Each connection with a mount is bind-mounted read-only into every task container of the project at `/data/<connection name>`, next to the worktree. A container's fingerprint gains its mounts, so changing connections recreates the project's containers at their next Bash call (today only the image tag and the network flag are compared).
-- The environment image installs DuckDB (the Python package and the CLI) outside `/workspace`, at the app's DuckDB version: 2.0.0, from one constant.
+- The environment image installs the DuckDB CLI outside `/workspace`, at the app's DuckDB version: 2.0.0, from one constant. Not the Python package (changed 2026-10-28, #405's review): installing it into the team's environment would override the DuckDB version the team pins, so their code would run against another library in the sandbox than in production, and DuckDB 2.0.0 needs Python 3.11 or later, which would break the image of a project on an older Python. The CLI is a static binary that needs neither. The app's own data summary uses the Python package on the host, in the app's environment.
 - Agents explore data with Bash: `duckdb`, pandas, or the project's own code, on `/data/...`. Bash output stays capped as in stage 2, which keeps a whole table out of the context; the container's memory limit (4 GB) stays.
 
 ## 6. Context hooks
