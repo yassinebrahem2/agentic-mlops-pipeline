@@ -43,6 +43,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.observer import ProposalApprovalObserver
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
@@ -235,6 +236,12 @@ async def build_services(
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
     handoffs = SqliteHandoffs(databases)
+
+    proposal_observer = ProposalApprovalObserver(proposals, approvals, workspace)
+    approvals.add_observer(proposal_observer)
+
+    for project in await workspace.list_projects():
+        await proposals.recover(project.id)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
