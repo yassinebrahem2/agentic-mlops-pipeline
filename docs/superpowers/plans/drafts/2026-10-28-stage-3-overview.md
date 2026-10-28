@@ -125,6 +125,7 @@ class Connections(Protocol):        # connections
     async def mounts(self, project_id: str) -> list[Mount]: ...
 ```
 
+- The findings' text is the backend's (`Finding.reason`); connections owns the one frontend component that shows findings (`SecretFilesWarning`), which the proposals' connections card imports.
 - Relative paths are refused, and so are a folder inside the app's data folder and a folder that contains it. Local folders work in both run modes: in server mode they are folders on the server, picked with the server-side folder browser; connections task 1 lifts the server-mode refusal from `GET /api/folders` (`WorkspaceService.browse`, its one change in `workspace/`), which stays behind the session like every route.
 - Routes (connections): `GET/POST /api/projects/{id}/connections`, `POST .../connections/inspect`, `PATCH/DELETE .../connections/{con}`, `GET .../connections/{con}/tables`. Route (data-summary): `GET .../connections/{con}/tables/{table}` returning `TableDetail`.
 

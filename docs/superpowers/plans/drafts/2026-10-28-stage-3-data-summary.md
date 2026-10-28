@@ -19,12 +19,12 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | The hook registry, the injection point and `status_board` | contracts task 1 |
-| 2 | The locked DuckDB session and the table profile | contracts task 1 |
-| 3 | The result cache | task 2 |
+| 2 | The locked DuckDB session and the table profile | contracts task 1, connections task 1 |
+| 3 | The result cache | task 2, connections task 1 |
 | 4 | The `data_summary` hook | tasks 1 to 3, connections task 1 |
 | 5 | The table-detail route | task 4 |
 
-Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking and knowledge plans register their hooks on the registry.
+Task 1 starts after contracts task 1 only; tasks 2 to 5 also wait for connections task 1 (the overview's Starts). Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking and knowledge plans register their hooks on the registry.
 
 ---
 
