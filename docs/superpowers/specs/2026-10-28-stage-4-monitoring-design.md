@@ -66,7 +66,12 @@ backend/src/mlops_agents/
 - `mlflow`: metric points from the tracking record.
 - `job`: job runs the team records in a file (as many schedulers write logs) or CI.
 
-**Parsers.** A source's raw output is turned into standard records by a parser. Agents' checks write standard records directly and need no parser. For the team's existing monitoring, Onboarding (or Data Quality) writes a small parser per source, tests it in the sandbox on real outputs, and proposes it (proposal kind `parser`, §9). Approved parsers are stored versioned in `project.db` and run in the sandbox over the read-only connection mount, with no network and a time limit; their output is validated against the standard record before it is stored. A parser that fails or produces invalid records raises an `operational` signal about itself.
+**Parsers.** A source's raw output is turned into standard records by a parser. Agents' checks write standard records directly and need no parser. For the team's existing monitoring, Onboarding (or Data Quality) writes a parser per source, tests it on real outputs, and proposes it (proposal kind `parser`, §9). Approved parsers are stored versioned in `project.db`.
+- **A mapping first.** A parser is declarative: field paths or column names for each standard field, an optional pattern for log lines, and a "fired when" expression over the mapped fields. The app evaluates it itself, with no code and no Docker, so reading never depends on the sandbox.
+- **Code only when a mapping cannot express it.** Then the parser is a small script run in the sandbox over the read-only mount, with no network and a time limit.
+- Either way, the output is validated against the standard record before it is stored. A parser that fails or produces invalid records raises an `operational` signal about itself; a code parser that cannot run (Docker down) does too.
+
+**Catching up never pages anyone for the past.** After downtime, a signal whose condition has already cleared becomes an incident marked "resolved while the app was offline": it wakes no one and goes into the next report. Only conditions still true notify. Detection time counts from `seen_at`, honestly.
 
 **Reading never misses or repeats.** Each source keeps a cursor (its last data version, run ID or time). Records are idempotent by source and source key. After downtime the scheduler reads every source from its cursor, oldest first, before the live loop resumes; nothing is dropped and nothing is counted twice.
 
@@ -95,7 +100,7 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 
 **Signals** (`sig`): a fired result, a silence, a failed job or run, a parser failure. Each keeps its source record.
 
-**Grouping.** A new signal joins an open incident when it shares a cause key (the same table, feed, job or model version) within a window (a setting); otherwise it opens a new incident. The diagnosing agent can merge or split incidents (tools below).
+**Grouping.** A new signal joins an open incident when it shares a cause key (the same table, feed, job or model version) within a window (a setting), **or when its subject is downstream of the incident's subject in the pipeline graph** from the handoff (one upstream schema change that breaks scoring, shifts three columns and drops a metric is one incident). Otherwise it opens a new incident. The diagnosing agent can merge or split incidents (tools below).
 
 **The incident** (`inc`): category (data quality, drift, model performance, operational), subtype (schema change, late feed, null spike, input drift, label shift, concept drift, failed training, bad deploy, failed scoring, silence, ...), severity (§7), status, cause (the agent's diagnosis), the signals, the timeline (every agent action, notification, decision and verdict), the related PRs and issues, `started_at` (the earliest signal's `ran_at`), `detected_at`, `acknowledged_at`, `mitigated_at`, `resolved_at`.
 
@@ -117,8 +122,10 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
   4. roll back or fall back;
   5. rerun a job that is safe to rerun;
   6. retrain or deploy something new.
-- **Action hooks.** Responses 3 to 6 run only the team's commands from the handoff, registered as action hooks (`hok`), each with its kind (rollback, rerun, hold, fall back, train, deploy) and command. A hook runs in the sandbox with the network and credentials the user granted for it. Running a hook is risk class `deploy`.
-- **Pre-approved rules** (`rul`), proposed by agents and approved by the user (proposal kind `rule`, §9): a condition on standard results (for example "after a deploy, the prediction distribution shifts past X"), the hook it allows (only kinds rollback, rerun, hold, fall back), and limits (at most once per incident, per day). When an incident's evidence matches an approved rule, the agent may run that hook without asking, at any level except `suggest`, and the incident's timeline says which rule allowed it. Without a matching rule, the hook asks as `deploy` does.
+- **Action hooks.** Responses 3 to 6 run only the team's commands from the handoff, registered as action hooks (`hok`), each with its kind (rollback, rerun, hold, fall back, train, deploy) and command. Running a hook is risk class `deploy`.
+- **Hook credentials.** A hook that writes to the team's systems (a rollback moving the tracker's production alias) has its own credential, entered by the user through a keystore route like a tracker credential. It is injected only into that hook's own container run, never into the agent's Bash, so the sandbox still never writes to the tracker on its own (stage 3).
+- **Hold** is tier 1: the app records the hold on the incident and, when the team registered a hold or quarantine command, runs it (blocking a promotion, quarantining a batch) without asking. When the team has no such command, a hold is a notification only; the first audit reports the missing command as a gap.
+- **Pre-approved rules** (`rul`), proposed by agents and approved by the user (proposal kind `rule`, §9): a condition over standard result records (check IDs, values, thresholds, a time window), the hook it allows (only kinds rollback, rerun, fall back), and limits (at most once per incident, per day). When an agent runs a hook citing a rule, **the gate evaluates the rule's condition in code against the stored records**; only when it holds, and the limits allow, does the hook run without asking (at any level except `suggest`). The agent can cite a rule; it can never certify one. The incident's timeline records the rule and the records that satisfied it. Otherwise the hook asks as `deploy` does.
 - **A human always decides** a train or deploy hook (tier 3): it always asks, `bypass` included, like `propose`. At night it waits for the person; the morning report lists it.
 - After a deploy, the deployment agent compares the new version with the previous one on recent production inputs (both loaded from the tracker, scored in the sandbox) and on early labels with their counts; clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
 
@@ -141,6 +148,8 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 ## 8. Notifications and the morning report
 
 - **Channels:** Discord (a webhook URL) and email (SMTP: host, port, user, sender; the password in the keystore), set in Integrations with a Test button. A message carries the incident's title, severity, cause, what was done, what waits for a person, and a link to it in the app.
+- **Links.** Links use the app's `public_url` setting (server mode, behind HTTPS). In local mode the app is reachable only from its own machine, so a phone cannot open the link; the message says so and carries the full summary.
+- **"Waking" someone** is a Discord mention and an email marked urgent; whether it rings depends on the person's phone settings, which the Integrations page tells them.
 - **On-call:** people from the handoff (name, Discord mention or email, hours, time zone, escalation order), editable in project settings.
 - **The morning report**, at a set time per person: incidents since the last report, what agents did and why (each with the rule or approval behind it), what waits for a person, and expectations that were suspended by maintenance.
 - A notification that fails to send is retried and recorded; a channel failing repeatedly raises an `operational` incident in the app.
@@ -175,8 +184,14 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
 - ID prefixes `res` (result), `sig` (signal), `inc` (exists), `rul` (rule), `hok` (action hook), `win` (maintenance window).
 - Stage 4 "Agreed" rewritten from this spec: checks in the team's repository, delivered by PR; results read through sources and parsers; silence as a signal; the three tiers and the response menu; severity and routing; the baseline as the team's existing monitoring, read not re-run.
-- Risk classes: running an action hook is `deploy`; a train or deploy hook asks at every level, `bypass` included; a hook allowed by an approved rule runs without asking at `ask` and above. The policy table gains these exceptions.
-- Stage 5's "train/deploy hooks" become the action hooks of this stage; stage 5 adds Retraining and Deployment & Rollback behavior on top.
+- Risk classes, `deploy` exceptions, as one table in the roadmap:
+
+  | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
+  |---|---|---|
+  | train, deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
+  | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
+  | hold | runs without asking at every level except `suggest` (tier 1) | same |
+- Stage 5's "train/deploy hooks" become the action hooks of this stage. Stage 5 keeps Retraining's and Deployment & Rollback's behavior (when to propose a retrain, evaluating a candidate against production, promotion) and the Deployments page.
 
 ## 13. Error handling
 
