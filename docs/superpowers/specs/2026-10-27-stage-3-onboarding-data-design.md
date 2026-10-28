@@ -187,6 +187,7 @@ class ConnectionKind(Protocol):
 **`connections` payload:** the connections to create (kind, name, settings) and why each, from what Onboarding found in the code and heard from the user. Applying creates them (§4).
 
 **`handoff` payload** (needs the project's connections to exist):
+- **Models:** a project can have several production models; the profile below, the data roles' prediction and label tables, the commands and the promotion mode are given per model (one model is the common case).
 - **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive, how the model is served (`batch`, `online` or `streaming`), the cost of each kind of error (a false alarm against a miss, in the user's words and as a ratio when known), and the groups that matter (columns and values, such as a region or customer type, whose metrics are watched separately).
 - **Data roles:** per table of the connections: `training`, `serving_inputs` (the model's raw inputs as served), `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
 - **Tracking:** the sources to create (MLflow URL and whether it needs a credential; the GitHub workflows that matter).
