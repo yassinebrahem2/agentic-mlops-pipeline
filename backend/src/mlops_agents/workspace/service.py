@@ -164,7 +164,6 @@ class WorkspaceService:
         return await self.get(project_id)
 
     async def browse(self, path_text: str | None) -> FolderListing:
-        self._require_local_mode()
         return await browse_folder(path_text)
 
     # GitHub projects

@@ -558,6 +558,96 @@
         "title": "BackupResult",
         "type": "object"
       },
+      "ConnectionView": {
+        "properties": {
+          "data_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Version"
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "unreachable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Detail"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "settings",
+          "status",
+          "status_detail",
+          "findings",
+          "data_version"
+        ],
+        "title": "ConnectionView",
+        "type": "object"
+      },
+      "CreateConnection": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "settings"
+        ],
+        "title": "CreateConnection",
+        "type": "object"
+      },
       "DecisionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -778,6 +868,53 @@
         "title": "EventRecord",
         "type": "object"
       },
+      "Finding": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "title": "Finding",
+        "type": "object"
+      },
+      "Findings": {
+        "properties": {
+          "secret_files": {
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "title": "Secret Files",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "unsupported_files": {
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "title": "Unsupported Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unsupported_files",
+          "secret_files",
+          "truncated"
+        ],
+        "title": "Findings",
+        "type": "object"
+      },
       "FolderEntry": {
         "properties": {
           "is_git_repo": {
@@ -935,6 +1072,25 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InspectConnection": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "settings"
+        ],
+        "title": "InspectConnection",
         "type": "object"
       },
       "IssuesSettings": {
@@ -1929,6 +2085,38 @@
         "title": "SetGitHubToken",
         "type": "object"
       },
+      "TableRef": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "format": {
+            "enum": [
+              "csv",
+              "parquet",
+              "json",
+              "jsonl"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "files",
+          "format"
+        ],
+        "title": "TableRef",
+        "type": "object"
+      },
       "TaskView": {
         "properties": {
           "agent": {
@@ -2350,6 +2538,20 @@
           "turn_id"
         ],
         "title": "TurnWaitingData",
+        "type": "object"
+      },
+      "UpdateConnection": {
+        "properties": {
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "UpdateConnection",
         "type": "object"
       },
       "ValidationError": {
@@ -3824,6 +4026,312 @@
         "summary": "Decide Approval",
         "tags": [
           "approvals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/connections": {
+      "get": {
+        "operationId": "list_connections_api_projects__project_id__connections_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionView"
+                  },
+                  "title": "Response List Connections Api Projects  Project Id  Connections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connections",
+        "tags": [
+          "connections"
+        ]
+      },
+      "post": {
+        "operationId": "create_connection_api_projects__project_id__connections_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Connection",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/connections/inspect": {
+      "post": {
+        "operationId": "inspect_connection_api_projects__project_id__connections_inspect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InspectConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Findings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Connection",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/connections/{connection_id}": {
+      "delete": {
+        "operationId": "delete_connection_api_projects__project_id__connections__connection_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Connection",
+        "tags": [
+          "connections"
+        ]
+      },
+      "patch": {
+        "operationId": "update_connection_api_projects__project_id__connections__connection_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Connection",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/connections/{connection_id}/tables": {
+      "get": {
+        "operationId": "list_connection_tables_api_projects__project_id__connections__connection_id__tables_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TableRef"
+                  },
+                  "title": "Response List Connection Tables Api Projects  Project Id  Connections  Connection Id  Tables Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connection Tables",
+        "tags": [
+          "connections"
         ]
       }
     },
