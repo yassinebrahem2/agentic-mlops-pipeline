@@ -10,9 +10,19 @@ import pytest
 from mlops_agents.providers.verification import probe_model
 
 if TYPE_CHECKING:
-    from fake_openai import FakeState, RunningFake, start_fake_server
+    from fake_openai import (
+        FakeState,
+        RunningFake,
+        fake_embedding,
+        start_fake_server,
+    )
 else:
-    from tests.fakes.fake_openai import FakeState, RunningFake, start_fake_server
+    from tests.fakes.fake_openai import (
+        FakeState,
+        RunningFake,
+        fake_embedding,
+        start_fake_server,
+    )
 
 
 @pytest.fixture
@@ -292,3 +302,132 @@ async def test_fake_write_ignores_pull_request_text_in_tool_results(
             if "name" in fn:
                 names.append(str(fn["name"]))
     assert names == ["Write"]
+
+
+async def test_fake_openai_models_includes_embedding_models(fake_server: RunningFake) -> None:
+    async with httpx2.AsyncClient(base_url=fake_server.base_url.removesuffix("/v1")) as client:
+        resp = await client.get("/v1/models")
+        assert resp.status_code == 200
+        data: dict[str, Any] = resp.json()
+        models_list: list[dict[str, Any]] = data["data"]
+        model_ids = {m["id"] for m in models_list}
+        assert "fake-embed" in model_ids
+        assert "fake-embed-wide" in model_ids
+        assert "fake-tools" in model_ids
+
+
+def test_fake_embedding_deterministic_and_bag_of_words() -> None:
+    v1 = fake_embedding("a short sentence about model monitoring", 16)
+    v2 = fake_embedding("a short sentence about model monitoring", 16)
+    assert v1 == v2
+    assert len(v1) == 16
+    # Deterministic and normalized
+    norm = sum(x * x for x in v1)
+    assert abs(norm - 1.0) < 1e-5
+
+    # Ranks text sharing words above one that does not
+    query = fake_embedding("model monitoring", 16)
+    shared = fake_embedding("a short sentence about model monitoring", 16)
+    unrelated = fake_embedding("completely unrelated cooking recipe with garlic", 16)
+
+    def dot(a: list[float], b: list[float]) -> float:
+        return sum(x * y for x, y in zip(a, b, strict=True))
+
+    assert dot(query, shared) > dot(query, unrelated)
+
+
+async def test_fake_openai_embeddings_string_and_list(fake_server: RunningFake) -> None:
+    async with httpx2.AsyncClient(base_url=fake_server.base_url.removesuffix("/v1")) as client:
+        # String input for fake-embed (16 dims)
+        resp1 = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "model monitoring"},
+        )
+        assert resp1.status_code == 200
+        body1 = resp1.json()
+        assert body1["object"] == "list"
+        assert body1["model"] == "fake-embed"
+        assert len(body1["data"]) == 1
+        assert body1["data"][0]["index"] == 0
+        assert len(body1["data"][0]["embedding"]) == 16
+        assert body1["data"][0]["embedding"] == fake_embedding("model monitoring", 16)
+
+        # List input for fake-embed-wide (32 dims)
+        resp2 = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed-wide", "input": ["text one", "text two"]},
+        )
+        assert resp2.status_code == 200
+        body2 = resp2.json()
+        assert len(body2["data"]) == 2
+        assert body2["data"][0]["index"] == 0
+        assert body2["data"][1]["index"] == 1
+        assert len(body2["data"][0]["embedding"]) == 32
+        assert len(body2["data"][1]["embedding"]) == 32
+
+
+async def test_fake_openai_embeddings_honors_failures_and_wrong_dimensions(
+    fake_server: RunningFake,
+) -> None:
+    async with httpx2.AsyncClient(base_url=fake_server.base_url.removesuffix("/v1")) as client:
+        # 1. 401 with required_key
+        fake_server.state.required_key = "secret"
+        resp = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp.status_code == 401
+        # Success with auth header
+        resp_auth = await client.post(
+            "/v1/embeddings",
+            headers={"Authorization": "Bearer secret"},
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp_auth.status_code == 200
+        fake_server.state.reset()
+
+        # 2. 401 with auth_fail
+        fake_server.state.auth_fail = True
+        resp_fail = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp_fail.status_code == 401
+        fake_server.state.reset()
+
+        # 3. 429 with rate_limit_remaining
+        fake_server.state.rate_limit_remaining = 1
+        resp_rl = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp_rl.status_code == 429
+        # Second call succeeds
+        resp_ok = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp_ok.status_code == 200
+        fake_server.state.reset()
+
+        # 4. embedding_wrong_dimensions answers that size
+        fake_server.state.embedding_wrong_dimensions = 8
+        resp_wrong = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-embed", "input": "test"},
+        )
+        assert resp_wrong.status_code == 200
+        body = resp_wrong.json()
+        assert len(body["data"][0]["embedding"]) == 8
+        fake_server.state.reset()
+
+
+async def test_fake_openai_embeddings_rejects_chat_model(fake_server: RunningFake) -> None:
+    async with httpx2.AsyncClient(base_url=fake_server.base_url.removesuffix("/v1")) as client:
+        # Chat model name sent to /embeddings gives 404 model_not_found
+        resp = await client.post(
+            "/v1/embeddings",
+            json={"model": "fake-tools", "input": "test"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "model_not_found"

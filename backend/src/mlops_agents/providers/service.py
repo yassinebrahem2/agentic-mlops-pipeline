@@ -24,7 +24,7 @@ from mlops_agents.providers.models import (
     ProviderCreate,
     RemoteModel,
 )
-from mlops_agents.providers.verification import probe_model
+from mlops_agents.providers.verification import probe_embedder, probe_model
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import models as models_table
 from mlops_agents.storage.tables import provider_keys, providers
@@ -208,7 +208,9 @@ class ProvidersService:
         if await self.get_model(address) is not None:
             raise DomainError("model_exists", f"{address} is already added.", status=409)
         context = data.context_window
-        if context is None:
+        if data.model_type == "embedder":
+            context = None
+        elif context is None:
             try:
                 remote = await self.list_remote_models(provider.name)
             except DomainError:
@@ -229,6 +231,8 @@ class ProvidersService:
                     availability="untested",
                     availability_detail=None,
                     verified_at=None,
+                    model_type=data.model_type,
+                    dimensions=None,
                 )
             )
         return await self.require_model(address)
@@ -251,7 +255,13 @@ class ProvidersService:
             await conn.execute(delete(models_table).where(models_table.c.address == address))
 
     async def record_verification(
-        self, address: str, *, tool_calling: bool, streaming: bool, detail: str | None
+        self,
+        address: str,
+        *,
+        tool_calling: bool,
+        streaming: bool,
+        detail: str | None,
+        dimensions: int | None = None,
     ) -> ModelEntry:
         await self._update_model(
             address,
@@ -260,6 +270,7 @@ class ProvidersService:
             availability="verified",
             availability_detail=detail,
             verified_at=now_iso(),
+            dimensions=dimensions,
         )
         return await self.require_model(address)
 
@@ -281,9 +292,29 @@ class ProvidersService:
         keys = await self.keys_for(provider.id)
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {provider.name} first.", status=409)
+        first_key = keys[0] if keys else None
+
+        if entry.model_type == "embedder":
+            try:
+                probe = await probe_embedder(
+                    provider.base_url, first_key, entry.wire_model_id, http=self._http
+                )
+            except ProviderCallError as err:
+                await self.mark_model_problem(address, err.message)
+                raise DomainError(
+                    "verification_failed", f"Checking {address} failed: {err.message}", status=502
+                ) from None
+            return await self.record_verification(
+                address,
+                tool_calling=False,
+                streaming=False,
+                detail=None,
+                dimensions=probe.dimensions,
+            )
+
         try:
             result = await probe_model(
-                provider.base_url, keys[0] if keys else None, entry.wire_model_id, http=self._http
+                provider.base_url, first_key, entry.wire_model_id, http=self._http
             )
         except ProviderCallError as err:
             await self.mark_model_problem(address, err.message)
@@ -295,6 +326,7 @@ class ProvidersService:
             tool_calling=result.tool_calling,
             streaming=result.streaming,
             detail=result.detail,
+            dimensions=None,
         )
 
     # Environment keys
@@ -368,4 +400,6 @@ def _model(row: RowMapping) -> ModelEntry:
         availability=row["availability"],
         availability_detail=row["availability_detail"],
         verified_at=row["verified_at"],
+        model_type=row["model_type"],
+        dimensions=row["dimensions"],
     )

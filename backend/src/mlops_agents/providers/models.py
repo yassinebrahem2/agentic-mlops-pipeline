@@ -1,8 +1,10 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic.config import JsonDict
 
 from mlops_agents.credentials.scrub import base_url_problem
+from mlops_agents.providers.embedder import ModelType
 
 ProviderKind = Literal["hosted", "self_hosted"]
 ProviderStatus = Literal["ok", "needs_attention"]
@@ -45,10 +47,22 @@ class Provider(BaseModel):
     cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES
 
 
+_TYPE_LABELS: dict[ModelType, str] = {
+    "chat": "a chat",
+    "embedder": "an embedder",
+}
+
+
+# openapi-typescript marks properties with defaults as required unless default is stripped from schema
+def _strip_default(schema: JsonDict) -> None:
+    schema.pop("default", None)
+
+
 class ModelCreate(BaseModel):
     provider: str
     wire_model_id: str = Field(min_length=1)
     context_window: int | None = Field(default=None, gt=0)
+    model_type: ModelType = Field(default="chat", json_schema_extra=_strip_default)
 
 
 class ModelEntry(BaseModel):
@@ -62,6 +76,8 @@ class ModelEntry(BaseModel):
     availability: Availability
     availability_detail: str | None
     verified_at: str | None
+    model_type: ModelType = "chat"
+    dimensions: int | None = None
 
     @computed_field
     @property
@@ -73,6 +89,14 @@ class ModelEntry(BaseModel):
                 f"The model {self.address} failed: {self.availability_detail}. "
                 "Verify it again in AI providers or choose another model."
             )
+        if self.model_type == "embedder":
+            if self.availability != "verified" or self.dimensions is None:
+                return (
+                    f"The embedder {self.address} has not passed verification (an embeddings call). "
+                    "Verify it in AI providers or choose another model."
+                )
+            return None
+
         if self.availability != "verified" or not (self.tool_calling and self.streaming):
             return (
                 f"The model {self.address} has not passed verification (tool calls and streaming). "
@@ -81,6 +105,13 @@ class ModelEntry(BaseModel):
         if self.context_window is None:
             return f"The context window of {self.address} is unknown. Enter it in AI providers."
         return None
+
+    def problem_for(self, wanted: ModelType) -> str | None:
+        if self.model_type != wanted:
+            self_lbl = _TYPE_LABELS[self.model_type]
+            wanted_lbl = _TYPE_LABELS[wanted]
+            return f"{self.address} is {self_lbl} model, not {wanted_lbl} model. Choose {wanted_lbl} model."
+        return self.problem
 
 
 class RemoteModel(BaseModel):

@@ -68,3 +68,61 @@ def test_the_problem_is_serialized_for_the_api() -> None:
         ModelEntry.model_validate({**USABLE, "context_window": None}).model_dump()["problem"]
         is not None
     )
+
+
+USABLE_EMBEDDER: dict[str, Any] = {
+    "address": "fake:fake-embed",
+    "provider_id": "prv_fake",
+    "provider_name": "fake",
+    "wire_model_id": "fake-embed",
+    "context_window": None,
+    "tool_calling": False,
+    "streaming": False,
+    "availability": "verified",
+    "availability_detail": None,
+    "verified_at": "2026-10-28T00:00:00Z",
+    "model_type": "embedder",
+    "dimensions": 16,
+}
+
+
+def test_a_verified_embedder_with_dimensions_has_no_problem() -> None:
+    assert ModelEntry.model_validate(USABLE_EMBEDDER).problem is None
+
+
+def test_an_unverified_embedder_says_so() -> None:
+    assert ModelEntry.model_validate({**USABLE_EMBEDDER, "availability": "untested"}).problem == (
+        "The embedder fake:fake-embed has not passed verification (an embeddings call). "
+        "Verify it in AI providers or choose another model."
+    )
+
+
+def test_a_verified_embedder_with_null_dimensions_is_a_problem() -> None:
+    assert ModelEntry.model_validate({**USABLE_EMBEDDER, "dimensions": None}).problem == (
+        "The embedder fake:fake-embed has not passed verification (an embeddings call). "
+        "Verify it in AI providers or choose another model."
+    )
+
+
+def test_a_failed_embedder_gives_recorded_failure() -> None:
+    entry = ModelEntry.model_validate(
+        {**USABLE_EMBEDDER, "availability": "needs_attention", "availability_detail": "HTTP 401"}
+    )
+    assert entry.problem == (
+        "The model fake:fake-embed failed: HTTP 401. Verify it again in AI providers or choose another model."
+    )
+
+
+def test_problem_for_wanted_type() -> None:
+    chat_entry = ModelEntry.model_validate(USABLE)
+    embedder_entry = ModelEntry.model_validate(USABLE_EMBEDDER)
+
+    assert chat_entry.problem_for("chat") is None
+    assert embedder_entry.problem_for("embedder") is None
+
+    assert chat_entry.problem_for("embedder") == (
+        "groq/m1 is a chat model, not an embedder model. Choose an embedder model."
+    )
+    assert embedder_entry.problem_for("chat") == (
+        "fake:fake-embed is an embedder model, not a chat model. Choose a chat model."
+    )
