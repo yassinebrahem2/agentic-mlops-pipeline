@@ -45,7 +45,14 @@ Placeholder = Literal[
 _CRON_FIELDS = 5
 
 
+# ZoneInfo hands the name to the file system, which on Windows forgives a trailing space or dot
+# and a backslash; only the database's own spelling is accepted.
+_IANA_NAME = re.compile(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*")
+
+
 def _check_timezone(value: str) -> str:
+    if _IANA_NAME.fullmatch(value) is None:
+        raise ValueError(f"{value!r} is not an IANA time zone name (for example Europe/Paris)")
     try:
         ZoneInfo(value)
     except (ZoneInfoNotFoundError, ValueError, OSError) as err:
@@ -58,7 +65,7 @@ def _check_timezone(value: str) -> str:
 
 
 TimeZoneName = Annotated[str, AfterValidator(_check_timezone)]
-ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+ClockTime = Annotated[str, StringConstraints(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")]
 
 
 class _Strict(BaseModel):

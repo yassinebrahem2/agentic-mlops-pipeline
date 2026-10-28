@@ -372,13 +372,30 @@ def test_on_call_needs_a_contact() -> None:
         OnCall.model_validate({**on_call, "contacts": []})
 
 
-@pytest.mark.parametrize("zone", ["Europe/Paris", "UTC", "America/Argentina/Buenos_Aires"])
+@pytest.mark.parametrize(
+    "zone", ["Europe/Paris", "UTC", "America/Argentina/Buenos_Aires", "Etc/GMT+5"]
+)
 def test_valid_timezones_pass(zone: str) -> None:
     on_call = _handoff()["operations"]["on_call"][0]
     assert OnCall.model_validate({**on_call, "timezone": zone}).timezone == zone
 
 
-@pytest.mark.parametrize("zone", ["Mars/Base", "", "../etc/passwd", "Paris", "Europe", "zone.tab"])
+# The odd names are ones a Windows file lookup would forgive (trailing space or dot, backslash).
+@pytest.mark.parametrize(
+    "zone",
+    [
+        "Mars/Base",
+        "",
+        "../etc/passwd",
+        "Paris",
+        "Europe",
+        "zone.tab",
+        "Europe/Paris ",
+        "Europe/Paris.",
+        "Europe\\Paris",
+        "Europe/Paris\n",
+    ],
+)
 def test_invalid_timezones_fail_on_every_carrier(zone: str) -> None:
     ops = _handoff()["operations"]
     with pytest.raises(ValidationError):
@@ -405,7 +422,16 @@ def test_on_call_hours_allow_a_window_over_midnight(start: str, end: str) -> Non
 
 @pytest.mark.parametrize(
     ("start", "end"),
-    [("09:00", "09:00"), ("9:00", "17:00"), ("09:00", "24:00"), ("09:60", "17:00"), ("", "17:00")],
+    [
+        ("09:00", "09:00"),
+        ("9:00", "17:00"),
+        ("09:00", "24:00"),
+        ("09:60", "17:00"),
+        ("", "17:00"),
+        # Arabic-indic digits: \d would accept them.
+        ("0\N{ARABIC-INDIC DIGIT NINE}:00", "17:00"),
+        ("09:00", "17:0\N{ARABIC-INDIC DIGIT FIVE}"),
+    ],
 )
 def test_on_call_hours_reject_equal_or_malformed(start: str, end: str) -> None:
     with pytest.raises(ValidationError):
