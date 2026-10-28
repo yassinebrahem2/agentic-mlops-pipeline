@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
+from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
+from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
@@ -226,7 +228,8 @@ class TurnWorkers:
         self._turn_over.add((project_id, session_id))
         if ending.status == "waiting":
             # The turn has not ended: the executor stored the wait and told the subscribers and
-            # the observers (`handle_turn_waiting`, the one writer of `waiting`), and the
+            # the observers (`handle_turn_waiting`, the one writer of `waiting`) once
+            # `_WaitAwareSink` had taken the session out of the running set, and the
             # turn's resume starts a new worker. Until then the session is busy: no queued turn
             # runs (Decision #281).
             _raise_worker_cancel()
@@ -259,8 +262,9 @@ class TurnWorkers:
         if turn_id in self._stopped_turns:
             return _Ending("stopped")
         runner = self._executor.resume if resume else self._executor.run
+        sink: TurnSink = _WaitAwareSink(hub, lambda: self._turn_over.add(key))
         child_task = asyncio.create_task(
-            runner(project_id, session_id, agent, turn_id, hub, lock=lock)
+            runner(project_id, session_id, agent, turn_id, sink, lock=lock)
         )
         self._child_tasks[key] = child_task
         try:
@@ -296,6 +300,31 @@ class TurnWorkers:
     async def _turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         for observer in self._observers:
             await _observed(observer.turn_started(project_id, agent, turn_id))
+
+
+class _WaitAwareSink:
+    """The hub as the turn task's sink. A wait takes the session out of the running set before
+    `turn.waiting` reaches any subscriber or observer, so none of them sees it running."""
+
+    def __init__(self, hub: SessionHub, waits: Callable[[], None]) -> None:
+        self._hub = hub
+        self._waits = waits
+
+    async def text(self, message_id: str, text: str) -> None:
+        await self._hub.text(message_id, text)
+
+    async def tool_started(self, message_id: str, call: ToolCallPart) -> None:
+        await self._hub.tool_started(message_id, call)
+
+    async def tool_finished(self, message_id: str, result: ToolResultPart) -> None:
+        await self._hub.tool_finished(message_id, result)
+
+    async def message(self, message: MessageView, *, created: bool) -> None:
+        await self._hub.message(message, created=created)
+
+    async def turn_waiting(self, turn_id: str) -> None:
+        self._waits()
+        await self._hub.turn_waiting(turn_id)
 
 
 def _raise_worker_cancel() -> None:

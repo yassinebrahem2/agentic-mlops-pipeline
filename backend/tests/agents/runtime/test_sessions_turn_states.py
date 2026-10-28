@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import Resync, TextPart
+from mlops_agents.agents.runtime.contract import Resync, TextPart, TurnEnd
+from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -15,6 +17,7 @@ from tests.agents.runtime.session_env import (
     collect_until_turn_ended,
     opened_stream,
 )
+from tests.agents.runtime.test_resuming_turns import make_tool_reg, write_agent_def
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -153,4 +156,59 @@ async def test_turn_states_reports_no_running_turn_once_turn_ended_is_published(
     assert await env.manager.turn_states(env.project_id) == {}
 
     release.set()
+    await env.manager.close()
+
+
+class TurnStatesOnWait:
+    """Reads the session manager's turn states from inside its `turn_waiting` call."""
+
+    def __init__(self) -> None:
+        self.manager: SessionManager | None = None
+        self.seen: asyncio.Queue[dict[str, Literal["running", "waiting"]]] = asyncio.Queue()
+
+    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
+        return None
+
+    async def turn_waiting(self, project_id: str, agent: str, turn_id: str) -> None:
+        assert self.manager is not None
+        self.seen.put_nowait(await self.manager.turn_states(project_id))
+
+    async def turn_ended(
+        self, project_id: str, agent: str, turn_id: str, status: TurnEnd, final_text: str | None
+    ) -> None:
+        return None
+
+
+async def test_an_observer_of_a_wait_sees_the_session_waiting(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    observer = TurnStatesOnWait()
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[write_agent_def(tmp_path)],
+        tools=make_tool_reg(),
+        observers=[observer],
+    )
+    observer.manager = env.manager
+    await env.settings.set_default_model("writer", f"{env.provider}:fake-tools")
+    fake_openai.state.scripted_tool_calls = [
+        {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "print(1)"}}
+    ]
+    await env.manager.send(env.project_id, "writer", "Write a.py")
+
+    seen = await asyncio.wait_for(observer.seen.get(), timeout=10)
+
+    assert seen == {"writer": "waiting"}
     await env.manager.close()
