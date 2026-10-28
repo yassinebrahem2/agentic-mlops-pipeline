@@ -241,7 +241,9 @@ function ConnectionRow({
             <span>—</span>
           ) : tables.isPending ? (
             <span>Loading tables...</span>
-          ) : tables.data ? (
+          ) : tables.error ? (
+            <span className="text-destructive">{errorText(tables.error)}</span>
+          ) : (
             <>
               <span>
                 {tables.data.length} {tables.data.length === 1 ? "table" : "tables"}
@@ -260,8 +262,6 @@ function ConnectionRow({
                 </Button>
               )}
             </>
-          ) : (
-            <span>—</span>
           )}
         </dd>
       </dl>

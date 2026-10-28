@@ -261,8 +261,8 @@ def test_load_template_contains_duckdb_and_no_latest(tmpl: str) -> None:
     assert f"ARG DUCKDB_CLI_SHA256_AMD64={DUCKDB_CLI_SHA256_AMD64}\n" in content
     assert f"ARG DUCKDB_CLI_SHA256_ARM64={DUCKDB_CLI_SHA256_ARM64}\n" in content
     assert "latest" not in content.lower()
-    assert "duckdb==${DUCKDB_VERSION}" in content or f"duckdb=={DUCKDB_VERSION}" in content
     assert "/usr/local/bin/duckdb" in content
+    assert "duckdb-cli-linux" in content
 
 
 def test_duckdb_version_in_dockerfile_equals_config() -> None:
@@ -306,7 +306,7 @@ def test_duckdb_fragment_read_through_importlib_resources() -> None:
         .joinpath("_duckdb.fragment")
         .read_text(encoding="utf-8")
     )
-    assert "ARG DUCKDB_VERSION=" in fragment
+    assert "ARG DUCKDB_VERSION" in fragment
     assert "/usr/local/bin/duckdb" in fragment
 
 

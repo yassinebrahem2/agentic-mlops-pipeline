@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import type { components } from "@/api/schema";
 import { ConnectionFindings } from "@/components/ConnectionFindings";
 import { FolderBrowser } from "@/components/FolderBrowser";
@@ -40,6 +40,7 @@ export function ConnectionDialog({
   const [name, setName] = useState("");
   const [chosenPath, setChosenPath] = useState("");
   const [inspectedPath, setInspectedPath] = useState<string | null>(null);
+  const latestInspectRef = useRef<string | null>(null);
 
   const inspect = useMutation({
     mutationFn: async (path: string) =>
@@ -50,7 +51,9 @@ export function ConnectionDialog({
         }),
       ),
     onSuccess: (_data, path) => {
-      setInspectedPath(path);
+      if (latestInspectRef.current === path) {
+        setInspectedPath(path);
+      }
     },
   });
 
@@ -96,6 +99,10 @@ export function ConnectionDialog({
     },
   });
 
+  const resetInspect = inspect.reset;
+  const resetCreate = create.reset;
+  const resetUpdate = update.reset;
+
   useEffect(() => {
     if (open) {
       setName(connection?.name ?? "");
@@ -105,18 +112,19 @@ export function ConnectionDialog({
           : "",
       );
       setInspectedPath(null);
-      inspect.reset();
-      create.reset();
-      update.reset();
+      latestInspectRef.current = null;
+      resetInspect();
+      resetCreate();
+      resetUpdate();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, connection]);
+  }, [open, connection, resetInspect, resetCreate, resetUpdate]);
 
   const handleChooseFolder = (path: string) => {
+    latestInspectRef.current = path;
     setChosenPath(path);
     setInspectedPath(null);
-    create.reset();
-    update.reset();
+    resetCreate();
+    resetUpdate();
     inspect.mutate(path);
   };
 

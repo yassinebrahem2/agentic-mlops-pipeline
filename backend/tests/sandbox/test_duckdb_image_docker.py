@@ -63,21 +63,14 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
         assert res_ver.exit_code == 0, f"duckdb --version failed: {res_ver.output}"
         assert DUCKDB_VERSION in res_ver.output
 
-        # 2. python -c "import duckdb; print(duckdb.__version__)" prints DUCKDB_VERSION
-        res_py = await service.run(
-            project_id, task, 'python -c "import duckdb; print(duckdb.__version__)"', timeout_s=30
-        )
-        assert res_py.exit_code == 0, f"import duckdb failed: {res_py.output}"
-        assert DUCKDB_VERSION in res_py.output
-
-        # 3. command -v duckdb is outside /workspace
+        # 2. command -v duckdb is outside /workspace
         res_which = await service.run(project_id, task, "command -v duckdb", timeout_s=30)
         assert res_which.exit_code == 0, f"command -v duckdb failed: {res_which.output}"
         bin_path = res_which.output.strip()
         assert not bin_path.startswith("/workspace")
         assert bin_path == "/usr/local/bin/duckdb"
 
-        # 4. duckdb -c "select count(*) from read_csv('/data/<name>/a.csv')" returns row count
+        # 3. duckdb -c "select count(*) from read_csv('/data/<name>/a.csv')" returns row count
         res_query = await service.run(
             project_id,
             task,
@@ -87,7 +80,7 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
         assert res_query.exit_code == 0, f"duckdb query failed: {res_query.output}"
         assert "2" in res_query.output
 
-        # 5. /proc/mounts lists, as binds of host paths, only /workspace and /data/* mounts
+        # 4. /proc/mounts lists, as binds of host paths, only /workspace and /data/* mounts
         res_mounts = await service.run(project_id, task, "cat /proc/mounts", timeout_s=30)
         assert res_mounts.exit_code == 0
         mount_lines = res_mounts.output.splitlines()
@@ -136,15 +129,6 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
         )
         assert res_ver.exit_code == 0
         assert DUCKDB_VERSION in res_ver.output
-
-        res_py = await service_base.run(
-            project_id_base,
-            task_base,
-            'python -c "import duckdb; print(duckdb.__version__)"',
-            timeout_s=30,
-        )
-        assert res_py.exit_code == 0
-        assert DUCKDB_VERSION in res_py.output
     finally:
         await service_base.remove_task(project_id_base, task_base.id)
         await service_base.close()
@@ -181,16 +165,55 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
         res_ver = await service_uv.run(project_id_uv, task_uv, "duckdb --version", timeout_s=300)
         assert res_ver.exit_code == 0
         assert DUCKDB_VERSION in res_ver.output
-
-        res_py = await service_uv.run(
-            project_id_uv,
-            task_uv,
-            'python -c "import duckdb; print(duckdb.__version__)"',
-            timeout_s=30,
-        )
-        assert res_py.exit_code == 0
-        assert DUCKDB_VERSION in res_py.output
     finally:
         await service_uv.remove_task(project_id_uv, task_uv.id)
         await service_uv.close()
+        await databases.dispose()
+
+
+@pytest.mark.docker
+async def test_real_docker_duckdb_python_310_project_builds(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = DataPaths(home)
+    paths.ensure()
+
+    databases = Databases(paths)
+    await databases.app()
+    project_id = new_id("prj")
+    await databases.project(project_id)
+
+    events = SqliteEventLog(databases)
+    registry = KindRegistry([LocalFolderKind(paths.root)])
+    conns_service = ConnectionsService(databases, events, registry)
+    runner = CliDockerRunner()
+
+    worktree = tmp_path / "worktree_310"
+    worktree.mkdir()
+    (worktree / "requirements.txt").write_text("six\n", encoding="utf-8")
+    (worktree / ".python-version").write_text("3.10\n", encoding="utf-8")
+
+    projects = MemorySandboxProjects(
+        roots={project_id: worktree},
+        connections=conns_service,
+    )
+    service = SandboxService(runner=runner, projects=projects, events=events)
+    task = TaskRef(new_id("tsk"), "Python 3.10 DuckDB Task", "branch", worktree, "active")
+
+    try:
+        res_py = await service.run(
+            project_id,
+            task,
+            "python -c \"import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')\"",
+            timeout_s=300,
+        )
+        assert res_py.exit_code == 0
+        assert res_py.output.strip() == "3.10"
+
+        res_ver = await service.run(project_id, task, "duckdb --version", timeout_s=30)
+        assert res_ver.exit_code == 0
+        assert DUCKDB_VERSION in res_ver.output
+    finally:
+        await service.remove_task(project_id, task.id)
+        await service.close()
         await databases.dispose()

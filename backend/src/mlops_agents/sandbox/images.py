@@ -51,6 +51,8 @@ def load_template(template_name: str, python_version: str) -> str:
         content = content.replace("# @duckdb\n", fragment.strip() + "\n\n")
     elif "# @duckdb" in content:
         content = content.replace("# @duckdb", fragment.strip() + "\n")
+    else:
+        raise ValueError(f"Template '{template_name}' missing '# @duckdb' marker")
 
     arg_mapping: dict[str, str] = {
         "PYTHON_VERSION": python_version,
@@ -64,7 +66,7 @@ def load_template(template_name: str, python_version: str) -> str:
     for line in content.splitlines(keepends=True):
         replaced = False
         for arg_name, arg_val in arg_mapping.items():
-            if line.startswith(f"ARG {arg_name}="):
+            if line.startswith(f"ARG {arg_name}"):
                 lines.append(f"ARG {arg_name}={arg_val}\n")
                 replaced = True
                 break
