@@ -163,8 +163,4 @@ Task 1 gets an early PR, from `plan/stage-3-tracking-task1`: the pages plan read
 
 ## Interface gaps
 
-Settled in the overview and no longer listed: project secrets, event types, `auth` of a GitHub Actions source, `to_version: None`, typed pages, `ModelSummary`, the `run_metrics` key, list-route `limit` and `offset`, `EvaluationRecord`, the one-minute default interval. Still open:
-
-- **The evaluations table.** "Shared by contracts" says every table named in I13 to I21 is written, but I16 names a row model, not a table. This plan assumes a table `evaluations` (source, model, version, run_key, schema_version, payload JSON, fetched_at) unique on source, model and version. Needed: contracts' migration says so, or names it otherwise.
-- **Tracking settings route.** The sync interval is a project setting (I16) but I16 lists no route to change it. Task 4 adds `GET` and `PUT .../tracking/settings` (`{sync_interval_s}`), consumed by no other plan; the lead decides whether it stays or the setting is only editable later.
-- **Artifact endpoint.** I16 says "the tracker's artifact API" without naming it. This plan uses `GET /get-artifact`, which an MLflow tracking server answers for artifacts it can read; a server that does not serve artifacts yields no evaluations (skipped, not an error). If stage 5 needs the `mlflow-artifacts` proxy path as well, that is a change to task 2's step 5.
+None open: the overview (I15, I16) settles the earlier ones.

@@ -155,5 +155,4 @@ Small rules the plan adds so the spec's guarantees ("no agent can read a host pa
 
 ## Interface gaps
 
-1. **`ConnectionView.data_version` is "the newest table's"** (overview) without saying by which order. The plan takes the version string of the table whose newest file has the latest mtime; say so in I15 if another rule is meant.
-2. **The folder browser in server mode.** The overview and spec §4 say server mode uses the server-side folder browser, but `GET /api/folders` is refused there today. Task 1 removes that refusal from `WorkspaceService.browse` (a change in `workspace/`, which the overview's shared-files list does not assign to a plan). Confirm it, or name another route.
+None open: the overview (I15, I16) settles the earlier ones.

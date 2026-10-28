@@ -98,7 +98,7 @@ class Mount(BaseModel): host_path: Path; container_path: str        # always rea
 class DuckDbSource(BaseModel): sql_from: str; allowed_directories: list[Path]
 class Finding(BaseModel): path: str; reason: str
 class Findings(BaseModel): unsupported_files: list[Finding]; secret_files: list[Finding]; truncated: bool
-class ConnectionView(BaseModel): id: str; name: str; kind: str; settings: dict[str, Any]; status: ConnectionStatus; status_detail: str | None; findings: Findings; data_version: str | None   # the newest table's
+class ConnectionView(BaseModel): id: str; name: str; kind: str; settings: dict[str, Any]; status: ConnectionStatus; status_detail: str | None; findings: Findings; data_version: str | None   # the data version of the table whose newest file has the latest modified time
 
 class ConnectionKind(Protocol):
     name: str
@@ -123,7 +123,7 @@ class Connections(Protocol):        # connections
     async def mounts(self, project_id: str) -> list[Mount]: ...
 ```
 
-- Relative paths are refused, and so are a folder inside the app's data folder and a folder that contains it. Local folders work in both run modes: in server mode they are folders on the server, picked with the server-side folder browser.
+- Relative paths are refused, and so are a folder inside the app's data folder and a folder that contains it. Local folders work in both run modes: in server mode they are folders on the server, picked with the server-side folder browser; connections task 1 lifts the server-mode refusal from `GET /api/folders` (`WorkspaceService.browse`, its one change in `workspace/`), which stays behind the session like every route.
 - Routes (connections): `GET/POST /api/projects/{id}/connections`, `POST .../connections/inspect`, `PATCH/DELETE .../connections/{con}`, `GET .../connections/{con}/tables`. Route (data-summary): `GET .../connections/{con}/tables/{table}` returning `TableDetail`.
 
 ### I16: tracking (`tracking/contract.py`)
@@ -154,7 +154,8 @@ class TrackingAdapter(Protocol):
 ```
 
 - A `github_actions` source has `auth: "none"` and uses the app's GitHub login.
-- The MLflow adapter fetches `mlops_agents/evaluation.json` for model-version runs through the tracker's artifact API.
+- The MLflow adapter fetches `mlops_agents/evaluation.json` for model-version runs through MLflow's `GET /get-artifact` (a server that cannot serve the artifact yields no record, not an error). Records are stored in the `evaluations` table (source, model, version, run_key, schema_version, payload JSON, fetched_at), unique on source, model and version (contracts).
+- Routes `GET` and `PUT .../tracking/settings` (`{sync_interval_s}`) set the sync interval (tracking).
 - The default sync interval is 1 minute (a project setting).
 - Routes: `GET/POST /api/projects/{id}/tracking/sources`; `PUT .../tracking/sources/{trk}/credential` (keystore only); `POST .../tracking/sync` with an optional `source_id`, returning 202; `GET .../tracking/models` (`Page[ModelSummary]`), `.../versions?model=` (`Page[ModelVersionRow]`), `.../runs` (`Page[RunRow]`), `.../ci-runs` (`Page[CiRunRow]`), `.../deployments` (`Page[DeploymentRow]`), `.../metrics?run_key=&metric=&latest=` (`Page[MetricPoint]`), `.../evaluations?model=&version=` (`Page[EvaluationRecord]`). List routes take `limit` (default 50, max 500) and `offset`; `/runs` takes `run_key`; `/versions` and `/deployments` take `model` and `source_id`.
 - The fake MLflow server (tracking) runs in-process as an ASGI app and standalone (`python -m tests.fakes.fake_mlflow --port <n>`) for the e2e.
