@@ -150,7 +150,7 @@ async def build_services(
 
     sandbox = SandboxService(
         docker_runner,
-        projects=DatabaseSandboxProjects(databases, workspace),
+        projects=DatabaseSandboxProjects(databases, workspace, connections),
         events=events,
     )
     await sandbox.cleanup_orphans()
