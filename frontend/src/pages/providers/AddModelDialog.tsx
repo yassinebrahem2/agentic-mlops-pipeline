@@ -30,10 +30,12 @@ type ModelCreate = components["schemas"]["ModelCreate"];
 export function AddModelDialog({ providers }: { providers: Provider[] }) {
   const queryClient = useQueryClient();
   const providerId = useId();
+  const typeId = useId();
   const modelIdId = useId();
   const contextId = useId();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState("");
+  const [modelType, setModelType] = useState<"chat" | "embedder">("chat");
   const [modelId, setModelId] = useState("");
   const [contextWindow, setContextWindow] = useState("");
 
@@ -49,6 +51,7 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
 
   function reset() {
     setProvider("");
+    setModelType("chat");
     setModelId("");
     setContextWindow("");
     add.reset();
@@ -56,7 +59,11 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
 
   function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    const body: ModelCreate = { provider, wire_model_id: modelId.trim() };
+    const body: ModelCreate = {
+      provider,
+      wire_model_id: modelId.trim(),
+      model_type: modelType,
+    };
     if (contextWindow !== "") body.context_window = Number(contextWindow);
     add.mutate(body);
   }
@@ -115,6 +122,30 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
               <p>You can still type a model ID in the Model field.</p>
             </div>
           )}
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={typeId}>Type</Label>
+            <Select
+              value={modelType}
+              onValueChange={(value: "chat" | "embedder") => {
+                setModelType(value);
+                setModelId("");
+              }}
+            >
+              <SelectTrigger id={typeId} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chat">Chat model</SelectItem>
+                <SelectItem value="embedder">Embedder</SelectItem>
+              </SelectContent>
+            </Select>
+            {modelType === "embedder" && (
+              <p className="text-muted-foreground">
+                Any OpenAI-compatible /embeddings endpoint works, hosted or self-hosted.
+              </p>
+            )}
+          </div>
 
           <div className="flex flex-col gap-2">
             <Label htmlFor={modelIdId}>Model</Label>
