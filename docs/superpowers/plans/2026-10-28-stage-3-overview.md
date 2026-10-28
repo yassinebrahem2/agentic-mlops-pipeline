@@ -114,6 +114,7 @@ class ConnectionKind(Protocol):
     def findings(self, settings: BaseModel) -> Findings: ...
     def tables(self, settings: BaseModel) -> list[TableRef]: ...
     def data_version(self, settings: BaseModel, table: TableRef) -> str: ...
+    def latest_data_version(self, settings: BaseModel) -> str | None: ...   # ConnectionView.data_version, from the kind's own scan; None when the kind cannot tell cheaply (added by #383's review: connections' owner adds it to contracts' contract.py and the member-count test, seven methods)
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource: ...
     def sandbox_mount(self, name: str, settings: BaseModel) -> Mount | None: ...   # container path /data/<name>
 
@@ -312,6 +313,7 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 ```
 
 - `attempt(key_index)` raises the provider's raw exception; `KeyFailover` classifies it with `providers/errors.classify`. A provider with no keys gets `attempt(None)` once, with no failover.
+- `KeyFailover(clock=None, on_success=None)`: `on_success(provider)` is awaited after a successful call when `provider.status` is `needs_attention` (rate-limits task 2 adds it and wires `ProvidersService.clear_attention`; Decision #384: the needs-attention mark informs and never refuses a turn or an embedding).
 - `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider) -> None` (Try again) and `describe_keys(states) -> str` (the one wording, used by the stall card and the embedder's message). Its clock is injected (`Clock` protocol: `now()`, `async sleep(seconds)`).
 - `TurnHooks` gains `approvals: Approvals`, `approval_store: ApprovalStore` (the one shared store, which `graph.py` uses instead of constructing its own) and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
 - The one `KeyFailover` instance is built in `build_services` by rate-limits task 1 (its early PR), so embedders task 1 can use it.
