@@ -12,7 +12,6 @@ from sqlalchemy import RowMapping, insert, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.exc import IntegrityError
 
-from mlops_agents.api.errors import field_errors
 from mlops_agents.clock import now_iso
 from mlops_agents.connections.contract import (
     CONNECTION_NAME_PATTERN,
@@ -26,7 +25,7 @@ from mlops_agents.connections.contract import (
 )
 from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.credentials.scrub import error_text
-from mlops_agents.errors import DomainError
+from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
@@ -66,13 +65,12 @@ class ConnectionsService:
         try:
             return kind.settings_model.model_validate(settings)
         except ValidationError as err:
-            errors = field_errors(err.errors(include_input=False, include_url=False))
-            reasons = "; ".join(f"{e['field']}: {e['message']}" for e in errors)
+            message = validation_error_message(err)
             raise DomainError(
                 "connection_invalid",
-                f"The settings are invalid ({reasons}).",
+                f"The settings are invalid ({message.text}).",
                 status=422,
-                detail={"errors": errors},
+                detail={"errors": message.errors},
             ) from None
 
     def _stored(self, settings_json: Any) -> dict[str, Any]:

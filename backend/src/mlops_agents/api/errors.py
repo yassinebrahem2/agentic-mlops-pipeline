@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -14,12 +14,10 @@ from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mlops_agents.credentials import KeyStoreError
-from mlops_agents.errors import DomainError
+from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.sandbox.contract import SandboxUnavailable
 
 _log = logging.getLogger(__name__)
-
-_VALUE_ERROR_PREFIX = "Value error, "
 
 
 def error_response(
@@ -34,19 +32,6 @@ def error_response(
     )
 
 
-def field_errors(errors: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
-    """Each validation error as its location and its sentence only: the submitted input may
-    hold a key. A pydantic `ValidationError` passes
-    `err.errors(include_input=False, include_url=False)`, so the input is not even kept."""
-    return [
-        {
-            "field": ".".join(str(part) for part in error["loc"]),
-            "message": str(error["msg"]).removeprefix(_VALUE_ERROR_PREFIX),
-        }
-        for error in errors
-    ]
-
-
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
@@ -58,7 +43,7 @@ def register_error_handlers(app: FastAPI) -> None:
             422,
             "invalid_request",
             "Some fields are missing or invalid.",
-            {"errors": field_errors(exc.errors())},
+            {"errors": validation_error_message(exc).errors},
         )
 
     @app.exception_handler(KeyStoreError)
