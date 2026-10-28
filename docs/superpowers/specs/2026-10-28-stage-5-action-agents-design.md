@@ -119,7 +119,7 @@ New in `project.db`: fix requests, training requests, training policies, reports
 ## Changes to the roadmap
 
 - Stage 5 "Agreed" rewritten from this spec, with the changes above; the continuous-improvement principle stated once in the roadmap's agent section.
-- Hook types `command` and `ci_dispatch` with placeholders and `deploys`; training policies; the `deploy` table: a `train` run within an approved training policy is allowed at `ask` and above, otherwise asks; a run that deploys asks at every level unless the handoff makes the team's gate the promotion authority; promotion in `person` mode asks at every level, `bypass` included.
+- Hook types `command` and `ci_dispatch` with placeholders and `deploys`; training policies; the `deploy` exceptions as the roadmap's table now states them (Permission risk classes), which is the one source.
 - Proposal kinds `training_policy`, `promotion`; proposals supersede by kind and key.
 - ID prefixes `fix`, `trq`, `pol`, `rep` (report), `prm`.
 - Stage 3 handoff: commands carry type, template or workflow and inputs, placeholders and `deploys`; who promotes; aliases map to environments; `serving_inputs` holds the raw inputs as served.
