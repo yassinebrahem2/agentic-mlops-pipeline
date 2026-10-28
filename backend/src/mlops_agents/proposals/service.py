@@ -9,12 +9,13 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
+from mlops_agents.api.errors import validation_error_message
 from mlops_agents.credentials.project_secrets import (
     ProjectSecrets,
     proposal_prefix,
     proposal_slot_ref,
 )
-from mlops_agents.credentials.scrub import error_text
+from mlops_agents.credentials.scrub import error_text, scrub_url_secrets
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
@@ -98,7 +99,7 @@ class ProposalsService:
         except ValidationError as exc:
             raise DomainError(
                 "proposal_invalid_payload",
-                f"Payload validation failed: {exc}",
+                f"Payload validation failed: {validation_error_message(exc)}",
                 status=422,
             ) from exc
 
@@ -173,12 +174,19 @@ class ProposalsService:
                 try:
                     result = await kind_obj.apply(project_id, proposal_id, payload)
                 except Exception as exc:
-                    logger.exception("Failed to apply proposal %s", proposal_id)
+                    logger.error(
+                        "Failed to apply proposal %s: %s",
+                        proposal_id,
+                        error_text(exc),
+                    )
                     result = ApplyResult(applied=[], failed={"apply": error_text(exc)})
                 finally:
                     await sweep(
                         self._project_secrets, project_id, proposal_id, needed, result=result
                     )
+
+                scrubbed_failed = {k: scrub_url_secrets(v) for k, v in result.failed.items()}
+                result = ApplyResult(applied=result.applied, failed=scrubbed_failed)
 
                 await self._store.update_result(
                     project_id, proposal_id, result_json=result.model_dump_json()
@@ -266,14 +274,35 @@ class ProposalsService:
             # 1. Approved without result
             approved_unapplied = await self._store.list_recover_approved_without_result(project_id)
             for rec in approved_unapplied:
-                kind_obj = self._kinds.get(rec.kind)
-                payload = kind_obj.payload_model.model_validate_json(rec.payload_json)
-                needed = kind_obj.credentials_needed(payload)
+                try:
+                    kind_obj = self._kinds.get(rec.kind)
+                    payload = kind_obj.payload_model.model_validate_json(rec.payload_json)
+                    needed = kind_obj.credentials_needed(payload)
+                except Exception as exc:
+                    logger.error(
+                        "Unknown or invalid proposal kind %r for proposal %s during recover: %s",
+                        rec.kind,
+                        rec.id,
+                        error_text(exc),
+                    )
+                    result = ApplyResult(
+                        applied=[],
+                        failed={"kind": scrub_url_secrets(error_text(exc))},
+                    )
+                    await self._store.update_result(
+                        project_id, rec.id, result_json=result.model_dump_json()
+                    )
+                    continue
+
                 result: ApplyResult = ApplyResult(applied=[], failed={})
                 try:
                     result = await kind_obj.apply(project_id, rec.id, payload)
                 except Exception as exc:
-                    logger.exception("Failed to apply proposal %s during recover", rec.id)
+                    logger.error(
+                        "Failed to apply proposal %s during recover: %s",
+                        rec.id,
+                        error_text(exc),
+                    )
                     result = ApplyResult(applied=[], failed={"apply": error_text(exc)})
                 finally:
                     await sweep(
@@ -283,6 +312,8 @@ class ProposalsService:
                         needed,
                         result=result,
                     )
+                scrubbed_failed = {k: scrub_url_secrets(v) for k, v in result.failed.items()}
+                result = ApplyResult(applied=result.applied, failed=scrubbed_failed)
                 await self._store.update_result(
                     project_id, rec.id, result_json=result.model_dump_json()
                 )
@@ -291,9 +322,25 @@ class ProposalsService:
             pending_no_apr = await self._store.list_recover_pending_without_approval(project_id)
             for rec in pending_no_apr:
                 await self._store.update_status(project_id, rec.id, status="rejected")
-                kind_obj = self._kinds.get(rec.kind)
-                payload = kind_obj.payload_model.model_validate_json(rec.payload_json)
-                needed = kind_obj.credentials_needed(payload)
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="proposal.decided",
+                    payload={"proposal_id": rec.id, "kind": rec.kind, "status": "rejected"},
+                    subject_id=rec.id,
+                )
+                needed = []
+                try:
+                    kind_obj = self._kinds.get(rec.kind)
+                    payload = kind_obj.payload_model.model_validate_json(rec.payload_json)
+                    needed = kind_obj.credentials_needed(payload)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to load kind %r for rejected proposal %s during recover: %s",
+                        rec.kind,
+                        rec.id,
+                        error_text(exc),
+                    )
                 await sweep(self._project_secrets, project_id, rec.id, needed)
 
             # 3. Non-pending proposals: clean up any remaining secret refs

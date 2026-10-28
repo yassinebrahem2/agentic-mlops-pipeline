@@ -47,10 +47,11 @@ async def sweep(
         try:
             await project_secrets.delete(ref)
         except KeyStoreError as exc:
-            logger.exception(
-                "KeyStoreError while deleting slot %s for proposal %s",
+            logger.error(
+                "KeyStoreError while deleting slot %s for proposal %s: %s",
                 slot.index,
                 proposal_id,
+                error_text(exc),
             )
             if result is not None:
                 result.failed[f"credential {slot.index}"] = error_text(exc)
