@@ -135,7 +135,7 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
 - **Hook credentials.** A hook that writes to the team's systems (a rollback moving the tracker's production alias) has its own credential, entered by the user through a keystore route like a tracker credential. It is injected only into that hook's own container run, never into the agent's Bash, so the sandbox still never writes to the tracker on its own (stage 3).
 - **Hold** is tier 1: the app records the hold on the incident and, when the team registered a hold or quarantine command, runs it (blocking a promotion, quarantining a batch) without asking. When the team has no such command, a hold is a notification only; the first audit reports the missing command as a gap.
 - **Pre-approved rules** (`rul`), proposed by agents and approved by the user (proposal kind `rule`, §9): a condition over standard result records (check IDs, values, thresholds, a time window), the hook it allows (only kinds rollback, rerun, fall back), and limits (at most once per incident, per day). When an agent runs a hook citing a rule, **the gate evaluates the rule's condition in code against the stored records**; only when it holds, and the limits allow, does the hook run without asking (at any level except `suggest`). The agent can cite a rule; it can never certify one. The incident's timeline records the rule and the records that satisfied it. Otherwise the hook asks as `deploy` does.
-- **A human always decides** a deploy hook (tier 3): it always asks, `bypass` included, like `propose`. At night it waits for the person; the morning report lists it. A train hook runs without asking only within an approved training policy (stage 5); otherwise it asks.
+- **A human decides** a deploy hook (tier 3) at every level below `bypass`; at `bypass` the person delegated it (stage 5). At night it waits for the person; the morning report lists it. A train hook runs without asking only within an approved training policy (stage 5); otherwise it asks.
 - After a deploy (by the team's gate or a person), the deployment agent compares the new version with the previous one from the results the team's evaluation step and checks write (stage 5), and early labels with their counts; clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
 - **Fixing causes.** Beyond responding, agents fix what caused an incident through PRs to the team's system (a missing validation, a fragile job, a weak check), continuously, as stage 5's principle says.
 
@@ -202,7 +202,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
   | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
   |---|---|---|
-  | deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
+  | deploy (promotion) | asks at `ask` and `autonomous`; allowed at `bypass` (stage 5); denied at `suggest` | same |
   | a pipeline run that deploys, where the handoff makes the team's gate the promotion authority (stage 5) | runs without asking at `ask` and above within an approved training policy | asks |
   | train, evaluate | run without asking at `ask` and above within an approved training policy (stage 5) | ask |
   | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
