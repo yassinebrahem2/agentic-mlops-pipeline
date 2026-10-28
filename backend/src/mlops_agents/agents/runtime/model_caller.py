@@ -238,7 +238,9 @@ class ModelCaller:
             message = (
                 f"{error.message.rstrip('.')}. {description}" if description else error.message
             )
-            kind = _EXHAUSTED if error.kind in _KEY_FAULTS else None
+            # A keyless provider has no key to rotate or fix: no Try again (Decision #384).
+            key_fault = bool(provider.keys) and error.kind in _KEY_FAULTS
+            kind = _EXHAUSTED if key_fault else None
             await self._flag_if_unfixable(provider, states, message)
             raise TurnFailed(message, kind) from failure.cause
         except Exception as exc:
