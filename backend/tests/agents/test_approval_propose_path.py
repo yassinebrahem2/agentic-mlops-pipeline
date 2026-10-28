@@ -1,6 +1,6 @@
-"""One path through the real gate and `handle_turn_waiting`: a tool of class propose asks even
-under bypass, its part carries the call's proposal kind, and the tool's context carries the
-call's ID, the same one its approval stores (I13)."""
+"""One path through the real gate and `handle_turn_waiting`: a tool of class propose asks at
+every level, bypass included; its stored part carries the call's proposal kind, and the tool's
+context carries the call's ID, the same one its approval stores (I13)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.runtime.contract import ApprovalPart, TurnEnded
 from mlops_agents.agents.tools.base import (
     AgentTool,
@@ -25,7 +26,7 @@ from mlops_agents.agents.tools.base import (
 )
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env
+from tests.agents.runtime.session_env import SessionEnv, build_session_env
 from tests.agents.runtime.test_resuming_turns import (
     collect_until_turn_ended,
     collect_until_turn_waiting,
@@ -75,8 +76,20 @@ def _definition(tmp_path: Path) -> Path:
     return def_dir
 
 
+async def _stored_approval_parts(env: SessionEnv, agent: str) -> list[ApprovalPart]:
+    """The approval parts as stored, not the hub's live copy of a busy turn's message."""
+    session_id = await env.store.session_id(env.project_id, agent)
+    return [
+        p
+        for m in await env.store.messages(env.project_id, session_id)
+        for p in m.parts
+        if isinstance(p, ApprovalPart)
+    ]
+
+
 @pytest.mark.asyncio
-async def test_a_propose_call_asks_under_bypass_and_its_part_carries_the_proposal_kind(
+@pytest.mark.parametrize("level", ["suggest", "ask", "autonomous", "bypass"])
+async def test_a_propose_call_asks_at_every_level_and_its_part_carries_the_proposal_kind(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -84,6 +97,7 @@ async def test_a_propose_call_asks_under_bypass_and_its_part_carries_the_proposa
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    level: PermissionLevel,
 ) -> None:
     tool = RecordingProposeTool()
     store = ApprovalStore(databases)
@@ -100,7 +114,7 @@ async def test_a_propose_call_asks_under_bypass_and_its_part_carries_the_proposa
         gate=ApprovalGate(databases, store=store),
         approval_store=store,
     )
-    await set_permission_level(databases, env.project_id, "bypass")
+    await set_permission_level(databases, env.project_id, level)
     await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases, env.manager, store=store)
     fake_openai.state.scripted_tool_calls = [
@@ -114,8 +128,7 @@ async def test_a_propose_call_asks_under_bypass_and_its_part_carries_the_proposa
 
     [pending] = await approvals.pending(env.project_id)
     assert (pending.kind, pending.proposal_kind) == ("tool", "handoff")
-    view = await env.manager.get(env.project_id, "proposer")
-    [part] = [p for m in view.messages for p in m.parts if isinstance(p, ApprovalPart)]
+    [part] = await _stored_approval_parts(env, "proposer")
     assert (part.approval_id, part.kind, part.proposal_kind) == (pending.id, "tool", "handoff")
     assert tool.preview_call_ids
     assert set(tool.preview_call_ids) == {pending.tool_call_id}
@@ -163,7 +176,6 @@ async def test_a_call_of_another_class_has_no_proposal_kind(
 
     [pending] = await ApprovalsService(databases, env.manager, store=store).pending(env.project_id)
     assert (pending.kind, pending.proposal_kind) == ("tool", None)
-    view = await env.manager.get(env.project_id, "writer")
-    [part] = [p for m in view.messages for p in m.parts if isinstance(p, ApprovalPart)]
+    [part] = await _stored_approval_parts(env, "writer")
     assert part.proposal_kind is None
     await env.manager.stop(env.project_id, "writer")

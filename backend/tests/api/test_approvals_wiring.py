@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.tools.base import Preview, RiskClass
@@ -51,6 +52,17 @@ async def _waiting(services: Services, project_id: str) -> None:
             await asyncio.sleep(0.05)
 
 
+async def _use_model(services: Services, fake: RunningFake, wire_model_id: str) -> None:
+    provider = await services.providers.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
+    )
+    await services.providers.add_model(
+        ModelCreate(provider=provider.name, wire_model_id=wire_model_id)
+    )
+    await services.providers.verify_model(f"fake:{wire_model_id}")
+    await services.agent_settings.set_default_model("orchestrator", f"fake:{wire_model_id}")
+
+
 @pytest.mark.asyncio
 async def test_an_observer_sees_a_gate_approval_asked_and_cancelled_by_stop(
     tmp_path: Path, git_env: dict[str, str], fake_openai: RunningFake
@@ -60,20 +72,14 @@ async def test_an_observer_sees_a_gate_approval_asked_and_cancelled_by_stop(
         observer = RecordingObserver()
         services.approvals.add_observer(observer)
         project_id = await add_local_project(app, tmp_path, git_env)
-        provider = await services.providers.create_provider(
-            ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
-        )
-        await services.providers.add_model(
-            ModelCreate(provider=provider.name, wire_model_id="fake-write")
-        )
-        await services.providers.verify_model("fake:fake-write")
-        await services.agent_settings.set_default_model("orchestrator", "fake:fake-write")
+        await _use_model(services, fake_openai, "fake-write")
 
         # fake-write starts a task first; at the default level StartTask asks.
         await services.sessions.send(project_id, "orchestrator", "Start a task")
         [approval_id] = await _pending(services, project_id, 1)
-        assert observer.calls == [("asked", approval_id, "pending")]
+        # The turn waits only after the gate has created the approval and told the observers.
         await _waiting(services, project_id)
+        assert observer.calls == [("asked", approval_id, "pending")]
 
         await services.sessions.stop(project_id, "orchestrator")
 
@@ -132,3 +138,46 @@ async def test_an_observer_sees_recovery_expire_a_stale_approval(
         assert await services.approvals.pending(project_id) == []
 
         assert observer.calls == [("decided", stale.id, "expired")]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_last_pending_approval_of_a_turn_resumes_it(
+    tmp_path: Path, git_env: dict[str, str], fake_openai: RunningFake
+) -> None:
+    async with started_app(tmp_path / "data") as app:
+        services: Services = app.state.services
+        project_id = await add_local_project(app, tmp_path, git_env)
+        await _use_model(services, fake_openai, "fake-tools")
+        # Two calls in one step: at the default level each StartTask asks.
+        fake_openai.state.scripted_tool_calls = [
+            {"name": "StartTask", "arguments": {"title": "First"}},
+            {"name": "StartTask", "arguments": {"title": "Second"}},
+        ]
+        await services.sessions.send(project_id, "orchestrator", "Start two tasks")
+        first, second = await _pending(services, project_id, 2)
+        await _waiting(services, project_id)
+        [turn_id] = {a.turn_id for a in await services.approvals.pending(project_id)}
+
+        await services.approvals.cancel(project_id, first)
+
+        assert await _turn_status(services, project_id, turn_id) == "waiting"
+        assert [a.id for a in await services.approvals.pending(project_id)] == [second]
+
+        await services.approvals.cancel(project_id, second)
+
+        # Resumed: both calls come back as rejected, the model answers and the turn ends.
+        async with asyncio.timeout(15):
+            while True:
+                if await _turn_status(services, project_id, turn_id) == "done":
+                    break
+                await asyncio.sleep(0.05)
+        assert await services.approvals.pending(project_id) == []
+
+
+async def _turn_status(services: Services, project_id: str, turn_id: str) -> str:
+    engine = await services.databases.project(project_id)
+    async with engine.connect() as conn:
+        status = (
+            await conn.execute(select(turns.c.status).where(turns.c.id == turn_id))
+        ).scalar_one()
+    return str(status)
