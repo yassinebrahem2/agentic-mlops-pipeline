@@ -20,22 +20,22 @@ Stage 3 is built through several plans. This overview holds what they share. Rea
 
 ## Plans
 
-| Plan | Branch | Covers | Consumes (besides merged code) | Produces | Starts |
-|---|---|---|---|---|---|
-| contracts (claim first) | `plan/stage-3-contracts` | I13 to I20 as models and protocols; the stage 3 schema; the `propose` class; the `stall` kind in the approvals store; the approval-card dispatcher | none | I13 to I20 in code, both migrations, the dispatcher | now |
-| rate-limits | `plan/stage-3-rate-limits` | §2: the key failover engine (per key and model), the error classification, the stall (model node, graph routing, card, Try again), the cooldown setting | task 1 none; the rest I13 (contracts task 2) | `KeyFailover` (I21) from task 1 (early PR); the stall | task 1 now; the rest after contracts task 2 |
-| embedders | `plan/stage-3-embedders` | §3: model types, the embedder verify step, type-filtered pickers, the embedder settings, the fake `/embeddings`, the `Embedders` service | I14; I21 | `Embedders` (I14) from task 1 (early PR) | after contracts task 1 and rate-limits task 1 |
-| connections | `plan/stage-3-connections` | §4, §5: the registry and its routes, the `local_folder` kind, the settings section, read-only mounts and the container fingerprint, DuckDB in the environment image, the host-loopback test | I15 | `Connections` (I15) and its routes from task 1 (early PR) | after contracts task 1 |
-| data-summary | `plan/stage-3-data-summary` | §6: the hook registry and the one injection point, `status_board` as a hook, `data_summary` with the DuckDB lock-down, the cache, the table-detail route | I15, I18 | `HookRegistry` (I18) from task 1 (early PR); `GET .../connections/{con}/tables/{table}` | task 1 after contracts task 1; the rest also after connections task 1 |
-| tracking | `plan/stage-3-tracking` | §7: sources and routes, the MLflow and GitHub Actions adapters, the fake MLflow server, the sync loop, `TrackingHistory`, `tracking_summary` | I16, I18 | `Tracking` (I16) and its routes from task 1 (early PR) | tasks 1 to 4 after contracts task 1; task 5 after data-summary task 1 (the hook registry) and proposals task 1 (I20, the production alias) |
-| knowledge | `plan/stage-3-knowledge` | §8: notes and routes, the `VectorStore` (FTS5 + sqlite-vec), `SaveNote`, `SearchNotes`, the `knowledge` hook, re-embedding | I14, I17, I18 | `Knowledge` (I17) | after contracts task 1, embedders task 1 and data-summary task 1 |
-| proposals | `plan/stage-3-proposals` | §9's mechanism: `Propose`, proposal records, superseding, the credential slots and their lifecycle, the `Handoffs` store and route, both cards | I13, I19, I20 | `Proposals` (I19) and `Handoffs` (I20) from task 1 (early PR) | after contracts task 2; task 4 also after connections task 1 (the `inspect` route) |
-| onboarding | `plan/stage-3-onboarding` | §9 applying both kinds, §10, §11: the wizard step, `connections` and `handoff` apply, the kickoff, the seven definitions (and removing `status_board:`), the end-to-end test | every plan above | the working flow | after every plan above merges |
-| pages | `plan/stage-3-pages` | §12: Models, Data and Runs pages, each with its nav entry; the tracking sources section in project settings (list, add, credential, last sync) | the tracking, connections, table-detail and handoff routes; the tracking credential route | three pages | after those routes are on `main` |
+| Plan | Branch | Covers | Consumes (besides merged code) | Produces | Starts | State |
+|---|---|---|---|---|---|---|
+| contracts (claim first) | `plan/stage-3-contracts` | I13 to I20 as models and protocols; the stage 3 schema; the `propose` class; the `stall` kind in the approvals store; the approval-card dispatcher | none | I13 to I20 in code, both migrations, the dispatcher | now | Planned |
+| rate-limits | `plan/stage-3-rate-limits` | §2: the key failover engine (per key and model), the error classification, the stall (model node, graph routing, card, Try again), the cooldown setting | task 1 none; the rest I13 | `KeyFailover` (I21) from task 1 (early PR); the stall | task 1 now; the rest after contracts task 3 | Planned |
+| embedders | `plan/stage-3-embedders` | §3: model types, the embedder verify step, type-filtered pickers, the embedder settings, the fake `/embeddings`, the `Embedders` service | I14; I21 | `Embedders` (I14) from task 1 (early PR) | after contracts task 1 and rate-limits task 1 | Planned |
+| connections | `plan/stage-3-connections` | §4, §5: the registry and its routes, the `local_folder` kind, the settings section, read-only mounts and the container fingerprint, DuckDB in the environment image, the host-loopback test | I15 | `Connections` (I15), its routes and `SecretFilesWarning` from task 1 (early PR) | after contracts task 1 | Planned |
+| data-summary | `plan/stage-3-data-summary` | §6: the hook registry and the one injection point, `status_board` as a hook, `data_summary` with the DuckDB lock-down, the cache, the table-detail route | I15, I18 | `HookRegistry` (I18) from task 1 (early PR); `GET .../connections/{con}/tables/{table}` | task 1 after contracts task 1; the rest also after connections task 1 | Planned |
+| tracking | `plan/stage-3-tracking` | §7: sources and routes, the MLflow and GitHub Actions adapters, the fake MLflow server, the sync loop, `TrackingHistory`, `tracking_summary` | I16, I18 | `Tracking` (I16) and its routes from task 1 (early PR) | tasks 1 to 4 after contracts task 1; task 5 after data-summary task 1 (the hook registry) and proposals task 1 (I20, the production alias) | Planned |
+| knowledge | `plan/stage-3-knowledge` | §8: notes and routes, the `VectorStore` (FTS5 + sqlite-vec), `SaveNote`, `SearchNotes`, the `knowledge` hook, re-embedding | I14, I17, I18 | `Knowledge` (I17) | after contracts task 1, embedders task 1 and data-summary task 1 | Planned |
+| proposals | `plan/stage-3-proposals` | §9's mechanism: `Propose`, proposal records, superseding, the credential slots and their lifecycle, the `Handoffs` store and route, both cards | I13, I19, I20 | `Proposals` (I19) and `Handoffs` (I20) from task 1 (early PR) | after contracts tasks 2 and 3; task 4 also after connections task 1 (`inspect`, `SecretFilesWarning`) | Planned |
+| onboarding | `plan/stage-3-onboarding` | §9 applying both kinds, §10, §11: the wizard step, `connections` and `handoff` apply, the kickoff, the seven definitions (and removing `status_board:`), the end-to-end test | every plan above | the working flow | after every plan above merges | Planned |
+| pages | `plan/stage-3-pages` | §12: Models, Data and Runs pages, each with its nav entry; the tracking sources section in project settings (list, add, credential, last sync) | the tracking, connections, table-detail and handoff routes; the tracking credential route | three pages and the sources section | after contracts task 2 and those routes are on `main` | Planned |
 
-**contracts' tasks:** task 1 (early PR): "Shared by contracts" below, and every model and protocol of I13 to I20 (types and the schema only, mergeable within a day). Task 2 (early PR): I13 in the approvals service, store and parts, the `propose` class in the policy, and the card dispatcher with `ApprovalControls`. Task 3: the regenerated `openapi.json` and frontend types for everything above.
+**contracts' tasks:** task 1 (early PR, small): "Shared by contracts" below except the payloads, and the models and protocols of I13 to I18 and I21's types it names; five plans start on it. Task 2 (early PR): the proposal and handoff payloads (I19, I20) with their validators and `tzdata`; proposals, onboarding and pages need it. Task 3 (early PR): I13 in the approvals service, store and parts, the `propose` class in the policy, and the card dispatcher with `ApprovalControls`. Task 4: the regenerated `openapi.json` and the type checks for everything above.
 
-Owners claim plans as `AGENTS.md` says; contracts first, since every other plan starts on its early PRs.
+Owners claim plans as `AGENTS.md` says; contracts first, since every other plan starts on its early PRs. With ten plans and six people, an owner whose next task waits on another plan may claim a second plan (`AGENTS.md`).
 
 ## Interfaces between plans
 
@@ -52,7 +52,7 @@ contracts writes these into code exactly as here (except where a line names anot
 - Removing a project deletes its secrets (`ProjectSecrets.delete_prefix(project_prefix(id))`, contracts' lines in `workspace/service.py`'s removal path).
 - The full `HandoffPayload` and `ConnectionsPayload` (I19).
 
-### I13: approvals, parts and turns (changes to I9 and the approvals contract; contracts task 2)
+### I13: approvals, parts and turns (changes to I9 and the approvals contract; types in contracts task 1, behavior in contracts task 3)
 
 - `ApprovalKind = Literal["tool", "stall"]`. The approval record, `ApprovalView` and `ApprovalPart` gain `kind`, `step: int | None` and `proposal_kind: str | None`. For a `stall`, `tool`, `tool_call_id` and `risk_class` are null; existing rows are `tool`.
 - `ToolContext` gains `tool_call_id` (I19 needs it).

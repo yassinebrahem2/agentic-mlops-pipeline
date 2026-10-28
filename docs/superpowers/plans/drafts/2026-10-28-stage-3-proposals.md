@@ -32,7 +32,7 @@
 | 1 | The proposal store and service, `ProposalKinds`, `Handoffs`, the three routes | contracts tasks 1 and 2 | yes |
 | 2 | The approval observer, superseding and restart recovery | task 1 | no |
 | 3 | The `Propose` tool | tasks 1 and 2 | no |
-| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 2, connections task 1 (`inspect`) | no |
+| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 2, connections task 1 (`inspect`, `SecretFilesWarning`) | no |
 | 5 | The handoff card: every section, the credential field, the warnings | task 4 | no |
 
 Task 1 gets an early PR from `plan/stage-3-proposals-task1`: onboarding consumes `Proposals`, `ProposalKinds` and `Handoffs`. It leaves `main` working: nothing creates a proposal yet, so the routes answer 404 and `null`.
@@ -129,7 +129,7 @@ class ProposeArgs(BaseModel):   # extra="forbid"
 - A decided card shows the status and, when approved, the applied and failed parts from `result`; superseded and cancelled cards show their status with no controls and no `inspect` call. Reuse `ApprovalControls` and the stage 2 status badge; copy nothing. The Inbox needs no change: it already renders `ApprovalCard`.
 - Strict TypeScript, no `any`.
 
-**Tests (stop condition):** stubbed routes as `ApprovalCard.test.tsx` does: every connection renders with its reason; each connection's `inspect` result is handed to `SecretFilesWarning` (asserted by rendering the real component with a secret-file finding and an unsupported-file finding, so the test fails if the card stops using it); an `inspect` error shows on its connection and the decision still posts; a pending card posts the decision with the note; a failed proposal load shows the fallback preview and still lets the user decide; a decided card shows status, applied and failed parts, no controls and no `inspect` call; a duplicate (proposal `rejected`, approval `pending`) shows its reason above working Approve and Reject controls; a superseded card shows its status; the dispatcher renders this card for `proposal_kind` `connections` and the old card for other tools. `npm test`, lint, format check, build; CI green. No e2e here (onboarding's flow covers it).
+**Tests (stop condition):** stubbed routes as `ApprovalCard.test.tsx` does: every connection renders with its reason; each connection's `inspect` result is handed to `SecretFilesWarning` (asserted by rendering the real component with a secret-file finding and an unsupported-file finding, with a distinctive `Finding.reason` string in the stub, asserted verbatim in the card, so the test proves the wording is the backend's and fails if the card stops using the component); an `inspect` error shows on its connection and the decision still posts; a pending card posts the decision with the note; a failed proposal load shows the fallback preview and still lets the user decide; a decided card shows status, applied and failed parts, no controls and no `inspect` call; a duplicate (proposal `rejected`, approval `pending`) shows its reason above working Approve and Reject controls; a superseded card shows its status; the dispatcher renders this card for `proposal_kind` `connections` and the old card for other tools. `npm test`, lint, format check, build; CI green. No e2e here (onboarding's flow covers it).
 
 ---
 
