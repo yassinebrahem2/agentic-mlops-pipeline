@@ -175,7 +175,7 @@ All ask at every level, `bypass` included, as stage 3 decided.
 ## 10. Verdicts and the baseline record
 
 - Every incident has verdict buttons (real issue / not an issue / wrong type, with the right type), in the app and in the morning report's link. A user can also report a miss (something the app should have caught, with its time).
-- Labels confirm or refute model performance incidents automatically once enough arrive (the minimum sample size); the confirmation is recorded as a verdict with source `labels`.
+- Labels confirm or refute model performance incidents automatically once enough arrive (the minimum sample size): confirmation reads the standard results of Model Performance's label-based checks (agent-written, run on the team's scheduler, part of its first audit's expected output); it is recorded as a verdict with source `labels`.
 - **Baseline record.** The team's existing monitoring (`origin: "team"`) is read and stored like every result, from the first one, and never notifies anyone or opens incidents on its own. For each incident, the app records whether and when a team check fired on the same cause key. Existing-monitoring alerts the agents stayed silent on are listed for verdicts. This is what stage 6's Stats and the evaluation compare.
 
 ## 11. UI
@@ -202,6 +202,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
   | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
   |---|---|---|
   | deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
+  | a pipeline run that deploys, where the handoff makes the team's gate the promotion authority (stage 5) | runs without asking at `ask` and above within an approved training policy | asks |
   | train | runs without asking at `ask` and above within an approved training policy (stage 5) | asks |
   | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
   | hold | runs without asking at every level except `suggest` (tier 1); at `suggest` the alert recommends the hold and the person applies it in one click through the approval path | same |
@@ -232,7 +233,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
 - The end-to-end test passes and CI is green on every job.
 - After a simulated night with the app stopped halfway, restarting it catches up with no missed and no duplicated incident.
-- No deploy hook runs without a person's approval; no hook runs outside an approval, an approved rule or an approved training policy.
+- No deploy happens outside the team's own promotion mechanism: a person's approval, or, where the handoff makes the team's gate the authority, that gate within an approved training policy; no hook runs outside an approval, an approved rule or an approved training policy.
 
 ## Build order
 
