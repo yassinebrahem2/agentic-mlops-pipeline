@@ -71,6 +71,7 @@ const ollama: Provider = {
 
 const groqLlama: ModelEntry = {
   address: "groq:llama-3.3-70b-versatile",
+  model_type: "chat",
   provider_id: "prv_groq",
   provider_name: "groq",
   wire_model_id: "llama-3.3-70b-versatile",
@@ -85,6 +86,7 @@ const groqLlama: ModelEntry = {
 
 const ollamaMistral: ModelEntry = {
   address: "ollama:mistral",
+  model_type: "chat",
   provider_id: "prv_ollama",
   provider_name: "ollama",
   wire_model_id: "mistral",
@@ -99,6 +101,7 @@ const ollamaMistral: ModelEntry = {
 
 const brokenModel: ModelEntry = {
   address: "groq:broken-model",
+  model_type: "chat",
   provider_id: "prv_groq",
   provider_name: "groq",
   wire_model_id: "broken-model",

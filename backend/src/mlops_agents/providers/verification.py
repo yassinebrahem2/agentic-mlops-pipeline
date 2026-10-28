@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 import httpx2
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
-from mlops_agents.providers.bridge import build_chat_model
-from mlops_agents.providers.errors import classify
+from mlops_agents.providers.bridge import build_chat_model, build_embeddings
+from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind, classify
 
 PROBE_TOOL: dict[str, Any] = {
     "type": "function",
@@ -62,3 +63,33 @@ async def probe_model(
     else:
         detail = None
     return ProbeResult(tool_calling, streaming, detail)
+
+
+EMBED_PROBE_TEXT = "a short sentence about model monitoring"
+
+
+@dataclass(frozen=True)
+class EmbedderProbe:
+    dimensions: int
+
+
+async def probe_embedder(
+    base_url: str,
+    api_key: str | None,
+    wire_model_id: str,
+    *,
+    http: httpx2.AsyncClient,
+    timeout: float = 60.0,  # noqa: ASYNC109 -- passed to the OpenAI client, which applies it per request
+) -> EmbedderProbe:
+    embeddings = build_embeddings(base_url, api_key, wire_model_id, http=http, timeout=timeout)
+    try:
+        vector = await embeddings.aembed_query(EMBED_PROBE_TEXT)
+    except Exception as exc:
+        raise classify(exc, [api_key] if api_key else []) from None
+
+    if not vector or not all(math.isfinite(x) for x in vector):
+        raise ProviderCallError(
+            ProviderErrorKind.UNKNOWN,
+            "The provider's /embeddings answer holds no usable vector.",
+        )
+    return EmbedderProbe(dimensions=len(vector))

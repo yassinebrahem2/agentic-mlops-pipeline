@@ -29,6 +29,10 @@ from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
+from mlops_agents.connections.contract import Connections
+from mlops_agents.connections.kinds.local_folder import LocalFolderKind
+from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.errors import DomainError
@@ -40,6 +44,7 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
@@ -64,6 +69,7 @@ class Services:
     agent_settings: AgentSettingsService
     sessions: AgentSessions
     messaging_settings: MessagingSettings
+    connections: Connections
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -72,6 +78,7 @@ class Services:
     approvals: Approvals
     wakeups: WakeupService
     failover: KeyFailover
+    embedders: EmbeddersService
 
 
 async def _app_secrets(
@@ -130,6 +137,8 @@ async def build_services(
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
     providers = ProvidersService(databases, keystore, http)
+    failover = KeyFailover()
+    embedders = EmbeddersService(databases, providers, failover, http)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
@@ -141,6 +150,9 @@ async def build_services(
     # The one approval store: it holds the approval observers, so every transition reaches them.
     approval_store = ApprovalStore(databases)
     gate = ApprovalGate(databases, store=approval_store, audit_log=audit, event_log=events)
+
+    kind_registry = KindRegistry([LocalFolderKind(paths.root)])
+    connections = ConnectionsService(databases, events, kind_registry)
 
     sandbox = SandboxService(
         docker_runner,
@@ -243,6 +255,7 @@ async def build_services(
         agent_settings=agent_settings,
         sessions=sessions,
         messaging_settings=messaging_settings,
+        connections=connections,
         sandbox=sandbox,
         events=events,
         audit=audit,
@@ -250,5 +263,6 @@ async def build_services(
         tasks=tasks,
         approvals=approvals,
         wakeups=wakeups,
-        failover=KeyFailover(),
+        failover=failover,
+        embedders=embedders,
     )
