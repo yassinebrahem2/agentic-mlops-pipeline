@@ -180,8 +180,3 @@ Task 1 gets an early PR, from `plan/stage-3-data-summary-task1`: the tracking an
 **Checks:** `uv run ruff check`, `uv run ruff format`, `uv run pyright`, `uv run pytest`; from `frontend/`: `npm run lint`, `npm run format:check`, `npm test`, `npm run build`.
 
 ---
-
-## Interface gaps
-
-Still open after the overview's revision:
-- **The overview's "three lines in `executor.py`" is five** now that hooks also run on resume: the two `build` calls, the resume `Command` (one call to `context.resume_command`) and the two `build_messages` renames. The overview's data-summary line still says three; the lead should update it, since I18 requires hooks on resume and the overview names no mechanism (this plan's: a system message with the checkpoint's own first-message id, replaced through `Command(update=...)`, tested first). Not a gap: `DATA_SUMMARY_MAX_CHARS = 20_000` and `PROFILE_TIMEOUT_S = 30` in `data/constants.py` are proposals the lead may change.
