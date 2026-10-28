@@ -208,8 +208,6 @@ async def build_services(
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
     stack.push_async_callback(sessions.close)
-    await wakeups.start()
-    stack.push_async_callback(wakeups.close)
 
     approvals = ApprovalsService(
         databases=databases,
@@ -218,6 +216,13 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+
+    # Last, because starting fires the due wake-ups, which can recover projects and expire
+    # approvals: every service and observer hook must exist before anything can fire a
+    # transition. Later plans register their observers above this line. Close is registered
+    # first so a failed start still stops the timer.
+    stack.push_async_callback(wakeups.close)
+    await wakeups.start()
 
     return Services(
         settings=settings,
