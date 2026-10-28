@@ -1,6 +1,6 @@
 # Stage 4: The monitoring loop
 
-Date: 2026-10-28. Status: approved by the lead on 2026-10-28; amended with the stage 5 spec (training policies, fix requests, one evaluation implementation), pending that spec's approval.
+Date: 2026-10-28. Status: approved by the lead on 2026-10-28; amended with the stage 5 spec (training policies, fix requests, evaluation in the team's pipeline, continuous PRs), pending that spec's approval.
 Contracts (IDs, folder layout, SQLite rules, agent definitions, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and decisions: `project_knowledge.md` (entries of 2026-10-27 and 2026-10-28). Stages 1 to 3 stay as their specs say, unless changed here.
 
 ## Goal
@@ -135,7 +135,8 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
 - **Hold** is tier 1: the app records the hold on the incident and, when the team registered a hold or quarantine command, runs it (blocking a promotion, quarantining a batch) without asking. When the team has no such command, a hold is a notification only; the first audit reports the missing command as a gap.
 - **Pre-approved rules** (`rul`), proposed by agents and approved by the user (proposal kind `rule`, §9): a condition over standard result records (check IDs, values, thresholds, a time window), the hook it allows (only kinds rollback, rerun, fall back), and limits (at most once per incident, per day). When an agent runs a hook citing a rule, **the gate evaluates the rule's condition in code against the stored records**; only when it holds, and the limits allow, does the hook run without asking (at any level except `suggest`). The agent can cite a rule; it can never certify one. The incident's timeline records the rule and the records that satisfied it. Otherwise the hook asks as `deploy` does.
 - **A human always decides** a deploy hook (tier 3): it always asks, `bypass` included, like `propose`. At night it waits for the person; the morning report lists it. A train hook runs without asking only within an approved training policy (stage 5); otherwise it asks.
-- After a deploy, the deployment agent compares the new version with the previous one using stage 5's evaluation (one implementation: parity, replay on recent production inputs, early labels with their counts); clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
+- After a deploy (by the team's gate or a person), the deployment agent compares the new version with the previous one from the results the team's evaluation step and checks write (stage 5), and early labels with their counts; clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
+- **Fixing causes.** Beyond responding, agents fix what caused an incident through PRs to the team's system (a missing validation, a fragile job, a weak check), continuously, as stage 5's principle says.
 
 ## 7. Severity and routing (Alert Prioritization)
 
