@@ -15,6 +15,8 @@ from sqlalchemy import select
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import ToolFinished
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -199,6 +201,10 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     await agent_settings.set_default_model("orchestrator", f"{prov.name}:fake-tools")
 
     status_board = SqliteStatusBoard(catalog, events)
+    status_board_hook = StatusBoardHook()
+    status_board_hook.bind(status_board)
+    hooks = HookRegistry()
+    hooks.register(status_board_hook)
     session_mgr = SessionManager(
         databases=databases,
         workspace=workspace,
@@ -212,7 +218,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         turn_end=NoTurnEndCheck(),
         workspaces=tasks_svc,
         approval_store=ApprovalStore(databases),
-        status_board=status_board,
+        hooks=hooks,
     )
 
     session_view = await session_mgr.get(project.id, "orchestrator")

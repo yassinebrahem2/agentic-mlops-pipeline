@@ -13,6 +13,8 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
@@ -177,11 +179,17 @@ async def build_services(
         http=http,
         databases=databases,
     )
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names())
+    # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
+    # status board needs the catalog, so its hook is bound once the board exists.
+    hooks = HookRegistry()
+    status_board_hook = StatusBoardHook()
+    hooks.register(status_board_hook)
+    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
     status_board = SqliteStatusBoard(catalog, events)
+    status_board_hook.bind(status_board)
     list_agents = tools.get("ListAgents")
     if isinstance(list_agents, ListAgentsTool):
         list_agents.bind(catalog, status_board)
@@ -205,7 +213,7 @@ async def build_services(
         approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
-        status_board=status_board,
+        hooks=hooks,
         audit_log=audit,
         event_log=events,
     )
