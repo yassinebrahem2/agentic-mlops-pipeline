@@ -10,4 +10,6 @@ RUN python -m venv /opt/venv && \
     echo 'export PATH="/opt/venv/bin:$PATH"' >> /etc/profile.d/00-venv.sh && \
     echo 'export PATH="/opt/venv/bin:$PATH"' >> /etc/bash.bashrc
 
+# @duckdb
+
 WORKDIR /workspace
