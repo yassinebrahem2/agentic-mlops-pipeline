@@ -14,6 +14,8 @@ test("approvals carry their kind and the nullable stall fields", () => {
   expectTypeOf<ApprovalView["kind"]>().toEqualTypeOf<"tool" | "stall">();
   expectTypeOf<ApprovalView["tool"]>().toEqualTypeOf<string | null>();
   expectTypeOf<ApprovalView["risk_class"]>().toEqualTypeOf<RiskClass | null>();
+  expectTypeOf<ApprovalView["tool_call_id"]>().toEqualTypeOf<string | null>();
+  expectTypeOf<ApprovalPart["tool_call_id"]>().toEqualTypeOf<string | null>();
   expectTypeOf<ApprovalView["step"]>().toEqualTypeOf<number | null>();
   expectTypeOf<ApprovalView["proposal_kind"]>().toEqualTypeOf<string | null>();
   // A field with a pydantic default is emitted optional on the part.
