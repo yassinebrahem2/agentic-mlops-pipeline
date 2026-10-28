@@ -11,6 +11,7 @@ from mlops_agents.connections.kinds.local_folder import LocalFolderKind
 from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.ids import new_id
 from mlops_agents.paths import DataPaths
 from mlops_agents.sandbox.docker import CliDockerRunner
 from mlops_agents.sandbox.service import SandboxService
@@ -27,7 +28,7 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
 
     databases = Databases(paths)
     await databases.app()
-    project_id = "prj_duckdb_docker"
+    project_id = new_id("prj")
     await databases.project(project_id)
 
     events = SqliteEventLog(databases)
@@ -54,7 +55,7 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
         connections=conns_service,
     )
     service = SandboxService(runner=runner, projects=projects, events=events)
-    task = TaskRef("tsk_duckdb_req", "DuckDB Requirements Task", "branch", worktree, "active")
+    task = TaskRef(new_id("tsk"), "DuckDB Requirements Task", "branch", worktree, "active")
 
     try:
         # 1. duckdb --version prints DUCKDB_VERSION
@@ -117,7 +118,7 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
     runner = CliDockerRunner()
 
     # 1. Base template (no dependency files)
-    project_id_base = "prj_duckdb_base"
+    project_id_base = new_id("prj")
     await databases.project(project_id_base)
     worktree_base = tmp_path / "worktree_base"
     worktree_base.mkdir()
@@ -127,7 +128,7 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
         connections=conns_service,
     )
     service_base = SandboxService(runner=runner, projects=projects_base, events=events)
-    task_base = TaskRef("tsk_duckdb_base", "DuckDB Base Task", "branch", worktree_base, "active")
+    task_base = TaskRef(new_id("tsk"), "DuckDB Base Task", "branch", worktree_base, "active")
 
     try:
         res_ver = await service_base.run(
@@ -149,7 +150,7 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
         await service_base.close()
 
     # 2. UV template (pyproject.toml and uv.lock)
-    project_id_uv = "prj_duckdb_uv"
+    project_id_uv = new_id("prj")
     await databases.project(project_id_uv)
     worktree_uv = tmp_path / "worktree_uv"
     worktree_uv.mkdir()
@@ -174,7 +175,7 @@ async def test_real_docker_duckdb_base_and_uv_images(tmp_path: Path) -> None:
         connections=conns_service,
     )
     service_uv = SandboxService(runner=runner, projects=projects_uv, events=events)
-    task_uv = TaskRef("tsk_duckdb_uv", "DuckDB UV Task", "branch", worktree_uv, "active")
+    task_uv = TaskRef(new_id("tsk"), "DuckDB UV Task", "branch", worktree_uv, "active")
 
     try:
         res_ver = await service_uv.run(project_id_uv, task_uv, "duckdb --version", timeout_s=300)
