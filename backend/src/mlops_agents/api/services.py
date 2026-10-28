@@ -40,6 +40,10 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.proposals.contract import Handoffs
+from mlops_agents.proposals.handoffs import SqliteHandoffs
+from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
@@ -74,6 +78,9 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    proposals: ProposalsService
+    proposal_kinds: ProposalKinds
+    handoffs: Handoffs
 
 
 async def _app_secrets(
@@ -225,6 +232,9 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+    handoffs = SqliteHandoffs(databases)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -256,4 +266,7 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
+        handoffs=handoffs,
     )
