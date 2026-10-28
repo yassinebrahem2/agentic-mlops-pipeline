@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import httpx2
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import SecretStr
 
 # Self-hosted servers usually ignore the key, but the OpenAI client refuses to start without one.
 KEYLESS = "not-needed"
+EMBED_BATCH = 64
 
 
 def build_chat_model(
@@ -30,6 +31,26 @@ def build_chat_model(
         max_retries=0,
         timeout=timeout,
         http_async_client=http,
+    )
+
+
+def build_embeddings(
+    base_url: str,
+    api_key: str | None,
+    wire_model_id: str,
+    *,
+    http: httpx2.AsyncClient,
+    timeout: float = 120.0,
+) -> OpenAIEmbeddings:
+    return OpenAIEmbeddings(
+        base_url=base_url,
+        api_key=SecretStr(api_key or KEYLESS),
+        model=wire_model_id,
+        max_retries=0,
+        timeout=timeout,
+        http_async_client=http,
+        check_embedding_ctx_length=False,
+        chunk_size=EMBED_BATCH,
     )
 
 

@@ -40,6 +40,7 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
@@ -73,6 +74,7 @@ class Services:
     approvals: Approvals
     wakeups: WakeupService
     failover: KeyFailover
+    embedders: EmbeddersService
 
 
 async def _app_secrets(
@@ -139,6 +141,7 @@ async def build_services(
 
     failover = KeyFailover(on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
+    embedders = EmbeddersService(databases, providers, failover, http)
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings)
@@ -262,4 +265,5 @@ async def build_services(
         approvals=approvals,
         wakeups=wakeups,
         failover=failover,
+        embedders=embedders,
     )

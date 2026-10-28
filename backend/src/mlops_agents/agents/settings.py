@@ -207,8 +207,9 @@ class AgentSettingsService:
                 ),
             )
 
-        if entry.problem is not None:
-            return _ModelProblem(code="model_not_usable", message=entry.problem)
+        problem = entry.problem_for("chat")
+        if problem is not None:
+            return _ModelProblem(code="model_not_usable", message=problem)
 
         keys: list[str] = []
         if provider.kind == "hosted":
@@ -275,5 +276,6 @@ class AgentSettingsService:
 
     async def _require_usable_model(self, address: str) -> None:
         entry = await self._providers.require_model(address)
-        if entry.problem is not None:
-            raise DomainError("model_not_usable", entry.problem, status=409)
+        problem = entry.problem_for("chat")
+        if problem is not None:
+            raise DomainError("model_not_usable", problem, status=409)

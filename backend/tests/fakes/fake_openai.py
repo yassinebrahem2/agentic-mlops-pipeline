@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import math
+import re
 import socket
 import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -28,6 +31,26 @@ MODELS: dict[str, int] = {
     "fake-mixed-tools": 32768,
     "fake-write": 32768,
 }
+EMBEDDING_MODELS: dict[str, int] = {
+    "fake-embed": 16,
+    "fake-embed-wide": 32,
+}
+
+
+def fake_embedding(text: str, dimensions: int) -> list[float]:
+    words = re.findall(r"\w+", text.lower())
+    vec = [0.0] * dimensions
+    for w in words:
+        digest = hashlib.sha256(w.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:4], "big") % dimensions
+        sign = 1.0 if (digest[4] & 1) == 0 else -1.0
+        vec[idx] += sign
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm > 0:
+        vec = [x / norm for x in vec]
+    return vec
+
+
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "Read": {"file_path": "README.md"},
     "report_capabilities": {"ok": True},
@@ -68,6 +91,9 @@ class FakeState:
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     key_scripts: dict[str, list[KeyOutcome]] = field(default_factory=dict[str, list[KeyOutcome]])
+    # Embeddings
+    embedding_wrong_dimensions: int | None = None
+    embedding_truncate_count: int | None = None
     _slow_gate: threading.Event = field(default_factory=_open_gate)
 
     def script_for_key(self, key: str, outcomes: list[KeyOutcome]) -> None:
@@ -96,6 +122,8 @@ class FakeState:
         self.sse_error_remaining = 0
         self.sse_error_code = "tool_use_failed"
         self.sse_error_message = "Tool call validation failed in stream"
+        self.embedding_wrong_dimensions = None
+        self.embedding_truncate_count = None
         self.requests.clear()
         self.request_headers.clear()
         self.key_scripts.clear()
@@ -286,20 +314,40 @@ async def _stream(
     yield "data: [DONE]\n\n"
 
 
+def _is_authorized(state: FakeState, request: Request) -> bool:
+    if state.auth_fail:
+        return False
+    return state.required_key is None or (
+        request.headers.get("authorization") == f"Bearer {state.required_key}"
+    )
+
+
+def embeddings_failure(state: FakeState, request: Request) -> Response | None:
+    if not _is_authorized(state, request):
+        auth_hdr = request.headers.get("authorization") or ""
+        msg = f"Invalid API key: {auth_hdr}" if auth_hdr else "Invalid API key"
+        return _error(401, msg, "invalid_api_key")
+    if state.rate_limit_remaining > 0:
+        state.rate_limit_remaining -= 1
+        return _error(429, "Rate limit reached", "rate_limit_exceeded", {"retry-after": "0"})
+    if state.server_error_remaining > 0:
+        state.server_error_remaining -= 1
+        return _error(503, "The model is overloaded", "overloaded")
+    return None
+
+
 def create_fake_app(state: FakeState) -> FastAPI:
     app = FastAPI()
 
     def authorized(request: Request) -> bool:
-        if state.auth_fail:
-            return False
-        return state.required_key is None or (
-            request.headers.get("authorization") == f"Bearer {state.required_key}"
-        )
+        return _is_authorized(state, request)
 
     async def list_models(request: Request) -> Response:
         if not authorized(request):
             return _error(401, "Invalid API key", "invalid_api_key")
-        data = [{"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()]
+        data = [{"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()] + [
+            {"id": m, "object": "model"} for m in EMBEDDING_MODELS
+        ]
         return JSONResponse({"object": "list", "data": data})
 
     async def chat(request: Request) -> Response:
@@ -336,8 +384,56 @@ def create_fake_app(state: FakeState) -> FastAPI:
         stream = _stream(state, model, body["messages"], body.get("tools") or [], usage)
         return StreamingResponse(stream, media_type="text/event-stream")
 
+    async def embeddings(request: Request) -> Response:
+        if not authorized(request):
+            return _error(401, "Invalid API key", "invalid_api_key")
+        body: dict[str, Any] = await request.json()
+        state.requests.append(body)
+        state.request_headers.append(dict(request.headers))
+        failure = embeddings_failure(state, request)
+        if failure is not None:
+            return failure
+        model = str(body.get("model", ""))
+        if model not in EMBEDDING_MODELS:
+            return _error(404, f"Unknown model {model}", "model_not_found")
+        raw_input: object = body.get("input", "")
+        if isinstance(raw_input, str):
+            inputs = [raw_input]
+        elif isinstance(raw_input, list):
+            raw_list = cast(list[object], raw_input)
+            inputs = [str(x) for x in raw_list]
+        else:
+            inputs = [str(raw_input)]
+        dim = (
+            state.embedding_wrong_dimensions
+            if state.embedding_wrong_dimensions is not None
+            else EMBEDDING_MODELS[model]
+        )
+        data = [
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": fake_embedding(text, dim),
+            }
+            for i, text in enumerate(inputs)
+        ]
+        if state.embedding_truncate_count is not None:
+            data = data[: state.embedding_truncate_count]
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": data,
+                "model": model,
+                "usage": {
+                    "prompt_tokens": len(inputs) * 10,
+                    "total_tokens": len(inputs) * 10,
+                },
+            }
+        )
+
     app.add_api_route("/v1/models", list_models, methods=["GET"])
     app.add_api_route("/v1/chat/completions", chat, methods=["POST"])
+    app.add_api_route("/v1/embeddings", embeddings, methods=["POST"])
 
     return app
 
