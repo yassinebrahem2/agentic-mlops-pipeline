@@ -140,7 +140,7 @@ async def test_executor_cancellation_during_slow_tool(
         workspaces=workspaces,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(
@@ -236,7 +236,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
         workspaces=workspaces,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(

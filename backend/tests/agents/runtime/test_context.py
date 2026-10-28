@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -356,17 +357,30 @@ def _agent_message(parts: list[Part], status: MessageStatus) -> MessageView:
     )
 
 
-def test_build_messages_skips_approval_parts() -> None:
+STALL_PART = ApprovalPart(
+    type="approval",
+    approval_id="apr_stall",
+    tool_call_id=None,
+    preview=Preview(kind="text", title="Stalled: no usable key", body="key 1: limited"),
+    status="approved",
+    note=None,
+    kind="stall",
+    step=1,
+)
+TOOL_APPROVAL_PART = ApprovalPart(
+    type="approval",
+    approval_id="apr_1",
+    tool_call_id="c1",
+    preview=Preview(kind="diff", title="Write a.py", body="+x"),
+    status="approved",
+    note=None,
+)
+
+
+@pytest.mark.parametrize("approval", [TOOL_APPROVAL_PART, STALL_PART], ids=["tool", "stall"])
+def test_build_messages_skips_approval_parts(approval: ApprovalPart) -> None:
     call = ToolCallPart(type="tool_call", id="c1", name="Write", input={"path": "a.py"})
     result = ToolResultPart(type="tool_result", tool_call_id="c1", content="done", is_error=False)
-    approval = ApprovalPart(
-        type="approval",
-        approval_id="apr_1",
-        tool_call_id="c1",
-        preview=Preview(kind="diff", title="Write a.py", body="+x"),
-        status="approved",
-        note=None,
-    )
     text = TextPart(type="text", text="Writing.")
     with_approval = build_messages(
         _make_definition(),

@@ -1,23 +1,28 @@
-"""Approval storage backed by project.db (I12)."""
+"""Approval storage backed by project.db (I12, I13), and the one place that tells the approval
+observers: every approval asked and every move out of pending passes through this store."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert
 
-from mlops_agents.agents.approvals.contract import ApprovalView
-from mlops_agents.agents.runtime.contract import ApprovalStatus
+from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
+from mlops_agents.agents.approvals.observers import ApprovalObservers
+from mlops_agents.agents.runtime.contract import ApprovalKind, ApprovalStatus
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.clock import now_iso
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import approvals, turns
+from mlops_agents.storage.tables import approvals, messages, sessions, turns
 
 _UNSET = object()
+# The WHERE of the partial unique index approvals_stall_step (0004_stage3.sql), as literal SQL:
+# SQLite matches an upsert's conflict target to a partial index only by its written terms.
+_PENDING_STALL = text("kind = 'stall' AND status = 'pending'")
 
 
 class ApprovalRecord(ApprovalView):
@@ -37,9 +42,7 @@ def _row_to_record(row: Any) -> ApprovalRecord:
         preview_obj = cast(Preview, preview_raw)
 
     risk_class_raw = row["risk_class"]
-    risk_class_obj = (
-        RiskClass(risk_class_raw) if not isinstance(risk_class_raw, RiskClass) else risk_class_raw
-    )
+    risk_class_obj = None if risk_class_raw is None else RiskClass(risk_class_raw)
     task_id = str(row["task_id"]) if row["task_id"] is not None else None
 
     return ApprovalRecord(
@@ -48,9 +51,12 @@ def _row_to_record(row: Any) -> ApprovalRecord:
         session_id=str(row["session_id"]),
         message_id=str(row["message_id"]),
         agent=str(row["agent"]),
-        tool_call_id=str(row["tool_call_id"]),
-        tool=str(row["tool"]),
+        kind=cast(ApprovalKind, row["kind"]),
+        tool_call_id=row["tool_call_id"],
+        tool=row["tool"],
         risk_class=risk_class_obj,
+        step=row["step"],
+        proposal_kind=row["proposal_kind"],
         preview=preview_obj,
         status=cast(ApprovalStatus, row["status"]),
         note=row["note"],
@@ -61,10 +67,15 @@ def _row_to_record(row: Any) -> ApprovalRecord:
 
 
 class ApprovalStore:
-    """Store for approval requests in project.db."""
+    """Store for approval requests in project.db. The app has one (`build_services`), so an
+    observer added once is told of every transition."""
 
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
+        self._observers = ApprovalObservers()
+
+    def add_observer(self, observer: ApprovalObserver) -> None:
+        self._observers.add(observer)
 
     async def create(
         self,
@@ -74,16 +85,23 @@ class ApprovalStore:
         session_id: str,
         message_id: str,
         agent: str,
-        tool_call_id: str,
-        tool: str,
-        risk_class: RiskClass | str,
+        tool_call_id: str | None,
+        tool: str | None,
+        risk_class: RiskClass | str | None,
         preview: Preview,
         status: ApprovalStatus = "pending",
         note: str | None = None,
         id: str | None = None,
         task_id: str | None = None,
+        proposal_kind: str | None = None,
     ) -> ApprovalRecord:
-        """Create an approval request."""
+        """Create a tool approval request."""
+        if tool is None or tool_call_id is None or risk_class is None:
+            raise DomainError(
+                "approval_tool_missing",
+                "A tool approval needs its tool, its tool call ID and its risk class.",
+                status=422,
+            )
         apr_id = id if id is not None else new_id("apr")
         created_at = now_iso()
         decided_at = (
@@ -111,13 +129,88 @@ class ApprovalStore:
                     created_at=created_at,
                     decided_at=decided_at,
                     task_id=task_id,
+                    kind="tool",
+                    proposal_kind=proposal_kind,
                 )
             )
 
         rec = await self.get(project_id, apr_id)
         if rec is None:
             raise RuntimeError(f"Failed to load created approval {apr_id}")
+        await self._observers.tell("asked", [rec])
         return rec
+
+    async def create_stall(
+        self, project_id: str, turn_id: str, step: int, preview: Preview
+    ) -> tuple[ApprovalRecord, bool]:
+        """The pending stall of the turn's step, and whether this call created it. Idempotent:
+        a re-run of the model node, or two calls at once, get the one record."""
+        engine = await self._databases.project(project_id)
+        apr_id = new_id("apr")
+        async with engine.begin() as conn:
+            turn = (
+                await conn.execute(
+                    select(turns.c.session_id, sessions.c.agent)
+                    .select_from(turns.join(sessions, turns.c.session_id == sessions.c.id))
+                    .where(turns.c.id == turn_id)
+                )
+            ).first()
+            if turn is None:
+                raise DomainError("turn_not_found", f"Turn '{turn_id}' does not exist.", status=404)
+            message_id = (
+                await conn.execute(
+                    select(messages.c.id)
+                    .where(messages.c.turn_id == turn_id, messages.c.author_kind == "agent")
+                    .order_by(messages.c.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if message_id is None:
+                raise DomainError(
+                    "message_not_found",
+                    f"Turn '{turn_id}' has no agent message to hold its stall.",
+                    status=404,
+                )
+            # The insert is the transaction's first write: it waits for a concurrent call's
+            # transaction to commit, so the select after it sees that call's row.
+            await conn.execute(
+                insert(approvals)
+                .values(
+                    id=apr_id,
+                    turn_id=turn_id,
+                    session_id=str(turn[0]),
+                    message_id=str(message_id),
+                    agent=str(turn[1]),
+                    preview=preview.model_dump_json(),
+                    status="pending",
+                    created_at=now_iso(),
+                    kind="stall",
+                    step=step,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[approvals.c.turn_id, approvals.c.step],
+                    index_where=_PENDING_STALL,
+                )
+            )
+            row = (
+                (
+                    await conn.execute(
+                        select(approvals).where(
+                            approvals.c.turn_id == turn_id,
+                            approvals.c.step == step,
+                            approvals.c.kind == "stall",
+                            approvals.c.status == "pending",
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        record = _row_to_record(row)
+        created = record.id == apr_id
+        if created:
+            await self._observers.tell("asked", [record])
+        return record, created
 
     async def get(self, project_id: str, approval_id: str) -> ApprovalRecord | None:
         """Fetch an approval by ID."""
@@ -208,6 +301,8 @@ class ApprovalStore:
             raise DomainError(
                 "approval_not_found", f"Approval '{approval_id}' does not exist.", status=404
             )
+        if rec.status != "pending":
+            await self._observers.tell("decided", [rec])
         return rec
 
     async def decide(
@@ -222,6 +317,10 @@ class ApprovalStore:
         asked under: a decision never changes it."""
         status: ApprovalStatus = "approved" if approve else "rejected"
         return await self.update_status(project_id, approval_id, status, note=note)
+
+    async def cancel(self, project_id: str, approval_id: str) -> ApprovalRecord:
+        """Cancel one pending approval (a superseded proposal)."""
+        return await self.update_status(project_id, approval_id, "cancelled")
 
     async def pending(self, project_id: str) -> list[ApprovalRecord]:
         """List all pending approvals for a project."""
@@ -265,9 +364,11 @@ class ApprovalStore:
                 )
         if not pending_rows:
             return []
-        return await self.list_for_step(
+        cancelled = await self.list_for_step(
             project_id, turn_id, approval_ids=[str(r["id"]) for r in pending_rows]
         )
+        await self._observers.tell("decided", cancelled)
+        return cancelled
 
     async def expire_non_waiting(self, project_id: str) -> list[ApprovalRecord]:
         """Expire all pending approvals whose turn is not in 'waiting' status."""
@@ -292,4 +393,6 @@ class ApprovalStore:
                 )
         if not rows:
             return []
-        return await self.list_for_step(project_id, approval_ids=[str(r["id"]) for r in rows])
+        expired = await self.list_for_step(project_id, approval_ids=[str(r["id"]) for r in rows])
+        await self._observers.tell("decided", expired)
+        return expired

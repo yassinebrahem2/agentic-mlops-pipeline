@@ -349,6 +349,7 @@ async def test_worktree_recreation_on_files_and_pending_note(
         turn_id="trn_1",
         files=files,
         task=current_ref,
+        tool_call_id="call_1",
     )
     read_tool = ReadTool(tasks=service)
     output = await read_tool.run(ctx, ReadArgs(file_path="recreated.py"))

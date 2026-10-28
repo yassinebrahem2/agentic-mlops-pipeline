@@ -89,7 +89,7 @@ async def _setup_executor_env(
         store=store,
         caller=ModelCaller(providers, model_http),
         builder=builder,
-        hooks=stage1_hooks(workspaces),
+        hooks=stage1_hooks(workspaces, databases),
     )
 
     prov = await providers.create_provider(
@@ -339,7 +339,7 @@ async def test_graph_invalid_tool_call_with_mock_caller(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {

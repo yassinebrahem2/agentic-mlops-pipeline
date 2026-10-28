@@ -100,11 +100,13 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
         self,
         project_id: str,
         *,
+        approval_store: ApprovalStore,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
     ) -> None:
         """Mark running turns and their incomplete messages (streaming/stopped) as interrupted,
-        and expire pending approvals whose turn is not waiting.
+        and expire pending approvals whose turn is not waiting (through the app's one approval
+        store, so its observers are told).
         """
         engine = await self._databases.project(project_id)
         now = now_iso()
@@ -150,7 +152,6 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
         # Expire pending approvals whose turn is not waiting
         actual_audit = audit_log or self._audit_log
         actual_event = event_log or self._event_log
-        approval_store = ApprovalStore(self._databases)
         expired_records = await approval_store.expire_non_waiting(project_id)
         if expired_records:
             by_msg: dict[tuple[str, str], list[ApprovalRecord]] = {}

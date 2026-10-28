@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import ToolFinished
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -210,6 +211,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=tasks_svc,
+        approval_store=ApprovalStore(databases),
         status_board=status_board,
     )
 

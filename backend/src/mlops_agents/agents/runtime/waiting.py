@@ -168,6 +168,7 @@ async def handle_turn_waiting(
                     preview=dec.preview,
                     status="pending",
                     note=None,
+                    proposal_kind=dec.proposal_kind,
                 )
                 insert_idx = None
                 for idx, part in enumerate(current_parts):
@@ -204,12 +205,12 @@ async def stop_waiting_turn(
     store: SessionStore,
     hub: SessionHub,
     executor: TurnExecutor,
+    approval_store: ApprovalStore,
     audit_log: AuditLog | None = None,
     event_log: EventLog | None = None,
     observers: Sequence[TurnObserver] = (),
 ) -> None:
     """Stop a waiting turn: cancel approvals, mark message and turn stopped, delete checkpoint, notify."""
-    approval_store = ApprovalStore(store.databases)
     cancelled = await approval_store.cancel_for_turn(project_id, turn_id)
     cancelled_ids = {a.id for a in cancelled}
 
