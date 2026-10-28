@@ -38,7 +38,6 @@ In:
 
 Out:
 - Connection kinds other than local folder: PostgreSQL first, then S3, GCS, Azure, MySQL, SQLite files and others. The kind interface (§4) takes each as one new file; none ships now. Excel files: they need a DuckDB extension shipped per platform.
-- File connections in server mode: they would read the server's disk. The connections section says so in server mode.
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
 - Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
@@ -123,6 +122,7 @@ class ConnectionKind(Protocol):
 **Rules:**
 - Only the user creates, changes or deletes a connection: in project settings, or by approving a `connections` proposal (§9). No agent tool creates one.
 - A local folder must exist and be readable, and must not be inside the app's data folder. Links are resolved before the check.
+- In server mode (the app running continuously on a server, as it is meant to run), a local folder is a folder on that server, for example a mounted data disk; the folder picker browses the server's disk as the add-project wizard does in local mode, and the same checks apply.
 - Files in it that match the secret denylist are listed as a warning in the form and the proposal card. A read-only mount cannot hide them; the user decides.
 - The UI lists only the kinds that ship.
 
@@ -156,7 +156,7 @@ class ConnectionKind(Protocol):
 **Adapters**, one file each under `tracking/adapters/`, one interface `sync(source, since) -> SyncResult`:
 - **MLflow** over its REST API with the app's HTTP client (no MLflow package): experiments, runs and metric history, registered models, versions and aliases.
 - **GitHub Actions** over the stage 2 GitHub client: workflow runs.
-- A sync loop per project runs each source on an interval (a project setting, default 5 minutes) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
+- A sync loop per project runs each source on an interval (a project setting, default 1 minute, so the app is the first to know when a job or a run fails) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
 
 **For agents:**
 - `tracking_summary` hook: the production model and version, its latest metrics, the last runs and CI runs; capped.
@@ -187,12 +187,12 @@ class ConnectionKind(Protocol):
 **`connections` payload:** the connections to create (kind, name, settings) and why each, from what Onboarding found in the code and heard from the user. Applying creates them (§4).
 
 **`handoff` payload** (needs the project's connections to exist):
-- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive.
+- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive, how the model is served (`batch`, `online` or `streaming`), the cost of each kind of error (a false alarm against a miss, in the user's words and as a ratio when known), and the groups that matter (columns and values, such as a region or customer type, whose metrics are watched separately).
 - **Data roles:** per table of the connections: `training`, `serving_inputs`, `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
 - **Tracking:** the sources to create (MLflow URL and whether it needs a credential; the GitHub workflows that matter).
 - **Pipeline:** the stages (name, entry file or command, inputs, outputs, order). The Dashboard draws them in stage 4.
-- **Commands:** the team's train, evaluate, deploy and rollback commands where found. Stage 5 registers them as deploy hooks.
-- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured), and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
+- **Commands:** the team's action commands where found, each with what it does: train, evaluate, deploy, rollback, rerun a job, hold or quarantine a batch, fall back. Stage 4 and stage 5 run them as hooks; Onboarding only records them.
+- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured); every data feed and scheduled job with its expected time or cadence and its grace period (a missing result past it is an incident in stage 4); on-call people (who, their hours, how to reach them, and who to escalate to); and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
 - **Gaps:** what Onboarding could not find or set up, each with its next step (for example "predictions are not saved: PR #12 adds logging with a shared ID"; "MLflow has no authentication: PR #13 enables it").
 - **Grants:** sandbox network on or off, and the permission level, which can never be set to `bypass` by a proposal.
 
