@@ -107,9 +107,10 @@ async def test_executor_unexpected_exception_during_agent_build_fails_turn(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=store,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     repo_dir = make_repo(tmp_path / "repo_err", {"README.md": "Hi"}, git_env)
@@ -177,9 +178,10 @@ async def test_executor_turn_failed_from_caller(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=store,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(

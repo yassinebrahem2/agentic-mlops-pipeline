@@ -4,6 +4,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.pr_reminder import PrReminder
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
 from mlops_agents.agents.runtime.hub import AsyncRLock
@@ -157,6 +158,7 @@ async def test_turn_graph_with_pr_reminder_adds_step_when_changes_exist(
         inbound=NoInbound(),
         turn_end=reminder,
         workspaces=tasks,
+        approval_store=ApprovalStore(databases),
     )
     graph = create_turn_graph(
         agent=agent,

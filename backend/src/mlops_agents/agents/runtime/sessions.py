@@ -8,7 +8,9 @@ from typing import Literal
 
 import httpx2
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
@@ -32,7 +34,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
-from mlops_agents.events.contract import AuditLog, EventLog, StatusBoard
+from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -59,9 +61,10 @@ class SessionManager(AgentSessions):
         inbound: InboundSource,
         turn_end: TurnEndCheck,
         workspaces: TaskWorkspaces,
+        approval_store: ApprovalStore,
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
-        status_board: StatusBoard | None = None,
+        hooks: HookRegistry | None = None,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
     ) -> None:
@@ -76,6 +79,7 @@ class SessionManager(AgentSessions):
         self._audit_log = audit_log
         self._event_log = event_log
         self._observers = tuple(observers)
+        self._approval_store = approval_store
 
         self._store = SessionStore(databases, audit_log=self._audit_log, event_log=self._event_log)
         self._caller = ModelCaller(providers=providers, http=http)
@@ -85,13 +89,20 @@ class SessionManager(AgentSessions):
             tools=tools,
             settings=settings,
             workspaces=workspaces,
-            status_board=status_board,
+            hooks=hooks,
+            store=self._store,
         )
         self._executor = TurnExecutor(
             store=self._store,
             caller=self._caller,
             builder=self._builder,
-            hooks=TurnHooks(gate=gate, inbound=inbound, turn_end=turn_end, workspaces=workspaces),
+            hooks=TurnHooks(
+                gate=gate,
+                inbound=inbound,
+                turn_end=turn_end,
+                workspaces=workspaces,
+                approval_store=approval_store,
+            ),
             observers=observers,
         )
         self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
@@ -114,7 +125,10 @@ class SessionManager(AgentSessions):
             if project_id in self._recovered_projects:
                 return
             await self._store.recover(
-                project_id, audit_log=self._audit_log, event_log=self._event_log
+                project_id,
+                approval_store=self._approval_store,
+                audit_log=self._audit_log,
+                event_log=self._event_log,
             )
             self._recovered_projects.add(project_id)
 
@@ -328,6 +342,7 @@ class SessionManager(AgentSessions):
                         store=self._store,
                         hub=hub,
                         executor=self._executor,
+                        approval_store=self._approval_store,
                         audit_log=self._audit_log,
                         event_log=self._event_log,
                         observers=self._observers,
@@ -352,7 +367,10 @@ class SessionManager(AgentSessions):
         self._recovered_projects.discard(project_id)
         try:
             await self._store.recover(
-                project_id, audit_log=self._audit_log, event_log=self._event_log
+                project_id,
+                approval_store=self._approval_store,
+                audit_log=self._audit_log,
+                event_log=self._event_log,
             )
         except Exception as exc:
             logger.exception("Failed to recover project %s: %s", project_id, exc)

@@ -6,6 +6,11 @@ import * as streamModule from "@/lib/stream";
 import { STREAM_CLOSED, STREAM_OPEN, type StreamLike } from "@/pages/agents/session/stream";
 import { project, stubProjects } from "@/test/projects";
 import { renderPage } from "@/test/render";
+import {
+  CARD_FOR_KIND,
+  CARD_FOR_PROPOSAL,
+  type ApprovalCardComponent,
+} from "@/pages/agents/ApprovalCard";
 import type { ApprovalView, GitHubItem, LocalReview } from "./usePendingApprovals";
 
 class TestFakeStream implements StreamLike {
@@ -59,9 +64,12 @@ describe("InboxPage and badge", () => {
     {
       id: "appr_1",
       agent: "coder",
+      kind: "tool",
       tool: "Write",
       tool_call_id: "call_1",
       risk_class: "write_code",
+      step: null,
+      proposal_kind: null,
       preview: {
         title: "Write src/main.py",
         kind: "diff",
@@ -77,9 +85,12 @@ describe("InboxPage and badge", () => {
     {
       id: "appr_2",
       agent: "orchestrator",
+      kind: "tool",
       tool: "Bash",
       tool_call_id: "call_2",
       risk_class: "run",
+      step: null,
+      proposal_kind: null,
       preview: {
         title: "Run pytest",
         kind: "command",
@@ -683,5 +694,87 @@ describe("InboxPage and badge", () => {
 
     expect(await screen.findByText("Error loading activity")).toBeInTheDocument();
     expect(screen.getByText("GitHub API rate limited")).toBeInTheDocument();
+  });
+
+  it("passes a stall's and a proposal's fields to the approval card dispatcher", async () => {
+    // Each registered card prints what the dispatcher gave it.
+    const ShowsPart: ApprovalCardComponent = ({ approval, toolName, projectId }) => (
+      <div data-testid={`dispatched-${approval.approval_id}`}>
+        {[
+          approval.kind,
+          String(approval.step),
+          String(approval.proposal_kind),
+          String(approval.tool_call_id),
+          String(toolName),
+          projectId,
+        ].join("|")}
+      </div>
+    );
+    CARD_FOR_KIND.stall = ShowsPart;
+    CARD_FOR_PROPOSAL.handoff = ShowsPart;
+    const common = {
+      agent: "orchestrator",
+      preview: { title: "Stalled: no usable key", kind: "text" as const, body: "key 1" },
+      status: "pending" as const,
+      note: null,
+      session_id: "ses_1",
+      turn_id: "trn_1",
+      created_at: "2026-10-28T12:00:00Z",
+      decided_at: null,
+    };
+    const views: ApprovalView[] = [
+      {
+        ...common,
+        id: "appr_stall",
+        kind: "stall",
+        tool: null,
+        tool_call_id: null,
+        risk_class: null,
+        step: 3,
+        proposal_kind: null,
+      },
+      {
+        ...common,
+        id: "appr_handoff",
+        kind: "tool",
+        tool: "Propose",
+        tool_call_id: "call_9",
+        risk_class: "propose",
+        step: null,
+        proposal_kind: "handoff",
+      },
+    ];
+    getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects/{project_id}/approvals") {
+        return Promise.resolve({ data: views, response: new Response(null, { status: 200 }) });
+      }
+      if (path === "/api/projects/{project_id}/reviews") {
+        return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
+      }
+      if (path === "/api/projects/{project_id}/github/activity") {
+        return Promise.resolve({ data: [], response: new Response(null, { status: 200 }) });
+      }
+      if (path === "/api/projects/{project_id}") {
+        return Promise.resolve({
+          data: projectStub,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+
+    try {
+      renderPage("/projects/prj_1/inbox");
+
+      expect(await screen.findByTestId("dispatched-appr_stall")).toHaveTextContent(
+        "stall|3|null|null|undefined|prj_1",
+      );
+      expect(screen.getByTestId("dispatched-appr_handoff")).toHaveTextContent(
+        "tool|null|handoff|call_9|Propose|prj_1",
+      );
+    } finally {
+      delete CARD_FOR_KIND.stall;
+      delete CARD_FOR_PROPOSAL.handoff;
+    }
   });
 });

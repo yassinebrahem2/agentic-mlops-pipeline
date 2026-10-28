@@ -364,6 +364,52 @@ def test_a_waiting_message_with_an_approval_part_round_trips() -> None:
     assert approval.preview.kind == "diff"
 
 
+def test_an_approval_part_stored_before_stage_3_loads_as_a_tool_approval() -> None:
+    stored = {
+        "type": "approval",
+        "approval_id": "apr_01",
+        "tool_call_id": "call_1",
+        "preview": {"kind": "diff", "title": "Write a.py", "body": "+x"},
+        "status": "approved",
+        "note": None,
+    }
+
+    part = ApprovalPart.model_validate(stored)
+
+    assert (part.kind, part.step, part.proposal_kind) == ("tool", None, None)
+
+
+def test_a_stall_part_with_no_tool_call_round_trips() -> None:
+    message = MessageView(
+        id="msg_03",
+        turn_id="trn_01",
+        author_kind="agent",
+        author_name="orchestrator",
+        from_agent=None,
+        parts=[
+            ApprovalPart(
+                type="approval",
+                approval_id="apr_02",
+                tool_call_id=None,
+                preview=Preview(kind="text", title="Stalled: no usable key", body="key 1"),
+                status="pending",
+                note=None,
+                kind="stall",
+                step=4,
+            )
+        ],
+        status="waiting",
+        created_at="2026-10-28T09:00:00Z",
+    )
+
+    restored = MessageView.model_validate_json(message.model_dump_json())
+
+    assert restored == message
+    stall = restored.parts[0]
+    assert isinstance(stall, ApprovalPart)
+    assert (stall.kind, stall.step, stall.tool_call_id) == ("stall", 4, None)
+
+
 def test_session_view_carries_the_current_task() -> None:
     task = TaskView(
         id="tsk_01",

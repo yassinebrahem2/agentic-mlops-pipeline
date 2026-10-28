@@ -59,6 +59,7 @@ async def test_the_app_wires_send_message_to_a_bound_bus_with_the_catalog(app: F
         turn_id="trn_any",
         files=cast(FileAccess, object()),
         task=None,
+        tool_call_id="call_1",
     )
 
     out = await tool.invoke(ctx, {"to": "orchestrator", "message": "x"})
@@ -78,6 +79,7 @@ async def test_the_app_wires_list_agents_bound_with_catalog_and_status_board(app
         turn_id="trn_any",
         files=cast(FileAccess, object()),
         task=None,
+        tool_call_id="call_1",
     )
 
     out = await tool.invoke(ctx, {})

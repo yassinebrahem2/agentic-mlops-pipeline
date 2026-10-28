@@ -206,7 +206,7 @@ async def test_recovery_expires_pending_approvals_of_running_turn(
     )
 
     # Recover the project
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=approval_store)
 
     # 1. Turn is now interrupted
     t_status = await store.turn_status(project_id, turn_id)
@@ -296,7 +296,7 @@ async def test_recovery_preserves_waiting_turn_and_pending_approval(
     )
 
     # Recover the project
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=approval_store)
 
     # 1. Turn is still waiting
     assert await store.turn_status(project_id, turn_id) == "waiting"
@@ -529,7 +529,9 @@ async def test_decision_racing_with_stop_stop_wins_decision_gets_409(
     project_id = env.project_id
     store = env.store
     approval_store = ApprovalStore(databases)
-    approvals_svc = ApprovalsService(databases=databases, sessions=manager, audit_log=audit)
+    approvals_svc = ApprovalsService(
+        databases=databases, sessions=manager, store=approval_store, audit_log=audit
+    )
 
     view = await manager.get(project_id, "orchestrator")
     sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)

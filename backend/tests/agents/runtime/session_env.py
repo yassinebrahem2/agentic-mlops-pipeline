@@ -11,7 +11,9 @@ from typing import Any
 import httpx2
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
@@ -48,6 +50,7 @@ class SessionEnv:
     store: SessionStore
     project_id: str
     provider: str
+    approval_store: ApprovalStore  # the one the manager (and the default gate) were given
 
 
 def _settings(paths: DataPaths) -> Settings:
@@ -72,12 +75,18 @@ async def build_session_env(
     gate: Gate | None = None,
     inbound: InboundSource | None = None,
     audit_log: AuditLog | None = None,
+    approval_store: ApprovalStore | None = None,
+    hooks: HookRegistry | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
 
     tool_reg = tools if tools is not None else default_registry()
-    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=extra_dirs or ())
+    catalog = AgentCatalog.load(
+        tool_reg.names() | STAGE_2_TOOLS,
+        extra_dirs=extra_dirs or (),
+        hook_names=hooks.names() if hooks is not None else frozenset(),
+    )
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
@@ -92,6 +101,7 @@ async def build_session_env(
         memory_project_secrets(databases),
     )
 
+    approvals = approval_store if approval_store is not None else ApprovalStore(databases)
     manager = SessionManager(
         databases=databases,
         workspace=workspace_svc,
@@ -100,12 +110,14 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
-        gate=gate if gate is not None else ApprovalGate(databases),
+        gate=gate if gate is not None else ApprovalGate(databases, store=approvals),
         inbound=inbound if inbound is not None else NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        approval_store=approvals,
         observers=observers,
         bus=bus,
+        hooks=hooks,
         audit_log=audit_log,
     )
 
@@ -126,6 +138,7 @@ async def build_session_env(
         store=SessionStore(databases),
         project_id=project.id,
         provider=prov.name,
+        approval_store=approvals,
     )
 
 

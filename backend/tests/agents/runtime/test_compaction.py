@@ -189,6 +189,19 @@ def _approval() -> ApprovalPart:
     )
 
 
+def _stall() -> ApprovalPart:
+    return ApprovalPart(
+        type="approval",
+        approval_id="apr_2",
+        tool_call_id=None,
+        preview=Preview(kind="text", title="Stalled: no usable key", body=APPROVAL_BODY),
+        status="approved",
+        note="STALL-NOTE",
+        kind="stall",
+        step=1,
+    )
+
+
 async def _three_turns(
     store: SessionStore, session_id: str, filler: str
 ) -> tuple[list[MessageView], str]:
@@ -214,6 +227,7 @@ async def _three_turns(
                 ToolCallPart(type="tool_call", id="c1", name="Edit", input={"path": "README.md"}),
                 _approval(),
                 ToolResultPart(type="tool_result", tool_call_id="c1", content="ok", is_error=False),
+                _stall(),
                 *parts,
             ]
         agent = await store.add_message(
@@ -282,3 +296,5 @@ async def test_compaction_leaves_an_approval_out_of_the_summary_prompt(
     assert "PREVIEW-BODY" not in prompt
     assert "APPROVAL-NOTE" not in prompt
     assert "apr_1" not in prompt
+    assert "STALL-NOTE" not in prompt
+    assert "apr_2" not in prompt

@@ -93,7 +93,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_done(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
         checkpointer=checkpointer,
     )
 
@@ -184,7 +184,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_cancellation(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
         checkpointer=checkpointer,
     )
 
@@ -273,7 +273,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_failure(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
         checkpointer=checkpointer,
     )
 

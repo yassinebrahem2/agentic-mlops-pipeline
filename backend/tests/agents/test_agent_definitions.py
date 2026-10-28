@@ -10,12 +10,15 @@ import pytest
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import (
     AgentCatalog,
     AgentDefinition,
     DefinitionError,
     parse_definition,
 )
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -79,14 +82,20 @@ def load_spec_table_data() -> list[dict[str, Any]]:
         agent_display = cols[0]
         if agent_display not in NAME_MAP:
             raise AssertionError(f"Unmapped agent display name: {agent_display!r}")
+        chat_val = cols[1].lower()
+        if chat_val not in ("yes", "no"):
+            raise AssertionError(f"Chat value must be yes/no for {agent_display}, got {cols[1]!r}")
+        wake_val = cols[4].lower()
+        if wake_val not in ("yes", "no"):
+            raise AssertionError(f"Wake-ups must be yes/no for {agent_display}, got {cols[4]!r}")
         parsed_rows.append(
             {
                 "display_name": agent_display,
                 "name": NAME_MAP[agent_display],
-                "chat": cols[1].lower() == "yes",
+                "chat": chat_val == "yes",
                 "raw_tools": cols[2],
                 "raw_msg": cols[3],
-                "schedules": cols[4].lower() == "yes",
+                "schedules": wake_val == "yes",
                 "status_board": (NAME_MAP[agent_display] == "orchestrator"),
             }
         )
@@ -246,14 +255,17 @@ def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     assert "ScheduleWakeup" in str(exc_info_sched.value)
 
 
-def _load_local_env() -> None:
+def _load_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = Path(__file__).resolve().parents[2] / ".env"
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             s = line.strip()
             if s and not s.startswith("#") and "=" in s:
                 k, v = s.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
+                clean_k = k.strip()
+                clean_v = v.strip().strip("'\"")
+                if clean_k not in os.environ:
+                    monkeypatch.setenv(clean_k, clean_v)
 
 
 _BASE_URLS = {
@@ -270,8 +282,9 @@ async def test_live_agent_definitions(
     databases: Databases,
     keystore: MemoryKeyStore,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _load_local_env()
+    _load_local_env(monkeypatch)
     live_model = os.environ.get("MLOPS_AGENTS_LIVE_MODEL")
     if not live_model:
         pytest.skip("set MLOPS_AGENTS_LIVE_MODEL to run this live test")
@@ -322,6 +335,13 @@ async def test_live_agent_definitions(
         for agent in chat_agents:
             await agent_settings.set_default_model(agent, live_model)
 
+        status_board = SqliteStatusBoard(catalog, events)
+        status_board_hook = StatusBoardHook()
+        status_board_hook.bind(status_board)
+        hooks = HookRegistry()
+        hooks.register(status_board_hook)
+        approval_store = ApprovalStore(databases)
+
         manager = SessionManager(
             databases=databases,
             workspace=workspace_svc,
@@ -330,11 +350,12 @@ async def test_live_agent_definitions(
             settings=agent_settings,
             providers=providers_svc,
             http=http,
-            gate=ApprovalGate(databases),
+            gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=tasks_svc,
-            status_board=SqliteStatusBoard(catalog, events),
+            approval_store=approval_store,
+            hooks=hooks,
         )
 
         for agent in chat_agents:

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
+from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
 from mlops_agents.errors import DomainError
 
 TOOLS = frozenset({"Read", "Glob", "Grep"})
@@ -96,6 +97,43 @@ def test_catalog_rejects_unknown_tools_agents_and_hooks() -> None:
     )
     with pytest.raises(DefinitionError, match="unknown context hooks"):
         AgentCatalog([bad_hook], TOOLS)
+
+
+def _with(extra: str) -> str:
+    return VALID.replace("tools: [Read]", f"tools: [Read]\n{extra}")
+
+
+def test_context_hooks_are_validated_against_the_registered_names() -> None:
+    uses_profile = parse_definition(_with("context_hooks: [profile]"), "a.md")
+    catalog = AgentCatalog([uses_profile], TOOLS, hook_names=frozenset({"profile"}))
+    assert catalog.get("helper").hook_names == ("profile",)
+    with pytest.raises(DefinitionError, match="unknown context hooks: profile"):
+        AgentCatalog([uses_profile], TOOLS, hook_names=frozenset({"other"}))
+
+
+def test_status_board_true_is_the_status_board_hook_and_needs_no_registered_name() -> None:
+    definition = parse_definition(_with("status_board: true"), "a.md")
+    assert definition.hook_names == (STATUS_BOARD_HOOK,)
+    assert AgentCatalog([definition], TOOLS).get("helper").hook_names == ("status_board",)
+
+
+def test_status_board_listed_and_declared_appears_once() -> None:
+    definition = parse_definition(
+        _with("context_hooks: [profile, status_board]\nstatus_board: true"), "a.md"
+    )
+    assert definition.hook_names == ("profile", STATUS_BOARD_HOOK)
+
+
+def test_an_agent_without_hooks_has_no_hook_names() -> None:
+    assert parse_definition(VALID, "a.md").hook_names == ()
+
+
+def test_load_passes_the_hook_names(tmp_path: Path) -> None:
+    (tmp_path / "helper.md").write_text(_with("context_hooks: [profile]"), encoding="utf-8")
+    with pytest.raises(DefinitionError, match="unknown context hooks"):
+        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path])
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=frozenset({"profile"}))
+    assert catalog.get("helper").hook_names == ("profile",)
 
 
 def test_packaged_orchestrator() -> None:

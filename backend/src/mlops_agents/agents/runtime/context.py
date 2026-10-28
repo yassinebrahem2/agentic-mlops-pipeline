@@ -46,7 +46,7 @@ def build_messages(
     layout: str,
     summary: str | None,
     history: list[MessageView],
-    status_summary: str | None = None,
+    hook_context: str | None = None,
 ) -> list[BaseMessage]:
     """Assemble the langchain BaseMessage list for an agent run."""
     # 1. System message
@@ -66,8 +66,9 @@ def build_messages(
     if summary:
         sections.append(f"Summary of the earlier conversation:\n{summary}")
 
-    if status_summary:
-        sections.append(f"Status board:\n{status_summary}")
+    # The context hooks' blocks, already wrapped as data by the registry.
+    if hook_context:
+        sections.append(hook_context)
 
     system_content = "\n\n".join(sections)
     messages: list[BaseMessage] = [SystemMessage(content=system_content)]

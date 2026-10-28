@@ -8,6 +8,7 @@ import pytest
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -71,6 +72,7 @@ async def test_live_turn_orchestrator_readme(
         providers_svc = ProvidersService(databases, keystore, http)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
+        approval_store = ApprovalStore(databases)
         manager = SessionManager(
             databases=databases,
             workspace=workspace_svc,
@@ -79,10 +81,11 @@ async def test_live_turn_orchestrator_readme(
             settings=settings_svc,
             providers=providers_svc,
             http=http,
-            gate=ApprovalGate(databases),
+            gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=FakeWorkspaces(workspace=workspace_svc, git=git),
+            approval_store=approval_store,
         )
 
         prov = await providers_svc.create_provider(

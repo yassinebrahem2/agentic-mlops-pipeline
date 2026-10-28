@@ -162,7 +162,7 @@ Ideas, not adopted (see `project_knowledge.md`):
 ## Run modes
 
 - `local` (default): `mlops-agents start`. Binds to 127.0.0.1. Access token in the URL opened at start, exchanged for a session cookie. Local folders and GitHub repos. Keys in the OS keyring.
-- `server`: `mlops-agents start --server`. Password login (`MLOPS_AGENTS_PASSWORD`). GitHub repos only. Keys in an encrypted file unlocked by `MLOPS_AGENTS_MASTER_KEY`. HTTPS from a reverse proxy.
+- `server`: `mlops-agents start --server`. Password login (`MLOPS_AGENTS_PASSWORD`). Projects are GitHub repos only; a data connection may still be a folder on the server's disk (stage 3), chosen with the folder picker. Keys in an encrypted file unlocked by `MLOPS_AGENTS_MASTER_KEY`. HTTPS from a reverse proxy.
 - In both modes every API request needs a valid session, `Host`/`Origin` are checked, and state-changing requests carry a CSRF token. Mode rules are enforced by the API, not only the UI. One exception (stage 4): `GET /api/health/heartbeat`, which carries no data, takes no input and changes nothing, is answered without a session and without the Origin check; the Host check accepts the configured `public_url` host.
 
 ## IDs

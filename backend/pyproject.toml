@@ -21,6 +21,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.1.4",
   "sqlite-vec>=0.1.9",
   "sse-starlette>=3.3.4",
+  "tzdata>=2025.2",
   "uvicorn>=0.44.0",
 ]
 

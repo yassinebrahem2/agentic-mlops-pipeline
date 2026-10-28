@@ -96,11 +96,12 @@ async def _setup_rejection_env(
         settings=agent_settings,
         workspace=workspace,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
     store = SessionStore(databases)
     caller = ModelCaller(providers, model_http)
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers.create_provider(
