@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -181,3 +182,32 @@ async def _turn_status(services: Services, project_id: str, turn_id: str) -> str
             await conn.execute(select(turns.c.status).where(turns.c.id == turn_id))
         ).scalar_one()
     return str(status)
+
+
+async def test_wakeups_start_only_after_the_approvals_service_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Starting wake-ups fires the due ones, which can recover projects and expire approvals; an
+    observer registered later on the service would miss those transitions."""
+    from mlops_agents.agents.approvals.service import ApprovalsService
+    from mlops_agents.agents.messaging.wakeups import WakeupService
+
+    order: list[str] = []
+    approvals_init = ApprovalsService.__init__
+    wakeups_start = WakeupService.start
+
+    def recording_init(self: ApprovalsService, *args: Any, **kwargs: Any) -> None:
+        order.append("approvals built")
+        approvals_init(self, *args, **kwargs)
+
+    async def recording_start(self: WakeupService) -> asyncio.Task[None]:
+        order.append("wakeups started")
+        return await wakeups_start(self)
+
+    monkeypatch.setattr(ApprovalsService, "__init__", recording_init)
+    monkeypatch.setattr(WakeupService, "start", recording_start)
+
+    async with started_app(tmp_path):
+        pass
+
+    assert order == ["approvals built", "wakeups started"]

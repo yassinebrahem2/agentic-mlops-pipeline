@@ -198,7 +198,7 @@ def test_approvals_check_accepts_both_kinds(
 def test_approvals_check_rejects_mixed_kinds(
     project_db: sqlite3.Connection, values: dict[str, str]
 ) -> None:
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         _insert_approval(project_db, "apr_1", values)
 
 
@@ -273,7 +273,7 @@ def test_checks_reject_bad_values(project_db: sqlite3.Connection, statement: str
     project_db.execute(
         "INSERT INTO handoff_versions (proposal_id, approved_at, payload) VALUES ('prp_0', 't', '{}')"
     )
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         project_db.execute(statement)
 
 
@@ -499,7 +499,7 @@ def test_app_checks_reject_bad_values(tmp_path: Path, statement: str) -> None:
             "VALUES ('groq/e', 'prv_1', 'e')"
         )
         conn.execute("UPDATE models SET model_type = 'embedder', dimensions = 768")
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             conn.execute(statement)
     finally:
         conn.close()

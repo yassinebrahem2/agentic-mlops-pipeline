@@ -68,6 +68,31 @@ async def test_put_then_move_leaves_one_ref(databases: Databases, keystore: Memo
     assert await secrets.is_set(target)
 
 
+async def test_move_onto_itself_keeps_the_secret(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    secrets = ProjectSecrets(keystore, databases)
+    ref = tracking_ref("prj_1", "trk_1")
+    await secrets.put(ref, VALUE)
+    await secrets.move(ref, ref)
+    assert keystore.data == {ref: VALUE}
+    assert await secrets.is_set(ref)
+    assert await _rows(databases) == [(ref, "prj_1")]
+
+
+async def test_delete_prefix_matches_case_exactly(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    secrets = ProjectSecrets(keystore, databases)
+    upper, lower = tracking_ref("prj_AB", "trk_1"), tracking_ref("prj_ab", "trk_1")
+    await secrets.put(upper, VALUE)
+    await secrets.put(lower, VALUE)
+    await secrets.delete_prefix(project_prefix("prj_AB"))
+    assert set(keystore.data) == {lower}
+    assert await secrets.is_set(lower)
+    assert not await secrets.is_set(upper)
+
+
 async def test_put_twice_overwrites_and_records_once(
     databases: Databases, keystore: MemoryKeyStore
 ) -> None:
