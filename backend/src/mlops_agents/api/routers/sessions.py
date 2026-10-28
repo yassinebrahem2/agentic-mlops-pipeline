@@ -67,22 +67,6 @@ async def stop_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post(
-    "/projects/{project_id}/agents/{agent}/turns/{turn_id}/retry",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def retry_turn(
-    project_id: str,
-    agent: str,
-    turn_id: str,
-    services: ServicesDep,
-    _project: ProjectDep,
-) -> Response:
-    """Try again on a turn that failed because every key of its provider was exhausted."""
-    await services.sessions.retry_turn(project_id, agent, turn_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.get(
     "/projects/{project_id}/agents/{agent}/session/stream",
     response_class=SseResponse,

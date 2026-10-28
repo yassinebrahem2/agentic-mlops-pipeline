@@ -27,7 +27,6 @@ from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller
-from mlops_agents.agents.runtime.retry import retry_failed_turn
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
 from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.runtime.store import SessionStore
@@ -328,26 +327,6 @@ class SessionManager(AgentSessions):
             if self._workers.running((project_id, session_id)):
                 return
             self._workers.resume(project_id, session_id, agent, turn_id, hub, lock)
-
-    async def retry_turn(self, project_id: str, agent: str, turn_id: str) -> None:
-        await self._workspace.get(project_id)
-        await self._ensure_recovered(project_id)
-        self._check_agent(agent)
-        session_id = await self._registry.session_id(project_id, agent)
-        lock = self._registry.lock(project_id, session_id)
-        hub = self._registry.hub(project_id, session_id)
-        await retry_failed_turn(
-            project_id,
-            session_id,
-            agent,
-            turn_id,
-            store=self._store,
-            settings=self._settings,
-            caller=self._caller,
-            lock=lock,
-            busy=self._busy,
-            start_worker=lambda: self._workers.start(project_id, session_id, agent, hub, lock),
-        )
 
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)

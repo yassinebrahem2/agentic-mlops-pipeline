@@ -119,21 +119,6 @@ async def test_stop_session(
     assert fake.stopped == [(project_id, "orchestrator")]
 
 
-async def test_retry_turn(
-    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
-) -> None:
-    project_id = await add_local_project(app, tmp_path, git_env)
-    fake = FakeSessions()
-    app.state.services.sessions = fake
-
-    response = await client.post(
-        f"/api/projects/{project_id}/agents/orchestrator/turns/trn_1/retry"
-    )
-
-    assert response.status_code == 204
-    assert fake.retried == [(project_id, "orchestrator", "trn_1")]
-
-
 async def test_unknown_project_returns_json_404_not_stream(
     app: FastAPI, client: httpx2.AsyncClient
 ) -> None:

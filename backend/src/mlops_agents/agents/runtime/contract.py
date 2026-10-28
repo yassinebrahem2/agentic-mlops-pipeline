@@ -254,13 +254,6 @@ class AgentSessions(Protocol):
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None: ...
 
-    async def retry_turn(self, project_id: str, agent: str, turn_id: str) -> None:
-        """Try again on the session's latest turn, failed because every key of its provider was
-        exhausted: clears the provider's key marks and queues a new turn on the same trigger
-        message, adding no message. Any other turn of the session raises DomainError 409
-        `turn_not_retryable`; a turn not in the agent's session, 404 `turn_not_found`."""
-        ...
-
     def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
     ) -> AsyncGenerator[StreamEvent, None]: ...
