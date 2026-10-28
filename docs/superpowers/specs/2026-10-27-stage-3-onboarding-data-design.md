@@ -41,6 +41,7 @@ Out:
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
 - Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
+- A read-only tracker credential inside the sandbox (§7): in stage 3 agents read tracking history through `TrackingHistory` and `tracking_summary`; giving the sandbox a credential arrives with stage 4's hook credentials, which inject a secret into one run only.
 - Reading monitoring results and checks (stage 4), deploy hooks (stage 5), the Knowledge, Stats, Activity and Usage pages (stage 6). Stage 3 stores what they read.
 - The Data page's quality and drift history: empty until stage 4; the page says so.
 

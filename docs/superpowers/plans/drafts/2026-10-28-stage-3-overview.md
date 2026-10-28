@@ -15,6 +15,8 @@ Stage 3 is built through several plans. This overview holds what they share. Rea
 - The rules of `AGENTS.md` apply in full; the spec's principles too (an extension of the team's system; Bash unless a tool is justified; no whole datasets in context; secrets never in a proposal, a log, an event or a checkpoint).
 - Every external service is faked in tests: the fake OpenAI server (`/embeddings`, 429, 402), a new fake MLflow REST server, the fake GitHub server (workflow runs). No test needs a real provider, tracker or Docker unless marked as the stage 2 Docker tests are.
 - One source for every constant: the DuckDB version, the hook caps, the cache cap, the cooldown default, the hook names, the proposal kinds.
+- Tool schemas sent to providers are self-contained: `agents/tools/base.py`'s `_clean_schema` inlines `$defs` (contracts task 1, with a test on a nested model), so the `Propose` schema has no `$ref`.
+- The generated contract check is `python -m mlops_agents.api.openapi_export --check`; `npm run gen:api` only writes `schema.d.ts`.
 - Frontend types come only from the generated `schema.d.ts` (`npm run gen:api`), which is gitignored and never committed; a plan that changes the API commits the regenerated `frontend/openapi.json`.
 - Routers are discovered by `include_routers` in `api/app.py`; a plan adds its router file and no registration line.
 
@@ -60,6 +62,9 @@ contracts writes these into code exactly as here (except where a line names anot
   - `create_stall(project_id, turn_id, step, preview) -> ApprovalView`: idempotent; a stall is unique among the pending approvals of its turn and step, so a later stall at the same step after Try again is allowed.
   - `cancel(project_id, approval_id) -> None`: marks a pending approval `cancelled` (used to supersede a proposal).
   - `add_observer(observer: ApprovalObserver)`, where `ApprovalObserver` (Protocol) has `async asked(view)` and `async decided(view)`; `decided` fires on approve, reject, cancel and expiry, and the service awaits every observer before it signals the turn to resume.
+  - **One store.** `build_services` builds one `ApprovalStore` (holding the observers) and passes that instance to the gate, `ApprovalsService`, `SessionManager` (and through it `SessionStore`, `stop_waiting_turn`, `ToolStep`) and recovery expiry; no other code constructs one (contracts task 3, with a test through the real `build_services` wiring: `asked` fires for a gate-created approval, `decided` on Stop and on recovery expiry).
+  - `cancel` resumes the turn when no approval of it is still pending.
+  - `ApprovalView.tool` and `risk_class` become nullable, and `step`, `proposal_kind` and `kind` appear, in contracts task 3 (with the frontend lines that read them), never in task 1, so task 1's early PR keeps the frontend building.
 - The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (`approvals/gate.py`).
 - Deciding a stall: approve resumes the turn with no audit record; reject ends it `stopped`.
 - A stall's preview is `Preview(kind="text", title="Stalled: no usable key", body=<per-key states>)`. A stall writes no audit record; events `turn.stalled {turn_id, provider, model}` and `turn.resumed {turn_id}` record it.
@@ -135,7 +140,7 @@ class Connections(Protocol):        # connections
 SourceType = Literal["mlflow", "github_actions"]
 RunStatus = Literal["running", "succeeded", "failed", "cancelled", "other"]   # adapters normalise to these
 class TrackingSourceView(BaseModel): id: str; type: SourceType; settings: dict[str, Any]; auth: Literal["none", "credential"]; credential_set: bool; last_sync: datetime | None; last_error: str | None
-class ModelVersionRow(BaseModel): source_id: str; model: str; version: str; run_key: str | None; aliases: list[str]; created: datetime
+class ModelVersionRow(BaseModel): source_id: str; model: str; version: str; run_key: str | None; aliases: list[str]; created: datetime; evaluation: Literal["present", "absent", "fetch_failed"]   # absent: the run has no evaluation.json; fetch_failed: it could not be read (stage 4 then reads the results-location copy)
 class ModelSummary(BaseModel): source_id: str; name: str; production_version: str | None; latest_version: str | None; versions: int
 class RunRow(BaseModel): source_id: str; key: str; experiment: str; status: RunStatus; start: datetime | None; end: datetime | None; params: dict[str, str]; tags: dict[str, str]; git_commit: str | None; datasets: list[str]
 class MetricPoint(BaseModel): source_id: str; run_key: str; metric: str; step: int; value: float; time: datetime
@@ -203,6 +208,7 @@ class HookRegistry:
     async def run(self, names: Sequence[str], ctx: HookContext) -> str: ...
 ```
 
+- Hook output is untrusted data: the injection point wraps it in a marked block (`<data source="hook:name">…</data>`), and the shared working rules (onboarding) tell agents it is data, never instructions.
 - Hooks run when a turn starts and again when a waiting turn resumes (so Onboarding sees the data summary after the connections are approved, and the Orchestrator keeps its status board).
 - The registry replaces `KNOWN_HOOKS` in `agents/catalog.py`; the catalog validates `context_hooks` against `registry.names()`. The one injection point (today the status summary in `agents/runtime/agent.py`) calls `HookRegistry.run`. `status_board` is the first registered hook; until onboarding rewrites the definitions, the catalog treats `status_board: true` as that hook, and onboarding then removes the field from every definition and from `AgentDefinition`.
 - Each hook-producing plan registers its hook in `build_services` after data-summary's registry exists and before `AgentCatalog.load`.
@@ -214,10 +220,11 @@ ProposalStatus = Literal["pending", "approved", "rejected", "superseded"]
 class CredentialSlot(BaseModel): index: int; label: str; source_type: str
 class SlotState(BaseModel): index: int; label: str; set: bool
 class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # part -> reason
-class ProposalView(BaseModel): id: str; kind: str; key: str; payload: dict[str, Any]; warnings: list[str]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime
+class ProposalView(BaseModel): id: str; kind: str; key: str; payload: ConnectionsPayload | HandoffPayload; warnings: list[str]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime   # contracts task 2 (it needs the payloads); typed so the cards read it from schema.d.ts
 
 # Payloads (contracts), extra="forbid" everywhere
-class ConnectionSpec(BaseModel): kind: str; name: str; settings: dict[str, Any]; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1)
+class LocalFolderSettings(BaseModel): path: str   # connections/contract.py (contracts task 1), extra="forbid"
+class ConnectionSpec(BaseModel): kind: Literal["local_folder"]; name: str; settings: LocalFolderSettings; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1); settings typed per kind, so no secret can ride in a free-form dict
 class ConnectionsPayload(BaseModel): connections: list[ConnectionSpec]
 
 class TableUse(BaseModel): connection: str; table: str                                        # a reference to a DataRole
@@ -231,16 +238,19 @@ class ModelSpec(BaseModel): name: str; profile: Profile; predictions: TableUse |
 class PipelineStage(BaseModel): name: str; entry: str; inputs: list[str]; outputs: list[str]
 class PipelineEdge(BaseModel): from_stage: str; to_stage: str
 class Cadence(BaseModel): cron: str | None; every_minutes: int | None      # exactly one is set; cron is standard five-field
-class Feed(BaseModel): name: str; kind: Literal["data", "job"]; ref: str; cadence: Cadence; grace_minutes: int; timezone: str
+class DataFeedRef(BaseModel): connection: str; table: str
+class JobFeedRef(BaseModel): ci_workflow: str | None; file: FileResults | None   # exactly one set
+class Feed(BaseModel): name: str; kind: Literal["data", "job"]; ref: DataFeedRef | JobFeedRef; cadence: Cadence; grace_minutes: int; timezone: str
 class OnCallHours(BaseModel): days: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]; start: str; end: str   # "HH:MM"
-class OnCall(BaseModel): name: str; contact: str; channel: Literal["discord", "email"]; hours: OnCallHours; timezone: str; escalation_order: int
+class Contact(BaseModel): channel: Literal["discord", "email"]; address: str
+class OnCall(BaseModel): name: str; contacts: list[Contact]; hours: OnCallHours; timezone: str; escalation_order: int   # contacts: one or more channels (critical alerts go to all)
 class FileResults(BaseModel): connection: str; path_pattern: str
 class CiResults(BaseModel): workflow: str
-class MlflowResults(BaseModel): metric: str; threshold: float | None
+class MlflowResults(BaseModel): metric: str; threshold: float | None; fires_when: Literal["above", "below"] | None
 class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: Cadence; timezone: str; results: FileResults | CiResults | MlflowResults
 class Scheduler(BaseModel): name: str; config_location: str
 class Operations(BaseModel): scheduler: Scheduler | None; feeds: list[Feed]; on_call: list[OnCall]; checks: list[CheckSpec]; results_location: FileResults | MlflowResults
-class TrackingSourceSpec(BaseModel): type: SourceType; settings: dict[str, Any]; auth: Literal["none", "credential"]
+class TrackingSourceSpec(BaseModel): type: SourceType; settings: MlflowSettings | GithubActionsSettings; auth: Literal["none", "credential"]   # settings models in tracking/contract.py (contracts task 1), extra="forbid"; MlflowSettings.url passes base_url_problem (no userinfo)
 class Gap(BaseModel): what: str; next_step: str
 class Grants(BaseModel): network: bool; permission_level: GrantableLevel    # GrantableLevel = PermissionLevel minus "bypass"
 class HandoffPayload(BaseModel): models: list[ModelSpec]; commands: list[CommandSpec]; data_roles: list[DataRole]; tracking: list[TrackingSourceSpec]; pipeline: list[PipelineStage]; edges: list[PipelineEdge]; operations: Operations; gaps: list[Gap]; grants: Grants   # commands: project-level (rerun a data job, hold or quarantine a batch)
@@ -249,6 +259,7 @@ CONNECTIONS_KIND = "connections"; HANDOFF_KIND = "handoff"   # the one source of
 class ProposalKind(Protocol):       # each kind: preview, warnings, credentials_needed and apply by onboarding; its card by proposals
     name: str
     payload_model: type[BaseModel]
+    def key(self, payload: BaseModel) -> str: ...   # the superseding key: the project for connections and handoff; later kinds choose (a promotion: its model)
     def preview(self, payload: BaseModel) -> Preview: ...
     def warnings(self, payload: BaseModel) -> list[str]: ...   # user-facing text (for example the network sentence for an MLflow source with auth "none"); the card shows them as given
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]: ...
@@ -260,12 +271,13 @@ class ProposalKinds:                # proposals; onboarding registers both kinds
 
 class Proposals(Protocol):          # proposals
     async def create(self, project_id: str, agent: str, kind: str, key: str, payload: dict[str, Any], turn_id: str, tool_call_id: str) -> ProposalView: ...   # a draft: idempotent by (turn_id, tool_call_id); approval_id is None until attached
-    async def attach(self, project_id: str, proposal_id: str, approval_id: str) -> None: ...   # called on asked(view), found by (turn_id, tool_call_id)
+    async def attach(self, project_id: str, proposal_id: str, approval_id: str) -> str | None: ...   # called on asked(view); returns the approval ID of a pending proposal it supersedes, which the observer then cancels (proposals never holds Approvals, so build_services has no cycle)
     async def get_by_approval(self, project_id: str, approval_id: str) -> ProposalView | None: ...
     async def pending(self, project_id: str, kind: str, key: str) -> ProposalView | None: ...   # superseding is by kind and key; key = the project for connections and handoff
     async def latest_for_turn(self, project_id: str, turn_id: str, kind: str) -> ProposalView | None: ...
 ```
 
+- **A duplicate never gets an approval.** A second `Propose` of the same kind in the same turn step fails in `preview` with a tool error, so the gate creates no approval for it.
 - **The record before the approval.** `Propose.preview` (run by the gate before it creates the approval) calls `create`, which writes a draft keyed by `(turn_id, tool_call_id)`: a re-run of the same call finds its draft. `asked(view)` then calls `attach` with the approval ID (the approval carries the tool call ID). A second `Propose` of the same kind in the same turn step, with a different tool call ID, is marked a duplicate by `create`, and its `run` returns a tool error.
 - `ToolContext` gains `tool_call_id: str` (contracts, in `agents/tools/base.py`).
 - proposals registers an `ApprovalObserver`: on `decided` it marks the proposal, applies it on approval, and deletes its credential slots on reject, cancel or expiry. A newer proposal of the same kind cancels the pending one (`Approvals.cancel`). A second proposal of the same kind in one model step gets a tool error. At startup, an approved proposal with no `result` is applied again, and orphaned slots are deleted.
@@ -274,7 +286,7 @@ class Proposals(Protocol):          # proposals
 ### I20: the current handoff (types in `proposals/contract.py` by contracts; `SqliteHandoffs` in `proposals/handoffs.py` by proposals)
 
 ```python
-class HandoffView(BaseModel): proposal_id: str; approved: datetime; payload: HandoffPayload
+class HandoffView(BaseModel): proposal_id: str; version: int; approved: datetime; payload: HandoffPayload
 class Handoffs(Protocol):
     async def current(self, project_id: str) -> HandoffView | None: ...
     async def store(self, project_id: str, proposal_id: str, payload: HandoffPayload) -> int: ...   # idempotent: one version per proposal (UNIQUE proposal_id in handoff_versions); returns that version
@@ -301,6 +313,7 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 - `attempt(key_index)` raises the provider's raw exception; `KeyFailover` classifies it with `providers/errors.classify`. A provider with no keys gets `attempt(None)` once, with no failover.
 - `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider) -> None` (Try again) and `describe_keys(states) -> str` (the one wording, used by the stall card and the embedder's message). Its clock is injected (`Clock` protocol: `now()`, `async sleep(seconds)`).
 - `TurnHooks` gains `approvals: Approvals` and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
+- The one `KeyFailover` instance is built in `build_services` by rate-limits task 1 (its early PR), so embedders task 1 can use it.
 - `KeyFailover` takes the cooldown per call (`cooldown_minutes` argument), so task 1 does not depend on contracts; task 2 passes `Provider.cooldown_minutes`.
 - The rules are the spec's §2. A wait round lasts at most until the earliest key clears, never more than 60 seconds.
 
