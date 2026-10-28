@@ -23,7 +23,6 @@ from mlops_agents.agents.runtime.stall import StallState
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.caller_env import fail_after_text
 from tests.agents.runtime.hook_fakes import ScriptedInbound
 from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
 from tests.agents.runtime.stall_env import (
@@ -41,7 +40,7 @@ from tests.agents.runtime.test_resuming_turns import (
 )
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
-from tests.providers.fake_clock import FakeClock, rate_limit
+from tests.providers.fake_clock import FakeClock
 
 REJECTED = "Key 1: rejected by the provider."
 
@@ -308,25 +307,6 @@ async def test_compaction_out_of_keys_fails_the_turn_without_a_stall(
     assert await env.event_payloads("turn.stalled") == []
     message = await env.agent_message(ended.data.turn_id)
     assert (message.status, message.error_kind) == ("complete", "keys_exhausted")
-    await env.session.manager.close()
-
-
-async def test_keys_running_out_after_text_fail_the_turn_without_a_stall(
-    env: StallEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fail_after_text(monkeypatch, rate_limit())
-    stream = await opened_stream(env.session)
-
-    await env.session.manager.send(env.project_id, "orchestrator", "hi")
-    ended = _ended(await collect_until_turn_ended(stream))
-
-    assert (ended.data.status, ended.data.error_kind) == ("failed", "keys_exhausted")
-    assert ended.data.error is not None
-    assert ended.data.error.endswith("Key 1: rate limited (since 14:03 UTC).")
-    assert KEY not in ended.data.error
-    assert await env.stalls(ended.data.turn_id) == []
-    message = await env.agent_message(ended.data.turn_id)
-    assert message.parts == [TextPart(type="text", text="Partial ")]
     await env.session.manager.close()
 
 

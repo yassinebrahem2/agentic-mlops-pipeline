@@ -7,11 +7,7 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.api.services import Services
-from mlops_agents.providers.failover import (
-    AllKeysExhausted,
-    KeyFailover,
-    StreamedTextFailure,
-)
+from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover
 from mlops_agents.providers.models import Provider, ProviderCreate
 from tests.api.conftest import started_app
 from tests.providers.fake_clock import (
@@ -97,10 +93,9 @@ async def test_a_failing_on_success_is_logged_and_the_call_still_succeeds(
     [
         (1, (unauthorized(),), AllKeysExhausted),
         (1, (bad_request(),), Exception),
-        (1, (StreamedTextFailure(rate_limit()),), StreamedTextFailure),
         (0, (unauthorized(),), Exception),
     ],
-    ids=["every-key-exhausted", "re-raised", "after-text", "keyless"],
+    ids=["every-key-exhausted", "re-raised", "keyless"],
 )
 async def test_a_call_that_fails_reports_nothing(
     key_count: int, outcomes: tuple[BaseException, ...], raised: type[BaseException]

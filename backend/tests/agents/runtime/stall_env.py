@@ -3,7 +3,7 @@ and audit logs, for the stall tests."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +15,7 @@ from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     MessageView,
@@ -102,7 +103,10 @@ async def build_stall_env(
     tools: ToolRegistry | None = None,
     extra_dirs: list[Path] | None = None,
     inbound: InboundSource | None = None,
+    hooks: HookRegistry | None = None,
+    keys: Sequence[str] = (KEY,),
 ) -> StallEnv:
+    """`keys` are the provider's keys, in order; none makes it keyless."""
     events = SqliteEventLog(databases)
     audit_log = SqliteAuditLog(databases, secrets=[])
     store = ApprovalStore(databases)
@@ -122,12 +126,14 @@ async def build_stall_env(
         approval_store=store,
         event_log=events,
         clock=clock,
+        hooks=hooks,
     )
     approvals = ApprovalsService(
         databases, env.manager, store=store, audit_log=audit_log, event_log=events
     )
     env.manager.bind_approvals(approvals)
-    await env.providers.add_key(env.provider, KEY)
+    for key in keys:
+        await env.providers.add_key(env.provider, key)
     return StallEnv(env, approvals, events, audit_log, databases)
 
 

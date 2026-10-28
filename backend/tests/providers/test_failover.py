@@ -11,7 +11,6 @@ from mlops_agents.providers.failover import (
     KeyFailover,
     KeyState,
     RateLimited,
-    StreamedTextFailure,
 )
 from tests.providers.fake_clock import (
     FakeClock,
@@ -231,21 +230,6 @@ async def test_other_errors_re_raise_at_once(
     assert raised.value is error
     assert attempt.keys == [0]
     assert clock.sleeps == []
-
-
-async def test_a_streamed_text_failure_records_the_limit_and_never_fails_over(
-    failover: KeyFailover,
-) -> None:
-    two = provider(2)
-    failure = StreamedTextFailure(rate_limit())
-    attempt = Script(failure)
-
-    with pytest.raises(StreamedTextFailure) as raised:
-        await failover.call(two, MODEL, attempt, cooldown_minutes=COOLDOWN)
-
-    assert raised.value is failure
-    assert attempt.keys == [0]
-    assert statuses(failover.states(two, MODEL)) == ["limited", "ok"]
 
 
 async def test_a_provider_without_keys_is_called_once_with_none(

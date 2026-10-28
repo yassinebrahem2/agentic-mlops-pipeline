@@ -18,15 +18,12 @@ from mlops_agents.providers.failover import (
     AllKeysExhausted,
     KeyFailover,
     KeyState,
-    StreamedTextFailure,
     no_usable_key,
 )
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 
 _EXHAUSTED: ErrorKind = "keys_exhausted"
-# A failure after text streamed whose cause is one of these is the keys' fault: Try again helps.
-_KEY_FAULTS = (ProviderErrorKind.RATE_LIMIT, ProviderErrorKind.QUOTA, ProviderErrorKind.AUTH)
 # No key in these states works until someone fixes it, so the provider needs attention.
 _NEEDS_FIXING = ("billing", "rejected")
 
@@ -64,7 +61,8 @@ class ModelKeysExhausted(TurnFailed):
 
 
 class _OnTextCallbackError(Exception):
-    """Wrapper so on_text exceptions are not caught and classified as provider errors."""
+    """Wrapper so on_text and on_restart exceptions are not caught and classified as provider
+    errors."""
 
 
 class _StaleKeys(Exception):
@@ -142,12 +140,48 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
 
 @dataclass
 class _Call:
-    """One `call`: the provider and keys it read, and whether text has streamed."""
+    """One failover call: the provider and keys it read."""
 
     model: ResolvedModel  # with the keys read for this call
     provider: Provider
     secrets: tuple[str, ...]
-    text_sent: bool = False
+
+
+class _Stream:
+    """The text of one `call`, across its attempts, its stale-keys restart and its corrective
+    retries. An attempt that fails after text has its text taken back (`on_restart`) before the
+    failure reaches the failover, so the next attempt starts on a clean step and a wait for a
+    key shows no stale text."""
+
+    def __init__(
+        self,
+        on_text: Callable[[str], Awaitable[None]],
+        on_restart: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        self._on_text = on_text
+        self._on_restart = on_restart
+        self._sent = False
+
+    async def text(self, delta: str) -> None:
+        self._sent = True
+        try:
+            res = self._on_text(delta)
+            if inspect.isawaitable(res):
+                await res
+        except Exception as cb_exc:
+            raise _OnTextCallbackError() from cb_exc
+
+    async def take_back(self) -> None:
+        """After a failed attempt: take back the text it streamed, if any."""
+        if not self._sent:
+            return
+        self._sent = False
+        if self._on_restart is None:
+            return
+        try:
+            await self._on_restart()
+        except Exception as cb_exc:
+            raise _OnTextCallbackError() from cb_exc
 
 
 class ModelCaller:
@@ -164,12 +198,16 @@ class ModelCaller:
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
         on_text: Callable[[str], Awaitable[None]],
+        on_restart: Callable[[], Awaitable[None]] | None = None,
     ) -> ModelReply:
+        """`on_restart` takes back the text an attempt streamed before it failed; None (a call
+        whose text is not shown) takes nothing back."""
+        stream = _Stream(on_text, on_restart)
         call_messages = list(messages)
         rejected_retries = 0
         while True:
             try:
-                return await self._call_restarting(model, call_messages, tools, on_text)
+                return await self._call_restarting(model, call_messages, tools, stream)
             except _Rejected as rejected:
                 if rejected_retries >= MAX_REJECTED_RETRIES:
                     raise TurnFailed(rejected.message) from rejected.__cause__
@@ -191,21 +229,21 @@ class ModelCaller:
         model: ResolvedModel,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
-        on_text: Callable[[str], Awaitable[None]],
+        stream: _Stream,
     ) -> ModelReply:
         """One failover call; restarted once with a fresh read when the keys changed under it.
         A second change escapes as `_StaleKeys`, so the turn fails as unexpected."""
         try:
-            return await self._call_once(model, messages, tools, on_text)
+            return await self._call_once(model, messages, tools, stream)
         except _StaleKeys:
-            return await self._call_once(model, messages, tools, on_text)
+            return await self._call_once(model, messages, tools, stream)
 
     async def _call_once(
         self,
         model: ResolvedModel,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
-        on_text: Callable[[str], Awaitable[None]],
+        stream: _Stream,
     ) -> ModelReply:
         provider = await self._providers.get_provider_by_id(model.provider_id)
         keys = tuple(await self._providers.keys_for(provider.id))
@@ -213,7 +251,7 @@ class ModelCaller:
         wire_model = model.wire_model_id
 
         async def attempt(key_index: int | None) -> ModelReply:
-            return await self._attempt(call, key_index, messages, tools, on_text)
+            return await self._attempt(call, key_index, messages, tools, stream)
 
         try:
             reply = await self._failover.call(
@@ -234,18 +272,6 @@ class ModelCaller:
             )
             await self._flag_if_unfixable(provider, exhausted.keys, failed.message)
             raise failed from exhausted
-        except StreamedTextFailure as failure:
-            error = classify(failure.cause, secrets=call.secrets)
-            states = self._failover.states(provider, wire_model)
-            description = self._failover.describe_keys(states)
-            message = (
-                f"{error.message.rstrip('.')}. {description}" if description else error.message
-            )
-            # A keyless provider has no key to rotate or fix: no Try again (Decision #384).
-            key_fault = bool(provider.keys) and error.kind in _KEY_FAULTS
-            kind = _EXHAUSTED if key_fault else None
-            await self._flag_if_unfixable(provider, states, message)
-            raise TurnFailed(message, kind) from failure.cause
         except Exception as exc:
             error = classify(exc, secrets=call.secrets)
             if error.kind is ProviderErrorKind.BAD_GENERATION:
@@ -259,10 +285,11 @@ class ModelCaller:
         key_index: int | None,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
-        on_text: Callable[[str], Awaitable[None]],
+        stream: _Stream,
     ) -> ModelReply:
         """One request with one key (None: the keyless provider). It raises the provider's raw
-        exception, wrapped in `StreamedTextFailure` once text has streamed in the call."""
+        exception once the text it streamed is taken back. A cancel takes nothing back: a
+        stopped step keeps its text."""
         keys = call.model.keys
         if (key_index is None and keys) or (key_index is not None and key_index >= len(keys)):
             raise _StaleKeys()
@@ -274,25 +301,23 @@ class ModelCaller:
         )
         total_chunk: AIMessageChunk | None = None
         last_chunk: AIMessageChunk | None = None
+        failure: Exception | None = None
         try:
             async for chunk in runnable.astream(messages):
                 aim_chunk = cast(AIMessageChunk, chunk)
                 last_chunk = aim_chunk
                 total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
                 for delta in _extract_text_deltas(aim_chunk.content):
-                    call.text_sent = True
-                    try:
-                        res = on_text(delta)
-                        if inspect.isawaitable(res):
-                            await res
-                    except Exception as cb_exc:
-                        raise _OnTextCallbackError() from cb_exc
+                    await stream.text(delta)
         except _OnTextCallbackError:
             raise
         except Exception as exc:
-            if call.text_sent:
-                raise StreamedTextFailure(exc) from exc
-            raise
+            failure = exc
+        if failure is not None:
+            # Outside the handler, so an error of the take-back does not chain to the provider's
+            # error, which the classification would read through it.
+            await stream.take_back()
+            raise failure
         return _reply(total_chunk, last_chunk)
 
     async def _flag_if_unfixable(

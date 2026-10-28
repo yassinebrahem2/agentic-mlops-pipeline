@@ -180,6 +180,7 @@ class RecordingCaller(ModelCaller):
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
         on_text: Callable[[str], Awaitable[None]],
+        on_restart: Callable[[], Awaitable[None]] | None = None,
     ) -> ModelReply:
         self.requests.append(list(messages))
         return self._replies.pop(0)

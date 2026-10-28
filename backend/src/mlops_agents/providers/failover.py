@@ -59,14 +59,6 @@ class RateLimited(Exception):
         self.retry_after_s = retry_after_s
 
 
-class StreamedTextFailure(Exception):
-    """Raised by an attempt that failed after text streamed: it is never failed over."""
-
-    def __init__(self, cause: BaseException) -> None:
-        super().__init__("The model call failed after its text had started to stream.")
-        self.cause = cause
-
-
 class Clock(Protocol):
     def now(self) -> datetime: ...  # aware, UTC
 
@@ -157,9 +149,6 @@ class KeyFailover:
                     continue
             try:
                 result = await attempt(pick.index)
-            except StreamedTextFailure as failure:
-                self._record(provider, model, pick, classify(failure.cause))
-                raise
             except Exception as exc:
                 error = classify(exc)
                 if error.kind in _SAME_KEY_RETRY and transient_retries < len(TRANSIENT_BACKOFFS):

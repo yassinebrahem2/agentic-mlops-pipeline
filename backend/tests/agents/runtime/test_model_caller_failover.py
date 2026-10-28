@@ -15,13 +15,11 @@ from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.caller_env import (
     CallerEnv,
     build_caller_env,
-    fail_after_text,
     keys_used,
     resolve,
 )
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import KeyOutcome, RunningFake
-from tests.providers.fake_clock import payment_required, rate_limit, unauthorized
 
 KEYS = ("gsk_first_secret_value", "gsk_second_secret_value")
 HI: list[BaseMessage] = [HumanMessage(content="hi")]
@@ -143,29 +141,6 @@ async def test_daily_limits_exhaust_the_keys_without_flagging_the_provider(
     assert provider.status == "ok"
 
 
-async def test_a_429_after_text_fails_the_turn_without_trying_another_key(
-    env: CallerEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    built = fail_after_text(monkeypatch, rate_limit())
-    received: list[str] = []
-
-    async def on_text(text: str) -> None:
-        received.append(text)
-
-    with pytest.raises(TurnFailed) as raised:
-        await env.caller.call(env.model, HI, [], on_text)
-
-    failed = raised.value
-    assert not isinstance(failed, ModelKeysExhausted)
-    assert received == ["Partial "]
-    assert built == [0]
-    assert failed.error_kind == "keys_exhausted"
-    assert failed.message.endswith("Key 1: rate limited (since 14:03 UTC). Key 2: ok.")
-    for key in KEYS:
-        assert key not in failed.message
-    assert env.clock.sleeps == []
-
-
 async def test_parallel_calls_on_one_failover_share_its_state(
     env: CallerEnv, fake_openai: RunningFake
 ) -> None:
@@ -278,44 +253,5 @@ async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_th
     assert raised.value.error_kind is None
     assert provider_message in raised.value.message
     assert keys_used(fake_openai) == [KEYLESS]
-    provider = await env.providers.get_provider_by_id(env.model.provider_id)
-    assert provider.status == "ok"
-
-
-@pytest.mark.parametrize(
-    ("error", "provider_message"),
-    [
-        (rate_limit(), "quota exceeded"),
-        (payment_required(), "payment required"),
-        (unauthorized(), "bad key"),
-    ],
-    ids=["429", "402", "401"],
-)
-async def test_a_keyless_provider_failing_after_text_fails_plainly(
-    databases: Databases,
-    keystore: MemoryKeyStore,
-    fake_openai: RunningFake,
-    model_http: httpx2.AsyncClient,
-    monkeypatch: pytest.MonkeyPatch,
-    error: Exception,
-    provider_message: str,
-) -> None:
-    # No key to rotate or fix, so no Try again: the provider's own message, no error kind (#384).
-    env = await build_caller_env(
-        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
-    )
-    built = fail_after_text(monkeypatch, error)
-    received: list[str] = []
-
-    async def on_text(text: str) -> None:
-        received.append(text)
-
-    with pytest.raises(TurnFailed) as raised:
-        await env.caller.call(env.model, HI, [], on_text)
-
-    assert received == ["Partial "]
-    assert built == [0]
-    assert raised.value.error_kind is None
-    assert raised.value.message == provider_message
     provider = await env.providers.get_provider_by_id(env.model.provider_id)
     assert provider.status == "ok"

@@ -1,5 +1,5 @@
 """A provider and model on the fake server, with a model caller on a real `KeyFailover` driven
-by a `FakeClock`, for the model caller tests; and a client that fails after streaming text."""
+by a `FakeClock`, for the model caller tests; and clients that fail after streaming text."""
 
 from __future__ import annotations
 
@@ -105,12 +105,19 @@ class _TextThenFailure:
         raise self._error
 
 
-def fail_after_text(monkeypatch: pytest.MonkeyPatch, error: Exception) -> list[int]:
-    """Every client the caller builds fails after text; returns the key index of each build."""
+def script_builds(monkeypatch: pytest.MonkeyPatch, outcomes: list[Exception | None]) -> list[int]:
+    """The caller's next client builds, one outcome each, in order: an exception gives a client
+    that streams some text then fails with it; None, or a build after the outcomes are used up,
+    the real client on the fake server. Returns the key index of each build."""
     built: list[int] = []
+    real_build = ResolvedModel.build
+    pending = list(outcomes)
 
     def build(self: ResolvedModel, http: httpx2.AsyncClient, key_index: int = 0) -> Any:
         built.append(key_index)
+        error = pending.pop(0) if pending else None
+        if error is None:
+            return real_build(self, http, key_index)
         return _TextThenFailure(error)
 
     monkeypatch.setattr(ResolvedModel, "build", build)
