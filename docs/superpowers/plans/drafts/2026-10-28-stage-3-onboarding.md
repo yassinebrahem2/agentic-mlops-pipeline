@@ -24,8 +24,8 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | `ReadHandoff` and the seven definitions, without `status_board` | data-summary (hook registry, `status_board` hook), knowledge, tracking and proposals tool names, I20 `Handoffs` |
-| 2 | The kickoff | contracts (kickoff table), I20 |
-| 3 | The `connections` and `handoff` kinds | task 2 (`Kickoff`, `handoff_preview`), I15, I16, I19, I20 |
+| 2 | The kickoff | contracts task 1 (the `kickoff` table), contracts task 2 (`HandoffPayload`, I20 types), proposals task 1 (`Handoffs`) |
+| 3 | The `connections` and `handoff` kinds | task 2 (`Kickoff`, `handoff_preview`), contracts task 2 (the payloads), I15, I16, I19, I20 |
 | 4 | The Onboarding wizard step | task 1 (nothing else: the step posts a chat message) |
 | 5 | End to end | tasks 1 to 4, the fake MLflow server |
 

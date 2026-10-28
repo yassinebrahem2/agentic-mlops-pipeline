@@ -8,11 +8,11 @@
 
 **Branch:** `plan/stage-3-pages`.
 
-**Consumes** (generated types in `frontend/src/api/schema.d.ts`, after contracts task 3 and the owning plans merged; names from the overview):
+**Consumes** (generated types in `frontend/src/api/schema.d.ts`, regenerated with `npm run gen:api` once contracts task 2 and the owning plans' routes are on `main`; names from the overview). **Starts** after contracts task 2 (the `HandoffPayload` and `ConnectionsPayload` models, and I20's types) and those routes are on `main`:
 - I16 routes: `GET /api/projects/{id}/tracking/sources`; `POST .../tracking/sync` (optional `source_id`, 202); `GET/POST .../tracking/sources` (`POST` body: `type`, `settings`, `auth`); `PUT .../tracking/sources/{trk}/credential` (keystore only); `GET .../tracking/models` (`Page[ModelSummary]`), `.../versions` (`model`, `source_id`; `Page[ModelVersionRow]`), `.../runs` (`run_key`; `Page[RunRow]`), `.../ci-runs` (`Page[CiRunRow]`), `.../deployments` (`model`, `source_id`; `Page[DeploymentRow]`), `.../metrics` (`run_key`, `metric`, `latest`; `Page[MetricPoint]`); every list route takes `limit` (default 50, max 500) and `offset`; models `TrackingSourceView`, `RunStatus`; event `tracking.synced`. The `/evaluations` route is stage 5's and unused here. Behaviors relied on, owned by the tracking plan: `latest=true` returns the highest-`step` point per metric of the run; `/versions` is ordered newest first; a source's `settings` are `{url}` for `mlflow` and `{repository, workflows}` for `github_actions` (tracking's `MlflowSettings` and `GithubActionsSettings`, `extra="forbid"`); the credential route answers 422 for a source with `auth="none"`.
 - I15 routes: `GET /api/projects/{id}/connections`, `GET .../connections/{con}/tables`, `GET .../connections/{con}/tables/{table}`; models `ConnectionView` (with `findings: Findings`), `TableRef`, `TableDetail`, `ColumnInfo`; events `connection.created`, `connection.updated`, `connection.deleted`.
 - I20 route: `GET /api/projects/{id}/handoff` (`HandoffView` or `null`, 200); I19 `HandoffPayload`, of which the pages read `data_roles: list[DataRole]` (`connection`, `table`, `role`, `id_column`, `time_column`) and `models: list[ModelSpec]` (`name`, `profile.primary_metric`, `predictions` and `labels` as `TableUse | None`); event `handoff.approved`. A project has several models and several data roles, so both pages work on lists.
-- All five event types are in the backend `EventType` and the frontend `PROJECT_EVENT_TYPES`, written by contracts task 1 ("Shared by contracts"); this plan does not edit `useProjectEvents.ts`.
+- All five event types are in the backend `EventType` and the frontend `PROJECT_EVENT_TYPES`, written by contracts task 1 ("Shared by contracts"; contracts task 2 builds on it); this plan does not edit `useProjectEvents.ts`.
 - Frontend: `PageRoute` and the `import.meta.glob` route table (`app/routes.ts`), `useProjectEvents`, `api` / `unwrap` / `errorText`, `components/ui/*`.
 
 **Produces:** nothing other plans use (the proposals plan's cards say where to set a tracking credential; this section is that place). The `onboarding` plan's end-to-end test may visit these pages; this plan does not edit `frontend/e2e/flow.spec.ts` (onboarding's file).
@@ -23,7 +23,7 @@
 
 | Task | Title | Consumes |
 |---|---|---|
-| 1 | Shared hooks and formatters | tracking, connections, data-summary (table detail) and proposals (handoff) routes on `main`; contracts task 3 (types) |
+| 1 | Shared hooks and formatters | tracking, connections, data-summary (table detail) and proposals (handoff) routes on `main`; contracts task 2 (payload types) |
 | 2 | Runs page | task 1 |
 | 3 | Models page | tasks 1 and 2 (the status badge) |
 | 4 | Data page | task 1 |

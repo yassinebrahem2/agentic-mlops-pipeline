@@ -6,12 +6,12 @@
 
 **Goal:** Land, once, what every stage 3 plan shares, so each of them only adds its own module:
 - "Shared by contracts" (IDs, event types, the DuckDB constant and dependencies, project secrets, the schema, `Provider.cooldown_minutes`);
-- the types of I13 to I18 and I21 (task 1), then the I19 and I20 types with the full `ConnectionsPayload` and `HandoffPayload` (task 2);
+- the types of I13 to I18 (task 1), then the I19 and I20 types with the full `ConnectionsPayload` and `HandoffPayload` (task 2);
 - I13 itself: the `stall` kind, the approval observers, the `propose` class, the gate's `proposal_kind` and the approval-card dispatcher.
 
 A user sees nothing new. Every default keeps stage 2's behavior until the plan that owns it replaces the default.
 
-**Branch:** `plan/stage-3-contracts`. **Consumes:** merged code only. **Produces:** the overview's "Shared by contracts", I13 in full, and the types of I14 to I20 and I21's data types (not `HookRegistry`, `ProposalKinds`, `KeyFailover`: their plans write them).
+**Branch:** `plan/stage-3-contracts`. **Consumes:** merged code only. **Produces:** the overview's "Shared by contracts", I13 in full, and the types of I14 to I20 (not `HookRegistry`, `ProposalKinds`, `KeyFailover`: their plans write them).
 
 **Read first:** the stage 3 spec (`docs/superpowers/specs/2026-10-27-stage-3-onboarding-data-design.md`), §2, §9, §13 in full; the overview's interface sections; the roadmap's "Permission risk classes"; `docs/superpowers/plans/2026-10-24-stage-2-runtime-contracts.md` (this plan's model).
 
@@ -19,16 +19,16 @@ A user sees nothing new. Every default keeps stage 2's behavior until the plan t
 
 | Task | Title | Consumes | PR |
 |---|---|---|---|
-| 1 | Shared by contracts and the types of I13 to I18 and I21 | merged code | early PR |
+| 1 | Shared by contracts and the types of I13 to I18 | merged code | early PR |
 | 2 | The proposal and handoff payloads (I19, I20 types) | task 1 | early PR |
 | 3 | I13: stall, observers, `propose`, dispatcher | task 1 | early PR |
 | 4 | Regenerated API contract and frontend types | tasks 1 to 3 | none (last task) |
 
-Task 1 is small enough to merge within a day, because five plans start on it: IDs, events, one constant, two dependencies, the secrets module, one model field, the whole schema, and the types of I13 to I18 and I21; no behavior change. Task 2 holds the large payload models and their validators (proposals, onboarding and pages start on it). Task 3 holds I13's behavior (rate-limits' later tasks and proposals start on it). `main` must stay working after each early PR, so tasks 1 to 3 each commit a regenerated `frontend/openapi.json` for what they change (`schema.d.ts` is gitignored); task 4 closes the loop.
+Task 1 is small enough to merge within a day, because five plans start on it: IDs, events, one constant, two dependencies, the secrets module, one model field, the whole schema, and the types of I13 to I18; no behavior change. Task 2 holds the large payload models and their validators (proposals, onboarding and pages start on it). Task 3 holds I13's behavior (rate-limits' later tasks and proposals start on it). `main` must stay working after each early PR, so tasks 1 to 3 each commit a regenerated `frontend/openapi.json` for what they change (`schema.d.ts` is gitignored); task 4 closes the loop.
 
 ---
 
-### Task 1: Shared by contracts and the types of I13 to I18 and I21
+### Task 1: Shared by contracts and the types of I13 to I18
 
 **Files:**
 - `backend/src/mlops_agents/ids.py` and `tests/test_ids.py`: `con`, `trk`, `prp`, `kno`.
@@ -40,14 +40,13 @@ Task 1 is small enough to merge within a day, because five plans start on it: ID
 - Type modules, each new package with an empty `__init__.py`:
   - `connections/contract.py` (I15), `tracking/contract.py` (I16, with `Page[T]`), `knowledge/contract.py` (I17);
   - `agents/hooks/contract.py` (I18: `HookContext`, `ContextHook`);
-  - `providers/failover.py` (the data types I21 names and rate-limits' tests read: `KeyStatus`, `KeyState`, `AllKeysExhausted`, `RateLimited`, `StreamedTextFailure`; no `KeyFailover`, which rate-limits adds to the same file);
   - `providers/embedder.py` (I14: `ModelType`, `EmbedderUnavailable`, `Embedder`, `EmbedderStatus`, `Embedders`).
-- `agents/runtime/contract.py`: `ApprovalKind`, `ErrorKind`, the `ApprovalPart` fields, `TurnEndedData.error_kind` and `MessageView.error_kind` (null by default; the column `turns.error_kind` is the schema's; rate-limits writes and reads it). `agents/approvals/contract.py`: the `ApprovalView` fields only (the `Approvals` protocol changes in task 2, with its implementation).
+- `agents/runtime/contract.py`: `ApprovalKind`, `ErrorKind`, the `ApprovalPart` fields, `TurnEndedData.error_kind` and `MessageView.error_kind` (null by default; the column `turns.error_kind` is the schema's; rate-limits writes and reads it). `agents/approvals/contract.py`: the `ApprovalView` fields only (the `Approvals` protocol changes in task 3, with its implementation).
 - Regenerated `frontend/openapi.json` (the file lives in `frontend/`, written by `python -m mlops_agents.api.openapi_export`; this is the only generated file committed: `schema.d.ts` is gitignored and `npm run gen:api` rebuilds it); frontend test fixtures that stop type-checking.
 - `frontend/src/lib/useProjectEvents.contract.test.ts` (new): the event-list compile check, wrapped in a `test()` (vitest fails a file with no test) and compiled by `npm run build`'s `tsc -b` (`tsconfig.app.json` includes `src`, no excludes).
 - Tests: `tests/test_stage3_contracts.py`, `tests/storage/test_stage3_schema.py`, `tests/credentials/test_project_secrets.py`, and any existing test that pins a column list.
 
-**Interfaces:** Consumes merged code. Produces the overview's "Shared by contracts" and the type parts of I13 to I18 and I21, exactly as it writes them. The overview is the one source of names and types; a needed change takes a Decision issue.
+**Interfaces:** Consumes merged code. Produces the overview's "Shared by contracts" and the type parts of I13 to I18, exactly as it writes them. The overview is the one source of names and types; a needed change takes a Decision issue.
 
 **Implementation notes:**
 
@@ -61,7 +60,7 @@ Task 1 is small enough to merge within a day, because five plans start on it: ID
 - `CONNECTION_NAME_PATTERN` (`^[a-z0-9][a-z0-9-]{0,39}$`) is a constant in `connections/contract.py`: the one source of the connection-name rule.
 - Each contract module is pure (types, protocols, constants; no I/O, no imports from implementing modules), like stage 2's, so no cycle can form.
 - I13 data: `ApprovalKind = Literal["tool", "stall"]` and `ErrorKind = Literal["keys_exhausted"]` live in `agents/runtime/contract.py`. `ApprovalPart` and `ApprovalView` gain `kind`, `step: int | None`, `proposal_kind: str | None`; for a stall `tool_call_id` is null on both and `tool` and `risk_class` are null on the view. `ApprovalPart.kind` defaults to `"tool"` so message parts stored by stage 2 still validate. `TurnEndedData.error_kind: ErrorKind | None = None`. Existing readers (`gate.py`, `service.py`, `waiting.py`, `tool_step.py`, `store.py`) keep type-checking because a `tool` approval always sets the fields; the pyright fixes are minimal and listed in the PR.
-- I14 to I18 and I21's data types: copy the overview's definitions, `Literal`s included. Member counts for the contract test: `ConnectionKind` six methods, `Connections` nine, `Tracking` four, `TrackingAdapter` one, `Knowledge` four, `VectorStore` four, `Embedders` two. `ModelType` is defined in `providers/embedder.py`; the `ModelEntry` and `ModelCreate` fields are embedders'.
+- I14 to I18: copy the overview's definitions, `Literal`s included. Member counts for the contract test: `ConnectionKind` six methods, `Connections` nine, `Tracking` four, `TrackingAdapter` one, `Knowledge` four, `VectorStore` four, `Embedders` two. `ModelType` is defined in `providers/embedder.py`; the `ModelEntry` and `ModelCreate` fields are embedders'.
 *Schema.* Every `id` is the roadmap's prefixed ULID, every time UTC ISO 8601 text, JSON columns `TEXT`. These two files are the only stage 3 migrations. `storage/tables.py` declares every new table and column in the order the migration creates them (`test_tables.py` compares column order); the FTS5 virtual table and its shadow tables are not declared.
 
 `app/0002_stage3.sql` (plain `ALTER TABLE ... ADD COLUMN`):
@@ -96,7 +95,8 @@ Task 1 is small enough to merge within a day, because five plans start on it: ID
   - every existing row is copied with `kind = 'tool'`; foreign keys are checked after (`PRAGMA foreign_key_check` returns nothing).
 
 **Tests (stop condition):**
-- `test_stage3_contracts.py`, like stage 2's: every contract module imports with no cycle (`failover.py` types included); the protocols expose the member counts above: methods are checked by name with `inspect.getmembers`, attributes of a Protocol (`name`, `payload_model`, `settings_model`, `needs_credential`, `type`) through `typing.get_type_hints`, since `getmembers` does not see annotation-only attributes.
+- `test_stage3_contracts.py`, like stage 2's: every contract module imports with no cycle; the protocols expose the member counts above: methods are checked by name with `inspect.getmembers`, attributes of a Protocol (`name`, `payload_model`, `settings_model`, `needs_credential`, `type`) through `typing.get_type_hints`, since `getmembers` does not see annotation-only attributes.
+- `CONNECTION_NAME_PATTERN` accepts `hotel-data` and `a1`, and rejects a name with a space, a capital, a leading dash or more than 40 characters.
 - `ApprovalPart` stored without `kind` loads as `tool`; a `stall` part with null `tool_call_id` validates; `TurnEndedData` and `MessageView` without `error_kind` validate; `Provider` defaults `cooldown_minutes` to `DEFAULT_COOLDOWN_MINUTES`, and the app.db column default equals it.
 - `PROJECT_EVENT_TYPES` covers every `EventRecord` type (compile-time); `test_ids.py` accepts the four prefixes; `duckdb.__version__ == DUCKDB_VERSION` and `sqlite_vec` imports, on both platforms.
 - `ProjectSecrets`, against an in-memory `KeyStore` and an app.db: `put` then `move` leaves the value under the new ref only and one `secret_refs` row; `is_set` is true after `put`, false after `delete` and never touches the keystore (a keystore whose `get` raises still answers); `delete_prefix` removes every recorded ref under the prefix and none outside it; a keystore failure on `delete` keeps the row and raises; no value appears in any raised message; removing a project (through `WorkspaceService.remove`) deletes the secrets recorded under `project_prefix(project_id)` and no other project's.
@@ -123,12 +123,11 @@ Task 1 is small enough to merge within a day, because five plans start on it: ID
 - `proposals/payloads.py` holds every model of the overview's "Payloads" block (`ConnectionSpec` to `HandoffPayload`, `GrantableLevel`, `Placeholder`), all `extra="forbid"`, imported by `proposals/contract.py` (which would pass 400 lines with them). Beyond the field lists, validators where the overview states a rule:
   - `ConnectionSpec.name` uses `CONNECTION_NAME_PATTERN` (a constant in `connections/contract.py`, task 1; the connections plan reuses it for its own validation and the `/data/<name>` mount);
   - `Cadence`: exactly one of `cron` and `every_minutes`; a cron is five whitespace-separated fields; `every_minutes` is at least 1;
-  - every `timezone` field (`Feed`, `OnCall`, `CheckSpec`) is an IANA zone name, checked with `zoneinfo.ZoneInfo`; the `tzdata` package is added to the dependencies, because Windows has no system zone database;
+  - every `timezone` field (`Feed`, `OnCall`, `CheckSpec`) is an IANA zone name, checked with `zoneinfo.ZoneInfo`; `tzdata` (this task's dependency) supplies the zone database that Windows lacks;
   - `OnCallHours.start` and `end` match `HH:MM`, and an `end` before `start` is a window that crosses midnight and is allowed; `end` equal to `start` is rejected;
   - `CommandSpec`: `type == "command"` needs a `template` and no `workflow`; `type == "ci_dispatch"` needs a `workflow`; every `{name}` in a template (found with `string.Formatter().parse`) is in the command's `placeholders` (declared ones that the template does not use are allowed, since `ci_dispatch` inputs use them);
   - references resolve inside the payload, as `model_validator`s that name the missing target: each `ModelSpec.predictions` and `labels` (`TableUse`) matches a `DataRole` of the payload; each `PipelineEdge` endpoint is a `PipelineStage` name; a `ModelSpec.production_signal` of kind `tracker_alias` has its `ref` among that model's `environments` keys; model names are unique. References to connections and tracking sources, which live outside the payload, are checked when the proposal is applied, not here;
   - `GrantableLevel = Literal["suggest", "ask", "autonomous"]`, so a proposal can never carry `bypass`; a test pins it to `PermissionLevel` minus `bypass`.
-
 
 **Tests (stop condition):**
 - Payloads: a full `HandoffPayload` (two models, feeds, on-call, all three `results` shapes, both `CommandSpec` types) round-trips through JSON; `permission_level: "bypass"` is rejected; `GrantableLevel` equals `PermissionLevel` minus `bypass`; a four-field cron and a bad `HH:MM` are rejected; an unknown field is rejected; a connection name with a space or capital is rejected.
