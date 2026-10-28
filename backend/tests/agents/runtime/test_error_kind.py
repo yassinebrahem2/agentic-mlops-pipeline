@@ -12,6 +12,7 @@ import httpx2
 import pytest
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ErrorKind,
     MessageUpdated,
@@ -170,7 +171,7 @@ def hold_after_the_error_kind_write(monkeypatch: pytest.MonkeyPatch) -> asyncio.
     written = asyncio.Event()
 
     async def held(
-        self: SessionStore, project_id: str, turn_id: str, error_kind: ErrorKind
+        self: SessionStore, project_id: str, turn_id: str, error_kind: ErrorKind | None
     ) -> None:
         await set_error_kind(self, project_id, turn_id, error_kind)
         if not written.is_set():
@@ -270,3 +271,24 @@ async def test_an_end_writes_its_own_error_kind_over_a_recorded_one(
     view = await store.message("prj_kind", session_id, agent.id)
     assert view is not None
     assert view.error_kind == stored
+
+
+async def test_recovery_interrupts_a_running_turn_without_its_recorded_error_kind(
+    databases: Databases,
+) -> None:
+    # A crash between the failure record and the turn's end: the turn did not fail.
+    store = SessionStore(databases)
+    session_id = await store.session_id("prj_kind", "orchestrator")
+    turn_id = await store.add_turn("prj_kind", session_id, "msg_trigger", "running")
+    await store.set_error_kind("prj_kind", turn_id, "keys_exhausted")
+
+    await store.recover("prj_kind", approval_store=ApprovalStore(databases))
+
+    engine = await databases.project("prj_kind")
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                select(turns.c.status, turns.c.error_kind).where(turns.c.id == turn_id)
+            )
+        ).one()
+    assert tuple(row) == ("interrupted", None)
