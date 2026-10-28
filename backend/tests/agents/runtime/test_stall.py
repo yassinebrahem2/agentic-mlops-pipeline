@@ -132,6 +132,8 @@ async def test_try_again_resumes_the_turn_from_its_checkpoint(
     stream, _, turn_id = await send_until_waiting(env, "hi")
     [stall] = await env.stalls(turn_id)
     stalled_request = len(fake_openai.state.requests) - 1
+    provider = await env.session.providers.get_provider(env.session.provider)
+    assert provider.status == "needs_attention"
 
     await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
     ended = _ended(await collect_until_turn_ended(stream))

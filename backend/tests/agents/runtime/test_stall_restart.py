@@ -1,9 +1,10 @@
-"""A stalled turn across a restart, its provider deleted while it waits, and a re-run of the
-model node that already stalled: the stall is an interrupted graph like any waiting turn, and its
-approval is never duplicated."""
+"""A stalled turn across a restart, the edges of its Try again (a failing call, a deleted
+provider), and a re-run of the model node that already stalled: the stall is an interrupted graph
+like any waiting turn, and its approval is never duplicated."""
 
 from __future__ import annotations
 
+import traceback
 from pathlib import Path
 
 import httpx2
@@ -23,11 +24,13 @@ from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import KeyFailover, KeyState
+from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -160,6 +163,81 @@ async def test_try_again_after_the_provider_was_deleted_fails_the_turn(
     [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
     assert logged.exc_info is not None
     assert isinstance(logged.exc_info[1], TurnRefused)
+    assert await env.event_payloads("turn.resumed") == []
+    await env.session.manager.close()
+
+
+async def test_try_again_clears_the_needs_attention_mark_even_when_the_call_then_fails(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    env = await build_stall_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    fake_openai.state.script_for_key(KEY, ["401"])
+    stream, _, turn_id = await send_until_waiting(env, "hi")
+    [stall] = await env.stalls(turn_id)
+    providers = env.session.providers
+    assert (await providers.get_provider(env.session.provider)).status == "needs_attention"
+    # The call after Try again fails on an overloaded server, so it clears nothing itself.
+    fake_openai.state.server_error_remaining = 3
+
+    await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    events = await collect_until_turn_ended(stream, timeout=10)
+
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert (ended.data.status, ended.data.error_kind) == ("failed", None)
+    assert (await providers.get_provider(env.session.provider)).status == "ok"
+    await env.session.manager.close()
+
+
+async def test_try_again_after_switching_models_and_deleting_the_provider_fails_the_turn(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Pins today's behaviour, which the lead decides on: the resume builds the agent on the
+    # second provider's model, then Try again resets the keys of the deleted, stalled provider.
+    env = await build_stall_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    fake_openai.state.script_for_key(KEY, ["401"])
+    stream, _, turn_id = await send_until_waiting(env, "hi")
+    [stall] = await env.stalls(turn_id)
+    providers = env.session.providers
+    other = await providers.create_provider(
+        ProviderCreate(name="other", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    await providers.add_model(ModelCreate(provider=other.name, wire_model_id="fake-tools"))
+    await providers.verify_model(f"{other.name}:fake-tools")
+    await env.session.settings.set_default_model("orchestrator", f"{other.name}:fake-tools")
+    await providers.delete_provider(env.session.provider)
+
+    await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    events = await collect_until_turn_ended(stream, timeout=10)
+
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert (ended.data.status, ended.data.error, ended.data.error_kind) == (
+        "failed",
+        UNEXPECTED_FAILURE_TEXT,
+        None,
+    )
+    [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
+    assert logged.exc_info is not None
+    error = logged.exc_info[1]
+    assert isinstance(error, DomainError)
+    assert error.code == "provider_not_found"
+    assert "reset_keys" in "".join(traceback.format_tb(error.__traceback__))
     assert await env.event_payloads("turn.resumed") == []
     await env.session.manager.close()
 

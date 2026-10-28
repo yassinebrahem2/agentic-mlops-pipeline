@@ -19,17 +19,15 @@ from mlops_agents.agents.tools.base import Preview
 from mlops_agents.events.contract import EventLog
 
 __all__ = [
-    "STALL_TITLE",
     "LateApprovals",
     "StallState",
     "await_stall",
     "pending_stall",
     "record_stall",
     "stall_part",
-    "stall_preview",
 ]
 
-STALL_TITLE = "Stalled: no usable key"
+_STALL_TITLE = "Stalled: no usable key"
 
 
 @dataclass(frozen=True)
@@ -49,8 +47,8 @@ def pending_stall(stall: StallState | None) -> StallState | None:
     return stall if stall is not None and not stall.resolved else None
 
 
-def stall_preview(exhausted: ModelKeysExhausted) -> Preview:
-    return Preview(kind="text", title=STALL_TITLE, body=exhausted.description)
+def _stall_preview(exhausted: ModelKeysExhausted) -> Preview:
+    return Preview(kind="text", title=_STALL_TITLE, body=exhausted.description)
 
 
 def stall_part(stall: StallState) -> ApprovalPart:
@@ -81,7 +79,7 @@ async def record_stall(
     """The model node's stall: the step's pending stall approval, found again on a re-run of the
     node, and its `turn.stalled` event. A re-run (a crash before the checkpoint) records the
     event again: it is informational."""
-    approval = await approvals.create_stall(project_id, turn_id, step, stall_preview(exhausted))
+    approval = await approvals.create_stall(project_id, turn_id, step, _stall_preview(exhausted))
     if events is not None:
         await events.record(
             project_id,
