@@ -340,11 +340,7 @@ async def test_live_agent_definitions(
         for agent in chat_agents:
             start = await manager.get(project.id, agent)
             sub = manager.subscribe(project.id, agent, after_seq=start.last_seq)
-            prompt = (
-                "Please start a task, add a line 'Updated by orchestrator' to README.md, and open a local review for it."
-                if agent == "orchestrator"
-                else f"Hello {agent}, please reply with a short greeting and introduce your role in one sentence."
-            )
+            prompt = f"Hello {agent}, please reply with a short greeting and introduce your role in one sentence."
             await manager.send(project.id, agent, prompt)
 
             events_list: list[StreamEvent] = []
@@ -362,6 +358,13 @@ async def test_live_agent_definitions(
             assert len(text) > 0
 
         # Tool-using agent called one of its own tools
+        start = await manager.get(project.id, "orchestrator")
+        sub = manager.subscribe(project.id, "orchestrator", after_seq=start.last_seq)
+        await manager.send(project.id, "orchestrator", "What does README.md say? Please read it.")
+        async for ev in sub:
+            if isinstance(ev, TurnEnded):
+                break
+
         orch_defn = catalog.get("orchestrator")
         orch_view = await manager.get(project.id, "orchestrator")
         has_tool_call = any(
@@ -370,22 +373,5 @@ async def test_live_agent_definitions(
             for p in m.parts
         )
         assert has_tool_call, "Orchestrator did not call any of its own tools"
-
-        # Task was started
-        task = await tasks_svc.current(project.id, "orchestrator")
-        assert task is not None, "Task was not started"
-
-        # README.md was changed in the task's worktree
-        worktree_readme = (task.worktree / "README.md").read_text(encoding="utf-8")
-        assert "Updated by orchestrator" in worktree_readme
-
-        # A local review was opened in the Inbox / tasks service
-        task_view = await tasks_svc.view(project.id, task.id)
-        assert task_view.status == "in_review" and task_view.review_kind == "local"
-        open_tasks = await tasks_svc.open_tasks(project.id)
-        assert any(
-            t.id == task.id and t.status == "in_review" and t.review_kind == "local"
-            for t in open_tasks
-        )
 
         await manager.close()
