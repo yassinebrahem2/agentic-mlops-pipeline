@@ -25,6 +25,7 @@ from mlops_agents.events.observer import EventTurnObserver
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import turns
+from tests.agents.runtime.caller_env import fail_after_text
 from tests.agents.runtime.observer_fakes import RecordingObserver
 from tests.agents.runtime.session_env import (
     SessionEnv,
@@ -34,6 +35,7 @@ from tests.agents.runtime.session_env import (
 )
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.providers.fake_clock import rate_limit
 
 KEY = "gsk_only_secret_value"
 
@@ -57,8 +59,9 @@ async def _fail_one_turn(
     fake: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
     *,
-    exhaust_keys: bool,
+    key_fault: bool,
 ) -> _Failed:
     event_log = SqliteEventLog(databases)
     recorder = RecordingObserver()
@@ -74,8 +77,9 @@ async def _fail_one_turn(
         observers=[EventTurnObserver(event_log), recorder],
     )
     await env.providers.add_key(env.provider, KEY)
-    if exhaust_keys:
-        fake.state.script_for_key(KEY, ["401"])
+    if key_fault:
+        # Every key exhausted before any text stalls the turn instead (test_stall.py).
+        fail_after_text(monkeypatch, rate_limit())
     else:
         fake.state.server_error_remaining = 3
     stream = await opened_stream(env)
@@ -102,7 +106,7 @@ async def _fail_one_turn(
     return _Failed(stored, ended, live, reloaded, logged)
 
 
-async def test_a_turn_with_every_key_exhausted_reports_keys_exhausted_everywhere(
+async def test_a_turn_failing_on_its_keys_reports_keys_exhausted_everywhere(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -110,6 +114,7 @@ async def test_a_turn_with_every_key_exhausted_reports_keys_exhausted_everywhere
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     failed = await _fail_one_turn(
         tmp_path,
@@ -119,7 +124,8 @@ async def test_a_turn_with_every_key_exhausted_reports_keys_exhausted_everywhere
         fake_openai,
         model_http,
         git_env,
-        exhaust_keys=True,
+        monkeypatch,
+        key_fault=True,
     )
 
     assert failed.ended.data.status == "failed"
@@ -144,6 +150,7 @@ async def test_any_other_failure_leaves_error_kind_null(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     failed = await _fail_one_turn(
         tmp_path,
@@ -153,7 +160,8 @@ async def test_any_other_failure_leaves_error_kind_null(
         fake_openai,
         model_http,
         git_env,
-        exhaust_keys=False,
+        monkeypatch,
+        key_fault=False,
     )
 
     assert failed.ended.data.status == "failed"
@@ -197,7 +205,7 @@ async def test_a_turn_stopped_after_its_error_kind_was_written_has_none(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
     await env.providers.add_key(env.provider, KEY)
-    fake_openai.state.script_for_key(KEY, ["401"])
+    fail_after_text(monkeypatch, rate_limit())
     stream = await opened_stream(env)
 
     await env.manager.send(env.project_id, "orchestrator", "hi")

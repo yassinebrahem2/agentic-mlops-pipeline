@@ -27,6 +27,7 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.graph import TurnSink, turn_checkpointer
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.hub import SessionHub
+from mlops_agents.agents.runtime.stall import StallState, stall_part
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.sqlite import connect_checkpointer
@@ -153,12 +154,13 @@ async def handle_turn_waiting(
     message_id: str | None,
     current_parts: list[Part],
     decisions: dict[str, GateDecision] | None = None,
+    stall: StallState | None = None,
     lock: AbstractAsyncContextManager[Any],
     observers: Sequence[TurnObserver] = (),
 ) -> None:
     """Transition a turn and its agent message to 'waiting' state, emit TurnWaiting, and notify observers."""
+    existing_apr_ids = {p.approval_id for p in current_parts if isinstance(p, ApprovalPart)}
     if decisions:
-        existing_apr_ids = {p.approval_id for p in current_parts if isinstance(p, ApprovalPart)}
         for tool_call_id, dec in decisions.items():
             if (
                 dec.outcome == "ask"
@@ -185,6 +187,8 @@ async def handle_turn_waiting(
                 else:
                     current_parts.append(apr_part)
                 existing_apr_ids.add(dec.approval_id)
+    if stall is not None and stall.approval_id not in existing_apr_ids:
+        current_parts.append(stall_part(stall))
 
     if message_id is not None:
         async with lock:

@@ -15,6 +15,7 @@ from langgraph.graph.message import add_messages  # pyright: ignore[reportMissin
 from langgraph.graph.state import CompiledStateGraph  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.types import Command
 
+from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import (
@@ -25,11 +26,13 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.hooks import Gate, GateDecision, InboundSource, TurnEndCheck
-from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelKeysExhausted
+from mlops_agents.agents.runtime.stall import StallState, await_stall, pending_stall, record_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.tool_step import ToolStep, needs_wait
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import Preview
+from mlops_agents.events.contract import EventLog
 
 
 class TurnSink(Protocol):
@@ -48,6 +51,7 @@ class TurnState(TypedDict):
     call_errors: NotRequired[dict[str, str]]  # the step's calls answered before the gate
     turn_end_checked: NotRequired[bool]
     end_note: NotRequired[str | None]  # for the next model request only, never a message
+    stall: NotRequired[StallState | None]  # the step's stall: no usable key (stall.py)
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,8 @@ class TurnHooks:
     turn_end: TurnEndCheck
     workspaces: TaskWorkspaces
     approval_store: ApprovalStore  # the app's one store
+    approvals: Approvals  # a stall's approval
+    events: EventLog | None  # turn.stalled and turn.resumed; None records no event
 
 
 def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
@@ -65,7 +71,7 @@ def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
     Only these and LangGraph's safe types are read back as themselves; any other type would come
     back a plain dict. A type added to `TurnState` beyond LangChain's messages is added here.
     """
-    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview, Command)]
+    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview, Command, StallState)]
     return AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
 
 
@@ -132,7 +138,20 @@ def create_turn_graph(
         t0 = time.monotonic()
         try:
             reply = await caller.call(agent.model, request, tool_schemas, on_text)
-        except (Exception, asyncio.CancelledError):
+        except (Exception, asyncio.CancelledError) as error:
+            if isinstance(error, ModelKeysExhausted) and not streamed_chunks:
+                stall = await record_stall(
+                    hooks.approvals,
+                    hooks.events,
+                    project_id=project_id,
+                    agent=agent.definition.name,
+                    turn_id=turn_id,
+                    step=step_count,
+                    exhausted=error,
+                )
+                # The step is taken again after Try again: no message and no step spent. The
+                # inbound messages are this turn's now (taken), so they stay in its state.
+                return {"messages": inbound, "stall": stall}
             if streamed_chunks:
                 partial_text = "".join(streamed_chunks)
                 current_parts.append(TextPart(type="text", text=partial_text))
@@ -226,6 +245,7 @@ def create_turn_graph(
             "messages": [*inbound, new_message],
             "step_count": step_count if end_note else step_count + 1,
             "end_note": None,
+            "stall": None,
         }
 
     step = ToolStep(
@@ -247,9 +267,25 @@ def create_turn_graph(
         note = await hooks.turn_end.note(project_id, session_id, turn_id)
         return {"turn_end_checked": True, "end_note": note}
 
+    async def wait_node(state: TurnState) -> dict[str, Any]:
+        stall = pending_stall(state.get("stall"))
+        if stall is None:
+            return await step.wait(state)
+        return await await_stall(
+            stall,
+            store=hooks.approval_store,
+            caller=caller,
+            events=hooks.events,
+            project_id=project_id,
+            agent=agent.definition.name,
+            turn_id=turn_id,
+        )
+
     def route_model(state: TurnState) -> str:
         if state.get("stopped_reason"):
             return END
+        if pending_stall(state.get("stall")) is not None:
+            return "wait"
         last_msg = state["messages"][-1]
         if isinstance(last_msg, AIMessage) and bool(last_msg.tool_calls):
             return "decide"
@@ -260,21 +296,27 @@ def create_turn_graph(
     def route_decide(state: TurnState) -> str:
         return "wait" if needs_wait(state) else "tools"
 
+    def route_wait(state: TurnState) -> str:
+        # Only a resolved stall leaves the wait node with the stall still set.
+        return "model" if state.get("stall") is not None else "tools"
+
     def route_turn_end(state: TurnState) -> str:
         return "model" if state.get("end_note") else END
 
     graph_builder = StateGraph(TurnState)
     graph_builder.add_node("model", model_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("decide", step.decide)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
-    graph_builder.add_node("wait", step.wait)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("wait", wait_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("tools", step.run)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("turn_end", turn_end_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_edge(START, "model")
     graph_builder.add_conditional_edges(
-        "model", route_model, {"decide": "decide", "turn_end": "turn_end", END: END}
+        "model",
+        route_model,
+        {"wait": "wait", "decide": "decide", "turn_end": "turn_end", END: END},
     )
     graph_builder.add_conditional_edges("decide", route_decide, {"wait": "wait", "tools": "tools"})
-    graph_builder.add_edge("wait", "tools")
+    graph_builder.add_conditional_edges("wait", route_wait, {"model": "model", "tools": "tools"})
     graph_builder.add_edge("tools", "model")
     graph_builder.add_conditional_edges("turn_end", route_turn_end, {"model": "model", END: END})
 

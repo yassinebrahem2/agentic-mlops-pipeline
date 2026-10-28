@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from typing import Any
 
 import httpx2
 import pytest
-from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted, TurnFailed
-from mlops_agents.providers.bridge import KEYLESS, ResolvedModel
+from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.caller_env import CallerEnv, build_caller_env, keys_used, resolve
+from tests.agents.runtime.caller_env import (
+    CallerEnv,
+    build_caller_env,
+    fail_after_text,
+    keys_used,
+    resolve,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import KeyOutcome, RunningFake
 from tests.providers.fake_clock import payment_required, rate_limit, unauthorized
@@ -138,34 +142,10 @@ async def test_daily_limits_exhaust_the_keys_without_flagging_the_provider(
     assert provider.status == "ok"
 
 
-class _TextThenFailure:
-    """A chat client that streams some text, then fails with `error` (a 429, say). The fake
-    server cannot do this over HTTP: its status line goes out before any text."""
-
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    async def astream(self, _: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
-        yield AIMessageChunk(content="Partial ")
-        raise self._error
-
-
-def _fail_after_text(monkeypatch: pytest.MonkeyPatch, error: Exception) -> list[int]:
-    """Every client the caller builds fails after text; returns the key index of each build."""
-    built: list[int] = []
-
-    def build(self: ResolvedModel, http: httpx2.AsyncClient, key_index: int = 0) -> Any:
-        built.append(key_index)
-        return _TextThenFailure(error)
-
-    monkeypatch.setattr(ResolvedModel, "build", build)
-    return built
-
-
 async def test_a_429_after_text_fails_the_turn_without_trying_another_key(
     env: CallerEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    built = _fail_after_text(monkeypatch, rate_limit())
+    built = fail_after_text(monkeypatch, rate_limit())
     received: list[str] = []
 
     async def on_text(text: str) -> None:
@@ -323,7 +303,7 @@ async def test_a_keyless_provider_failing_after_text_fails_plainly(
     env = await build_caller_env(
         databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
     )
-    built = _fail_after_text(monkeypatch, error)
+    built = fail_after_text(monkeypatch, error)
     received: list[str] = []
 
     async def on_text(text: str) -> None:

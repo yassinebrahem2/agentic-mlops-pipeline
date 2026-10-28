@@ -224,6 +224,7 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+    sessions.bind_approvals(approvals)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a

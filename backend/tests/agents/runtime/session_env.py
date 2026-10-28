@@ -26,11 +26,11 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.events.contract import AuditLog
+from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.failover import Clock, KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -80,6 +80,8 @@ async def build_session_env(
     audit_log: AuditLog | None = None,
     approval_store: ApprovalStore | None = None,
     hooks: HookRegistry | None = None,
+    event_log: EventLog | None = None,
+    clock: Clock | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -90,7 +92,7 @@ async def build_session_env(
         extra_dirs=extra_dirs or (),
         hook_names=hooks.names() if hooks is not None else frozenset(),
     )
-    failover = KeyFailover(FakeClock())
+    failover = KeyFailover(clock if clock is not None else FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
@@ -124,6 +126,7 @@ async def build_session_env(
         bus=bus,
         hooks=hooks,
         audit_log=audit_log,
+        event_log=event_log,
     )
 
     prov = await providers_svc.create_provider(

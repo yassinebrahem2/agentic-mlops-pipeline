@@ -1,12 +1,15 @@
 """A provider and model on the fake server, with a model caller on a real `KeyFailover` driven
-by a `FakeClock`, for the model caller tests."""
+by a `FakeClock`, for the model caller tests; and a client that fails after streaming text."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import httpx2
+import pytest
+from langchain_core.messages import AIMessageChunk, BaseMessage
 
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.providers.bridge import ResolvedModel
@@ -81,3 +84,30 @@ async def build_caller_env(
 def keys_used(fake: RunningFake) -> list[str]:
     """The bearer key of every chat request the fake received, in order."""
     return [h["authorization"].removeprefix("Bearer ") for h in fake.state.request_headers]
+
+
+class _TextThenFailure:
+    """A chat client that streams some text, then fails with `error` (a 429, say). The fake
+    server cannot do this over HTTP: its status line goes out before any text."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def bind_tools(self, _: list[dict[str, Any]]) -> _TextThenFailure:
+        return self
+
+    async def astream(self, _: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Partial ")
+        raise self._error
+
+
+def fail_after_text(monkeypatch: pytest.MonkeyPatch, error: Exception) -> list[int]:
+    """Every client the caller builds fails after text; returns the key index of each build."""
+    built: list[int] = []
+
+    def build(self: ResolvedModel, http: httpx2.AsyncClient, key_index: int = 0) -> Any:
+        built.append(key_index)
+        return _TextThenFailure(error)
+
+    monkeypatch.setattr(ResolvedModel, "build", build)
+    return built
