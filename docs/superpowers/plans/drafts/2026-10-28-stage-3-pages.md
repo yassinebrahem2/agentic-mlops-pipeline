@@ -26,7 +26,7 @@
 | 1 | Shared hooks and formatters | tracking, connections, data-summary (table detail) and proposals (handoff) routes on `main`; contracts task 2 (payload types) |
 | 2 | Runs page | task 1 |
 | 3 | Models page | tasks 1 and 2 (the status badge) |
-| 4 | Data page | task 1 |
+| 4 | Data page | task 1; connections task 1 (`ConnectionFindings`) |
 | 5 | Tracking sources section in project settings | task 1 (hooks); the tracking sources and credential routes |
 
 No task has an early PR: nothing consumes these pages.
@@ -123,11 +123,11 @@ No task has an early PR: nothing consumes these pages.
 
 **Files:** new `frontend/src/pages/data/route.tsx`, `DataPage.tsx`, `ConnectionCard.tsx`, `TableRow.tsx`, `TableDetailPanel.tsx`, `roles.ts`, tests.
 
-**Interfaces:** Consumes `useConnections`, `useTables`, `useTableDetail`, `useHandoff` (task 1). Produces `roleFor(handoff: HandoffView | null, connectionName: string, table: string): DataRole | null` (the first entry of `payload.data_roles` with that `connection` and `table`) and `modelsUsing(handoff, connectionName, table): { model: string; as: "predictions" | "labels" }[]` (the `ModelSpec`s whose `predictions` or `labels` `TableUse` names the table). These two are the only readers of the handoff on this page.
+**Interfaces:** Consumes `useConnections`, `useTables`, `useTableDetail`, `useHandoff` (task 1) and `ConnectionFindings` (connections task 1; imported, never copied). Produces `roleFor(handoff: HandoffView | null, connectionName: string, table: string): DataRole | null` (the first entry of `payload.data_roles` with that `connection` and `table`) and `modelsUsing(handoff, connectionName, table): { model: string; as: "predictions" | "labels" }[]` (the `ModelSpec`s whose `predictions` or `labels` `TableUse` names the table). These two are the only readers of the handoff on this page.
 
 **Implementation notes:**
 - Route: path `/projects/:projectId/data`, `nav: { area: "project", label: "Data", order: 30, icon: Database }`.
-- One `Card` per connection: name, kind, a status badge (`ok`, or `unreachable` with `status_detail` visible), and its tables. It shows `findings` only: one warning line naming `secret_files` when not empty, and one muted line naming `unsupported_files` when not empty. It renders no `settings`: nothing outside `connections/kinds/` knows what a connection is (spec §4).
+- One `Card` per connection: name, kind, a status badge (`ok`, or `unreachable` with `status_detail` visible), and its tables. Its findings are shown only through connections' `ConnectionFindings` component (connections task 1; `{ findings }` from the `ConnectionView`): this page writes no secret-file or unsupported-file line and no reason text of its own. It renders no `settings`: nothing outside `connections/kinds/` knows what a connection is (spec §4).
 - Tables list (`useTables`): name, format, number of files, the role badge from `roleFor` (`role`: training, serving_inputs, predictions, labels or other; "Not assigned" when the handoff names none; no badge, and one line "Roles appear after you approve the handoff", when `useHandoff` is `null`). Tables of an unreachable connection are not requested.
 - Expanding a table opens `TableDetailPanel` (`useTableDetail`, requested on first expand only): row count, data version, the column list (name and type, compact table), the `summary` text in a scrollable `pre` (whitespace preserved, rendered as text), the role's `id_column` and `time_column`, and the models using the table (`modelsUsing`, e.g. "Predictions of model-a"). A route error shows `errorText` inside the panel; other tables stay usable.
 - Footer, always visible: "Quality and drift history arrives with monitoring." (a muted line, exactly this text).
@@ -138,7 +138,7 @@ No task has an early PR: nothing consumes these pages.
 - Two connections render; the unreachable one shows its detail and requests no tables.
 - Tables render with roles from a handoff holding several roles and two models; "Not assigned" for a table the handoff omits; the "after you approve" line and no badges with a `null` handoff.
 - Expanding a table requests the detail once (collapse and re-expand does not refetch), shows row count, data version, columns, summary; a 4xx shows its message in the panel only.
-- `findings.secret_files` and `unsupported_files` lines shown; no `settings` value is in the DOM.
+- A connection with secret-like and unsupported files renders them through `ConnectionFindings` (assert with the real component and a finding's backend `reason`); a clean connection shows nothing; no `settings` value is in the DOM.
 - A `connection.created` event adds the card, `connection.deleted` removes it; `handoff.approved` fills in roles.
 - The footer line is present in every state.
 - `roleFor` units: connection and table match, one table name under two connections, no match, null handoff; `modelsUsing` with two models.
