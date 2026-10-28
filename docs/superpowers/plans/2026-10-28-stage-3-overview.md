@@ -69,7 +69,7 @@ contracts writes these into code exactly as here (except where a line names anot
 - The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (`approvals/gate.py`).
 - Deciding a stall: approve resumes the turn with no audit record; reject ends it `stopped`.
 - A stall's preview is `Preview(kind="text", title="Stalled: no usable key", body=<per-key states>)`. A stall writes no audit record; events `turn.stalled {turn_id, provider, model}` and `turn.resumed {turn_id}` record it.
-- contracts (task 1) adds the types and fields: `ErrorKind`, `TurnEndedData.error_kind`, `MessageView.error_kind`; rate-limits writes and reads them.
+- contracts (task 1) adds the types and fields: `ErrorKind`, `TurnEndedData.error_kind`, `MessageView.error_kind`; rate-limits writes and reads them. **Removed by rate-limits task 5** (the user's rule, 2026-10-28: a key running out mid-turn never ends the turn, so nothing fails with `keys_exhausted`): `ErrorKind`, every `error_kind` and the `turns.error_kind` column go; later plans must not use them.
 - `turn.ended` and the turn view gain `error_kind: Literal["keys_exhausted"] | None` (column `turns.error_kind`; rate-limits writes it through the executor's failure path, the `TurnObserver` protocol and its implementers); the failed agent message's `MessageView` carries the same `error_kind`, so the UI knows it after a reload; the UI offers Try again on a failed turn with that kind, which re-sends its trigger message.
 - The policy gains the class `propose`: `ask` at every level, `bypass` included.
 - Frontend: `ApprovalCard.tsx` dispatches on `kind` and `proposal_kind` to one component per card; contracts exports the note field with the Approve and Reject controls as one component (`ApprovalControls`) that every card reuses.
@@ -308,7 +308,7 @@ class KeyState(BaseModel): key_index: int; status: KeyStatus; since: datetime | 
 
 class AllKeysExhausted(Exception): keys: list[KeyState]
 class RateLimited(Exception): retry_after_s: float           # raised instead of waiting when wait=False
-class StreamedTextFailure(Exception): cause: BaseException    # raised by an attempt after text has streamed; never failed over
+class StreamedTextFailure(Exception): cause: BaseException    # removed by rate-limits task 5: a failure after text is failed over like any other, after the step's partial text is taken back
 
 class KeyFailover:   # one per app (build_services), shared by every call; state per (provider id, key index, model)
     async def call[T](self, provider: Provider, model: str, attempt: Callable[[int | None], Awaitable[T]], *, cooldown_minutes: int, wait: bool = True) -> T: ...   # callers pass Provider.cooldown_minutes
@@ -339,7 +339,7 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - New package `__init__.py` files: `tracking/`, `connections/`, `knowledge/`, `agents/hooks/` by contracts task 1, `proposals/` by contracts task 2, `onboarding/` by onboarding; other plans add modules, never recreate them. Sub-packages (`connections/kinds/`, `tracking/adapters/`, `data/`) belong to the plan that creates them.
 - `frontend/src/pages/inbox/InboxPage.test.tsx`: contracts and rate-limits, each its own tests.
 - `backend/tests/agents/test_catalog.py`: data-summary and onboarding, each its own tests.
-- `frontend/src/pages/agents/MessageView.tsx`: contracts (the part dispatch) and rate-limits (Try again on `error_kind`), each its own lines.
+- `frontend/src/pages/agents/MessageView.tsx`: contracts (the part dispatch).
 - `agents/definitions/*.md`: onboarding, for stage 3; the stage 4 and 5 plans edit them later, named in their overviews.
 - `tests/fakes/fake_openai.py`: embedders (`/embeddings`), rate-limits (429 and 402 scripts) and onboarding (its scripted models), each in its own functions.
 - `frontend/src/pages/agents/ApprovalCard.tsx`: contracts (the dispatcher and `ApprovalControls`); rate-limits (the stall card) and proposals (the two proposal cards) each add their own component file and one line in the dispatcher.
