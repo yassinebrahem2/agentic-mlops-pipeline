@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 import stat
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -453,7 +453,7 @@ async def _push_with_init_hook(
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
     name: str,
-    after_init: Any,
+    after_init: Callable[[Path], None],
 ) -> list[Path]:
     """Push a committed task; `after_init(temp_push)` runs once the temp bare repo exists."""
     bare = make_bare_remote(tmp_path, git_env, name=f"remote_{name}.git")
@@ -519,9 +519,12 @@ async def test_push_logs_a_failed_cleanup_of_its_temp_folder(
 
     monkeypatch.setattr(push_module, "rmtree", failing_rmtree)
 
+    def nothing(_: Path) -> None:
+        return None
+
     with caplog.at_level(logging.ERROR, logger="mlops_agents.agents.tasks.push"):
         temp_dirs = await _push_with_init_hook(
-            tmp_path, paths, databases, keystore, git_env, monkeypatch, "fail", lambda _: None
+            tmp_path, paths, databases, keystore, git_env, monkeypatch, "fail", nothing
         )
 
     assert len(temp_dirs) == 1
