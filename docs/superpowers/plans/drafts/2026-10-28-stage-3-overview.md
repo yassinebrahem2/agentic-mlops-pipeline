@@ -260,7 +260,7 @@ CONNECTIONS_KIND = "connections"; HANDOFF_KIND = "handoff"   # the one source of
 class ProposalKind(Protocol):       # each kind: preview, warnings, credentials_needed and apply by onboarding; its card by proposals
     name: str
     payload_model: type[BaseModel]
-    def key(self, payload: BaseModel) -> str: ...   # the superseding key: the project for connections and handoff; later kinds choose (a promotion: its model)
+    def key(self, payload: BaseModel) -> str: ...   # the superseding key within the project (proposals live in project.db): a constant for connections and handoff; later kinds choose (a promotion: its model)
     def preview(self, payload: BaseModel) -> Preview: ...
     def warnings(self, payload: BaseModel) -> list[str]: ...   # user-facing text (for example the network sentence for an MLflow source with auth "none"); the card shows them as given
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]: ...
@@ -274,7 +274,7 @@ class Proposals(Protocol):          # proposals
     async def create(self, project_id: str, agent: str, kind: str, key: str, payload: dict[str, Any], turn_id: str, tool_call_id: str) -> ProposalView: ...   # a draft: idempotent by (turn_id, tool_call_id); approval_id is None until attached
     async def attach(self, project_id: str, proposal_id: str, approval_id: str) -> str | None: ...   # called on asked(view); returns the approval ID of a pending proposal it supersedes, which the observer then cancels (proposals never holds Approvals, so build_services has no cycle)
     async def get_by_approval(self, project_id: str, approval_id: str) -> ProposalView | None: ...
-    async def pending(self, project_id: str, kind: str, key: str) -> ProposalView | None: ...   # superseding is by kind and key; key = the project for connections and handoff
+    async def pending(self, project_id: str, kind: str, key: str) -> ProposalView | None: ...   # superseding is by kind and key; key = a constant for connections and handoff (proposals are per project)
     async def latest_for_turn(self, project_id: str, turn_id: str, kind: str) -> ProposalView | None: ...
 ```
 

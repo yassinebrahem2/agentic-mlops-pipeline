@@ -8,7 +8,7 @@
 
 **Branch:** `plan/stage-3-pages`.
 
-**Consumes** (generated types in `frontend/src/api/schema.d.ts`, regenerated with `npm run gen:api` once contracts task 2 and the owning plans' routes are on `main`; names from the overview). **Starts** after contracts task 2 (the `HandoffPayload` and `ConnectionsPayload` models, and I20's types) and those routes are on `main`. Note the table-detail route (`GET .../connections/{con}/tables/{table}`) arrives with data-summary's plan PR, not an early PR, so the Data page's table expansion (task 4) can start only once that PR has merged; tasks 1 to 3 and 5 do not need it:
+**Consumes** (generated types in `frontend/src/api/schema.d.ts`, regenerated with `npm run gen:api` once contracts task 2 and the owning plans' routes are on `main`; names from the overview). **Starts** after contracts task 2 (the `HandoffPayload` and `ConnectionsPayload` models, and I20's types) and those routes are on `main`: the tracking routes (all in tracking task 1, an early PR), the connections routes (connections task 1, an early PR) and `GET .../handoff` (proposals task 1, an early PR). The table-detail route (`GET .../connections/{con}/tables/{table}`) arrives with data-summary's plan PR, not an early PR, so the Data page (task 5, last for that reason) starts only once that PR has merged; tasks 1 to 4 do not need it:
 - I16 routes: `GET /api/projects/{id}/tracking/sources`; `POST .../tracking/sync` (optional `source_id`, 202); `GET/POST .../tracking/sources` (`POST` body: `type`, `settings`, `auth`); `PUT .../tracking/sources/{trk}/credential` (keystore only); `GET .../tracking/models` (`Page[ModelSummary]`), `.../versions` (`model`, `source_id`; `Page[ModelVersionRow]`), `.../runs` (`run_key`; `Page[RunRow]`), `.../ci-runs` (`Page[CiRunRow]`), `.../deployments` (`model`, `source_id`; `Page[DeploymentRow]`), `.../metrics` (`run_key`, `metric`, `latest`; `Page[MetricPoint]`); every list route takes `limit` (default 50, max 500) and `offset`; models `TrackingSourceView`, `RunStatus`; event `tracking.synced`. The `/evaluations` route is stage 5's and unused here. Behaviors relied on, owned by the tracking plan: `latest=true` returns the highest-`step` point per metric of the run; `/versions` is ordered newest first; a source's `settings` are `{url}` for `mlflow` and `{repository, workflows}` for `github_actions` (`MlflowSettings` and `GithubActionsSettings` in `tracking/contract.py`, `extra="forbid"`, written by contracts task 1; the form builds exactly these keys from the generated types); the credential route answers 422 for a source with `auth="none"`.
 - I15 routes: `GET /api/projects/{id}/connections`, `GET .../connections/{con}/tables`, `GET .../connections/{con}/tables/{table}`; models `ConnectionView` (with `findings: Findings`), `TableRef`, `TableDetail`, `ColumnInfo`; events `connection.created`, `connection.updated`, `connection.deleted`.
 - I20 route: `GET /api/projects/{id}/handoff` (`HandoffView` or `null`, 200); I19 `HandoffPayload`, of which the pages read `data_roles: list[DataRole]` (`connection`, `table`, `role`, `id_column`, `time_column`) and `models: list[ModelSpec]` (`name`, `profile.primary_metric`, `predictions` and `labels` as `TableUse | None`); event `handoff.approved`. A project has several models and several data roles, so both pages work on lists.
@@ -26,12 +26,12 @@
 | 1 | Shared hooks and formatters | tracking, connections and proposals (handoff) routes on `main`; contracts task 2 (payload types) |
 | 2 | Runs page | task 1 |
 | 3 | Models page | tasks 1 and 2 (the status badge) |
-| 4 | Data page | task 1; connections task 1 (`ConnectionFindings`); data-summary's plan PR merged (the table-detail route) |
-| 5 | Tracking sources section in project settings | task 1 (hooks); the tracking sources and credential routes |
+| 4 | Tracking sources section in project settings | task 1 (hooks); the tracking sources and credential routes (tracking task 1, an early PR) |
+| 5 | Data page | task 1; connections task 1 (`ConnectionFindings`); data-summary's plan PR merged (the table-detail route) |
 
 No task has an early PR: nothing consumes these pages.
 
-**Nav.** The settings section (task 5) is not a page: `ProjectSettingsPage.tsx` gains one import and one line for it (overview, shared files). Each page's `route.tsx` carries its own `nav` entry and `import.meta.glob` finds it, so `Sidebar.tsx` and `app/routes.ts` need no edit, and an entry exists exactly when its page does. Orders: Agents 0, Inbox 10, Models 20, Data 30, Runs 40, Project settings 100.
+**Nav.** The settings section (task 4) is not a page: `ProjectSettingsPage.tsx` gains one import and one line for it (overview, shared files). Each page's `route.tsx` carries its own `nav` entry and `import.meta.glob` finds it, so `Sidebar.tsx` and `app/routes.ts` need no edit, and an entry exists exactly when its page does. Orders: Agents 0, Inbox 10, Models 20, Data 30, Runs 40, Project settings 100.
 
 ---
 
@@ -119,7 +119,33 @@ No task has an early PR: nothing consumes these pages.
 
 ---
 
-### Task 4: Data page
+### Task 4: Tracking sources section in project settings
+
+**Files:** new `frontend/src/pages/project-settings/TrackingSourcesSection.tsx`, `AddTrackingSourceDialog.tsx`, `SourceCredentialForm.tsx`, tests beside them; `frontend/src/pages/project-settings/ProjectSettingsPage.tsx` (one import and one line, shared with the embedders and connections plans).
+
+**Interfaces:** Consumes `useTrackingSources`, `useCreateSource`, `useSetSourceCredential` (task 1), `TrackingSourceView` and `SourceType` (generated), `formatTime`. Produces nothing.
+
+**Implementation notes:**
+- One list, one row per source: type label (MLflow, GitHub Actions), its target (`settings.url` for `mlflow`; `settings.repository` plus the workflow names, or "all workflows", for `github_actions`), the auth state ("No authentication", "Credential set", or "Credential missing" for `auth="credential"` with `credential_set` false), "Last sync <time>" or "Never synced", and `last_error` in a destructive `Alert` when set. The list refreshes on `tracking.synced` (task 1's prefix invalidation). No route removes or edits a source, so the section offers neither.
+- Add: a dialog with a type `Select`.
+  - `mlflow`: URL, and a switch "Needs a credential" (sets `auth`).
+  - `github_actions`: repository (`owner/name`) and workflow file names, comma separated, optional; `auth` is `none` and says it uses the app's GitHub login.
+  - The form builds exactly the keys of `components["schemas"]["MlflowSettings"]` and `GithubActionsSettings` (contracts task 1). The server's 422 message is shown as given (`errorText`, `fieldErrors` for a field), never re-validated here beyond non-empty.
+- Credential: for an `auth="credential"` source, `SourceCredentialForm` has one `type="password"` input (`autoComplete="off"`) and Set. The value is held only in the input's state, sent in the `PUT`, and cleared on success or failure; it is never put in a query key, a toast, a log or the DOM after saving. Setting it again replaces it. After the add dialog creates a credential source it sends the credential in a second call; if that call fails, the source stays listed as "Credential missing" with the form open on its row, with the server's error shown (no rollback, no hidden retry).
+- Warnings about an open tracker belong to the backend (the proposal kind's `warnings`); this section adds no sentence of its own about authentication.
+- States: loading, error (`errorText`), and no sources ("No tracking source yet. Onboarding adds them when you approve the handoff, or add one here.").
+
+**Tests (stop condition):** with stubbed routes:
+- Sources render with target, auth state, last sync and error; the three auth states; empty state; route error.
+- Adding an `mlflow` source with a credential posts `{type, settings: {url}, auth: "credential"}` then puts the credential; a `github_actions` source posts `{repository, workflows}` with `auth: "none"` and shows no credential form; a 422 shows its message and keeps the dialog open.
+- A failing credential put leaves the source listed as "Credential missing" with the error shown.
+- The credential value is absent from every recorded URL and from the DOM after saving, and the input is cleared; the credential input is `type="password"`.
+- A `tracking.synced` event refreshes last sync.
+- Checks as task 1, and `ProjectSettingsPage.test.tsx` still passes.
+
+---
+
+### Task 5: Data page
 
 **Files:** new `frontend/src/pages/data/route.tsx`, `DataPage.tsx`, `ConnectionCard.tsx`, `TableRow.tsx`, `TableDetailPanel.tsx`, `roles.ts`, `frontend/src/lib/useConnections.ts` (adds `useTableDetail`), tests.
 
@@ -143,32 +169,3 @@ No task has an early PR: nothing consumes these pages.
 - The footer line is present in every state.
 - `roleFor` units: connection and table match, one table name under two connections, no match, null handoff; `modelsUsing` with two models.
 - Checks as task 1; then, with all tasks in, `npm run build` and `npm run e2e` (it must stay green; no e2e file is edited: onboarding owns `flow.spec.ts`).
-
----
-
-### Task 5: Tracking sources section in project settings
-
-**Files:** new `frontend/src/pages/project-settings/TrackingSourcesSection.tsx`, `AddTrackingSourceDialog.tsx`, `SourceCredentialForm.tsx`, tests beside them; `frontend/src/pages/project-settings/ProjectSettingsPage.tsx` (one import and one line, shared with the embedders and connections plans).
-
-**Interfaces:** Consumes `useTrackingSources`, `useCreateSource`, `useSetSourceCredential` (task 1), `TrackingSourceView` and `SourceType` (generated), `formatTime`. Produces nothing.
-
-**Implementation notes:**
-- One list, one row per source: type label (MLflow, GitHub Actions), its target (`settings.url` for `mlflow`; `settings.repository` plus the workflow names, or "all workflows", for `github_actions`), the auth state ("No authentication", "Credential set", or "Credential missing" for `auth="credential"` with `credential_set` false), "Last sync <time>" or "Never synced", and `last_error` in a destructive `Alert` when set. The list refreshes on `tracking.synced` (task 1's prefix invalidation). No route removes or edits a source, so the section offers neither.
-- Add: a dialog with a type `Select`.
-  - `mlflow`: URL, and a switch "Needs a credential" (sets `auth`).
-  - `github_actions`: repository (`owner/name`) and workflow file names, comma separated, optional; `auth` is `none` and says it uses the app's GitHub login.
-  - The form builds exactly the settings keys of the tracking plan's models. The server's 422 message is shown as given (`errorText`, `fieldErrors` for a field), never re-validated here beyond non-empty.
-- Credential: for an `auth="credential"` source, `SourceCredentialForm` has one `type="password"` input (`autoComplete="off"`) and Set. The value is held only in the input's state, sent in the `PUT`, and cleared on success or failure; it is never put in a query key, a toast, a log or the DOM after saving. Setting it again replaces it. After the add dialog creates a credential source it sends the credential in a second call; if that call fails, the source stays listed as "Credential missing" with the form open on its row, with the server's error shown (no rollback, no hidden retry).
-- Warnings about an open tracker belong to the backend (the proposal kind's `warnings`); this section adds no sentence of its own about authentication.
-- States: loading, error (`errorText`), and no sources ("No tracking source yet. Onboarding adds them when you approve the handoff, or add one here.").
-
-**Tests (stop condition):** with stubbed routes:
-- Sources render with target, auth state, last sync and error; the three auth states; empty state; route error.
-- Adding an `mlflow` source with a credential posts `{type, settings: {url}, auth: "credential"}` then puts the credential; a `github_actions` source posts `{repository, workflows}` with `auth: "none"` and shows no credential form; a 422 shows its message and keeps the dialog open.
-- A failing credential put leaves the source listed as "Credential missing" with the error shown.
-- The credential value is absent from every recorded URL and from the DOM after saving, and the input is cleared; the credential input is `type="password"`.
-- A `tracking.synced` event refreshes last sync.
-- Checks as task 1, and `ProjectSettingsPage.test.tsx` still passes.
-
----
-
