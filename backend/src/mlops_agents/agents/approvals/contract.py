@@ -30,9 +30,11 @@ class ApprovalView(BaseModel):
 
 class ApprovalObserver(Protocol):
     """Told of every approval asked, and of every move out of pending (approve, reject,
-    cancel, Stop, expiry), each after it is stored. `decided` may run under the recovery or
-    the session lock: an observer must not block, and must not call back into Approvals or
-    AgentSessions from `decided`."""
+    cancel, Stop, expiry), each after it is stored. An observer must not block. Two paths hold
+    a lock while they tell `decided`: Stop (the session lock) and recovery expiry (the recovery
+    lock); both only reject or cancel, and an observer must not call back into Approvals or
+    AgentSessions from them. The approve path holds no lock, so an observer may post messages
+    there (onboarding's kickoff does)."""
 
     async def asked(self, view: ApprovalView) -> None: ...
 

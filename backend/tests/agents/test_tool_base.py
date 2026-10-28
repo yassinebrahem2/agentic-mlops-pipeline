@@ -171,6 +171,31 @@ def test_schema_preserves_title_property_and_only_collapses_null_defaults() -> N
     assert params["properties"]["opt"]["default"] is None
 
 
+class Node(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    child: "Node | None" = None
+
+
+class SelfReferencingArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: Node
+
+
+class SelfReferencingTool(AgentTool[SelfReferencingArgs]):
+    name: ClassVar[str] = "SelfReferencing"
+    description: ClassVar[str] = "A tool whose arguments contain a recursive model."
+    risk: ClassVar[RiskClass] = RiskClass.READ
+    args_model: ClassVar[type[BaseModel]] = SelfReferencingArgs
+
+    async def run(self, ctx: ToolContext, args: SelfReferencingArgs) -> ToolOutput:
+        return ToolOutput("ok")
+
+
+def test_schema_refuses_a_model_that_refers_to_itself() -> None:
+    with pytest.raises(ValueError, match="Node refers to itself"):
+        SelfReferencingTool().schema()
+
+
 def test_default_registry_tools_emit_schemas_validating_existing_test_arguments() -> None:
     from mlops_agents.agents.tools import default_registry
 
