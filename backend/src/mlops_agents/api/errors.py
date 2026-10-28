@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -34,6 +34,19 @@ def error_response(
     )
 
 
+def field_errors(errors: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """Each validation error as its location and its sentence only: the submitted input may
+    hold a key. A pydantic `ValidationError` passes
+    `err.errors(include_input=False, include_url=False)`, so the input is not even kept."""
+    return [
+        {
+            "field": ".".join(str(part) for part in error["loc"]),
+            "message": str(error["msg"]).removeprefix(_VALUE_ERROR_PREFIX),
+        }
+        for error in errors
+    ]
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
@@ -41,16 +54,11 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
-        # Only the location and the sentence: the submitted input may hold a key.
-        errors = [
-            {
-                "field": ".".join(str(part) for part in error["loc"]),
-                "message": str(error["msg"]).removeprefix(_VALUE_ERROR_PREFIX),
-            }
-            for error in exc.errors()
-        ]
         return error_response(
-            422, "invalid_request", "Some fields are missing or invalid.", {"errors": errors}
+            422,
+            "invalid_request",
+            "Some fields are missing or invalid.",
+            {"errors": field_errors(exc.errors())},
         )
 
     @app.exception_handler(KeyStoreError)

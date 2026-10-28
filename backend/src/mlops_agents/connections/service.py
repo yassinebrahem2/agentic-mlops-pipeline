@@ -13,6 +13,7 @@ from sqlalchemy import RowMapping, insert, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.exc import IntegrityError
 
+from mlops_agents.api.errors import field_errors
 from mlops_agents.clock import now_iso
 from mlops_agents.connections.contract import (
     CONNECTION_NAME_PATTERN,
@@ -25,6 +26,7 @@ from mlops_agents.connections.contract import (
     TableRef,
 )
 from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.ids import new_id
@@ -63,25 +65,28 @@ class ConnectionsService:
             )
         return row
 
-    def _pick_newest_table_version(
-        self,
-        kind: ConnectionKind,
-        settings: BaseModel,
-        tables: list[TableRef],
-    ) -> str | None:
-        latest_fn = getattr(kind, "latest_data_version", None)
-        if latest_fn is not None:
-            return latest_fn(settings, tables)
-        return None
+    def _parse(self, kind: ConnectionKind, settings: dict[str, Any]) -> BaseModel:
+        try:
+            return kind.settings_model.model_validate(settings)
+        except ValidationError as err:
+            errors = field_errors(err.errors(include_input=False, include_url=False))
+            reasons = "; ".join(f"{e['field']}: {e['message']}" for e in errors)
+            raise DomainError(
+                "connection_invalid",
+                f"The settings are invalid ({reasons}).",
+                status=422,
+                detail={"errors": errors},
+            ) from None
+
+    async def _read(self, kind: ConnectionKind, parsed: BaseModel) -> tuple[Findings, str | None]:
+        findings = await asyncio.to_thread(kind.findings, parsed)
+        data_ver = await asyncio.to_thread(kind.latest_data_version, parsed)
+        return findings, data_ver
 
     async def inspect(self, project_id: str, kind: str, settings: dict[str, Any]) -> Findings:
         del project_id
         kind_obj = self._registry.get(kind)
-        try:
-            parsed = kind_obj.settings_model.model_validate(settings)
-        except ValidationError as err:
-            raise DomainError("connection_invalid", str(err), status=400) from None
-
+        parsed = self._parse(kind_obj, settings)
         await asyncio.to_thread(kind_obj.validate, parsed, None)
         return await asyncio.to_thread(kind_obj.findings, parsed)
 
@@ -90,19 +95,18 @@ class ConnectionsService:
     ) -> ConnectionView:
         kind_obj = self._registry.get(kind)
 
-        if not re.match(CONNECTION_NAME_PATTERN, name):
+        if re.fullmatch(CONNECTION_NAME_PATTERN, name) is None:
             raise DomainError(
                 "invalid_connection_name",
                 f"Connection name '{name}' is invalid.",
                 status=400,
             )
 
-        try:
-            parsed = kind_obj.settings_model.model_validate(settings)
-        except ValidationError as err:
-            raise DomainError("connection_invalid", str(err), status=400) from None
-
+        parsed = self._parse(kind_obj, settings)
         await asyncio.to_thread(kind_obj.validate, parsed, None)
+        # Read before the insert: a folder that fails here leaves no row behind.
+        findings, data_ver = await self._read(kind_obj, parsed)
+        stored = parsed.model_dump(mode="json")
 
         con_id = new_id("con")
         now = now_iso()
@@ -114,7 +118,7 @@ class ConnectionsService:
                         id=con_id,
                         name=name,
                         kind=kind,
-                        settings_json=json.dumps(settings),
+                        settings_json=json.dumps(stored),
                         credential_ref=None,
                         status="ok",
                         status_detail=None,
@@ -137,17 +141,11 @@ class ConnectionsService:
             payload={"name": name, "kind": kind},
         )
 
-        findings = await asyncio.to_thread(kind_obj.findings, parsed)
-        tables = await asyncio.to_thread(kind_obj.tables, parsed)
-        data_ver = await asyncio.to_thread(
-            self._pick_newest_table_version, kind_obj, parsed, tables
-        )
-
         return ConnectionView(
             id=con_id,
             name=name,
             kind=kind,
-            settings=settings,
+            settings=stored,
             status="ok",
             status_detail=None,
             findings=findings,
@@ -159,12 +157,10 @@ class ConnectionsService:
     ) -> ConnectionView:
         row = await self._get_row(project_id, connection_id)
         kind_obj = self._registry.get(row["kind"])
-        try:
-            parsed = kind_obj.settings_model.model_validate(settings)
-        except ValidationError as err:
-            raise DomainError("connection_invalid", str(err), status=400) from None
-
+        parsed = self._parse(kind_obj, settings)
         await asyncio.to_thread(kind_obj.validate, parsed, None)
+        findings, data_ver = await self._read(kind_obj, parsed)
+        stored = parsed.model_dump(mode="json")
 
         now = now_iso()
         engine = await self._databases.project(project_id)
@@ -173,7 +169,7 @@ class ConnectionsService:
                 update(connections)
                 .where(connections.c.id == connection_id)
                 .values(
-                    settings_json=json.dumps(settings),
+                    settings_json=json.dumps(stored),
                     status="ok",
                     status_detail=None,
                     updated=now,
@@ -188,17 +184,11 @@ class ConnectionsService:
             payload={"name": row["name"], "kind": row["kind"]},
         )
 
-        findings = await asyncio.to_thread(kind_obj.findings, parsed)
-        tables = await asyncio.to_thread(kind_obj.tables, parsed)
-        data_ver = await asyncio.to_thread(
-            self._pick_newest_table_version, kind_obj, parsed, tables
-        )
-
         return ConnectionView(
             id=connection_id,
             name=row["name"],
             kind=row["kind"],
-            settings=settings,
+            settings=stored,
             status="ok",
             status_detail=None,
             findings=findings,
@@ -292,17 +282,11 @@ class ConnectionsService:
                 kind_obj = self._registry.get(row.kind)
                 parsed = kind_obj.settings_model.model_validate(json.loads(row.settings_json))
                 await asyncio.to_thread(kind_obj.validate, parsed, None)
-                findings = await asyncio.to_thread(kind_obj.findings, parsed)
-                tables = await asyncio.to_thread(kind_obj.tables, parsed)
-                data_ver = await asyncio.to_thread(
-                    self._pick_newest_table_version, kind_obj, parsed, tables
-                )
-            except DomainError as err:
+                findings, data_ver = await self._read(kind_obj, parsed)
+            except (DomainError, OSError) as exc:
+                # The kind's own failures; anything else is a bug and reaches the 500 handler.
                 status = "unreachable"
-                status_detail = err.message
-            except Exception as exc:
-                status = "unreachable"
-                status_detail = str(exc)
+                status_detail = error_text(exc)
 
             if status != row.status or status_detail != row.status_detail:
                 async with engine.begin() as conn:

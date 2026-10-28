@@ -37,9 +37,23 @@ SUPPORTED_EXTENSIONS: Final[dict[str, TableFormat]] = {
 }
 
 
+# DuckDB 2.0.0 expands these in every path it reads and has no option to turn that off.
+WILDCARD_CHARACTERS: Final = frozenset("*?[")
+WILDCARD_REASON: Final = "a name with a wildcard"
+
+
+def has_wildcard(text: str) -> bool:
+    """True if DuckDB would read `text` as a glob pattern."""
+    return not WILDCARD_CHARACTERS.isdisjoint(text)
+
+
 def is_link(entry: os.DirEntry[str]) -> bool:
     """True if entry is a symlink or Windows junction."""
     return entry.is_symlink() or bool(getattr(entry, "is_junction", None) and entry.is_junction())
+
+
+def _is_link_path(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
 
 
 def scan_tables_and_unsupported(
@@ -52,17 +66,22 @@ def scan_tables_and_unsupported(
     try:
         with os.scandir(folder) as it:
             entries = sorted(it, key=lambda e: e.name.casefold())
-    except (PermissionError, OSError) as exc:
+    except OSError as exc:
+        # The resolved path is not shown: the kind's messages name the folder as typed.
         reason = getattr(exc, "strerror", None) or type(exc).__name__
         raise DomainError(
             "connection_invalid",
-            f"{folder} could not be read ({reason}).",
+            f"The folder could not be listed ({reason}).",
             status=400,
         ) from None
 
     for entry in entries:
         if is_link(entry):
             unsupported.append(Finding(path=entry.name, reason="a link"))
+            continue
+
+        if has_wildcard(entry.name):
+            unsupported.append(Finding(path=entry.name, reason=WILDCARD_REASON))
             continue
 
         if entry.is_file(follow_symlinks=False):
@@ -98,6 +117,10 @@ def scan_tables_and_unsupported(
                 unsupported.append(Finding(path=entry.name, reason="a link"))
                 continue
 
+            if any(has_wildcard(c.name) for c in non_dot):
+                unsupported.append(Finding(path=entry.name, reason=WILDCARD_REASON))
+                continue
+
             if len(non_dot) > MAX_TABLE_FILES:
                 unsupported.append(Finding(path=entry.name, reason="too many files"))
                 continue
@@ -127,26 +150,31 @@ def scan_tables_and_unsupported(
                 )
             )
 
-    # Name collisions: when two tables would share a default name, the files among them use full file name.
-    default_names = [c.default_name for c in candidate_tables]
-    counts = Counter(default_names)
-
-    tables: list[TableRef] = []
-    for c in candidate_tables:
-        final_name = (
-            c.entry_name if counts[c.default_name] > 1 and c.type == "file" else c.default_name
-        )
-        tables.append(
-            TableRef(
-                name=final_name,
-                files=c.files,
-                format=c.format,
-            )
-        )
+    tables = [
+        TableRef(name=name, files=c.files, format=c.format)
+        for c, name in zip(candidate_tables, _table_names(candidate_tables), strict=True)
+    ]
 
     tables.sort(key=lambda t: t.name)
     unsupported.sort(key=lambda u: u.path)
     return tables, unsupported
+
+
+def _table_names(candidates: list[_CandidateTable]) -> list[str]:
+    """Default names, except that a file whose name is shared takes its full file name.
+
+    Repeated until no name is shared: a file's full name can equal another file's stem
+    (`a.csv` next to `a.csv.json`). Entry names are unique, so this ends."""
+    names = [c.default_name for c in candidates]
+    while True:
+        counts = Counter(names)
+        renamed = [
+            c.entry_name if c.type == "file" and counts[name] > 1 else name
+            for c, name in zip(candidates, names, strict=True)
+        ]
+        if renamed == names:
+            return names
+        names = renamed
 
 
 def compute_data_version(folder: Path, table: TableRef) -> str:
@@ -201,22 +229,28 @@ def walk_findings(folder: Path, unsupported: list[Finding]) -> Findings:
     entries_count = 0
 
     for root, dirs, files in os.walk(folder, followlinks=False):
-        dirs.sort()
+        entries_count += len(dirs)
+        # followlinks=False still enters Windows junctions; links and junctions are pruned here.
+        dirs[:] = sorted(d for d in dirs if not _is_link_path(Path(root) / d))
         files.sort()
-
-        entries_count += len(dirs) + len(files)
+        if entries_count > MAX_SCAN_ENTRIES:
+            truncated = True
+            break
 
         for f in files:
-            full_path = Path(root) / f
-            rel_posix = full_path.relative_to(folder).as_posix()
-            if is_secret(rel_posix):
-                secret_findings.append(Finding(path=rel_posix, reason="matches a secret file name"))
-                if len(secret_findings) >= MAX_SECRET_FINDINGS:
-                    truncated = True
-                    break
+            entries_count += 1
+            if entries_count > MAX_SCAN_ENTRIES:
+                truncated = True
+                break
+            rel_posix = (Path(root) / f).relative_to(folder).as_posix()
+            if not is_secret(rel_posix):
+                continue
+            if len(secret_findings) == MAX_SECRET_FINDINGS:
+                truncated = True
+                break
+            secret_findings.append(Finding(path=rel_posix, reason="matches a secret file name"))
 
-        if truncated or entries_count >= MAX_SCAN_ENTRIES:
-            truncated = True
+        if truncated:
             break
 
     secret_findings.sort(key=lambda s: s.path)

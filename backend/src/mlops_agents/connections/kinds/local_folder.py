@@ -18,6 +18,7 @@ from mlops_agents.connections.contract import (
 from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.connections.kinds.local_folder_scan import (
     compute_data_version,
+    has_wildcard,
     latest_data_version,
     scan_tables_and_unsupported,
     walk_findings,
@@ -115,6 +116,13 @@ class LocalFolderKind:
                 status=400,
             )
 
+        if has_wildcard(str(resolved)):
+            raise DomainError(
+                "connection_invalid",
+                "Path cannot contain *, ? or [ (DuckDB reads them as wildcards).",
+                status=400,
+            )
+
         try:
             with os.scandir(resolved):
                 pass
@@ -172,8 +180,9 @@ class LocalFolderKind:
         resolved = self._resolve(settings)
         return compute_data_version(resolved, table)
 
-    def latest_data_version(self, settings: BaseModel, tables: list[TableRef]) -> str | None:
+    def latest_data_version(self, settings: BaseModel) -> str | None:
         resolved = self._resolve(settings)
+        tables, _ = scan_tables_and_unsupported(resolved)
         return latest_data_version(resolved, tables)
 
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource:

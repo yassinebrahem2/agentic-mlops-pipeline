@@ -202,3 +202,40 @@ async def test_project_isolation(
     # P2 should see empty connections
     list_p2 = (await client.get(f"/api/projects/{p2}/connections")).json()
     assert len(list_p2) == 0
+
+
+async def test_invalid_settings_never_echo_the_submitted_values(
+    client: httpx2.AsyncClient,
+    sample_project: tuple[str, Path],
+    tmp_path: Path,
+) -> None:
+    project_id, _ = sample_project
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    secret = "sk-secret-xyz-123"
+
+    # Through the service: the kind's settings model refuses the extra field.
+    res = await client.post(
+        f"/api/projects/{project_id}/connections",
+        json={
+            "kind": LOCAL_FOLDER_KIND,
+            "name": "leak",
+            "settings": {"path": str(data_dir), "token": secret},
+        },
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "connection_invalid"
+    assert res.json()["detail"] == {
+        "errors": [{"field": "token", "message": "Extra inputs are not permitted"}]
+    }
+    assert secret not in res.text
+
+    # Through the request-validation handler: settings is not an object.
+    res = await client.post(
+        f"/api/projects/{project_id}/connections/inspect",
+        json={"kind": LOCAL_FOLDER_KIND, "settings": secret},
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid_request"
+    assert [e["field"] for e in res.json()["detail"]["errors"]] == ["body.settings"]
+    assert secret not in res.text
