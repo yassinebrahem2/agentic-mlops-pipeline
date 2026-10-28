@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import uvicorn
@@ -37,6 +38,9 @@ class FakeGitHubState:
     )
     comment_counter: int = 0
     labels: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
+    workflow_runs: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict[str, list[dict[str, Any]]]
+    )
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
     def merge_pull(self, repo: str, number: int) -> dict[str, Any]:
@@ -65,6 +69,7 @@ class FakeGitHubState:
         self.comments.clear()
         self.comment_counter = 0
         self.labels.clear()
+        self.workflow_runs.clear()
         self.requests.clear()
 
 
@@ -325,6 +330,54 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
 
         repo_labels = state.labels.get(full_name, set())
         return JSONResponse([{"name": lbl} for lbl in sorted(repo_labels)])
+
+    def _parse_iso(s: str) -> datetime:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+
+    @app.get("/repos/{owner}/{repo}/actions/runs")
+    async def list_actions_runs(owner: str, repo: str, request: Request) -> Response:
+        full_name = f"{owner}/{repo}"
+        state.requests.append(
+            {
+                "method": "GET",
+                "path": f"/repos/{full_name}/actions/runs",
+                "params": dict(request.query_params),
+            }
+        )
+        err = _check_common(request, "actions: read")
+        if err is not None:
+            return err
+
+        runs = state.workflow_runs.get(full_name)
+        if runs is None:
+            runs = state.workflow_runs.get(repo, [])
+
+        created = request.query_params.get("created")
+        if created:
+            filter_str = created[2:] if created.startswith(">=") else created
+            filter_dt = _parse_iso(filter_str)
+            filtered_runs: list[dict[str, Any]] = []
+            for r in runs:
+                raw_created = r.get("created_at")
+                if raw_created and _parse_iso(str(raw_created)) >= filter_dt:
+                    filtered_runs.append(r)
+        else:
+            filtered_runs = list(runs)
+
+        page = int(request.query_params.get("page", 1))
+        per_page = int(request.query_params.get("per_page", 100))
+        start = (page - 1) * per_page
+        end = start + per_page
+
+        return JSONResponse(
+            {
+                "total_count": len(filtered_runs),
+                "workflow_runs": filtered_runs[start:end],
+            }
+        )
 
     return app
 
