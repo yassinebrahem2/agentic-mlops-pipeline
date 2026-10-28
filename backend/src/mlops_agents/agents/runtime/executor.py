@@ -24,6 +24,7 @@ from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
+from mlops_agents.credentials.scrub import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -244,8 +245,17 @@ class TurnExecutor:
                 )
             except BaseException:
                 # The graph owns the thread once it runs; a failure or a Stop before that ends
-                # the turn, and would leave its checkpoint behind.
-                await self.delete_checkpoint(project_id, turn_id)
+                # the turn, and would leave its checkpoint behind. A failing cleanup never
+                # replaces what ended the turn: a Stop stays a Stop.
+                try:
+                    await self.delete_checkpoint(project_id, turn_id)
+                except Exception as exc:
+                    logger.error(
+                        "Could not delete the checkpoint thread of turn %s: %s: %s",
+                        turn_id,
+                        type(exc).__name__,
+                        error_text(exc),
+                    )
                 raise
             return await self._execute_graph(
                 built_agent,

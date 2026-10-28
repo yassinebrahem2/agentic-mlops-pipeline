@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -18,7 +19,8 @@ from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.runtime import waiting
+from mlops_agents.agents.runtime import executor, waiting
+from mlops_agents.agents.runtime.agent import TurnRefused
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.graph import turn_checkpointer
 from mlops_agents.paths import DataPaths
@@ -195,3 +197,38 @@ async def test_a_stop_during_the_resume_hooks_deletes_the_thread(
 
     assert (await turn.ended()).data.status == "stopped"
     assert await turn.thread() is None
+
+
+async def _failing_delete(db_path: str | Path, turn_id: str) -> None:
+    raise RuntimeError("project.db could not be opened at https://user:s3cret@example.com/x")
+
+
+async def test_a_failing_cleanup_keeps_the_resume_failure(
+    turn: Waiting, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(executor, "delete_checkpoint_thread", _failing_delete)
+    await turn.env.settings.set_default_model(AGENT, None)
+
+    with caplog.at_level(logging.ERROR):
+        await turn.approve()
+        assert (await turn.ended()).data.status == "failed"
+
+    failed = next(r for r in caplog.records if "failed unexpectedly" in r.getMessage())
+    assert failed.exc_info is not None
+    assert isinstance(failed.exc_info[1], TurnRefused)
+    cleanup = next(r for r in caplog.records if "checkpoint thread" in r.getMessage())
+    assert "s3cret" not in cleanup.getMessage()
+    assert cleanup.exc_info is None
+
+
+async def test_a_failing_cleanup_keeps_a_stop_a_stop(
+    turn: Waiting, hook: ResumeHook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(executor, "delete_checkpoint_thread", _failing_delete)
+    hook.block = True
+    await turn.approve()
+    await asyncio.wait_for(hook.blocked.wait(), timeout=10)
+
+    await turn.env.manager.stop(turn.env.project_id, AGENT)
+
+    assert (await turn.ended()).data.status == "stopped"
