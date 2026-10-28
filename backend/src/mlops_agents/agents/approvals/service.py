@@ -1,39 +1,65 @@
-"""Approvals service implementation (I12)."""
+"""Approvals service implementation (I12, I13)."""
 
 from __future__ import annotations
 
-from mlops_agents.agents.approvals.contract import Approvals, ApprovalView
+from mlops_agents.agents.approvals.contract import ApprovalObserver, Approvals, ApprovalView
 from mlops_agents.agents.approvals.decisions import record_decisions
-from mlops_agents.agents.approvals.store import ApprovalStore
-from mlops_agents.agents.runtime.contract import AgentSessions, ApprovalPart, Part
+from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
+from mlops_agents.agents.runtime.contract import (
+    AgentSessions,
+    ApprovalPart,
+    DecidedApprovalStatus,
+    Part,
+)
+from mlops_agents.agents.tools.base import Preview
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
 
 
 class ApprovalsService(Approvals):
-    """Enforces approval decisions, updates message parts, records audit/events, and resumes turns."""
+    """Enforces approval decisions, updates message parts, records audit/events, and resumes
+    or stops turns. Its store tells the observers, before any turn moves on."""
 
     def __init__(
         self,
         databases: Databases,
         sessions: AgentSessions,
         *,
-        store: ApprovalStore | None = None,
+        store: ApprovalStore,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
     ) -> None:
         self._databases = databases
         self._sessions = sessions
-        self._store = store if store is not None else ApprovalStore(databases)
+        self._store = store
         self._audit_log = audit_log
         self._event_log = event_log
+
+    def add_observer(self, observer: ApprovalObserver) -> None:
+        self._store.add_observer(observer)
 
     async def pending(self, project_id: str) -> list[ApprovalView]:
         """List all pending approvals for a project."""
         await self._sessions.ensure_recovered(project_id)
         records = await self._store.pending(project_id)
         return [ApprovalView.model_validate(r) for r in records]
+
+    async def create_stall(
+        self, project_id: str, turn_id: str, step: int, preview: Preview
+    ) -> ApprovalView:
+        """The pending stall of the turn's step; only the call that creates it records
+        `approval.requested`."""
+        record, created = await self._store.create_stall(project_id, turn_id, step, preview)
+        if created and self._event_log is not None:
+            await self._event_log.record(
+                project_id,
+                source=record.agent,
+                type="approval.requested",
+                subject_id=record.id,
+                payload={"approval_id": record.id, "turn_id": turn_id, "tool": None},
+            )
+        return ApprovalView.model_validate(record)
 
     async def decide(
         self,
@@ -43,9 +69,32 @@ class ApprovalsService(Approvals):
         approve: bool,
         note: str | None = None,
     ) -> ApprovalView:
-        """Decide an approval request (approve or reject), update parts, audit, and resume if done."""
+        """Decide an approval request (approve or reject), update parts, audit, and resume if
+        done. Rejecting a stall stops its turn instead."""
         await self._sessions.ensure_recovered(project_id)
+        record = await self._pending_record(project_id, approval_id)
 
+        # Atomic update in store; the approval keeps the task it was asked under.
+        status: DecidedApprovalStatus = "approved" if approve else "rejected"
+        updated_rec = await self._store.decide(project_id, approval_id, approve=approve, note=note)
+        await self._record(project_id, updated_rec, status, actor="user", note=note)
+
+        if record.kind == "stall" and not approve:
+            await self._sessions.stop(project_id, record.agent)
+        else:
+            await self._resume_when_none_pending(project_id, record)
+        return ApprovalView.model_validate(updated_rec)
+
+    async def cancel(self, project_id: str, approval_id: str) -> None:
+        """Cancel a pending approval (a superseded proposal); resumes its turn when none of
+        the turn's approvals is still pending."""
+        await self._sessions.ensure_recovered(project_id)
+        record = await self._pending_record(project_id, approval_id)
+        cancelled = await self._store.cancel(project_id, approval_id)
+        await self._record(project_id, cancelled, "cancelled", actor="system", note=None)
+        await self._resume_when_none_pending(project_id, record)
+
+    async def _pending_record(self, project_id: str, approval_id: str) -> ApprovalRecord:
         record = await self._store.get(project_id, approval_id)
         if record is None:
             raise DomainError(
@@ -53,55 +102,48 @@ class ApprovalsService(Approvals):
                 f"Approval '{approval_id}' does not exist.",
                 status=404,
             )
-
         if record.status != "pending":
             raise DomainError(
                 "approval_not_pending",
                 f"Approval '{approval_id}' is not pending (status: {record.status}).",
                 status=409,
             )
+        return record
 
-        # Atomic update in store; the approval keeps the task it was asked under.
-        status_val = "approved" if approve else "rejected"
-        updated_rec = await self._store.decide(project_id, approval_id, approve=approve, note=note)
+    async def _record(
+        self,
+        project_id: str,
+        record: ApprovalRecord,
+        status: DecidedApprovalStatus,
+        *,
+        actor: str,
+        note: str | None,
+    ) -> None:
+        """Update the approval's message part, then write its decision records."""
 
-        # Update message part in session
         def _update_part(parts: list[Part]) -> list[Part]:
-            res: list[Part] = []
-            for part in parts:
-                if isinstance(part, ApprovalPart) and part.approval_id == approval_id:
-                    res.append(
-                        ApprovalPart(
-                            type="approval",
-                            approval_id=part.approval_id,
-                            tool_call_id=part.tool_call_id,
-                            preview=part.preview,
-                            status=status_val,
-                            note=note,
-                        )
-                    )
-                else:
-                    res.append(part)
-            return res
+            return [
+                part.model_copy(update={"status": status, "note": note})
+                if isinstance(part, ApprovalPart) and part.approval_id == record.id
+                else part
+                for part in parts
+            ]
 
         await self._sessions.update_message(
             project_id, record.session_id, record.message_id, _update_part
         )
-
         await record_decisions(
             project_id,
-            [updated_rec],
-            status_val,
-            actor="user",
+            [record],
+            status,
+            actor=actor,
             databases=self._databases,
             audit_log=self._audit_log,
             event_log=self._event_log,
             note=note,
         )
 
-        # Check remaining pending approvals for this turn
+    async def _resume_when_none_pending(self, project_id: str, record: ApprovalRecord) -> None:
         step_approvals = await self._store.list_for_step(project_id, record.turn_id)
         if not any(a.status == "pending" for a in step_approvals):
             await self._sessions.resume_turn(project_id, record.session_id, record.turn_id)
-
-        return ApprovalView.model_validate(updated_rec)

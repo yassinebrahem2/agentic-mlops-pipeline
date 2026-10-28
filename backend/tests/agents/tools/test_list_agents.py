@@ -49,6 +49,7 @@ def _ctx(agent: str = "orchestrator", project_id: str = "prj_test") -> ToolConte
         turn_id="trn_1",
         files=cast(FileAccess, object()),
         task=None,
+        tool_call_id="call_1",
     )
 
 

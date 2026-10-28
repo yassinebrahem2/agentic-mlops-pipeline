@@ -212,6 +212,7 @@ async def test_resuming_turn_approve(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -303,6 +304,7 @@ async def test_resuming_turn_reject_with_note(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -386,6 +388,7 @@ async def test_resuming_turn_two_asks_in_one_step(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -515,6 +518,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         providers=providers_svc,
         http=model_http,
         gate=gate,
+        approval_store=store,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
@@ -522,6 +526,7 @@ async def test_resuming_turn_after_rebuilding_manager(
     new_approvals_service = ApprovalsService(
         databases=databases,
         sessions=new_manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -589,6 +594,7 @@ async def test_resuming_turn_no_duplicates(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -693,6 +699,7 @@ async def test_resuming_turn_task_mismatch(
         providers=providers_svc,
         http=model_http,
         gate=gate,
+        approval_store=store,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=workspaces,
@@ -710,6 +717,7 @@ async def test_resuming_turn_task_mismatch(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )

@@ -12,7 +12,6 @@ import httpx2
 import pytest
 from langgraph.types import interrupt
 
-from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.hooks import GateCall, GateDecision
@@ -176,13 +175,12 @@ async def test_a_queued_turn_waits_until_the_waiting_turn_is_resumed_and_ends(
         extra_dirs=[write_agent_def(tmp_path)],
         tools=make_tool_reg(),
         observers=[observer],
-        gate=ApprovalGate(databases),
     )
     await env.settings.set_default_model("writer", f"{env.provider}:fake-tools")
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "print(1)"}}
     ]
-    approvals = ApprovalsService(databases, env.manager)
+    approvals = ApprovalsService(databases, env.manager, store=env.approval_store)
     sub = await opened_stream(env, "writer")
     await env.manager.send(env.project_id, "writer", "Write a.py")
     queued = await env.manager.send(env.project_id, "writer", "Write b.py")

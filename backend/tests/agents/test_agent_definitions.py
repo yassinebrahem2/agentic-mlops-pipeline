@@ -10,6 +10,7 @@ import pytest
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import (
     AgentCatalog,
     AgentDefinition,
@@ -388,6 +389,7 @@ async def test_live_orchestrator_adds_line_to_readme(
         await agent_settings.set_default_model("orchestrator", live_model)
 
         status_board = SqliteStatusBoard(catalog, events)
+        approval_store = ApprovalStore(databases)
         manager = SessionManager(
             databases=databases,
             workspace=workspace_svc,
@@ -396,10 +398,11 @@ async def test_live_orchestrator_adds_line_to_readme(
             settings=agent_settings,
             providers=providers_svc,
             http=http,
-            gate=ApprovalGate(databases),
+            gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=tasks_svc,
+            approval_store=approval_store,
             status_board=status_board,
         )
 

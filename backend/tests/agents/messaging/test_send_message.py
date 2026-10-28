@@ -17,6 +17,7 @@ def _ctx(env: BusEnv, agent: str, turn: str = "trn_none") -> ToolContext:
         turn_id=turn,
         files=cast(FileAccess, object()),  # the tool reads no files
         task=None,
+        tool_call_id="call_1",
     )
 
 

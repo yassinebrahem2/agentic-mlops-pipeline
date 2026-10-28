@@ -26,26 +26,30 @@ async def record_decisions(
     event_log: EventLog | None,
     note: str | None = None,
 ) -> None:
-    """Write each decided approval's audit record, then its `approval.decided` event; a log
-    left out is not written. Only a user's approve or reject carries a note."""
+    """Write each decided tool approval's audit record, then each approval's `approval.decided`
+    event; a log left out is not written. Only a user's approve or reject carries a note. A
+    stall writes no audit record (turn.stalled and turn.resumed record it)."""
     level = (
         await get_permission_level(databases, project_id)
         if audit_log is not None and approvals
         else None
     )
     for approval in approvals:
-        if audit_log is not None and level is not None:
-            detail: dict[str, Any] = {"approval_id": approval.id, "tool": approval.tool}
+        if audit_log is not None and level is not None and approval.kind == "tool":
+            tool, risk_class = approval.tool, approval.risk_class
+            if tool is None or risk_class is None:
+                raise ValueError(f"Tool approval {approval.id} has no tool or risk class.")
+            detail: dict[str, Any] = {"approval_id": approval.id, "tool": tool}
             if decision in ("approved", "rejected"):
                 detail["note"] = note
             await audit_log.record(
                 project_id,
                 actor=actor,
                 action="approval",
-                risk_class=approval.risk_class,
+                risk_class=risk_class,
                 permission_level=level,
                 decision=decision,
-                target=approval.tool,
+                target=tool,
                 detail=detail,
             )
         if event_log is not None:

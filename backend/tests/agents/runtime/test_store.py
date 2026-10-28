@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     Part,
     TextPart,
@@ -182,7 +183,7 @@ async def test_recover_turns_running_into_interrupted(databases: Databases) -> N
     # done turn
     t_done = await store.add_turn("prj_test", session_id, "msg_4", "done")
 
-    await store.recover("prj_test")
+    await store.recover("prj_test", approval_store=ApprovalStore(databases))
 
     engine = await databases.project("prj_test")
     async with engine.connect() as conn:
@@ -233,7 +234,7 @@ async def test_recover_redelivers_inbound_messages_taken_by_running_turn(
     assert taken[0].status == "complete"
 
     # Simulate crash recovery
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=ApprovalStore(databases))
 
     # Inbound message should be redelivered: status="queued", read_by_turn cleared
     all_msgs = await store.messages(project_id, session_id)

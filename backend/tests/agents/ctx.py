@@ -11,6 +11,7 @@ def tool_context(
     session_id: str = "ses_test",
     turn_id: str = "trn_test",
     task: TaskRef | None = None,
+    tool_call_id: str = "call_test",
 ) -> ToolContext:
     """A ToolContext for tests that exercise a tool against a given file view."""
     return ToolContext(
@@ -20,4 +21,5 @@ def tool_context(
         turn_id=turn_id,
         files=files,
         task=task,
+        tool_call_id=tool_call_id,
     )

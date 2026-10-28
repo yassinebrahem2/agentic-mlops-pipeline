@@ -56,6 +56,7 @@ class TurnHooks:
     inbound: InboundSource
     turn_end: TurnEndCheck
     workspaces: TaskWorkspaces
+    approval_store: ApprovalStore  # the app's one store
 
 
 def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
@@ -239,7 +240,7 @@ def create_turn_graph(
         current_parts=current_parts,
         lock=lock,
         update_parts=_update_parts,
-        approval_store=ApprovalStore(store.databases),
+        approval_store=hooks.approval_store,
     )
 
     async def turn_end_node(state: TurnState) -> dict[str, Any]:

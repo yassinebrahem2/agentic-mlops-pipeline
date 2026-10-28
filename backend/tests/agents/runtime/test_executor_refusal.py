@@ -110,7 +110,7 @@ async def _setup_executor_env(
         workspaces=workspaces,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(

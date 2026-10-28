@@ -15,6 +15,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import Part, TaskView, TextPart
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
@@ -254,11 +255,13 @@ async def run_graph(
     caller = RecordingCaller(replies)
     sink = RecordingSink()
     parts: list[Part] = []
+    approval_store = ApprovalStore(databases)
     hooks = TurnHooks(
-        gate=gate or ApprovalGate(),
+        gate=gate or ApprovalGate(store=approval_store),
         inbound=inbound or NoInbound(),
         turn_end=turn_end or NoTurnEndCheck(),
         workspaces=workspaces or FixedWorkspaces(agent.files),
+        approval_store=approval_store,
     )
     graph = create_turn_graph(
         agent=agent,

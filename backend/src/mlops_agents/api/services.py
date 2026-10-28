@@ -11,6 +11,7 @@ import httpx2
 from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
@@ -135,7 +136,9 @@ async def build_services(
     audit = SqliteAuditLog(databases, secrets=secret_source)
     messaging_settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, messaging_settings)
-    gate = ApprovalGate(databases, audit_log=audit, event_log=events)
+    # The one approval store: it holds the approval observers, so every transition reaches them.
+    approval_store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=approval_store, audit_log=audit, event_log=events)
 
     sandbox = SandboxService(
         docker_runner,
@@ -191,6 +194,7 @@ async def build_services(
         inbound=inbound,
         turn_end=PrReminder(tasks),
         workspaces=tasks,
+        approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
         status_board=status_board,
@@ -207,6 +211,7 @@ async def build_services(
     approvals = ApprovalsService(
         databases=databases,
         sessions=sessions,
+        store=approval_store,
         audit_log=audit,
         event_log=events,
     )
