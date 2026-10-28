@@ -49,100 +49,82 @@ NAME_MAP: dict[str, str] = {
     "Alert Prioritization": "alert-prioritization",
 }
 
+_CHAT_AGENTS: tuple[str, ...] = (
+    "orchestrator",
+    "onboarding",
+    "data-quality",
+    "model-performance",
+    "retraining",
+    "deployment",
+)
+
 
 def load_spec_table_data() -> list[dict[str, Any]]:
     spec_path = (
         Path(__file__).resolve().parents[3]
         / "docs/superpowers/specs/2026-10-24-stage-2-agent-runtime-design.md"
     )
-    lines = spec_path.read_text(encoding="utf-8").splitlines()
-    in_section_9 = False
-    table_lines: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## 9. The seven agents"):
-            in_section_9 = True
-            continue
-        if in_section_9:
-            if stripped.startswith("## "):
-                break
-            if stripped.startswith("|"):
-                table_lines.append(stripped)
-
-    data_lines = table_lines[2:]
+    sec = (
+        spec_path.read_text(encoding="utf-8")
+        .split("## 9. The seven agents", 1)[1]
+        .split("\n## ", 1)[0]
+    )
+    data_lines = [ln.strip() for ln in sec.splitlines() if ln.strip().startswith("|")][2:]
     if len(data_lines) != 7:
         raise AssertionError(f"Expected exactly 7 rows in spec table, got {len(data_lines)}")
 
-    parsed_rows: list[dict[str, Any]] = []
-    for row in data_lines:
-        cols = [c.strip() for c in row.split("|")[1:-1]]
-        agent_display = cols[0]
-        if agent_display not in NAME_MAP:
-            raise AssertionError(f"Unmapped agent display name: {agent_display!r}")
-        parsed_rows.append(
-            {
-                "display_name": agent_display,
-                "name": NAME_MAP[agent_display],
-                "chat": cols[1].lower() == "yes",
-                "raw_tools": cols[2],
-                "raw_msg": cols[3],
-                "schedules": cols[4].lower() == "yes",
-                "status_board": (NAME_MAP[agent_display] == "orchestrator"),
-            }
-        )
+    rows: list[dict[str, Any]] = [
+        {
+            "display_name": c[0],
+            "name": NAME_MAP[c[0]],
+            "chat": c[1].lower() == "yes",
+            "raw_tools": c[2],
+            "raw_msg": c[3],
+            "schedules": c[4].lower() == "yes",
+            "status_board": (NAME_MAP[c[0]] == "orchestrator"),
+        }
+        for c in ([col.strip() for col in r.split("|")[1:-1]] for r in data_lines)
+    ]
 
-    all_agents = [r["name"] for r in parsed_rows]
-    chat_agents = [r["name"] for r in parsed_rows if r["chat"]]
-
+    all_agents = [r["name"] for r in rows]
+    chat_agents = [r["name"] for r in rows if r["chat"]]
     result: list[dict[str, Any]] = []
     prev_tools: tuple[str, ...] = ()
-    for r in parsed_rows:
+    base_tools = (
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "Bash",
+        "StartTask",
+        "ResumeTask",
+        "OpenPullRequest",
+        "SearchIssues",
+        "OpenIssue",
+        "CommentOnIssue",
+        "ListAgents",
+        "SendMessage",
+    )
+    for r in rows:
         raw_tools = r["raw_tools"]
         if raw_tools.lower() == "same":
             tools = prev_tools
         elif "all general tools" in raw_tools.lower():
-            base = ("Read", "Glob", "Grep", "Write", "Edit", "Bash", "StartTask", "ResumeTask")
-            rest = (
-                "OpenPullRequest",
-                "SearchIssues",
-                "OpenIssue",
-                "CommentOnIssue",
-                "ListAgents",
-                "SendMessage",
-            )
-            tools = base + rest + (("ScheduleWakeup",) if r["schedules"] else ())
+            tools = base_tools + (("ScheduleWakeup",) if r["schedules"] else ())
         else:
             tools = tuple(t.strip() for t in raw_tools.split(",") if t.strip())
-
-        if not tools or tools[0] != "Read":
-            raise AssertionError(f"Tools for {r['name']} must start with 'Read', got {tools}")
+        assert tools and tools[0] == "Read", f"Tools for {r['name']} must start with 'Read'"
         prev_tools = tools
 
         raw_msg = r["raw_msg"]
         if raw_msg == "all but Alert Prioritization":
-            can_message = tuple(
-                a for a in all_agents if a not in ("alert-prioritization", r["name"])
-            )
+            can_msg = tuple(a for a in all_agents if a not in ("alert-prioritization", r["name"]))
         elif raw_msg == "all chat agents":
-            can_message = tuple(a for a in chat_agents if a != r["name"])
+            can_msg = tuple(a for a in chat_agents if a != r["name"])
         else:
-            for p in raw_msg.split(","):
-                p_clean = p.strip()
-                if p_clean and p_clean not in NAME_MAP:
-                    raise AssertionError(f"Unmapped agent in May message: {p_clean!r}")
-            can_message = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(",") if p.strip())
-
-        result.append(
-            {
-                "name": r["name"],
-                "display_name": r["display_name"],
-                "chat": r["chat"],
-                "schedules": r["schedules"],
-                "status_board": r["status_board"],
-                "tools": tools,
-                "can_message": can_message,
-            }
-        )
+            can_msg = tuple(NAME_MAP[p.strip()] for p in raw_msg.split(",") if p.strip())
+        result.append({**r, "tools": tools, "can_message": can_msg})
     return result
 
 
@@ -156,13 +138,10 @@ def _load_definition(name: str) -> AgentDefinition:
 
 
 def _assert_definition_matches_spec(defn: AgentDefinition, expected: dict[str, Any]) -> None:
-    assert defn.name == expected["name"]
-    assert defn.display_name == expected["display_name"]
-    assert defn.chat is expected["chat"]
-    assert defn.schedules is expected["schedules"]
+    assert defn.name == expected["name"] and defn.display_name == expected["display_name"]
+    assert defn.chat is expected["chat"] and defn.schedules is expected["schedules"]
     assert defn.status_board is expected["status_board"]
-    assert defn.tools[0] == "Read"
-    assert defn.tools == expected["tools"]
+    assert defn.tools[0] == "Read" and defn.tools == expected["tools"]
     assert defn.can_message == expected["can_message"]
 
 
@@ -170,23 +149,12 @@ def _assert_definition_matches_spec(defn: AgentDefinition, expected: dict[str, A
 def test_stage2_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
     defn = _load_definition(expected["name"])
     _assert_definition_matches_spec(defn, expected)
-
-    prompt_lines = defn.prompt.splitlines()
-    assert len(prompt_lines) < 60, f"{defn.name} prompt exceeds 60 lines: {len(prompt_lines)} lines"
-
-    lower_prompt = defn.prompt.lower()
-    assert "how to work:" in lower_prompt or "how to work" in lower_prompt, (
-        f"{defn.name} prompt missing 'How to work' section"
-    )
-    if defn.chat:
-        assert "starttask" in lower_prompt, f"{defn.name} prompt missing StartTask guidance"
-    else:
-        assert "monitoring loop" in lower_prompt or "stage 4" in lower_prompt, (
-            f"{defn.name} prompt missing monitoring loop or stage 4 reference"
-        )
-    assert "not available yet" in lower_prompt, (
-        f"{defn.name} prompt missing note on what is not available yet"
-    )
+    assert len(defn.prompt.splitlines()) < 60, f"{defn.name} prompt exceeds 60 lines"
+    low = defn.prompt.lower()
+    assert "how to work:" in low or "how to work" in low, f"{defn.name} missing 'How to work'"
+    guidance = "starttask" if defn.chat else "monitoring loop"
+    assert guidance in low or "stage 4" in low, f"{defn.name} missing task/loop guidance"
+    assert "not available yet" in low, f"{defn.name} missing 'not available yet'"
 
 
 def test_spec_table_detects_missing_tool() -> None:
@@ -278,7 +246,7 @@ _BASE_URLS = {
 
 
 @pytest.mark.live
-async def test_live_orchestrator_adds_line_to_readme(
+async def test_live_agent_definitions(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -328,7 +296,8 @@ async def test_live_orchestrator_adds_line_to_readme(
         await providers_svc.add_key(prov.name, key_val)
         await providers_svc.add_model(ModelCreate(provider=provider_name, wire_model_id=wire_id))
         await providers_svc.verify_model(live_model)
-        await agent_settings.set_default_model("orchestrator", live_model)
+        for agent in _CHAT_AGENTS:
+            await agent_settings.set_default_model(agent, live_model)
 
         manager = SessionManager(
             databases=databases,
@@ -345,30 +314,33 @@ async def test_live_orchestrator_adds_line_to_readme(
             status_board=SqliteStatusBoard(catalog, events),
         )
 
-        start = await manager.get(project.id, "orchestrator")
-        sub = manager.subscribe(project.id, "orchestrator", after_seq=start.last_seq)
-        await manager.send(
-            project.id,
-            "orchestrator",
-            "Please start a task, add a line 'Updated by orchestrator' to README.md, and open a local review for it.",
-        )
+        for agent in _CHAT_AGENTS:
+            start = await manager.get(project.id, agent)
+            sub = manager.subscribe(project.id, agent, after_seq=start.last_seq)
+            prompt = (
+                "Please start a task, add a line 'Updated by orchestrator' to README.md, and open a local review for it."
+                if agent == "orchestrator"
+                else f"Hello {agent}, please reply with a short greeting and introduce your role in one sentence."
+            )
+            await manager.send(project.id, agent, prompt)
 
-        events_list: list[StreamEvent] = []
-        async for ev in sub:
-            events_list.append(ev)
-            if isinstance(ev, TurnEnded):
-                break
+            events_list: list[StreamEvent] = []
+            async for ev in sub:
+                events_list.append(ev)
+                if isinstance(ev, TurnEnded):
+                    break
 
-        assert any(isinstance(e, TurnEnded) and e.data.status == "done" for e in events_list)
-        view = await manager.get(project.id, "orchestrator")
-        assert len(view.messages) >= 2
-        agent_msg = view.messages[-1]
-        text = "".join(p.text for p in agent_msg.parts if p.type == "text")
-        print("\nLive model response:", text)
-        assert len(text) > 0
+            assert any(isinstance(e, TurnEnded) and e.data.status == "done" for e in events_list)
+            view = await manager.get(project.id, agent)
+            assert len(view.messages) >= 2
+            agent_msg = view.messages[-1]
+            text = "".join(p.text for p in agent_msg.parts if p.type == "text")
+            print(f"\nLive model response from {agent}:\n{text}\n")
+            assert len(text) > 0
 
         # Chat agent called one of its tools
-        has_tool_call = any(p.type == "tool_call" for m in view.messages for p in m.parts)
+        orch_view = await manager.get(project.id, "orchestrator")
+        has_tool_call = any(p.type == "tool_call" for m in orch_view.messages for p in m.parts)
         assert has_tool_call, "Chat agent did not call any tool"
 
         # Task was started
@@ -389,3 +361,6 @@ async def test_live_orchestrator_adds_line_to_readme(
         )
 
         await manager.close()
+
+
+test_live_orchestrator_adds_line_to_readme = test_live_agent_definitions
