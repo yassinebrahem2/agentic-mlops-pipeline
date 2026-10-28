@@ -8,9 +8,9 @@ the proposal is applied. References inside the payload are checked here.
 from __future__ import annotations
 
 import re
-from string import Formatter
+from collections import Counter
+from importlib.resources import files
 from typing import Annotated, Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AfterValidator,
@@ -26,6 +26,7 @@ from mlops_agents.connections.contract import (
     LocalFolderKindName,
     LocalFolderSettings,
 )
+from mlops_agents.proposals.templates import check_template
 from mlops_agents.tracking.contract import GithubActionsSettings, MlflowSettings, SourceType
 
 # PermissionLevel minus "bypass": a proposal can never grant it (a test pins the two together).
@@ -45,23 +46,21 @@ Placeholder = Literal[
 _CRON_FIELDS = 5
 
 
-# ZoneInfo hands the name to the file system, which on Windows forgives a trailing space or dot
-# and a backslash; only the database's own spelling is accepted.
-_IANA_NAME = re.compile(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*")
+# The tzdata package's own list, not a lookup in the platform's zone database: Linux's also
+# loads posix/..., right/... and posixrules, and a Windows file lookup forgives a trailing space
+# or dot and a backslash. Exact membership gives every platform the same names.
+_ZONE_NAMES = frozenset(files("tzdata").joinpath("zones").read_text(encoding="utf-8").split())
 
 
 def _check_timezone(value: str) -> str:
-    if _IANA_NAME.fullmatch(value) is None:
+    if value not in _ZONE_NAMES:
         raise ValueError(f"{value!r} is not an IANA time zone name (for example Europe/Paris)")
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError, OSError) as err:
-        # ValueError: a malformed key such as "" or a path escape. OSError: a region folder such
-        # as "Europe" is a directory in the zone database, which some platforms report as one.
-        raise ValueError(
-            f"{value!r} is not an IANA time zone name (for example Europe/Paris)"
-        ) from err
     return value
+
+
+def _require_unique(plural: str, names: list[str]) -> None:
+    for name in sorted(n for n, count in Counter(names).items() if count > 1):
+        raise ValueError(f"two {plural} are named {name!r}")
 
 
 TimeZoneName = Annotated[str, AfterValidator(_check_timezone)]
@@ -81,7 +80,12 @@ class ConnectionSpec(_Strict):
 
 
 class ConnectionsPayload(_Strict):
-    connections: list[ConnectionSpec]
+    connections: Annotated[list[ConnectionSpec], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _names_unique(self) -> ConnectionsPayload:
+        _require_unique("connections", [spec.name for spec in self.connections])
+        return self
 
 
 class TableUse(_Strict):
@@ -132,20 +136,22 @@ class CommandSpec(_Strict):
 
     @model_validator(mode="after")
     def _check_shape(self) -> CommandSpec:
+        # Declared placeholders a command does not use are allowed.
         if self.type == "command":
-            if not self.template:
-                raise ValueError("a command needs a template")
+            if self.template is None or not self.template.strip():
+                raise ValueError("a command needs a non-blank template")
             if self.workflow is not None:
                 raise ValueError("a command has no workflow (use type ci_dispatch)")
-        elif not self.workflow:
-            raise ValueError("a ci_dispatch needs a workflow")
-        if self.template is not None:
-            # Declared-but-unused placeholders are fine: ci_dispatch inputs use them.
-            used = {name for _, name, _, _ in Formatter().parse(self.template) if name is not None}
-            for name in sorted(used - set(self.placeholders)):
-                raise ValueError(
-                    f"the template uses {{{name}}}, which the command does not declare"
-                )
+            if self.inputs:
+                raise ValueError("a command has no inputs (those belong to a ci_dispatch)")
+            check_template("the template", self.template, self.placeholders)
+        else:
+            if self.workflow is None or not self.workflow.strip():
+                raise ValueError("a ci_dispatch needs a non-blank workflow")
+            if self.template is not None:
+                raise ValueError("a ci_dispatch has no template (use type command)")
+        for key, value in sorted(self.inputs.items()):
+            check_template(f"the input {key!r}", value, self.placeholders)
         return self
 
 
@@ -245,9 +251,18 @@ class Feed(_Strict):
     grace_minutes: int
     timezone: TimeZoneName
 
+    @model_validator(mode="after")
+    def _ref_matches_kind(self) -> Feed:
+        expected = DataFeedRef if self.kind == "data" else JobFeedRef
+        if type(self.ref) is not expected:
+            raise ValueError(f"feed {self.name!r}: a {self.kind} feed needs a {expected.__name__}")
+        return self
+
 
 class OnCallHours(_Strict):
-    days: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
+    days: Annotated[
+        list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]], Field(min_length=1)
+    ]
     start: ClockTime
     end: ClockTime
 
@@ -330,9 +345,7 @@ class HandoffPayload(_Strict):
 
     @model_validator(mode="after")
     def _references_resolve(self) -> HandoffPayload:
-        names = [model.name for model in self.models]
-        for name in sorted({n for n in names if names.count(n) > 1}):
-            raise ValueError(f"two models are named {name!r}")
+        _require_unique("models", [model.name for model in self.models])
         roles = {(role.connection, role.table) for role in self.data_roles}
         for model in self.models:
             for field, use in (("predictions", model.predictions), ("labels", model.labels)):
@@ -341,9 +354,24 @@ class HandoffPayload(_Strict):
                         f"model {model.name!r}: {field} table {use.table!r} of connection "
                         f"{use.connection!r} has no data role"
                     )
-        stages = {stage.name for stage in self.pipeline}
-        for edge in self.edges:
-            for end in (edge.from_stage, edge.to_stage):
-                if end not in stages:
-                    raise ValueError(f"an edge names the unknown pipeline stage {end!r}")
+        _check_pipeline(self.pipeline, self.edges)
         return self
+
+
+def _check_pipeline(pipeline: list[PipelineStage], edges: list[PipelineEdge]) -> None:
+    # Cycles are allowed: real pipelines feed predictions back into training.
+    names = [stage.name for stage in pipeline]
+    _require_unique("pipeline stages", names)
+    seen: set[tuple[str, str]] = set()
+    for edge in edges:
+        for end in (edge.from_stage, edge.to_stage):
+            if end not in names:
+                raise ValueError(f"an edge names the unknown pipeline stage {end!r}")
+        if edge.from_stage == edge.to_stage:
+            raise ValueError(f"an edge joins the pipeline stage {edge.from_stage!r} to itself")
+        pair = (edge.from_stage, edge.to_stage)
+        if pair in seen:
+            raise ValueError(
+                f"the edge from {edge.from_stage!r} to {edge.to_stage!r} appears twice"
+            )
+        seen.add(pair)

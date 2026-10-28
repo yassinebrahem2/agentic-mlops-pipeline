@@ -202,6 +202,16 @@ def test_approvals_check_rejects_mixed_kinds(
         _insert_approval(project_db, "apr_1", values)
 
 
+def test_approval_id_is_required(project_db: sqlite3.Connection) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        project_db.execute(
+            "INSERT INTO approvals (id, turn_id, session_id, message_id, agent, tool_call_id, "
+            "tool, risk_class, preview, status, created_at) VALUES (NULL, 'trn_1', 'ses_1', "
+            "'msg_1', 'coder', 'call_1', 'Edit', 'write_code', '{}', 'pending', ?)",
+            (_TS,),
+        )
+
+
 def test_tool_approval_may_carry_a_proposal_kind(project_db: sqlite3.Connection) -> None:
     _insert_approval(project_db, "apr_1", {**_GOOD_TOOL_APPROVAL, "proposal_kind": "'handoff'"})
 

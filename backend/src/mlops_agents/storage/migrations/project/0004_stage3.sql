@@ -199,7 +199,7 @@ ALTER TABLE turns ADD COLUMN error_kind TEXT
 -- rebuilt as 0003 did. No table references approvals, so the DROP is safe with foreign keys on.
 -- Index names are global: the indexes are recreated after the rename.
 CREATE TABLE approvals_new (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   turn_id TEXT NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
