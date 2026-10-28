@@ -91,6 +91,9 @@ class FakeSessionsForApproval:
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         self.resumed_turns.append((project_id, session_id, turn_id))
 
+    async def retry_turn(self, project_id: str, agent: str, turn_id: str) -> None:
+        raise NotImplementedError
+
 
 class BothReadBeforeEitherWrites(ApprovalStore):
     """Holds the first two reads of an approval until both have been made, so two decisions

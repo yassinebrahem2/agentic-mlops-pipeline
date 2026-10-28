@@ -106,6 +106,7 @@ class FakeSessions(AgentSessions):
         self.no_chat_agents = no_chat_agents or set()
         self.order_log = order_log if order_log is not None else []
         self.stopped: list[tuple[str, str]] = []
+        self.retried: list[tuple[str, str, str]] = []
         self.closed_projects: list[str] = []
         self.sent_messages: list[tuple[str, str, str]] = []
         self.posted_messages: list[tuple[str, str, str, str]] = []
@@ -228,3 +229,7 @@ class FakeSessions(AgentSessions):
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         pass
+
+    async def retry_turn(self, project_id: str, agent: str, turn_id: str) -> None:
+        self._check_agent(agent)
+        self.retried.append((project_id, agent, turn_id))

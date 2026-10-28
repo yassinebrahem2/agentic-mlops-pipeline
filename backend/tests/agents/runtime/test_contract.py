@@ -312,6 +312,9 @@ class DummySessions:
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         pass
 
+    async def retry_turn(self, project_id: str, agent: str, turn_id: str) -> None:
+        pass
+
     async def close_project(self, project_id: str) -> None:
         """Before a project is removed: ends its running turns (interrupted), drops its hubs and
         subscribers, closes its database handles; later calls for that project start fresh."""

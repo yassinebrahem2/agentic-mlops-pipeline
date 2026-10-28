@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from sqlalchemy import insert, select, update
 
@@ -10,6 +11,15 @@ from mlops_agents.agents.runtime.store.base import StoreBase
 from mlops_agents.clock import now_iso
 from mlops_agents.ids import new_id
 from mlops_agents.storage.tables import turns
+
+
+@dataclass(frozen=True)
+class StoredTurn:
+    id: str
+    session_id: str
+    trigger_message_id: str
+    status: str
+    error_kind: ErrorKind | None
 
 
 class TurnsStore(StoreBase):
@@ -135,6 +145,41 @@ class TurnsStore(StoreBase):
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             row = (await conn.execute(select(turns.c.status).where(turns.c.id == turn_id))).first()
+        return None if row is None else str(row[0])
+
+    async def stored_turn(self, project_id: str, turn_id: str) -> StoredTurn | None:
+        """The turn's row, or None if not found."""
+        engine = await self._databases.project(project_id)
+        query = select(
+            turns.c.id,
+            turns.c.session_id,
+            turns.c.trigger_message_id,
+            turns.c.status,
+            turns.c.error_kind,
+        ).where(turns.c.id == turn_id)
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None:
+            return None
+        return StoredTurn(
+            id=str(row[0]),
+            session_id=str(row[1]),
+            trigger_message_id=str(row[2]),
+            status=str(row[3]),
+            error_kind=cast(ErrorKind | None, row[4]),
+        )
+
+    async def latest_turn_id(self, project_id: str, session_id: str) -> str | None:
+        """The session's most recently added turn, whatever its status; None without turns."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(turns.c.id)
+            .where(turns.c.session_id == session_id)
+            .order_by(turns.c.created_at.desc(), turns.c.id.desc())
+            .limit(1)
+        )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).first()
         return None if row is None else str(row[0])
 
     async def turn_trigger_id(self, project_id: str, turn_id: str) -> str | None:
