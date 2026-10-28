@@ -110,9 +110,9 @@ _LINES: dict[KeyStatus, str] = {
 
 class KeyFailover:
     """One per app, shared by every call. Each read-then-write of the state is one block with
-    no `await` inside, so concurrent calls need no lock. `on_success` is the one owner of the
-    success rule: a provider marked needs attention answered, so the mark is cleared
-    (Decision #384)."""
+    no `await` inside, so concurrent calls need no lock. The failover owns the success rule: after a
+    successful call of a provider marked needs attention it awaits `on_success` (the app
+    clears the mark, Decision #384)."""
 
     def __init__(
         self,
