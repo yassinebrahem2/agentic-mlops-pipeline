@@ -41,6 +41,7 @@ from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
@@ -129,8 +130,14 @@ async def build_services(
     # The one instance: every consumer of project secrets gets it through its constructor.
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
-    # The one key failover: every model and embedder call shares its key states.
-    failover = KeyFailover()
+
+    # The one key failover: every model and embedder call shares its key states. It is built
+    # before the providers service that holds it, so its success hook looks the service up
+    # when it runs.
+    async def clear_attention(provider: Provider) -> None:
+        await providers.clear_attention(provider.id)
+
+    failover = KeyFailover(on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
 
     async def secret_source() -> list[str]:

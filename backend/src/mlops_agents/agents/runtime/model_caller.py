@@ -248,9 +248,6 @@ class ModelCaller:
             if error.kind is ProviderErrorKind.BAD_GENERATION:
                 raise _Rejected(error.message) from exc
             raise TurnFailed(error.message) from exc
-        if provider.status == "needs_attention":
-            # The provider answered: whatever it needed is fixed.
-            await self._providers.clear_attention(provider.id)
         return reply
 
     async def _attempt(

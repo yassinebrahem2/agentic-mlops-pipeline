@@ -134,18 +134,25 @@ class ProvidersService:
         await self._set_status(provider_id, "needs_attention", detail)
 
     async def clear_attention(self, provider_id: str) -> None:
-        """The provider works again: a call succeeded, or Try again."""
-        await self._set_status(provider_id, "ok", None)
+        """The provider works again: a call succeeded, or Try again. Only a marked provider is
+        written, so a healthy one costs no write."""
+        await self._set_status(provider_id, "ok", None, only_if="needs_attention")
 
     async def _set_status(
-        self, provider_id: str, status: ProviderStatus, detail: str | None
+        self,
+        provider_id: str,
+        status: ProviderStatus,
+        detail: str | None,
+        *,
+        only_if: ProviderStatus | None = None,
     ) -> None:
+        condition = providers.c.id == provider_id
+        if only_if is not None:
+            condition = condition & (providers.c.status == only_if)
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(
-                update(providers)
-                .where(providers.c.id == provider_id)
-                .values(status=status, status_detail=detail)
+                update(providers).where(condition).values(status=status, status_detail=detail)
             )
 
     # Keys

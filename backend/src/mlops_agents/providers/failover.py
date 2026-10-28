@@ -4,6 +4,7 @@ model, and the call loop that moves between keys (stage 3 spec, section 2)."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,8 @@ from pydantic import BaseModel
 
 from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind, classify
 from mlops_agents.providers.models import Provider
+
+logger = logging.getLogger(__name__)
 
 TRANSIENT_BACKOFFS = (1.0, 2.0)
 # A per-minute limit has cleared a minute after it was hit: a key limited again after that
@@ -107,10 +110,17 @@ _LINES: dict[KeyStatus, str] = {
 
 class KeyFailover:
     """One per app, shared by every call. Each read-then-write of the state is one block with
-    no `await` inside, so concurrent calls need no lock."""
+    no `await` inside, so concurrent calls need no lock. `on_success` is the one owner of the
+    success rule: a provider marked needs attention answered, so the mark is cleared
+    (Decision #384)."""
 
-    def __init__(self, clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        clock: Clock | None = None,
+        on_success: Callable[[Provider], Awaitable[None]] | None = None,
+    ) -> None:
         self._clock: Clock = clock if clock is not None else SystemClock()
+        self._on_success = on_success
         self._entries: dict[tuple[str, int, str], _Entry] = {}
         self._cursors: dict[tuple[str, str], int] = {}
 
@@ -124,7 +134,9 @@ class KeyFailover:
         wait: bool = True,
     ) -> T:
         if not provider.keys:
-            return await attempt(None)
+            result = await attempt(None)
+            await self._report_success(provider)
+            return result
         cooldown = timedelta(minutes=cooldown_minutes)
         transient_retries = 0
         pick: _Pick | None = None
@@ -154,6 +166,7 @@ class KeyFailover:
                 pick = None
                 continue
             self._succeed(provider, model, pick.index)
+            await self._report_success(provider)
             return result
 
     def states(self, provider: Provider, model: str) -> list[KeyState]:
@@ -176,6 +189,15 @@ class KeyFailover:
             line = _LINES[state.status].format(since=since)
             lines.append(f"Key {state.key_index + 1}: {line}.")
         return " ".join(lines)
+
+    async def _report_success(self, provider: Provider) -> None:
+        """The call already succeeded: a failing `on_success` is logged, never raised."""
+        if self._on_success is None or provider.status != "needs_attention":
+            return
+        try:
+            await self._on_success(provider)
+        except Exception:
+            logger.exception("The success hook of provider %s failed.", provider.id)
 
     def _entry(self, provider: Provider, index: int, model: str) -> _Entry:
         return self._entries.setdefault((provider.id, index, model), _Entry())

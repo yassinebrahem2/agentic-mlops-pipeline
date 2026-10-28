@@ -31,7 +31,7 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import Clock, KeyFailover
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.models import ModelCreate, Provider, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -92,7 +92,11 @@ async def build_session_env(
         extra_dirs=extra_dirs or (),
         hook_names=hooks.names() if hooks is not None else frozenset(),
     )
-    failover = KeyFailover(clock if clock is not None else FakeClock())
+
+    async def clear_attention(provider: Provider) -> None:  # wired as `build_services` does
+        await providers_svc.clear_attention(provider.id)
+
+    failover = KeyFailover(clock if clock is not None else FakeClock(), on_success=clear_attention)
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()

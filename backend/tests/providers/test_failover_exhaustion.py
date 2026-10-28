@@ -1,7 +1,7 @@
 """Key failover: exhausted keys, cooldown probes, Try again, the wording and the one instance."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -10,11 +10,13 @@ from mlops_agents.api import services as services_module
 from mlops_agents.api.services import Services
 from mlops_agents.providers.failover import (
     AllKeysExhausted,
+    Clock,
     KeyFailover,
     KeyState,
     KeyStatus,
     RateLimited,
 )
+from mlops_agents.providers.models import Provider
 from tests.api.conftest import started_app
 from tests.providers.fake_clock import (
     KEY_VALUES,
@@ -256,8 +258,12 @@ async def test_build_services_builds_exactly_one_key_failover(
     built: list[KeyFailover] = []
 
     class RecordedKeyFailover(KeyFailover):
-        def __init__(self) -> None:
-            super().__init__()
+        def __init__(
+            self,
+            clock: Clock | None = None,
+            on_success: Callable[[Provider], Awaitable[None]] | None = None,
+        ) -> None:
+            super().__init__(clock, on_success)
             built.append(self)
 
     monkeypatch.setattr(services_module, "KeyFailover", RecordedKeyFailover)

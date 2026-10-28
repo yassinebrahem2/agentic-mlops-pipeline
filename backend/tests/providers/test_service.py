@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Callable
 import httpx2
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.errors import DomainError
@@ -12,6 +13,7 @@ from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover
 from mlops_agents.providers.models import DEFAULT_COOLDOWN_MINUTES, ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import providers
 from tests.conftest import MemoryKeyStore
 from tests.providers.fake_clock import FakeClock, Script, statuses, unauthorized
 
@@ -332,6 +334,27 @@ async def test_a_key_change_clears_the_providers_failover_state(
         await svc.create_provider(HOSTED)
         await svc.add_key("groq", GOOD)
         assert statuses(failover.states(provider, "m1")) == ["ok"]
+
+
+async def test_clear_attention_only_clears_a_provider_needing_attention(
+    make_service: MakeService, databases: Databases
+) -> None:
+    svc = make_service()
+    created = await svc.create_provider(HOSTED)
+    await svc.mark_needs_attention(created.id, "HTTP 401")
+
+    await svc.clear_attention(created.id)
+
+    cleared = await svc.get_provider_by_id(created.id)
+    assert (cleared.status, cleared.status_detail) == ("ok", None)
+    # A detail kept on an `ok` row shows the update touched only a needs-attention row.
+    engine = await databases.app()
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(providers).where(providers.c.id == created.id).values(status_detail="kept")
+        )
+    await svc.clear_attention(created.id)
+    assert (await svc.get_provider_by_id(created.id)).status_detail == "kept"
 
 
 async def test_cooldown_is_stored_and_read_back(make_service: MakeService) -> None:

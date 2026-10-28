@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.failover import KeyFailover
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.models import ModelCreate, Provider, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
@@ -60,7 +60,11 @@ async def build_caller_env(
     """The first of `wire_model_ids` is `model`; every one is added and verified. The fake's
     request log is cleared after setup."""
     clock = FakeClock()
-    failover = KeyFailover(clock)
+
+    async def clear_attention(provider: Provider) -> None:  # wired as `build_services` does
+        await providers.clear_attention(provider.id)
+
+    failover = KeyFailover(clock, on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
     kind = "hosted" if keys else "self_hosted"
     await providers.create_provider(ProviderCreate(name=name, kind=kind, base_url=fake.base_url))
