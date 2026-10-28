@@ -118,6 +118,7 @@ function setup(
           environment: { state: "ready", tag: "env:1", detail: null },
           network: false,
         });
+      if (path.endsWith("/connections")) return json([]);
       if (method !== "GET" && options.failure)
         return json({ code: options.failure, message: "Action failed", detail: null }, 409);
       if (path.endsWith("/refresh") || path.endsWith("/relink")) {
@@ -388,7 +389,7 @@ it("renders the permissions, sandbox, GitHub issues and agent messages sections"
     "Medium",
   );
   expect(await screen.findByRole("spinbutton", { name: "Maximum messages" })).toHaveValue(6);
-  for (const name of ["Permissions", "Sandbox", "GitHub issues", "Agent messages"]) {
+  for (const name of ["Permissions", "Sandbox", "Connections", "GitHub issues", "Agent messages"]) {
     expect(screen.getByRole("region", { name })).toBeInTheDocument();
   }
 });
