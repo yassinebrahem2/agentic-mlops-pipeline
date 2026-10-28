@@ -322,7 +322,9 @@ class ProposalStore:
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
             await conn.execute(
-                update(proposals).where(proposals.c.id == proposal_id).values(result=result_json)
+                update(proposals)
+                .where(proposals.c.id == proposal_id, proposals.c.status == "approved")
+                .values(result=result_json)
             )
 
     async def list_recover_approved_without_result(self, project_id: str) -> list[ProposalRecord]:
