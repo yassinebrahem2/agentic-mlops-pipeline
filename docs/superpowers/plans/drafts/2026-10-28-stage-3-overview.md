@@ -155,6 +155,8 @@ class TrackingAdapter(Protocol):
     async def sync(self, source: TrackingSourceView, credential: str | None, since: datetime | None) -> SyncResult: ...
 ```
 
+- Source settings, one model per type, `extra="forbid"`: `MlflowSettings(url: str)`, `GithubActionsSettings(repository: str, workflows: list[str] = [])`; onboarding's `TrackingSourceSpec.settings` uses these keys.
+- `ModelSummary.production_version` is the version holding the alias that the current handoff's `ModelSpec.environments` maps to the environment `production` (read through `Handoffs.current`, I20); without a handoff, the alias `production`.
 - A `github_actions` source has `auth: "none"` and uses the app's GitHub login.
 - The MLflow adapter fetches `mlops_agents/evaluation.json` for model-version runs through MLflow's `GET /get-artifact` (a server that cannot serve the artifact yields no record, not an error). Records are stored in the `evaluations` table (source, model, version, run_key, schema_version, payload JSON, fetched_at), unique on source, model and version (contracts).
 - Routes `GET` and `PUT .../tracking/settings` (`{sync_interval_s}`) set the sync interval (tracking).
