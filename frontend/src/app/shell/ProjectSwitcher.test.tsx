@@ -125,7 +125,11 @@ describe("ProjectSwitcher", () => {
                     ? issues
                     : url.endsWith("/sandbox")
                       ? sandbox
-                      : fakeProjects.find((project) => url.endsWith(`/api/projects/${project.id}`));
+                      : url.endsWith("/connections")
+                        ? []
+                        : fakeProjects.find((project) =>
+                            url.endsWith(`/api/projects/${project.id}`),
+                          );
         if (data !== undefined)
           return Promise.resolve(
             new Response(JSON.stringify(data), {

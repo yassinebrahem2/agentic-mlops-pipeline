@@ -15,4 +15,6 @@ WORKDIR /tmp/build
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
+# @duckdb
+
 WORKDIR /workspace
