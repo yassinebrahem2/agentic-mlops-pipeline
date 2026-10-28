@@ -77,7 +77,16 @@ def test_version_3_database_migrates_with_its_approvals(tmp_path: Path) -> None:
         conn.close()
 
     assert migrate(db, "project", tmp_path / "bk") == [4]
-    assert len(list((tmp_path / "bk").glob("*.db"))) == 1
+    backups = list((tmp_path / "bk").glob("*.db"))
+    assert len(backups) == 1
+    backup = sqlite3.connect(backups[0])
+    try:
+        # Taken before 0004 ran: the version 3 schema, with the approval row.
+        assert "kind" not in [str(r[1]) for r in backup.execute("PRAGMA table_info(approvals)")]
+        assert "error_kind" not in [str(r[1]) for r in backup.execute("PRAGMA table_info(turns)")]
+        assert backup.execute("SELECT COUNT(*) FROM approvals").fetchone() == (1,)
+    finally:
+        backup.close()
 
     conn = connect_sync(db)
     try:

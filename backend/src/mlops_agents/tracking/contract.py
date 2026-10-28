@@ -12,7 +12,6 @@ from mlops_agents.credentials.scrub import base_url_problem
 SourceType = Literal["mlflow", "github_actions"]
 # Adapters normalise every tracker's run states to these.
 RunStatus = Literal["running", "succeeded", "failed", "cancelled", "other"]
-SourceAuth = Literal["none", "credential"]
 
 
 class MlflowSettings(BaseModel):
@@ -41,7 +40,7 @@ class TrackingSourceView(BaseModel):
     id: str
     type: SourceType
     settings: dict[str, Any]
-    auth: SourceAuth
+    auth: Literal["none", "credential"]
     credential_set: bool
     last_sync: datetime | None
     last_error: str | None
@@ -155,7 +154,11 @@ class Tracking(Protocol):
     async def sources(self, project_id: str) -> list[TrackingSourceView]: ...
 
     async def create_source(
-        self, project_id: str, type: SourceType, settings: dict[str, Any], auth: SourceAuth
+        self,
+        project_id: str,
+        type: SourceType,
+        settings: dict[str, Any],
+        auth: Literal["none", "credential"],
     ) -> TrackingSourceView: ...
 
     async def sync(self, project_id: str, source_id: str | None = None) -> None:
