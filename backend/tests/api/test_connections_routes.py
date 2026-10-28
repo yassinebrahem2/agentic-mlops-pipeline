@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx2
 import pytest
-from sqlalchemy import insert
+from fastapi import FastAPI
+from sqlalchemy import insert, update
 
 from mlops_agents.clock import now_iso
 from mlops_agents.config import RunMode
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
-from mlops_agents.storage.tables import projects
+from mlops_agents.storage.tables import connections, projects
 from tests.api.conftest import SERVER_ENV, SERVER_URL, signed_in, started_app
 
 
@@ -238,4 +240,34 @@ async def test_invalid_settings_never_echo_the_submitted_values(
     assert res.status_code == 422
     assert res.json()["code"] == "invalid_request"
     assert [e["field"] for e in res.json()["detail"]["errors"]] == ["body.settings"]
+    assert secret not in res.text
+
+
+async def test_listing_never_returns_values_of_stored_settings_that_no_longer_parse(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    sample_project: tuple[str, Path],
+    tmp_path: Path,
+) -> None:
+    project_id, _ = sample_project
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    secret = "sk-secret-stored-789"
+    created = await client.post(
+        f"/api/projects/{project_id}/connections",
+        json={"kind": LOCAL_FOLDER_KIND, "name": "drift", "settings": {"path": str(data_dir)}},
+    )
+    engine = await app.state.services.databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(connections)
+            .where(connections.c.id == created.json()["id"])
+            .values(settings_json=json.dumps({"path": str(data_dir), "token": secret}))
+        )
+
+    res = await client.get(f"/api/projects/{project_id}/connections")
+
+    assert res.status_code == 200
+    assert res.json()[0]["status"] == "unreachable"
+    assert res.json()[0]["settings"] == {}
     assert secret not in res.text

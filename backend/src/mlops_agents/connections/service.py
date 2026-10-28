@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from typing import Any, cast
 
@@ -32,8 +31,6 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import connections
-
-logger = logging.getLogger(__name__)
 
 
 class ConnectionsService:
@@ -78,15 +75,22 @@ class ConnectionsService:
                 detail={"errors": errors},
             ) from None
 
-    def _stored(self, settings_json: str) -> dict[str, Any]:
+    def _stored(self, settings_json: Any) -> dict[str, Any]:
         """A row's stored settings, for `_parse`; never the text of the decode error."""
-        try:
-            value = json.loads(settings_json)
-        except json.JSONDecodeError:
-            value = None
-        if not isinstance(value, dict):
+        # SQLite is dynamically typed: a hand-edited row can hold a blob or a number.
+        if not isinstance(settings_json, str):
             raise DomainError(
                 "connection_invalid", "The stored settings are not valid JSON.", status=422
+            )
+        try:
+            value = json.loads(settings_json)
+        except ValueError:
+            raise DomainError(
+                "connection_invalid", "The stored settings are not valid JSON.", status=422
+            ) from None
+        if not isinstance(value, dict):
+            raise DomainError(
+                "connection_invalid", "The stored settings are not a JSON object.", status=422
             )
         return cast(dict[str, Any], value)
 
@@ -271,8 +275,11 @@ class ConnectionsService:
                 if m is not None:
                     mounts_list.append(m)
             except (DomainError, OSError) as exc:
-                logger.debug("Skipping mount for connection %s: %s", row.name, error_text(exc))
-                continue
+                raise DomainError(
+                    "connection_unreachable",
+                    f"Connection '{row.name}' is unreachable: {error_text(exc)}",
+                    status=400,
+                ) from None  # the cause's own text is not scrubbed
 
         mounts_list.sort(key=lambda m: m.container_path)
         return mounts_list
@@ -291,9 +298,11 @@ class ConnectionsService:
             settings: dict[str, Any] = {}
 
             try:
-                settings = self._stored(row.settings_json)
+                raw_settings = self._stored(row.settings_json)
                 kind_obj = self._registry.get(row.kind)
-                parsed = self._parse(kind_obj, settings)
+                parsed = self._parse(kind_obj, raw_settings)
+                # Only parsed settings are shown: a stored value the model refuses stays hidden.
+                settings = parsed.model_dump(mode="json")
                 await asyncio.to_thread(kind_obj.validate, parsed, None)
                 findings, data_ver = await self._read(kind_obj, parsed)
             except (DomainError, OSError) as exc:

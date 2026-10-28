@@ -168,10 +168,12 @@ async def test_service_unreachable_handling(service_env: ServiceEnv, tmp_path: P
     assert item2.status == "ok"
     assert item2.status_detail is None
 
-    # Mounts leaves out unreachable connection
-    mounts = await service.mounts(project_id)
-    assert len(mounts) == 1
-    assert mounts[0].container_path == "/data/c2"
+    # Mounts fails when a connection is unreachable
+    with pytest.raises(DomainError) as exc_info:
+        await service.mounts(project_id)
+    assert exc_info.value.code == "connection_unreachable"
+    assert "c1" in exc_info.value.message
+    assert f"Folder does not exist: {d1}" in exc_info.value.message
 
 
 async def test_service_list_data_version_updates_on_mtime_change(
