@@ -653,6 +653,100 @@
         "title": "DockerStatus",
         "type": "object"
       },
+      "EmbedderChoice": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "EmbedderChoice",
+        "type": "object"
+      },
+      "EmbedderSettingView": {
+        "properties": {
+          "chosen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EmbedderStatus"
+          }
+        },
+        "required": [
+          "chosen",
+          "status"
+        ],
+        "title": "EmbedderSettingView",
+        "type": "object"
+      },
+      "EmbedderStatus": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "required": [
+          "configured",
+          "address",
+          "dimensions",
+          "problem"
+        ],
+        "title": "EmbedderStatus",
+        "type": "object"
+      },
       "EnvironmentStatus": {
         "properties": {
           "detail": {
@@ -4283,6 +4377,98 @@
         ]
       }
     },
+    "/api/projects/{project_id}/settings/embedder": {
+      "get": {
+        "operationId": "get_project_embedder_api_projects__project_id__settings_embedder_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedderSettingView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Embedder",
+        "tags": [
+          "embedders"
+        ]
+      },
+      "put": {
+        "operationId": "set_project_embedder_api_projects__project_id__settings_embedder_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedderChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedderSettingView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Project Embedder",
+        "tags": [
+          "embedders"
+        ]
+      }
+    },
     "/api/projects/{project_id}/settings/issues": {
       "get": {
         "operationId": "get_issues_settings_api_projects__project_id__settings_issues_get",
@@ -4900,6 +5086,66 @@
         "summary": "List Remote Models",
         "tags": [
           "providers"
+        ]
+      }
+    },
+    "/api/settings/embedder": {
+      "get": {
+        "operationId": "get_app_embedder_api_settings_embedder_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedderSettingView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get App Embedder",
+        "tags": [
+          "embedders"
+        ]
+      },
+      "put": {
+        "operationId": "set_app_embedder_api_settings_embedder_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedderChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedderSettingView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set App Embedder",
+        "tags": [
+          "embedders"
         ]
       }
     },
