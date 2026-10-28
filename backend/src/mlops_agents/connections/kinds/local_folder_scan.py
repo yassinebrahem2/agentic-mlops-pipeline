@@ -72,7 +72,7 @@ def scan_tables_and_unsupported(
                     _CandidateTable(
                         type="file",
                         entry_name=entry.name,
-                        default_name=Path(entry.name).stem.lower(),
+                        default_name=Path(entry.name).stem,
                         format=SUPPORTED_EXTENSIONS[ext],
                         files=[entry.name],
                     )

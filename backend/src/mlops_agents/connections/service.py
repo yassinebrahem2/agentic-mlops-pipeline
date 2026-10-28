@@ -69,31 +69,9 @@ class ConnectionsService:
         settings: BaseModel,
         tables: list[TableRef],
     ) -> str | None:
-        if not tables:
-            return None
-        folder_fn = getattr(kind, "_resolve", None)
-        if folder_fn is None:
-            return None
-        try:
-            resolved = folder_fn(settings)
-            latest_mtime = -1
-            newest_table: TableRef | None = None
-            for t in tables:
-                t_mtime = -1
-                for f in t.files:
-                    try:
-                        st = (resolved / f).stat(follow_symlinks=False)
-                        if st.st_mtime_ns > t_mtime:
-                            t_mtime = st.st_mtime_ns
-                    except OSError:
-                        continue
-                if t_mtime > latest_mtime:
-                    latest_mtime = t_mtime
-                    newest_table = t
-            if newest_table is not None:
-                return kind.data_version(settings, newest_table)
-        except Exception:
-            return None
+        latest_fn = getattr(kind, "latest_data_version", None)
+        if latest_fn is not None:
+            return latest_fn(settings, tables)
         return None
 
     async def inspect(self, project_id: str, kind: str, settings: dict[str, Any]) -> Findings:

@@ -69,7 +69,7 @@ def test_tables_scan_formats_and_rules(tmp_path: Path) -> None:
     assert "items" in table_names
     assert "config" in table_names
     assert "logs" in table_names
-    assert "caps" in table_names
+    assert "CAPS" in table_names
     assert "events" in table_names
 
     # Check events subfolder table
@@ -280,3 +280,19 @@ def test_findings_walk_secrets_and_truncation(
     monkeypatch.setattr(scan_module, "MAX_SCAN_ENTRIES", 3)
     trunc_findings = kind.findings(LocalFolderSettings(path=str(data)))
     assert trunc_findings.truncated is True
+
+
+def test_findings_walk_secret_cap_100(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    data = tmp_path / "data"
+    data.mkdir()
+
+    # Create 105 secret files (e.g. .pem files)
+    for i in range(105):
+        (data / f"secret_{i:03d}.pem").write_text("KEY", encoding="utf-8")
+
+    kind = LocalFolderKind(home)
+    findings = kind.findings(LocalFolderSettings(path=str(data)))
+    assert findings.truncated is True
+    assert len(findings.secret_files) == 100

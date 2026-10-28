@@ -194,3 +194,36 @@ async def test_service_unreachable_handling(service_env: ServiceEnv, tmp_path: P
     mounts = await service.mounts(project_id)
     assert len(mounts) == 1
     assert mounts[0].container_path == "/data/c2"
+
+
+async def test_service_list_data_version_updates_on_mtime_change(
+    service_env: ServiceEnv, tmp_path: Path
+) -> None:
+    service, databases, _, _ = service_env
+    project_id = "prj_test3"
+    await databases.project(project_id)
+
+    data_dir = tmp_path / "data_mtime"
+    data_dir.mkdir()
+    file_path = data_dir / "records.csv"
+    file_path.write_text("id,val\n1,a", encoding="utf-8")
+
+    c = await service.create(project_id, LOCAL_FOLDER_KIND, "conn", {"path": str(data_dir)})
+    v1 = c.data_version
+    assert v1 is not None
+
+    listing1 = await service.list(project_id)
+    assert listing1[0].data_version == v1
+
+    # Update mtime on records.csv
+    import asyncio
+    import os
+
+    await asyncio.sleep(0.01)
+    st = file_path.stat()
+    os.utime(file_path, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+
+    listing2 = await service.list(project_id)
+    v2 = listing2[0].data_version
+    assert v2 is not None
+    assert v2 != v1

@@ -18,6 +18,7 @@ from mlops_agents.connections.contract import (
 from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.connections.kinds.local_folder_scan import (
     compute_data_version,
+    latest_data_version,
     scan_tables_and_unsupported,
     walk_findings,
 )
@@ -170,6 +171,10 @@ class LocalFolderKind:
     def data_version(self, settings: BaseModel, table: TableRef) -> str:
         resolved = self._resolve(settings)
         return compute_data_version(resolved, table)
+
+    def latest_data_version(self, settings: BaseModel, tables: list[TableRef]) -> str | None:
+        resolved = self._resolve(settings)
+        return latest_data_version(resolved, tables)
 
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource:
         resolved = self._resolve(settings)
