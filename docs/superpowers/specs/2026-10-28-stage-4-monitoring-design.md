@@ -74,7 +74,7 @@ backend/src/mlops_agents/
 
 **Reading never misses or repeats.** Each source keeps a cursor: per file, its size, modified time and the byte offset read (an appended JSON Lines file is read from its offset); for `ci` and `mlflow`, the last run ID or time. A file that shrank or changed before the offset (restated data) is read again from the start. Records are idempotent by source and source key (from the record, else the file, offset and line), so a re-read stores nothing twice. After downtime the scheduler reads every source from its cursor, oldest first, before the live loop resumes.
 
-**Times.** `ran_at` (the time the result describes) decides silence, ordering and `started_at`; `seen_at` decides detection time. Cadences, deadlines, on-call hours and the morning report use the IANA time zone given with them (the handoff's, else the project's), daylight saving included.
+**Times.** `ran_at` (the time the result describes) decides silence, ordering and `started_at`; `seen_at` decides detection time. Cadences, deadlines, on-call hours and the morning report use the IANA time zone given with them in the handoff, else the project's time zone (a new project setting, defaulting to the server's), daylight saving included.
 
 **Untrusted text.** Everything read from the team's data, results, logs and parsers is data, never instructions. It reaches agents marked as untrusted content, the agents' prompts say so, and any action it might suggest still goes through the gates and the rules evaluated in code.
 
@@ -82,6 +82,7 @@ backend/src/mlops_agents/
 
 One loop in the app process with its own job table in `project.db` per project (it does not use stage 2's agent wake-ups, whose per-agent caps guard against an agent looping and would cap a bad night):
 - sync tracking (stage 3);
+- sync PR states (stage 2's PR state sync, run on a timer as well as after turns), so a check PR merged at night activates its expectation;
 - collect results from every source (every minute by default);
 - check expected results against their deadlines (§3a);
 - incident follow-ups: "re-check after N days" by time, "re-check after N labels" by counting the labels table the handoff names, at each collection;
@@ -190,6 +191,8 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
 ## Changes to the roadmap
 
+- Run modes: one exception to "every API request needs a valid session": `GET /api/health/heartbeat`, which carries no data, takes no input and changes nothing. It is answered without a session and without the Origin check; the Host check accepts the configured `public_url` host.
+- The permission gate's inputs grow: besides the risk class and the level, a call to an action hook passes its hook kind and the rule it cites, and the gate evaluates that rule in code before deciding (§6). A change to the merged gate and policy contract.
 - ID prefixes `res` (result), `sig` (signal), `inc` (exists), `rul` (rule), `hok` (action hook), `win` (maintenance window), `chk` (registered check).
 - Stage 4 "Agreed" rewritten from this spec: checks in the team's repository, delivered by PR; results read through sources and parsers; silence as a signal; the three tiers and the response menu; severity and routing; the baseline as the team's existing monitoring, read not re-run.
 - The risk-class table's `propose` row lists parsers, rules, action hooks and maintenance windows; checks are delivered by PR (risk class `github`).
