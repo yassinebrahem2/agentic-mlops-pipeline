@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
+import type { ModelType } from "@/lib/models";
 import { useRemoteModels } from "@/lib/useRemoteModels";
 
 type Provider = components["schemas"]["Provider"];
@@ -35,7 +36,7 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
   const contextId = useId();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState("");
-  const [modelType, setModelType] = useState<"chat" | "embedder">("chat");
+  const [modelType, setModelType] = useState<ModelType>("chat");
   const [modelId, setModelId] = useState("");
   const [contextWindow, setContextWindow] = useState("");
 
@@ -127,8 +128,8 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
             <Label htmlFor={typeId}>Type</Label>
             <Select
               value={modelType}
-              onValueChange={(value: "chat" | "embedder") => {
-                setModelType(value);
+              onValueChange={(value) => {
+                setModelType(value as ModelType);
                 setModelId("");
               }}
             >

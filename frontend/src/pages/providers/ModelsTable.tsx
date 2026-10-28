@@ -104,6 +104,7 @@ function trait(model: ModelEntry, value: boolean): string {
 
 function ModelRow({ model }: { model: ModelEntry }) {
   const queryClient = useQueryClient();
+  const isEmbedder = model.model_type === "embedder";
   // Verification makes a real model call; the row shows its answer, or why it failed.
   const verify = useMutation({
     mutationFn: async () =>
@@ -147,14 +148,10 @@ function ModelRow({ model }: { model: ModelEntry }) {
         </div>
       </TableCell>
       <TableCell>{TYPE_LABELS[model.model_type]}</TableCell>
+      <TableCell>{isEmbedder ? "Not applicable" : trait(model, model.tool_calling)}</TableCell>
+      <TableCell>{isEmbedder ? "Not applicable" : trait(model, model.streaming)}</TableCell>
       <TableCell>
-        {model.model_type === "embedder" ? "Not applicable" : trait(model, model.tool_calling)}
-      </TableCell>
-      <TableCell>
-        {model.model_type === "embedder" ? "Not applicable" : trait(model, model.streaming)}
-      </TableCell>
-      <TableCell>
-        {model.model_type === "embedder" ? (
+        {isEmbedder ? (
           "Not applicable"
         ) : model.context_window === null ? (
           <SetContextWindowDialog model={model} />
@@ -163,7 +160,7 @@ function ModelRow({ model }: { model: ModelEntry }) {
         )}
       </TableCell>
       <TableCell>
-        {model.model_type === "embedder"
+        {isEmbedder
           ? model.dimensions !== null && model.dimensions !== undefined
             ? model.dimensions
             : "Not checked"

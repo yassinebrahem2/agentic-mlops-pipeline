@@ -29,7 +29,6 @@ export function useEmbedderSettings(projectId?: string) {
       }
       return unwrap(await api.GET("/api/settings/embedder"));
     },
-    enabled: projectId === undefined || Boolean(projectId),
   });
 
   const mutation = useMutation({
@@ -52,17 +51,20 @@ export function useEmbedderSettings(projectId?: string) {
       if (projectId) {
         queryClient.setQueryData(projectEmbedderKey(projectId), saved);
         void queryClient.invalidateQueries({ queryKey: projectEmbedderKey(projectId) });
+        void queryClient.invalidateQueries({ queryKey: appEmbedderKey() });
       } else {
         queryClient.setQueryData(appEmbedderKey(), saved);
         void queryClient.invalidateQueries({ queryKey: appEmbedderKey() });
-        void queryClient.invalidateQueries({ queryKey: ["projects"] });
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "projects" && query.queryKey[2] === "embedder",
+        });
       }
     },
   });
 
   return {
     ...query,
-    query,
     mutation,
   };
 }

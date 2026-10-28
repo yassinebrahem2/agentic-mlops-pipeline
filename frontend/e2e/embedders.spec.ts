@@ -128,6 +128,8 @@ test("embedder settings flow: verify, app default, project override, and fallbac
     await expect(chatModelDialog).toBeHidden();
 
     await page.getByRole("button", { name: `Verify ${chatAddress}`, exact: true }).click();
+    const chatRow = page.getByRole("row").filter({ hasText: chatAddress });
+    await expect(chatRow.getByText("Verified")).toBeVisible();
 
     // Verify fake-embed is absent from agent default model select
     const orchestratorModel = page.getByRole("combobox", { name: "Model for Orchestrator" });
@@ -142,6 +144,7 @@ test("embedder settings flow: verify, app default, project override, and fallbac
 
     const defaultEmbedder = page.getByRole("combobox", { name: "Default embedder" });
     await defaultEmbedder.click();
+    await expect(page.getByRole("option", { name: embedAddress })).toBeVisible();
     await expect(page.getByRole("option", { name: chatAddress })).toHaveCount(0);
     await page.keyboard.press("Escape");
   });

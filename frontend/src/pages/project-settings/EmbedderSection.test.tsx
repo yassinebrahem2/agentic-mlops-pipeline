@@ -2,6 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
+import { useEmbedderSettings } from "@/lib/useEmbedderSettings";
 import { EmbedderSection } from "./EmbedderSection";
 import { failure, json, renderSection, stubRoutes } from "./testing";
 
@@ -254,5 +255,69 @@ describe("project-settings EmbedderSection", () => {
     await user.click(await screen.findByRole("option", { name: "fake:fake-embed" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot assign model");
+  });
+
+  it("saving the app default refreshes the project section", async () => {
+    const user = userEvent.setup();
+    let appSetting: EmbedderSettingView = {
+      chosen: "fake:fake-embed",
+      status: { address: "fake:fake-embed", configured: true, dimensions: 16, problem: null },
+    };
+    let projectSetting: EmbedderSettingView = {
+      chosen: null,
+      status: { address: "fake:fake-embed", configured: true, dimensions: 16, problem: null },
+    };
+
+    stubRoutes({
+      "GET /api/settings/embedder": () => json(appSetting),
+      "PUT /api/settings/embedder": (body) => {
+        const address = (body as { address: string | null }).address;
+        appSetting = {
+          chosen: address,
+          status: {
+            address,
+            configured: true,
+            dimensions: address === "fake:fake-embed-wide" ? 32 : 16,
+            problem: null,
+          },
+        };
+        projectSetting = {
+          chosen: null,
+          status: {
+            address,
+            configured: true,
+            dimensions: address === "fake:fake-embed-wide" ? 32 : 16,
+            problem: null,
+          },
+        };
+        return json(appSetting);
+      },
+      "GET /api/projects/prj_1/settings/embedder": () => json(projectSetting),
+      "GET /api/models": () => json(allModels),
+      "GET /api/providers": () => json([fakeProvider]),
+    });
+
+    function Host() {
+      const app = useEmbedderSettings();
+      return (
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              app.mutation.mutate("fake:fake-embed-wide");
+            }}
+          >
+            Update app default
+          </button>
+          <EmbedderSection projectId="prj_1" />
+        </div>
+      );
+    }
+
+    renderSection(<Host />);
+
+    expect(await screen.findByText("Using fake:fake-embed")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Update app default" }));
+    expect(await screen.findByText("Using fake:fake-embed-wide")).toBeInTheDocument();
   });
 });
