@@ -23,7 +23,6 @@ class AddProviderKey(BaseModel):
 
 class ProviderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    # At most a day: providers reset their daily limits within one.
     cooldown_minutes: int = Field(
         ge=1, le=1440, description="Minutes an exhausted key rests before it is tried again."
     )
