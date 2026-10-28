@@ -28,6 +28,10 @@ import { useRemoteModels } from "@/lib/useRemoteModels";
 type Provider = components["schemas"]["Provider"];
 type ModelCreate = components["schemas"]["ModelCreate"];
 
+function isModelType(value: string): value is ModelType {
+  return value === "chat" || value === "embedder";
+}
+
 export function AddModelDialog({ providers }: { providers: Provider[] }) {
   const queryClient = useQueryClient();
   const providerId = useId();
@@ -129,8 +133,10 @@ export function AddModelDialog({ providers }: { providers: Provider[] }) {
             <Select
               value={modelType}
               onValueChange={(value) => {
-                setModelType(value as ModelType);
-                setModelId("");
+                if (isModelType(value)) {
+                  setModelType(value);
+                  setModelId("");
+                }
               }}
             >
               <SelectTrigger id={typeId} className="w-full">

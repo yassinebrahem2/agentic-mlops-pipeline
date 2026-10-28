@@ -12,7 +12,7 @@ from mlops_agents.providers.provider_embedder import ProviderEmbedder
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
-from tests.fakes.fake_openai import RunningFake, fake_embedding
+from tests.fakes.fake_openai import FakeState, RunningFake, fake_embedding, start_fake_server
 from tests.providers.fake_clock import FakeClock
 
 
@@ -329,24 +329,56 @@ async def test_returned_count_mismatch_raises_unavailable(
     assert "Verify it again in AI providers." in str(err.value)
 
 
-async def test_unreachable_provider_raises_scrubbed(
+async def test_unknown_model_permanent_error_scrubs_secrets(
     databases: Databases,
     keystore: MemoryKeyStore,
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
     svc = ProvidersService(databases, keystore, model_http)
+    provider = await svc.create_provider(
+        ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
+    )
+    secret_key = "secret_embed_val_404"
+    await svc.add_key("fake-hosted", secret_key)
+    provider = await svc.get_provider("fake-hosted")
+
+    fake_openai.state.embedding_error_status = 404
+    fake_openai.state.embedding_error_message = f"Model not found with secret {secret_key}"
+    fake_openai.state.embedding_error_code = "model_not_found"
+    failover = KeyFailover()
+    embedder = ProviderEmbedder(
+        address="fake-hosted:fake-embed",
+        dimensions=16,
+        provider=provider,
+        wire_model_id="fake-embed",
+        failover=failover,
+        providers=svc,
+        http=model_http,
+    )
+    with pytest.raises(EmbedderUnavailable) as err:
+        await embedder.embed(["hello"])
+    assert secret_key not in str(err.value)
+    assert "***" in str(err.value)
+
+
+async def test_unreachable_provider_raises_unavailable(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    running = start_fake_server(FakeState())
+    svc = ProvidersService(databases, keystore, model_http)
     secret = "secret_key_unreachable"
     provider = await svc.create_provider(
-        ProviderCreate(name="fake-dead", kind="hosted", base_url=fake_openai.base_url)
+        ProviderCreate(name="fake-dead", kind="hosted", base_url=running.base_url)
     )
     await svc.add_key("fake-dead", secret)
     provider = await svc.get_provider("fake-dead")
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        raise httpx2.ConnectError(f"connection to host failed for key {secret}")
+    # Stop server to make it unreachable
+    running.stop()
 
-    mock_http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     failover = KeyFailover(clock=FakeClock())
     embedder = ProviderEmbedder(
         address="fake-dead:fake-embed",
@@ -355,12 +387,11 @@ async def test_unreachable_provider_raises_scrubbed(
         wire_model_id="fake-embed",
         failover=failover,
         providers=svc,
-        http=mock_http,
+        http=model_http,
     )
     with pytest.raises(EmbedderUnavailable) as err:
         await embedder.embed(["hello"])
     assert secret not in str(err.value)
-    assert "***" in str(err.value)
 
 
 async def test_cancellation_propagates(

@@ -120,8 +120,5 @@ def classify(exc: BaseException, secrets: Iterable[str] = ()) -> ProviderCallErr
     kind, retry_after = _kind(exc)
     raw_message = _provider_message(exc) if kind is ProviderErrorKind.BAD_GENERATION else None
     if raw_message is None:
-        if isinstance(exc, openai.APIConnectionError) and exc.__cause__ is not None:
-            raw_message = f"{error_text(exc)}: {error_text(exc.__cause__)}"
-        else:
-            raw_message = error_text(exc)
+        raw_message = error_text(exc)
     return ProviderCallError(kind, scrub_values(raw_message, secrets), retry_after)
