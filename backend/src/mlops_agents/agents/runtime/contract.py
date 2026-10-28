@@ -32,6 +32,8 @@ MessageStatus = Literal["complete", "streaming", "queued", "stopped", "interrupt
 # What a pending approval can become: by a user's decision, a Stop or recovery.
 DecidedApprovalStatus = Literal["approved", "rejected", "cancelled", "expired"]
 ApprovalStatus = Literal["pending", DecidedApprovalStatus]
+# A tool call to allow, or a turn stalled for want of a usable key (Try again or Stop).
+ApprovalKind = Literal["tool", "stall"]
 TurnEnd = Literal["done", "stopped", "interrupted", "failed"]
 # Why a turn failed, when the UI offers a remedy for it (Try again after keys_exhausted).
 ErrorKind = Literal["keys_exhausted"]
@@ -59,10 +61,14 @@ class ToolResultPart(BaseModel):
 class ApprovalPart(BaseModel):
     type: Literal["approval"]
     approval_id: str
-    tool_call_id: str
+    tool_call_id: str | None  # None for a stall
     preview: Preview
     status: ApprovalStatus
     note: str | None
+    # Defaults, so that a part stored before these fields existed loads as a tool approval.
+    kind: ApprovalKind = "tool"
+    step: int | None = None  # a stall's model step
+    proposal_kind: str | None = None  # set on a call of a tool of class propose
 
 
 Part = Annotated[
@@ -260,6 +266,7 @@ class AgentSessions(Protocol):
 
 __all__ = [
     "AgentSessions",
+    "ApprovalKind",
     "ApprovalPart",
     "ApprovalStatus",
     "AuthorKind",

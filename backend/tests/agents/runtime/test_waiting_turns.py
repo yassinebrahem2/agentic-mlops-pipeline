@@ -10,6 +10,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import interrupt
 from sqlalchemy import RowMapping, select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
@@ -132,6 +133,7 @@ def _make_manager(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        approval_store=ApprovalStore(databases),
     )
 
 
@@ -369,7 +371,7 @@ async def test_recovery_preserves_waiting_turn_and_message(
     await manager.close()
 
     # Re-run recovery via a new store recovery call or rebuilding SessionManager
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=ApprovalStore(databases))
 
     # Verify turn is still waiting
     turn = await _get_turn(databases, project_id, turn_id)

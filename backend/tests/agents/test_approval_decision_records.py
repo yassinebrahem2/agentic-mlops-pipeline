@@ -149,6 +149,7 @@ async def test_a_users_decision_is_recorded_by_the_shared_function(
     service = ApprovalsService(
         databases,
         FakeSessionsForApproval(SessionStore(databases)),
+        store=ApprovalStore(databases),
         audit_log=SqliteAuditLog(databases, secrets=[]),
         event_log=SqliteEventLog(databases),
     )
@@ -210,7 +211,7 @@ async def test_recovery_records_its_expiries_by_the_shared_function(
     apr = await waiting_approval(databases, project_id, turn_status="running")
     store = SessionStore(databases, audit_log=SqliteAuditLog(databases, secrets=[]))
 
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=ApprovalStore(databases))
 
     assert calls == [(project_id, [apr.id], "expired", "system", None)]
     assert [(r["decision"], r["actor"]) for r in await _audit_rows(databases, project_id)] == [

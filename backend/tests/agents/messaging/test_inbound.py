@@ -13,6 +13,7 @@ import pytest
 from langgraph.types import interrupt
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
@@ -486,7 +487,7 @@ async def test_a_message_taken_by_a_running_turn_is_redelivered_on_crash_recover
     await manager.close()
 
     # On restart, recover() is called
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=ApprovalStore(databases))
 
     # Verify that the mid-turn message is redelivered (queued again)
     msgs = await store.messages(project_id, view.id)

@@ -298,6 +298,15 @@
             "title": "Approval Id",
             "type": "string"
           },
+          "kind": {
+            "default": "tool",
+            "enum": [
+              "tool",
+              "stall"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "note": {
             "anyOf": [
               {
@@ -312,6 +321,17 @@
           "preview": {
             "$ref": "#/components/schemas/Preview"
           },
+          "proposal_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Kind"
+          },
           "status": {
             "enum": [
               "pending",
@@ -323,9 +343,27 @@
             "title": "Status",
             "type": "string"
           },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
           "tool_call_id": {
-            "title": "Tool Call Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
           },
           "type": {
             "const": "approval",
@@ -369,6 +407,14 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "enum": [
+              "tool",
+              "stall"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "note": {
             "anyOf": [
               {
@@ -383,8 +429,26 @@
           "preview": {
             "$ref": "#/components/schemas/Preview"
           },
+          "proposal_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Kind"
+          },
           "risk_class": {
-            "$ref": "#/components/schemas/RiskClass"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskClass"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "title": "Session Id",
@@ -401,13 +465,38 @@
             "title": "Status",
             "type": "string"
           },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
           "tool": {
-            "title": "Tool",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
           },
           "tool_call_id": {
-            "title": "Tool Call Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
           },
           "turn_id": {
             "title": "Turn Id",
@@ -419,9 +508,12 @@
           "agent",
           "session_id",
           "turn_id",
+          "kind",
           "tool_call_id",
           "tool",
           "risk_class",
+          "step",
+          "proposal_kind",
           "preview",
           "status",
           "note",
@@ -1809,7 +1901,8 @@
           "run",
           "message",
           "github",
-          "deploy"
+          "deploy",
+          "propose"
         ],
         "title": "RiskClass",
         "type": "string"

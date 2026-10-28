@@ -98,6 +98,7 @@ def make_context(
         turn_id="trn_1",
         files=files,
         task=task,
+        tool_call_id="call_1",
     )
 
 

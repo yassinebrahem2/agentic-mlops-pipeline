@@ -125,6 +125,22 @@ class DeployTool(AgentTool[DummyArgs]):
         return Preview(kind="text", title=self.name, body=f"preview for {self.name}")
 
 
+class ProposeArgs(BaseModel):
+    kind: object = None
+
+
+class ProposeTool(AgentTool[ProposeArgs]):
+    """A tool of class propose, as the proposals plan's Propose will be; its name is not read."""
+
+    name: ClassVar[str] = "propose_something"
+    description: ClassVar[str] = "Dummy propose tool"
+    risk: ClassVar[RiskClass] = RiskClass.PROPOSE
+    args_model: ClassVar[type[BaseModel]] = ProposeArgs
+
+    async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
+        return ToolOutput("ok")
+
+
 class _GateState(TypedDict):
     decisions: dict[str, GateDecision]
 
@@ -163,7 +179,7 @@ def _make_call(
     tool_call_id: str,
     project_id: str,
     turn_id: str = "trn_1",
-    args: DummyArgs | None = None,
+    args: BaseModel | None = None,
 ) -> GateCall:
     ctx = ToolContext(
         project_id=project_id,
@@ -172,6 +188,7 @@ def _make_call(
         turn_id=turn_id,
         files=FakeFileAccess(),
         task=None,
+        tool_call_id=tool_call_id,
     )
     return GateCall(
         tool_call_id=tool_call_id,
@@ -528,3 +545,58 @@ async def test_gate_wait_no_asks_returns_immediately(
 
     res = await gate.wait(project_id, "trn_1", decisions)
     assert res == decisions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["suggest", "ask", "autonomous", "bypass"])
+async def test_a_propose_call_asks_at_every_level_and_carries_its_proposal_kind(
+    databases: Databases, paths: DataPaths, level: PermissionLevel
+) -> None:
+    project_id = f"prj_propose{level}"
+    paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
+    await _setup_session_and_turn(databases, project_id)
+    await set_permission_level(databases, project_id, level)
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+
+    decisions = await gate.decide(
+        [
+            _make_call(ProposeTool(), "c_prop", project_id, args=ProposeArgs(kind="handoff")),
+            _make_call(DeployTool(), "c_deploy", project_id),
+        ]
+    )
+
+    proposal = decisions["c_prop"]
+    assert proposal.outcome == "ask"
+    assert proposal.proposal_kind == "handoff"
+    assert proposal.approval_id is not None
+    stored = await store.get(project_id, proposal.approval_id)
+    assert stored is not None
+    assert (stored.proposal_kind, stored.risk_class) == ("handoff", RiskClass.PROPOSE)
+    # Another class never carries a proposal kind.
+    assert decisions["c_deploy"].proposal_kind is None
+    if decisions["c_deploy"].approval_id is not None:
+        other = await store.get(project_id, decisions["c_deploy"].approval_id)
+        assert other is not None and other.proposal_kind is None
+
+
+@pytest.mark.asyncio
+async def test_a_propose_call_whose_kind_is_not_a_string_has_no_proposal_kind(
+    databases: Databases, paths: DataPaths
+) -> None:
+    project_id = "prj_proposebad"
+    paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
+    await _setup_session_and_turn(databases, project_id)
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+
+    decisions = await gate.decide(
+        [_make_call(ProposeTool(), "c_prop", project_id, args=ProposeArgs(kind=3))]
+    )
+
+    assert decisions["c_prop"].outcome == "ask"
+    assert decisions["c_prop"].proposal_kind is None
+    approval_id = decisions["c_prop"].approval_id
+    assert approval_id is not None
+    stored = await store.get(project_id, approval_id)
+    assert stored is not None and stored.proposal_kind is None

@@ -187,7 +187,7 @@ async def test_approvals_service_pending(databases: Databases, tmp_path: Path) -
     )
 
     fake_sessions = FakeSessionsForApproval(SessionStore(databases))
-    service = ApprovalsService(databases=databases, sessions=fake_sessions)
+    service = ApprovalsService(databases=databases, sessions=fake_sessions, store=store)
 
     pending = await service.pending(project_id)
     assert len(pending) == 2
@@ -245,6 +245,7 @@ async def test_approvals_service_decide_approve(databases: Databases, tmp_path: 
     service = ApprovalsService(
         databases=databases,
         sessions=fake_sessions,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -332,6 +333,7 @@ async def test_approvals_service_decide_reject(databases: Databases, tmp_path: P
     service = ApprovalsService(
         databases=databases,
         sessions=fake_sessions,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -377,7 +379,7 @@ async def test_approvals_service_errors(databases: Databases, tmp_path: Path) ->
     )
 
     fake_sessions = FakeSessionsForApproval(SessionStore(databases))
-    service = ApprovalsService(databases=databases, sessions=fake_sessions)
+    service = ApprovalsService(databases=databases, sessions=fake_sessions, store=store)
 
     # Deciding non-pending raises 409
     with pytest.raises(DomainError) as exc_info:
@@ -454,7 +456,7 @@ async def test_approvals_service_multiple_in_step(databases: Databases, tmp_path
         preview=preview,
     )
 
-    service = ApprovalsService(databases=databases, sessions=fake_sessions)
+    service = ApprovalsService(databases=databases, sessions=fake_sessions, store=store)
 
     # Decide first approval: turn should NOT resume yet
     await service.decide(project_id, apr1.id, approve=True, note="First OK")
@@ -527,7 +529,7 @@ async def test_approvals_service_concurrent_decisions(databases: Databases, tmp_
         preview=preview,
     )
 
-    service = ApprovalsService(databases=databases, sessions=fake_sessions)
+    service = ApprovalsService(databases=databases, sessions=fake_sessions, store=store)
 
     # Decide both concurrently
     results = await asyncio.gather(

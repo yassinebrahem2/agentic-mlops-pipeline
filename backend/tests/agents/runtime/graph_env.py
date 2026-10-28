@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.contract import (
@@ -22,6 +23,7 @@ from mlops_agents.agents.tools.files import RepoFiles
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.providers.bridge import ResolvedModel
+from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.models import Project
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.conftest import STAGE_2_TOOLS
@@ -44,16 +46,21 @@ class FixedWorkspaces:
         raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
 
 
-def stage1_hooks(workspaces: TaskWorkspaces) -> TurnHooks:
+def stage1_hooks(workspaces: TaskWorkspaces, databases: Databases) -> TurnHooks:
     """Every call allowed (ApprovalGate defaults to allow for READ tools), nothing delivered mid-turn, no turn-end note."""
+    store = ApprovalStore(databases)
     return TurnHooks(
-        gate=ApprovalGate(), inbound=NoInbound(), turn_end=NoTurnEndCheck(), workspaces=workspaces
+        gate=ApprovalGate(store=store),
+        inbound=NoInbound(),
+        turn_end=NoTurnEndCheck(),
+        workspaces=workspaces,
+        approval_store=store,
     )
 
 
-def graph_hooks(agent: Agent) -> TurnHooks:
+def graph_hooks(agent: Agent, databases: Databases) -> TurnHooks:
     """Stage 1's hooks for a graph run over `make_agent`'s repository."""
-    return stage1_hooks(FixedWorkspaces(agent.files))
+    return stage1_hooks(FixedWorkspaces(agent.files), databases)
 
 
 class RecordingSink:

@@ -19,6 +19,7 @@ class RiskClass(StrEnum):
     MESSAGE = "message"
     GITHUB = "github"
     DEPLOY = "deploy"
+    PROPOSE = "propose"
 
 
 class ToolFailure(Exception):
@@ -71,6 +72,7 @@ class ToolContext:
     turn_id: str
     files: FileAccess  # the current task's worktree view, else the repository's
     task: TaskRef | None
+    tool_call_id: str  # the model's ID for this call; an approval of it stores the same ID
 
 
 class Preview(BaseModel):

@@ -101,7 +101,7 @@ async def test_graph_tool_not_in_definition_returns_error(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {
@@ -188,7 +188,7 @@ async def test_graph_parallel_tools_order(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {

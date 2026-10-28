@@ -73,7 +73,9 @@ async def test_a_decision_keeps_the_task_the_approval_was_asked_under(
 ) -> None:
     project_id = "prj_keeptask"
     apr = await waiting_approval(databases, project_id, task_id="tsk_asked")
-    service = ApprovalsService(databases, FakeSessionsForApproval(SessionStore(databases)))
+    service = ApprovalsService(
+        databases, FakeSessionsForApproval(SessionStore(databases)), store=ApprovalStore(databases)
+    )
 
     await service.decide(project_id, apr.id, approve=True)
 
@@ -97,7 +99,11 @@ async def _service_after_restart(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
     apr = await waiting_approval(databases, env.project_id, turn_status="running")
-    return ApprovalsService(databases, env.manager), env.project_id, apr
+    return (
+        ApprovalsService(databases, env.manager, store=env.approval_store),
+        env.project_id,
+        apr,
+    )
 
 
 async def test_pending_after_a_restart_lists_no_approval_of_a_turn_that_is_not_waiting(
