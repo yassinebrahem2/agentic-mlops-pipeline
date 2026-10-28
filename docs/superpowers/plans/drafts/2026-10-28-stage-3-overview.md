@@ -48,6 +48,7 @@ contracts writes these into code exactly as here (except where a line names anot
 - `credentials/project_secrets.py`: `put(ref, value)`, `move(src_ref, dst_ref)`, `delete(ref)`, `delete_prefix(prefix)` over `KeyStore`; it records each ref it puts in the `secret_refs` table (ref, project, created), so `delete_prefix` works without listing the keystore. Refs: `project/<id>/proposal/<prp>/<slot>` and `project/<id>/tracking/<trk>`. Used by the proposal slot route and the tracking credential route; nothing else writes project secrets.
 - The schema, in `storage/migrations/app/0002_stage3.sql`, `storage/migrations/project/0004_stage3.sql` and `tables.py`: every table and column named in I13 to I21, plus `notes` (an explicit integer `seq` primary key and the text `id`), its FTS5 external-content table and triggers, `note_embeddings` (note, embedder, dimensions), `handoff_versions`, `kickoff` (project, handoff version, agent, posted message ID, status), unique keys (source and key) on every tracking record table (`run_metrics`: source, run key, metric, step, time), `last_sync` and `last_error` on tracking sources, `secret_refs`, `turns.error_kind`, `providers.cooldown_minutes`, and `connections` (`id, project_id, name, kind, settings_json, credential_ref, status, status_detail, created, updated`). `notes_fts` is an FTS5 external-content table on `notes(title, text)` with `content_rowid='seq'` and insert, update and delete triggers; `note_embeddings` is keyed by `note_id`.
 - `Provider.cooldown_minutes: int` (default 15) in `providers/models.py`.
+- Removing a project deletes its secrets (`project_secrets.delete_prefix("project/<id>/")`, one line in the project removal path).
 - The full `HandoffPayload` and `ConnectionsPayload` (I19).
 
 ### I13: approvals, parts and turns (changes to I9 and the approvals contract; contracts task 2)
@@ -272,7 +273,7 @@ class Handoffs(Protocol):
 
 - Route: `GET /api/projects/{id}/handoff` returns `HandoffView` or `null` (200). Stage 4 reads `operations` from it: the baseline inventory.
 - Agents read the current handoff with the tool `ReadHandoff(section?)` (risk class `read`; justified: it is in the app's database), owned by onboarding; a section returns that part of the payload, capped.
-- The payload models validate in code (contracts): IANA time zones, on-call `start` before `end`, a `command` has a `template` and a `ci_dispatch` a `workflow`, every `{placeholder}` in a template is declared, `Cadence` has exactly one field, references between parts (`TableUse`, alias maps, edges) resolve.
+- The payload models validate in code (contracts): IANA time zones, on-call hours (an `end` before `start` means the window crosses midnight), a `command` has a `template` and a `ci_dispatch` a `workflow`, every `{placeholder}` in a template is declared, `Cadence` has exactly one field, references between parts (`TableUse`, alias maps, edges) resolve.
 
 ### I21: key failover (`providers/failover.py`; rate-limits task 1)
 
@@ -298,7 +299,7 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 
 Each file below is edited by one plan only, except where a line says otherwise:
 - `storage/migrations/app/0002_stage3.sql`, `storage/migrations/project/0004_stage3.sql`, `storage/tables.py`, `ids.py`, `config.py`, `credentials/project_secrets.py`, `agents/approvals/service.py`, `agents/approvals/gate.py`, `agents/approvals/store*`, the event type lists: contracts. contracts also adds `cooldown_minutes` to `providers/models.py` in task 1 (its only line there). A later plan that needs a change opens a Decision.
-- `agents/runtime/model_caller.py`, `agents/runtime/graph.py`, `agents/runtime/graph_run.py`, `agents/runtime/waiting.py`, `providers/errors.py`, `providers/failover.py`: rate-limits; it also adds its key-failover lines to `providers/service.py`, its stall lines to `agents/runtime/sessions.py`, the `error_kind` path (`agents/runtime/executor.py`, the `TurnObserver` protocol and implementers, `MessageView`), and the cooldown field's lines to `api/routers/providers.py`.
+- `agents/runtime/model_caller.py`, `agents/runtime/graph.py`, `agents/runtime/graph_run.py`, `agents/runtime/waiting.py` (contracts adds the one line building a stall's part there), `providers/errors.py`, `providers/failover.py`: rate-limits; it also adds its key-failover lines to `providers/service.py`, its stall lines to `agents/runtime/sessions.py`, the `error_kind` path (`agents/runtime/executor.py`, the `TurnObserver` protocol and implementers, `MessageView`), and the cooldown field's lines to `api/routers/providers.py`.
 - `providers/models.py`, `providers/service.py`, `providers/verification.py`: embedders, except the lines named for contracts and rate-limits.
 - `agents/runtime/agent.py` (the injection point), `agents/catalog.py`: data-summary, which also adds its one line to `agents/runtime/executor.py` and to `agents/runtime/sessions.py` (onboarding later removes the `status_board` field from `catalog.py`).
 - `sandbox/containers.py`, `sandbox/templates/*`: connections.
