@@ -138,6 +138,7 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
 - **A human decides** a deploy hook (tier 3) at every level below `bypass`; at `bypass` the person delegated it (stage 5). At night it waits for the person; the morning report lists it. A train hook runs without asking only within an approved training policy (stage 5); otherwise it asks.
 - After a deploy (by the team's gate or a person), the deployment agent compares the new version with the previous one from the results the team's evaluation step and checks write (stage 5), and early labels with their counts; clear harm past a rule's threshold → roll back; unclear → observe with a deadline.
 - **Fixing causes.** Beyond responding, agents fix what caused an incident through PRs to the team's system (a missing validation, a fragile job, a weak check), continuously, as stage 5's principle says.
+- **Recent changes are suspects.** Incidents that open within a window (a setting) after any change merged or deployed (the agents' or the team's) are linked to those changes on their timeline. Agents may revert their own change (a revert PR marked as fixing the incident); for a team change, they comment on it and notify.
 
 ## 7. Severity and routing (Alert Prioritization)
 
@@ -198,15 +199,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 - ID prefixes `res` (result), `sig` (signal), `inc` (exists), `rul` (rule), `hok` (action hook), `win` (maintenance window), `chk` (registered check).
 - Stage 4 "Agreed" rewritten from this spec: checks in the team's repository, delivered by PR; results read through sources and parsers; silence as a signal; the three tiers and the response menu; severity and routing; the baseline as the team's existing monitoring, read not re-run.
 - The risk-class table's `propose` row lists parsers, rules, action hooks and maintenance windows; checks are delivered by PR (risk class `github`).
-- Risk classes, `deploy` exceptions, as one table in the roadmap:
-
-  | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
-  |---|---|---|
-  | deploy (promotion) | asks at `ask` and `autonomous`; allowed at `bypass` (stage 5); denied at `suggest` | same |
-  | a pipeline run that deploys, where the handoff makes the team's gate the promotion authority (stage 5) | runs without asking at `ask` and above within an approved training policy | asks |
-  | train, evaluate | run without asking at `ask` and above within an approved training policy (stage 5) | ask |
-  | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
-  | hold | runs without asking at every level except `suggest` (tier 1); at `suggest` the alert recommends the hold and the person applies it in one click through the approval path | same |
+- Risk classes: the `deploy` exceptions are one table in the roadmap (Permission risk classes), updated with stage 5; this spec does not restate it.
 - Stage 5's "train/deploy hooks" become the action hooks of this stage. Stage 5 keeps Retraining's and Deployment & Rollback's behavior (when to propose a retrain, evaluating a candidate against production, promotion) and the Deployments page.
 
 ## 13. Error handling
