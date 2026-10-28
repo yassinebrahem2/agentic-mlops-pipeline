@@ -17,6 +17,7 @@ Stage 3 is built through several plans. This overview holds what they share. Rea
 - The generated contract check is `python -m mlops_agents.api.openapi_export --check`; `npm run gen:api` only writes `schema.d.ts`.
 - Frontend types come only from the generated `schema.d.ts` (`npm run gen:api`), which is gitignored and never committed; a plan that changes the API commits the regenerated `frontend/openapi.json`.
 - Routers are discovered by `include_routers` in `api/app.py`; a plan adds its router file and no registration line.
+- A pydantic validation error never reaches a user or a log with its input values (a pasted secret would come back): one helper in `api/errors.py` turns a `ValidationError`'s errors into location plus message only (`include_input=False`, `include_url=False`), used by the request-validation handler and by every service that validates settings (`DomainError` 422). Connections task 1 (#383) extracts it from the handler; tracking task 1 (#389) and later plans use it.
 
 ## Plans
 
@@ -63,6 +64,7 @@ contracts writes these into code exactly as here (except where a line names anot
   - **One store.** `build_services` builds one `ApprovalStore` (holding the observers) and passes that instance to the gate, `ApprovalsService`, `SessionManager` (and through it `SessionStore`, `stop_waiting_turn`, `ToolStep`) and recovery expiry; no other code constructs one (contracts task 3, with a test through the real `build_services` wiring: `asked` fires for a gate-created approval, `decided` on Stop and on recovery expiry).
   - **Registration order.** Every observer and late binding (proposals' `ApprovalObserver`, rate-limits' late approvals) is registered in `build_services` above `await wakeups.start()`, which runs last: a due wake-up recovers projects and expires approvals, firing `decided`, and an observer registered after it misses those (found in #382).
   - `cancel` resumes the turn when no approval of it is still pending.
+  - From the approvals-fixes plan (bug #381): `decided` may be told again for an approval after a crash (the restart repair), so observers are idempotent; a user's approve or reject commits only while its turn waits (else 409 `approval_turn_not_waiting`); `Approvals.pending` (the Inbox list and badge) means the approvals the user can decide now: pending, and their turn waiting.
   - `ApprovalView.tool` and `risk_class` become nullable, and `step`, `proposal_kind` and `kind` appear, in contracts task 3 (with the frontend lines that read them), never in task 1, so task 1's early PR keeps the frontend building.
 - The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (`approvals/gate.py`).
 - Deciding a stall: approve resumes the turn with no audit record; reject ends it `stopped`.
@@ -313,6 +315,7 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 ```
 
 - `attempt(key_index)` raises the provider's raw exception; `KeyFailover` classifies it with `providers/errors.classify`. A provider with no keys gets `attempt(None)` once, with no failover.
+- `KeyFailover(clock=None, on_success=None)`: `on_success(provider)` is awaited after a successful call when `provider.status` is `needs_attention` (rate-limits task 2 adds it and wires `ProvidersService.clear_attention`; Decision #384: the needs-attention mark informs and never refuses a turn or an embedding).
 - `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider) -> None` (Try again) and `describe_keys(states) -> str` (the one wording, used by the stall card and the embedder's message). Its clock is injected (`Clock` protocol: `now()`, `async sleep(seconds)`).
 - `TurnHooks` gains `approvals: Approvals`, `approval_store: ApprovalStore` (the one shared store, which `graph.py` uses instead of constructing its own) and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
 - The one `KeyFailover` instance is built in `build_services` by rate-limits task 1 (its early PR), so embedders task 1 can use it.
