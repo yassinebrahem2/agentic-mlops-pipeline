@@ -20,15 +20,7 @@ The hard limits that hold at every level, `bypass` included, are in `docs/roadma
 ## The principle every agent follows (stages 3 to 5)
 
 - **Change through PRs, continuously.** Any change to the team's system is made through a PR by default: training code, evaluation, the promotion gate, the deployment workflow, checks, monitoring, data pipelines, configuration. Agents open PRs whenever a need appears (after an incident, after an audit, when a better practice applies, when a PR of theirs was rejected and they learned why), not once at onboarding. Stage 2's tools and gates apply (OpenPullRequest, the PR reminder, the `github` risk class).
-- **PR discipline.**
-  - Before opening a PR an agent searches the open PRs, the team's included, and updates a matching agent PR instead of duplicating; when a team PR touches the same files, it comments there or waits instead of conflicting.
-  - One concern per PR. Ownership: Retraining owns PRs to training; Deployment & Rollback owns PRs to evaluation, the promotion gate and deployment; the diagnosing agents own PRs to checks and data validation.
-  - A cap on open improvement PRs per repository (a setting); at the cap, agents keep the change as a note and say so. PRs that fix an open incident are exempt from the cap.
-  - A PR that changes decision semantics (the promotion gate, a threshold, a metric definition, the evaluation) carries the label `decision-semantics`, and its body states the behavior before and after.
-  - An agent PR that conflicts with the default branch is updated; one stale past a limit (a setting) is closed with a note.
-  - A PR closed unmerged becomes a Knowledge note with the reason given, or "closed without a reason", so it is not proposed again unless something changed.
-  - Stage 2's file claims apply across agents' open work.
-- **Every change is suspect after an incident.** Incidents that open within a window (a setting) after any change merged or deployed (agents' or the team's) are linked to those changes on their timeline. "Revert an agent PR" joins the response menu (a revert PR, marked as fixing the incident); for a team change, agents comment on it and notify instead.
+- **PR discipline:** as the roadmap's "Agents and the team's system" says.
 - **Run, never replace.** Agents run the team's pipelines and commands (action hooks, stage 4) and read their outputs through the tracker and the connections. The app has no training job, evaluation harness or deploy mechanism of its own.
 - **Respect the team's choices, then improve them.** With full CD, the team's gate decides promotions; agents make that gate better through PRs. With a manual approval step, the person approves; agents prepare what the person needs.
 
