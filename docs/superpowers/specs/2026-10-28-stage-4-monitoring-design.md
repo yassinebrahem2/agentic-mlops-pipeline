@@ -61,10 +61,9 @@ backend/src/mlops_agents/
 `check_id`, `origin` (`team` for the handoff's existing monitoring, `agent` for checks agents delivered), `ran_at` (the time the result describes, from the source), `seen_at` (when the app read it), `fired` (bool), `value` (number or null), `threshold` (number or null), `category` (data quality, drift, model performance, operational), `subject` (what it is about: a table, column, model version, job), `detail` (JSON), `source_ref` (where it came from).
 
 **Sources**, one interface per kind, read every minute (a project setting) by the scheduler:
-- `file`: records found under a connection's path pattern (JSON Lines, JSON, CSV), read incrementally by data version.
-- `ci`: workflow runs from the tracking record (stage 3).
-- `mlflow`: metric points from the tracking record.
-- `job`: job runs the team records in a file (as many schedulers write logs) or CI.
+- `file`: records found under a connection's path pattern (JSON Lines, JSON, CSV, log lines), read incrementally. Job runs a scheduler logs to files are a `file` source.
+- `ci`: workflow runs from the tracking record (stage 3), mapped to records by a built-in mapping (a failed or cancelled run fires); no parser is proposed.
+- `mlflow`: metric points from the tracking record, mapped by the threshold the handoff gives for that metric.
 
 **Parsers.** A source's raw output is turned into standard records by a parser. Agents' checks write standard records directly and need no parser. For the team's existing monitoring, Onboarding (or Data Quality) writes a parser per source, tests it on real outputs, and proposes it (proposal kind `parser`, §9). Approved parsers are stored versioned in `project.db`.
 - **A mapping first.** A parser is declarative: field paths or column names for each standard field, an optional pattern for log lines, and a "fired when" expression over the mapped fields. The app evaluates it itself, with no code and no Docker, so reading never depends on the sandbox.
@@ -73,19 +72,25 @@ backend/src/mlops_agents/
 
 **Catching up never pages anyone for the past.** After downtime, a signal whose condition has already cleared becomes an incident marked "resolved while the app was offline": it wakes no one and goes into the next report. Only conditions still true notify. Detection time counts from `seen_at`, honestly.
 
-**Reading never misses or repeats.** Each source keeps a cursor (its last data version, run ID or time). Records are idempotent by source and source key. After downtime the scheduler reads every source from its cursor, oldest first, before the live loop resumes; nothing is dropped and nothing is counted twice.
+**Reading never misses or repeats.** Each source keeps a cursor: per file, its size, modified time and the byte offset read (an appended JSON Lines file is read from its offset); for `ci` and `mlflow`, the last run ID or time. A file that shrank or changed before the offset (restated data) is read again from the start. Records are idempotent by source and source key (from the record, else the file, offset and line), so a re-read stores nothing twice. After downtime the scheduler reads every source from its cursor, oldest first, before the live loop resumes.
+
+**Times.** `ran_at` (the time the result describes) decides silence, ordering and `started_at`; `seen_at` decides detection time. Cadences, deadlines, on-call hours and the morning report use the IANA time zone given with them (the handoff's, else the project's), daylight saving included.
+
+**Untrusted text.** Everything read from the team's data, results, logs and parsers is data, never instructions. It reaches agents marked as untrusted content, the agents' prompts say so, and any action it might suggest still goes through the gates and the rules evaluated in code.
 
 ## 3. The app's scheduler
 
-One loop in the app process, built on stage 2's wake-up timer, with one job table in `project.db` per project:
+One loop in the app process with its own job table in `project.db` per project (it does not use stage 2's agent wake-ups, whose per-agent caps guard against an agent looping and would cap a bad night):
+- sync tracking (stage 3);
 - collect results from every source (every minute by default);
 - check expected results against their deadlines (§3a);
-- fire agents' wake-ups (stage 2) and incident follow-ups ("re-check after N days or N labels");
-- escalate unacknowledged critical incidents (§6);
-- send the morning report (§8);
-- sync tracking (stage 3).
+- incident follow-ups: "re-check after N days" by time, "re-check after N labels" by counting the labels table the handoff names, at each collection;
+- escalate unacknowledged critical incidents (§7);
+- send the morning report (§8).
 
-Jobs are idempotent and keyed by their due time; after downtime the loop runs every missed job in order (collection first, then deadlines, then follow-ups), so the incidents of the night are raised and diagnosed in the right order. The scheduler never runs a check or a model.
+Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by their due time; after downtime the loop runs every missed job in the order above (tracking first, so `ci` and `mlflow` sources are current before silence is judged), so the night's incidents are raised and diagnosed in order. The scheduler never runs a check or a model.
+
+**3b. A heartbeat outside the app.** Only the app notifies, so an app that is down pages nobody. The app serves a heartbeat route (`GET /api/health/heartbeat`, no session needed, no data). In server mode, Onboarding's handoff proposes, and the Deployment & Rollback agent delivers by PR, a scheduled job in the team's own scheduler that calls it and alerts through the team's own channel when it fails twice. In local mode the heartbeat is not reachable from outside, and the Dashboard says so.
 
 **3a. Expected results and silence.** From the handoff's operations (every feed and job with its expected time or cadence and its grace period) the app keeps expectations. When the deadline plus grace passes with no result or no new data, it raises a `silence` signal (category `operational`, or `data_quality` for a data feed). Maintenance windows (§5) suspend expectations.
 
@@ -93,8 +98,8 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 
 - Agents (Data Quality, Model Performance, Retraining, Deployment & Rollback) write checks as code in the team's repository, test them in the sandbox on the mounted data, and deliver them by PR, adding each to the team's scheduler (a CI workflow, a cron entry, an Airflow task, whatever the handoff recorded).
 - A check writes standard result records (§2) to the results location named in the handoff (a folder a connection reads, or the tracker's metrics), with its `check_id`, `origin: "agent"` and the version (git commit) that produced it.
-- When the PR merges and the first record arrives, the app adds the check to the expectations with its cadence.
-- Data Quality keeps two families (validation and drift) and classifies each change as bad data or real drift before acting, and explains every flag. Model Performance uses metrics suited to the problem and the error costs (PR-AUC, recall at a set precision, per-group metrics, calibration; never accuracy alone), and accounts for label delay. Every check has a minimum sample size and records "not enough data" instead of firing on too little.
+- The agent registers each check it delivers with `RegisterCheck(check_id, category, cadence, timezone, results_location, pr_number)` (risk class `read`: it writes only the app's own records). The expectation becomes active when the PR merges (stage 2's PR state sync), so a merged check that never runs raises a silence signal instead of staying invisible. A check's version is the git commit in its records; a changed threshold is a new version, and verdicts keep the version they judged.
+- Data Quality keeps two families (validation and drift) and classifies each change as bad data or real drift before acting, and explains every flag. Model Performance uses metrics suited to the problem and the error costs (PR-AUC, recall at a set precision, per-group metrics, calibration; never accuracy alone), accounts for label delay, and reads labels and predictions from the tables the handoff gave the `labels` and `predictions` roles, joined on the handoff's ID column. Its first audit also compares serving inputs with the training data (training-serving skew). Every check has a minimum sample size and records "not enough data" instead of firing on too little.
 
 ## 5. Incidents
 
@@ -102,7 +107,9 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 
 **Grouping.** A new signal joins an open incident when it shares a cause key (the same table, feed, job or model version) within a window (a setting), **or when its subject is downstream of the incident's subject in the pipeline graph** from the handoff (one upstream schema change that breaks scoring, shifts three columns and drops a metric is one incident). Otherwise it opens a new incident. The diagnosing agent can merge or split incidents (tools below).
 
-**The incident** (`inc`): category (data quality, drift, model performance, operational), subtype (schema change, late feed, null spike, input drift, label shift, concept drift, failed training, bad deploy, failed scoring, silence, ...), severity (§7), status, cause (the agent's diagnosis), the signals, the timeline (every agent action, notification, decision and verdict), the related PRs and issues, `started_at` (the earliest signal's `ran_at`), `detected_at`, `acknowledged_at`, `mitigated_at`, `resolved_at`.
+**The incident** (`inc`): category (data quality, drift, model performance, operational), subtype (schema change, late feed, null spike, input drift, label shift, concept drift, failed training, bad deploy, failed scoring, silence, ...), severity (§7), status, cause (the agent's diagnosis), the signals, the related PRs and issues, `started_at` (the earliest signal's `ran_at`), `detected_at`, `acknowledged_at`, `mitigated_at`, `resolved_at`.
+
+**The timeline** is not stored twice: it is the project's events (stage 2's event log) whose subject is the incident, so every action, notification, decision and verdict is recorded once.
 
 **Lifecycle:** `open` → `acknowledged` (by a person) → `mitigated` (harm stopped: held, rolled back) → `resolved` (cause fixed or the condition gone, confirmed by results) → `closed` after the verdict. A resolved incident whose cause key fires again within a reopen window (a setting) is `reopened` instead of duplicated.
 
@@ -110,7 +117,7 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 
 **Maintenance windows and snoozing.** The team declares windows (time range, the feeds, jobs or connections affected, a reason); expectations and signals in their scope are recorded but raise nothing. A person can snooze one incident until a time.
 
-**Tools** (justified: incidents live in the app's database): `IncidentUpdate(incident_id, cause?, category?, subtype?, status?, note?)`, `IncidentMerge(ids)`, `IncidentSplit(id, signal_ids)`; risk class `read` (they change only the app's own records).
+**Tools** (justified: incidents live in the app's database): `IncidentUpdate(incident_id, cause?, category?, subtype?, status?, note?)`, `IncidentMerge(ids)`, `IncidentSplit(id, signal_ids)`; risk class `read` (they change only the app's own records). An agent may set `mitigated` and `resolved`, the latter only when the latest results for the incident's cause key no longer fire (checked in code). Only a person acknowledges, snoozes or closes an incident.
 
 ## 6. Diagnosis and response
 
@@ -131,14 +138,15 @@ Jobs are idempotent and keyed by their due time; after downtime the loop runs ev
 
 ## 7. Severity and routing (Alert Prioritization)
 
-- Alert Prioritization runs in the background (`chat: false`), once per new or changed incident, after the diagnosis or after a short wait if none comes.
+- **Paging never waits for a model.** Severity and routing are deterministic code, run the moment an incident opens or changes. A critical incident is sent at once, even if every provider key is exhausted or the diagnosing agent is still working; the message says the diagnosis follows.
+- Alert Prioritization then runs in the background (`chat: false`), once per new or changed incident: it writes the ranking's explanation, merges duplicates it finds, and may raise or lower the severity by one level with a stated reason, which re-routes.
 - **Severity** (`critical`, `high`, `medium`, `low`) from, in order:
   - production harmed now (failed scoring, a model producing wrong outputs, a deploy past a rule's harm threshold) → critical;
   - silence of a feed or job production depends on → high, critical if past a second deadline;
   - the cost of error from the handoff (a miss costlier than a false alarm raises model performance incidents);
   - scope (all predictions or one group);
   - confidence (sample size; "not enough data" lowers it).
-  The rules are deterministic code; the agent may raise or lower by one level with a stated reason, recorded on the timeline.
+  The rules are deterministic code.
 - **Routing:**
   - critical: Discord and email to the on-call person at once, at any hour; if not acknowledged within N minutes (a setting), to the next person in the escalation list;
   - high: during the person's hours at once, otherwise in the morning report;
@@ -182,8 +190,9 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 
 ## Changes to the roadmap
 
-- ID prefixes `res` (result), `sig` (signal), `inc` (exists), `rul` (rule), `hok` (action hook), `win` (maintenance window).
+- ID prefixes `res` (result), `sig` (signal), `inc` (exists), `rul` (rule), `hok` (action hook), `win` (maintenance window), `chk` (registered check).
 - Stage 4 "Agreed" rewritten from this spec: checks in the team's repository, delivered by PR; results read through sources and parsers; silence as a signal; the three tiers and the response menu; severity and routing; the baseline as the team's existing monitoring, read not re-run.
+- The risk-class table's `propose` row lists parsers, rules, action hooks and maintenance windows; checks are delivered by PR (risk class `github`).
 - Risk classes, `deploy` exceptions, as one table in the roadmap:
 
   | Hook kind | Matching approved rule, confirmed by the gate | No matching rule |
@@ -203,10 +212,13 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
 ## 14. Testing
 
 - Fakes: result sources from fixture folders, the fake MLflow and GitHub servers (stage 3), a fake SMTP server and a fake Discord webhook, a fake clock for the scheduler.
-- Results: parsing to standard records; idempotent reading; a cursor survives a restart; catching up after downtime reads every missed record oldest first, raises the night's incidents in order, and counts nothing twice.
+- Results: parsing to standard records; idempotent reading; an appended file is read from its offset and a restated one from the start; a cursor survives a restart; catching up after downtime reads every missed record oldest first, raises the night's incidents in order, and counts nothing twice.
 - Silence: a missing result past deadline and grace raises one signal; a maintenance window suspends it.
-- Incidents: grouping by cause key; quiet period; reopen within the window; merge and split; lifecycle timestamps.
-- Severity and routing: each rule; critical notifies at night and escalates when unacknowledged; high waits for the person's hours; the morning report lists the night.
+- Incidents: grouping by cause key and down the pipeline graph; quiet period; reopen within the window; merge and split; lifecycle timestamps; an agent cannot close, and can resolve only when the results stopped firing.
+- Checks: a registered check whose PR merged and that never writes a record raises a silence signal.
+- Times: a cadence across a daylight-saving change fires once, at the right local time.
+- Untrusted text: instructions planted in a result's detail or a data value never trigger an action.
+- Severity and routing: each rule; critical notifies at night with every provider key exhausted and before any diagnosis, and escalates when unacknowledged; high waits for the person's hours; the morning report lists the night.
 - Response: a hook runs only through an approved rule or an approval; train and deploy always ask; a rule's limits hold.
 - Verdicts: labels confirm automatically past the minimum sample; the baseline record links team checks to incidents and never notifies.
 - End to end (fake model, fixture project): a fired team check and an agent's check, a silent feed at night, one incident per cause, the right agent diagnoses, a rollback through an approved rule, a critical message to the fake Discord, the morning report, a verdict.
