@@ -1,9 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { ApprovalStatus } from "./ApprovalCard";
+import type { ApprovalCardComponent, ApprovalStatus } from "./ApprovalCard";
 import { ApprovalControls } from "./ApprovalControls";
-import type { ApprovalCardComponent } from "./approvalCards";
 
 const APPROVAL_STATUS_CONFIG: Record<
   ApprovalStatus,

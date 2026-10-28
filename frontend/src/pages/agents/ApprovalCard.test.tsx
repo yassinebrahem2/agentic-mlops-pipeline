@@ -2,8 +2,13 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api } from "@/lib/api";
-import { ApprovalCard, type ApprovalPart } from "./ApprovalCard";
-import { CARD_FOR_KIND, CARD_FOR_PROPOSAL, type ApprovalCardComponent } from "./approvalCards";
+import {
+  ApprovalCard,
+  CARD_FOR_KIND,
+  CARD_FOR_PROPOSAL,
+  type ApprovalCardComponent,
+  type ApprovalPart,
+} from "./ApprovalCard";
 
 describe("ApprovalCard", () => {
   let postSpy: MockInstance | undefined;

@@ -10,7 +10,7 @@ import {
   CARD_FOR_KIND,
   CARD_FOR_PROPOSAL,
   type ApprovalCardComponent,
-} from "@/pages/agents/approvalCards";
+} from "@/pages/agents/ApprovalCard";
 import type { ApprovalView, GitHubItem, LocalReview } from "./usePendingApprovals";
 
 class TestFakeStream implements StreamLike {
