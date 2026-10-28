@@ -7,9 +7,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from langgraph.types import Command
-
-from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
+from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
 from mlops_agents.agents.runtime.compaction import compact_if_needed
 from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
@@ -150,7 +148,9 @@ class TurnExecutor:
 
         async def body() -> TurnOutcome:
             try:
-                built_agent = await self._builder.build(project_id, agent)
+                built_agent = await self._builder.build(
+                    project_id, agent, session_id=session_id, turn_id=turn_id
+                )
             except TurnRefused as exc:
                 text_part: list[Part] = [TextPart(type="text", text=exc.text)]
                 if exc.end == "done":
@@ -171,7 +171,7 @@ class TurnExecutor:
                 built_agent.layout,
                 summary,
                 [],
-                status_summary=built_agent.status_summary,
+                hook_context=built_agent.hook_context,
             )[0]
             await compact_if_needed(
                 self._store,
@@ -196,7 +196,7 @@ class TurnExecutor:
                 built_agent.layout,
                 summary,
                 active_history,
-                status_summary=built_agent.status_summary,
+                hook_context=built_agent.hook_context,
             )
             initial_state: TurnState = {
                 "messages": initial_messages,
@@ -242,7 +242,10 @@ class TurnExecutor:
                 await sink.message(updated_msg, created=False)
             await self._store.set_turn(project_id, turn_id, "running")
 
-            built_agent = await self._builder.build(project_id, agent)
+            built_agent = await self._builder.build(
+                project_id, agent, session_id=session_id, turn_id=turn_id
+            )
+            summary, _ = await self._store.summary(project_id, session_id)
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -250,7 +253,9 @@ class TurnExecutor:
                 turn_id,
                 agent_msg.id,
                 message.parts,
-                Command(resume=True),
+                await resume_command(
+                    built_agent, summary, self._store.db_path(project_id), turn_id
+                ),
                 sink,
                 lock,
             )

@@ -13,6 +13,7 @@ import httpx2
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.hooks import (
@@ -78,12 +79,17 @@ async def build_session_env(
     inbound: InboundSource | None = None,
     audit_log: AuditLog | None = None,
     approval_store: ApprovalStore | None = None,
+    hooks: HookRegistry | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
 
     tool_reg = tools if tools is not None else default_registry()
-    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=extra_dirs or ())
+    catalog = AgentCatalog.load(
+        tool_reg.names() | STAGE_2_TOOLS,
+        extra_dirs=extra_dirs or (),
+        hook_names=hooks.names() if hooks is not None else frozenset(),
+    )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
@@ -116,6 +122,7 @@ async def build_session_env(
         approval_store=approvals,
         observers=observers,
         bus=bus,
+        hooks=hooks,
         audit_log=audit_log,
     )
 

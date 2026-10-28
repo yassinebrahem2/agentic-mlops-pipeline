@@ -10,6 +10,7 @@ import httpx2
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import (
@@ -33,7 +34,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
-from mlops_agents.events.contract import AuditLog, EventLog, StatusBoard
+from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -65,7 +66,7 @@ class SessionManager(AgentSessions):
         approval_store: ApprovalStore,
         observers: Sequence[TurnObserver] = (),
         bus: MessageBus | None = None,
-        status_board: StatusBoard | None = None,
+        hooks: HookRegistry | None = None,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
     ) -> None:
@@ -90,7 +91,8 @@ class SessionManager(AgentSessions):
             tools=tools,
             settings=settings,
             workspaces=workspaces,
-            status_board=status_board,
+            hooks=hooks,
+            store=self._store,
         )
         self._executor = TurnExecutor(
             store=self._store,

@@ -141,6 +141,7 @@ async def test_executor_cancellation_during_slow_tool(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=store,
     )
     executor = TurnExecutor(
         store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
@@ -238,6 +239,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=store,
     )
     executor = TurnExecutor(
         store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)

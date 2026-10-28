@@ -17,6 +17,8 @@ from mlops_agents.agents.catalog import (
     DefinitionError,
     parse_definition,
 )
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -391,6 +393,10 @@ async def test_live_orchestrator_adds_line_to_readme(
         await agent_settings.set_default_model("orchestrator", live_model)
 
         status_board = SqliteStatusBoard(catalog, events)
+        status_board_hook = StatusBoardHook()
+        status_board_hook.bind(status_board)
+        hooks = HookRegistry()
+        hooks.register(status_board_hook)
         approval_store = ApprovalStore(databases)
         manager = SessionManager(
             databases=databases,
@@ -406,7 +412,7 @@ async def test_live_orchestrator_adds_line_to_readme(
             turn_end=NoTurnEndCheck(),
             workspaces=tasks_svc,
             approval_store=approval_store,
-            status_board=status_board,
+            hooks=hooks,
         )
 
         start = await manager.get(project.id, "orchestrator")

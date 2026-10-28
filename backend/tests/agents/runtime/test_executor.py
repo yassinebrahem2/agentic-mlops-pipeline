@@ -107,6 +107,7 @@ async def _setup_executor_env(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=store,
     )
     executor = TurnExecutor(
         store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
