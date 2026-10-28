@@ -39,6 +39,9 @@ from mlops_agents.events.observer import EventTurnObserver
 from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.knowledge.contract import Knowledge
+from mlops_agents.knowledge.service import KnowledgeService
+from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
@@ -74,6 +77,7 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    knowledge: Knowledge
 
 
 async def _app_secrets(
@@ -140,6 +144,9 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    vectors = SqliteVectorStore(databases)
+    knowledge = KnowledgeService(databases, embedders, vectors, events, secret_source)
+    stack.push_async_callback(knowledge.close)
     messaging_settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, messaging_settings)
     # The one approval store: it holds the approval observers, so every transition reaches them.
@@ -256,4 +263,5 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        knowledge=knowledge,
     )
