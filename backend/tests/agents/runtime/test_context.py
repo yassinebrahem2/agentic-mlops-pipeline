@@ -400,16 +400,21 @@ def test_build_messages_skips_approval_parts(approval: ApprovalPart) -> None:
     assert [type(m) for m in with_approval[1:]] == [AIMessage, ToolMessage]
 
 
-def test_build_messages_system_message_with_status_summary() -> None:
+def test_build_messages_appends_the_hook_context_as_the_last_system_section() -> None:
     definition = _make_definition()
     project = _make_project()
     layout = "README.md"
-    status_summary = "- Orchestrator: running\n- Alert Prioritization: inactive"
+    hook_context = (
+        '<data source="hook:status_board">\nStatus board:\n- Orchestrator: running\n</data>'
+    )
 
-    messages = build_messages(definition, project, layout, None, [], status_summary=status_summary)
+    messages = build_messages(
+        definition, project, layout, "Earlier things.", [], hook_context=hook_context
+    )
     content = str(messages[0].content)
-    assert "Status board:\n- Orchestrator: running\n- Alert Prioritization: inactive" in content
+    assert content.endswith("\n\n" + hook_context)
+    assert content.index("Summary of the earlier conversation:") < content.index(hook_context)
 
-    # Without status summary
+    # Without hook context
     messages_without = build_messages(definition, project, layout, None, [])
-    assert "Status board:" not in str(messages_without[0].content)
+    assert "<data" not in str(messages_without[0].content)
