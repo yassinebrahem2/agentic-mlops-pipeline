@@ -223,6 +223,7 @@ class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # par
 class ProposalView(BaseModel): id: str; kind: str; key: str; payload: ConnectionsPayload | HandoffPayload; warnings: list[str]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime   # contracts task 2 (it needs the payloads); typed so the cards read it from schema.d.ts
 
 # Payloads (contracts), extra="forbid" everywhere
+LOCAL_FOLDER_KIND = "local_folder"   # connections/contract.py (contracts task 1): the one source of the kind name
 class LocalFolderSettings(BaseModel): path: str   # connections/contract.py (contracts task 1), extra="forbid"
 class ConnectionSpec(BaseModel): kind: Literal["local_folder"]; name: str; settings: LocalFolderSettings; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1); settings typed per kind, so no secret can ride in a free-form dict
 class ConnectionsPayload(BaseModel): connections: list[ConnectionSpec]

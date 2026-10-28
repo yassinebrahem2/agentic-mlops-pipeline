@@ -9,7 +9,7 @@
 - every picker shows only models of its type;
 - the `Embedders` service hands the Knowledge store an `Embedder` that uses the key failover and never stalls a turn.
 
-**Branch:** `plan/stage-3-embedders`. **Consumes:** I14 as contracts task 1 writes it in `providers/embedder.py` (`ModelType`, `EmbedderUnavailable`, `Embedder`, `EmbedderStatus`, `Embedders`) and the `models.model_type` and `models.dimensions` columns in `app.db`; the `ModelEntry` and `ModelCreate` fields are this plan's (`providers/models.py` is embedders'), as is the implementation; I21 (`KeyFailover.call(..., wait=False)`, `AllKeysExhausted`, `RateLimited`, `KeyState`; rate-limits task 1). **Produces:** `Embedders` (I14) from task 1 (early PR), the embedder settings routes, the type-aware model pickers.
+**Branch:** `plan/stage-3-embedders`. **Consumes:** I14 as contracts task 1 writes it in `providers/embedder.py` (`ModelType`, `EmbedderUnavailable`, `Embedder`, `EmbedderStatus`, `Embedders`) and the `models.model_type` and `models.dimensions` columns in `app.db`; the `ModelEntry` and `ModelCreate` fields are this plan's (`providers/models.py` is embedders'), as is the implementation; I21 (`KeyFailover.call(..., cooldown_minutes=..., wait=False)`, `AllKeysExhausted`, `RateLimited`, `KeyState`; rate-limits task 1). **Produces:** `Embedders` (I14) from task 1 (early PR), the embedder settings routes, the type-aware model pickers.
 
 **Read first:** spec §3 and §14; `backend/src/mlops_agents/providers/{models,service,verification,bridge,errors}.py`; `backend/src/mlops_agents/agents/settings.py` (`_check_model`, `_require_usable_model`); `frontend/src/pages/providers/`; the stage 3 overview's I14, I21 and "Files shared"; `backend/src/mlops_agents/providers/failover.py` as rate-limits task 1 wrote it (its constructor, for the tests).
 
@@ -82,7 +82,7 @@ Task 1 gets an early PR, from `plan/stage-3-embedders-task1`: the knowledge plan
   - `status` and `default_status` share one private resolver (address in, `EmbedderStatus` out); `for_project` is `status` plus building the embedder.
   - `set_default` / `set_override` accept `None` (clear) or an address that exists, is an embedder and has no `problem`; anything else is a `DomainError` 409 with `model_not_usable` and the `problem_for("embedder")` text, 404 `model_not_found` for an unknown address.
   - Models deleted later leave the setting; `status` explains it (as agent defaults do).
-- **Wiring:** `Services.embedders: EmbeddersService`, one line in the dataclass, one in `build_services`, built after `providers` with the app's `KeyFailover` (rate-limits wires that single instance; reuse it, never create a second: the state must be shared).
+- **Wiring:** `Services.embedders: EmbeddersService`, one line in the dataclass, one in `build_services`, built after `providers` with the app's `KeyFailover` (rate-limits task 1 builds the one `KeyFailover` in `build_services`; the instance is a `build_services` local that rate-limits task 1 builds before this line; take that one, never create a second: the state must be shared).
 
 **Tests (stop condition):**
 - Fake server: `/embeddings` answers the right dimensions for each model, accepts a string and a list, is deterministic across calls and processes, ranks a text sharing words above one that does not, 401 without the key, 404 for a chat model name, honors `required_key`, `auth_fail`, `rate_limit_remaining` and `wrong_dimensions`; `/models` lists both kinds.
@@ -114,7 +114,7 @@ Checks: `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv
 
 **Tests (stop condition):** anonymous requests get 401 (as `test_models_routes.py` does); default: set a verified embedder, read it back, clear it; refused for a chat model, an unverified embedder and an unknown address, each with its code and message; project: an override is returned as `chosen`, a project without one reports `chosen` null and the app default in `status.address`, an unknown project is 404, the override of one project does not show in another; deleting the chosen model leaves `chosen` set and `status.problem` filled, `dimensions` null; the OpenAPI export lists the four operations (extend the existing openapi test pattern if it asserts operations). Full suite; checks.
 
-Checks: backend ruff, format, pyright, pytest; regenerate `openapi.json`, then `npm run lint` (it runs `gen:api`).
+Checks: backend ruff, format, pyright, pytest; regenerate `openapi.json` and run `uv run python -m mlops_agents.api.openapi_export --check`, then `npm run lint` (it runs `gen:api`, which writes only the gitignored `schema.d.ts`).
 
 ---
 
