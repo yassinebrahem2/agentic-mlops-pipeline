@@ -12,8 +12,9 @@ import pytest
 from mlops_agents.agents.runtime.contract import TextPart, TurnEnded
 from mlops_agents.agents.runtime.stall import StallState
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import collect_until_turn_ended
+from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
 from tests.agents.runtime.stall_env import (
     KEY,
     StallEnv,
@@ -124,4 +125,36 @@ async def test_a_compaction_stall_then_a_model_stall_make_two_approvals(
     ended = next(e for e in await collect_until_turn_ended(stream) if isinstance(e, TurnEnded))
     assert ended.data.status == "done"
     assert [s.status for s in await env.stalls(turn_id)] == ["approved", "approved"]
+    await env.session.manager.close()
+
+
+async def test_a_keyless_provider_failing_compaction_fails_the_turn_without_a_stall(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    # No key to rotate or fix (Decision #384): the provider's own message fails the turn.
+    env = await build_stall_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, keys=()
+    )
+    await add_long_history(env)
+    fake_openai.state.script_for_key(KEYLESS, ["401"])
+    stream = await opened_stream(env.session)
+
+    await env.session.manager.send(env.project_id, "orchestrator", "hi")
+    ended = next(e for e in await collect_until_turn_ended(stream) if isinstance(e, TurnEnded))
+
+    assert ended.data.status == "failed"
+    assert ended.data.error is not None
+    assert "Invalid API key" in ended.data.error
+    assert _is_compaction(fake_openai.state.requests[-1])
+    assert await env.stalls(ended.data.turn_id) == []
+    assert await env.event_payloads("turn.stalled") == []
+    message = await env.agent_message(ended.data.turn_id)
+    assert (message.status, message.parts) == ("complete", [])
+    assert await env.checkpoint(ended.data.turn_id) is None
     await env.session.manager.close()
