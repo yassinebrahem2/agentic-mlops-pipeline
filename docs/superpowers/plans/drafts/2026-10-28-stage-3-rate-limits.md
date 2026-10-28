@@ -9,7 +9,7 @@
 - key state is kept per provider, key and model, shared by the whole app;
 - when every key is exhausted the turn pauses on a `stall` approval (card with Try again and Stop) instead of failing, and no work is lost.
 
-**Branch:** `plan/stage-3-rate-limits`. **Consumes:** task 1 none; tasks 2 to 4 I13 (contracts task 2: `Approvals.create_stall`, the `stall` kind, `kind` and `step` on `ApprovalPart`, the decision of a stall, `turn.stalled`, `turn.resumed`, `error_kind` on the turn and on the failed agent message's `MessageView`, the card dispatcher and `ApprovalControls`) and contracts task 1 (`Provider.cooldown_minutes` with `providers.cooldown_minutes`, `turns.error_kind`, and the types `ErrorKind`, `TurnEndedData.error_kind` and `MessageView.error_kind`, which this plan only writes and reads). **Produces:** `KeyFailover`, `AllKeysExhausted`, `RateLimited`, `StreamedTextFailure`, `Clock` (I21) from task 1 (early PR); the stall; the cooldown route and field.
+**Branch:** `plan/stage-3-rate-limits`. **Consumes:** task 1 none; tasks 2 to 4 I13 (contracts task 3: `Approvals.create_stall`, the `stall` kind, `kind` and `step` on `ApprovalPart`, the decision of a stall, `turn.stalled`, `turn.resumed`, `error_kind` on the turn and on the failed agent message's `MessageView`, the card dispatcher and `ApprovalControls`) and contracts task 1 (`Provider.cooldown_minutes` with `providers.cooldown_minutes`, `turns.error_kind`, and the types `ErrorKind`, `TurnEndedData.error_kind` and `MessageView.error_kind`, which this plan only writes and reads). **Produces:** `KeyFailover`, `AllKeysExhausted`, `RateLimited`, `StreamedTextFailure`, `Clock` (I21) from task 1 (early PR); the stall; the cooldown route and field.
 
 **Read first:** spec §2, §3 (the embedder never stalls) and §12 (stalled-turn card, cooldown field); overview "Shared by contracts", I13, I14 (`EmbedderUnavailable`), I21 and "Files shared"; the stage 2 approvals plan (`2026-10-24-stage-2-approvals.md`) for how a turn waits and resumes. Existing code: `providers/errors.py`, `providers/bridge.py` (`ResolvedModel`), `agents/runtime/model_caller.py`, `graph.py`, `graph_run.py`, `waiting.py`, `executor.py`, `turn_end.py`, `hub.py`, `store/turns.py`, `agents/approvals/{store,service}.py`. The reference engine (`D:\SCRIPTS\Multimodal RAG Agent\src\mmrag\providers\retry_engine.py`) is for the concept only: it waits on one key and swaps after a streak, which is not the user's rule below. Never copy it.
 
@@ -20,8 +20,8 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | `KeyFailover` and the error classification | none |
-| 2 | The model caller on `KeyFailover`, `error_kind` and the cooldown route | task 1, contracts tasks 1 and 2 |
-| 3 | The stall in the turn graph | task 2, contracts task 2 |
+| 2 | The model caller on `KeyFailover`, `error_kind` and the cooldown route | task 1, contracts tasks 1 and 3 |
+| 3 | The stall in the turn graph | task 2, contracts task 3 |
 | 4 | The stalled-turn card, Try again on a failed turn, and the cooldown field | task 3 |
 
 Task 1 gets an early PR from `plan/stage-3-rate-limits-task1`: embedders consumes `KeyFailover`.
@@ -158,7 +158,7 @@ Decided here (the producer's call): `Clock.now()` returns an aware UTC `datetime
 
 **Files:** new `frontend/src/pages/agents/StallCard.tsx` and `StallCard.test.tsx`, `frontend/src/pages/agents/ApprovalCard.tsx` (one line in contracts' dispatcher), `frontend/src/pages/agents/MessageView.tsx` and `MessageList.tsx` (the failed agent message gets the Try again button; `MessageList` passes the send action), `frontend/src/pages/providers/ProviderCard.tsx` (the cooldown field) and its test, `frontend/src/pages/inbox/InboxPage.test.tsx` (a stall case).
 
-**Interfaces:** Consumes task 3, the generated `schema.d.ts` types (`ApprovalPart.kind`, the failed agent message's `error_kind`, `Provider.cooldown_minutes`, the settings route), the dispatcher and `ApprovalControls` of contracts task 2. Produces the card, the Try again button and the field.
+**Interfaces:** Consumes task 3, the generated `schema.d.ts` types (`ApprovalPart.kind`, the failed agent message's `error_kind`, `Provider.cooldown_minutes`, the settings route), the dispatcher and `ApprovalControls` of contracts task 3. Produces the card, the Try again button and the field.
 
 **Implementation notes:**
 - `StallCard`: title "Stalled: no usable key", the provider and model, one row per key with its state and reason (the preview body rendered readably, never raw), Try again (approve) and Stop (reject) through contracts' `ApprovalControls` and the existing decision call. Settled states read "Resumed" and "Stopped". It renders in the session and in the Inbox through the dispatcher.

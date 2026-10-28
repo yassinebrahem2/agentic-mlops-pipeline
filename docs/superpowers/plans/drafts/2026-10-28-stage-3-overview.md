@@ -217,7 +217,7 @@ class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # par
 class ProposalView(BaseModel): id: str; kind: str; key: str; payload: dict[str, Any]; warnings: list[str]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime
 
 # Payloads (contracts), extra="forbid" everywhere
-class ConnectionSpec(BaseModel): kind: str; name: str; settings: dict[str, Any]; why: str      # name follows CONNECTION_NAME_PATTERN
+class ConnectionSpec(BaseModel): kind: str; name: str; settings: dict[str, Any]; why: str      # name follows CONNECTION_NAME_PATTERN (connections/contract.py, contracts task 1)
 class ConnectionsPayload(BaseModel): connections: list[ConnectionSpec]
 
 class TableUse(BaseModel): connection: str; table: str                                        # a reference to a DataRole

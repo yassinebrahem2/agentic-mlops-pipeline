@@ -29,10 +29,10 @@
 
 | Task | Title | Consumes | Early PR |
 |---|---|---|---|
-| 1 | The proposal store and service, `ProposalKinds`, `Handoffs`, the three routes | contracts tasks 1 and 2 | yes |
+| 1 | The proposal store and service, `ProposalKinds`, `Handoffs`, the three routes | contracts tasks 1, 2 (payloads, I20 types) and 3 (approvals behavior) | yes |
 | 2 | The approval observer, superseding and restart recovery | task 1 | no |
 | 3 | The `Propose` tool | tasks 1 and 2 | no |
-| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 2, connections task 1 (`inspect`, `SecretFilesWarning`) | no |
+| 4 | The shared proposal card parts and the connections card | task 1 (generated types), contracts task 3 (`ApprovalControls`, dispatcher), connections task 1 (`inspect`, `SecretFilesWarning`) | no |
 | 5 | The handoff card: every section, the credential field, the warnings | task 4 | no |
 
 Task 1 gets an early PR from `plan/stage-3-proposals-task1`: onboarding consumes `Proposals`, `ProposalKinds` and `Handoffs`. It leaves `main` working: nothing creates a proposal yet, so the routes answer 404 and `null`.

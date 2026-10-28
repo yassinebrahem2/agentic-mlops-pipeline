@@ -110,7 +110,7 @@ Checks: `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv
 **Implementation notes:**
 - Routes are thin: they call `services.embedders`; `ProjectDep` checks the project. `EmbedderChoice` forbids extra fields as the other bodies do.
 - `EmbedderSettingView` is a route model defined in `embedders.py`; `EmbedderStatus` comes from I14.
-- Regenerate `frontend/openapi.json` from the backend as the frontend commands say. If contracts' regenerated file is already on `main`, merge it first and regenerate; never merge the generated files by hand.
+- Regenerate `frontend/openapi.json` from the backend as the frontend commands say. If contracts task 4's regenerated file is already on `main`, merge it first and regenerate; never merge the generated files by hand.
 
 **Tests (stop condition):** anonymous requests get 401 (as `test_models_routes.py` does); default: set a verified embedder, read it back, clear it; refused for a chat model, an unverified embedder and an unknown address, each with its code and message; project: an override is returned as `chosen`, a project without one reports `chosen` null and the app default in `status.address`, an unknown project is 404, the override of one project does not show in another; deleting the chosen model leaves `chosen` set and `status.problem` filled, `dimensions` null; the OpenAPI export lists the four operations (extend the existing openapi test pattern if it asserts operations). Full suite; checks.
 

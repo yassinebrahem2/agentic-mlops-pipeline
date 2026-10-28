@@ -10,7 +10,7 @@
 - a sync loop runs every source on an interval and on demand;
 - agents read it through the `TrackingHistory` tool and the `tracking_summary` hook.
 
-**Branch:** `plan/stage-3-tracking`. **Consumes:** I16 (models and protocols, `tracking/contract.py`), "Shared by contracts" (the `trk` prefix, the `tracking.synced` event type, `credentials/project_secrets.py`, the tracking tables and their unique keys), all from contracts task 1; I18 (`HookRegistry`, data-summary task 1); I20 (`Handoffs.current`, proposals task 1; task 5 only); the stage 2 GitHub client, `KeyStore`, `EventLog`. **Produces:** `Tracking` (I16) and its routes from task 1 (early PR), the fake MLflow server, `TrackingHistory`, `tracking_summary`.
+**Branch:** `plan/stage-3-tracking`. **Consumes:** I16 (models and protocols, `tracking/contract.py`), "Shared by contracts" (the `trk` prefix, the `tracking.synced` event type, `credentials/project_secrets.py`, the tracking tables and their unique keys), all from contracts task 1; I18 (`HookRegistry`, data-summary task 1); I20 (`Handoffs.current`, proposals task 1; the types are contracts task 2; task 5 only); the stage 2 GitHub client, `KeyStore`, `EventLog`. **Produces:** `Tracking` (I16) and its routes from task 1 (early PR), the fake MLflow server, `TrackingHistory`, `tracking_summary`.
 
 **Read first:** spec §7, §13 to §15 (tracking lines), overview I16 and I18; `integrations/github/api.py` (`request`, `GITHUB_API`), `agents/messaging/wakeups.py` (`start`, `_run_loop`, `close`: the model for the loop), `tests/fakes/fake_github.py` (the model for the fake server), `credentials/scrub.py` (`base_url_problem`, `error_text`, `scrub_values`).
 
@@ -22,9 +22,9 @@
 | 2 | The fake MLflow server and the MLflow adapter | task 1 |
 | 3 | The GitHub Actions adapter | task 1 |
 | 4 | The sync loop | tasks 2 and 3 |
-| 5 | The handoff's production alias, `TrackingHistory` and `tracking_summary` | task 1, data-summary task 1 (`HookRegistry`), proposals task 1 (`Handoffs`, I20) |
+| 5 | The handoff's production alias, `TrackingHistory` and `tracking_summary` | task 1, data-summary task 1 (`HookRegistry`), contracts task 2 (the I19 and I20 types), proposals task 1 (`Handoffs`, I20) |
 
-**Starts:** tasks 1 to 4 after contracts task 1; task 5 also after data-summary task 1 (the hook registry) and proposals task 1 (I20, the production alias).
+**Starts:** tasks 1 to 4 after contracts task 1; task 5 also after data-summary task 1 (the hook registry), contracts task 2 (the I19 and I20 types) and proposals task 1 (I20, the production alias).
 
 Task 1 gets an early PR, from `plan/stage-3-tracking-task1`: the pages plan reads its routes. Its service starts with no adapter registered (a sync of a source whose adapter is missing records the error "No adapter for this source type"); tasks 2 and 3 each add their one entry in `tracking/adapters/__init__.py`. Tasks 2 and 3 are independent of each other. In task 1, `ModelSummary.production_version` uses only the alias `production`; task 5 adds the handoff's mapping (state it in the early PR description).
 
