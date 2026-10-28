@@ -91,23 +91,15 @@ Answered in the stage 3 spec (`docs/superpowers/specs/2026-10-27-stage-3-onboard
 
 ### Stage 4: Monitoring loop
 
-Agreed:
-- Checks are deterministic code written by agents and delivered to the team's repository by PR; the team's own scheduler or CI runs them, never the app (the app can be offline). The app reads every result, and the LLM wakes only when one needs attention. A team with no scheduler gets one proposed by PR.
-- Data Quality keeps two test families, validation and drift. It classifies each change as bad data or real drift before acting, and explains every flag.
-- Model Performance uses metrics suited to the problem. For imbalanced data: PR-AUC, recall at a fixed precision, per-class metrics, never accuracy alone. It accounts for label delay.
-- Incidents have a category: data quality, drift, model performance, operational.
-- Alert Prioritization deduplicates, ranks and routes alerts, and merges raw alerts that share a cause into one incident.
-- Notifications: Discord and email (SMTP) in this stage. WhatsApp and Slack later.
-- Operational telemetry: GitHub Actions run history first. Airflow, cron and other schedulers come in through data connections.
-- Dashboard (one screen, each card linking to its page): pipeline map from Onboarding (stages are not fixed), current model version and metrics, deployment status, data quality, open incidents, agent status.
-- Shadow baseline, recorded silently from the very first result and never notifying anyone: the team's own existing monitoring (the checks, alerts and reports it ran before the agents), found by Onboarding and approved by the user. The app reads its results where they already land and never re-runs it; a per-source parser, approved by the user, turns each result into "ran / fired". A project with no readable existing monitoring has no baseline, and Stats says so instead of inventing one.
-- Verdicts on every incident, one click: real issue / not an issue / wrong type. Also: user-reported misses, baseline alerts the agents stayed silent on that the user marks real, and automatic confirmation when labels prove a metric drop. Verdicts cannot be backfilled, so they ship here.
-
-The spec must answer:
-- The incident data model and lifecycle.
-- How Alert Prioritization ranks (inputs and rules).
-- The scheduler design inside the single process.
-- Where results are read from and how each source's parser is stored and run (that checks live in the team's repository and run on the team's scheduler is decided).
+Agreed (spec: `docs/superpowers/specs/2026-10-28-stage-4-monitoring-design.md`, approved):
+- The app watches at any hour and is the first to know. It runs continuously and catches up after downtime without missing or repeating anything.
+- Checks are deterministic code written by agents and delivered to the team's repository by PR; the team's own scheduler or CI runs them, never the app. The app reads every result through sources and parsers into one standard result record; a feed or job that misses its expected time is a signal too (silence).
+- Signals are grouped by cause (and down the pipeline graph) into incidents with a lifecycle; the matching agent diagnoses and picks from the response menu, safest first, within the three tiers, always through the team's own commands (action hooks). Pre-approved rules are evaluated in code by the gate.
+- Data Quality keeps validation and drift, classifies bad data against real drift, and explains every flag. Model Performance uses metrics suited to the problem and the error costs, never accuracy alone, and accounts for label delay.
+- Severity and routing are deterministic code: paging never waits for a model. Alert Prioritization explains, merges and adjusts by one level. Discord and email; critical wakes the on-call person at any hour and escalates; a morning report. A heartbeat route lets the team's scheduler notice the app being down.
+- Dashboard (one screen, each card linking to its page): pipeline map, current model and metrics, open incidents, expectations at risk, agent status.
+- Baseline: the team's existing monitoring, read and recorded silently from the first result, never re-run and never notifying. Without readable existing monitoring there is no baseline, and Stats says so.
+- Verdicts on every incident (real issue / not an issue / wrong type), user-reported misses, automatic confirmation by labels. Verdicts cannot be backfilled, so they ship here.
 
 ### Stage 5: Action agents
 
@@ -173,7 +165,7 @@ Ideas, not adopted (see `project_knowledge.md`):
 
 - `local` (default): `mlops-agents start`. Binds to 127.0.0.1. Access token in the URL opened at start, exchanged for a session cookie. Local folders and GitHub repos. Keys in the OS keyring.
 - `server`: `mlops-agents start --server`. Password login (`MLOPS_AGENTS_PASSWORD`). GitHub repos only. Keys in an encrypted file unlocked by `MLOPS_AGENTS_MASTER_KEY`. HTTPS from a reverse proxy.
-- In both modes every API request needs a valid session, `Host`/`Origin` are checked, and state-changing requests carry a CSRF token. Mode rules are enforced by the API, not only the UI.
+- In both modes every API request needs a valid session, `Host`/`Origin` are checked, and state-changing requests carry a CSRF token. Mode rules are enforced by the API, not only the UI. One exception (stage 4): `GET /api/health/heartbeat`, which carries no data, takes no input and changes nothing, is answered without a session and without the Origin check; the Host check accepts the configured `public_url` host.
 
 ## IDs
 
@@ -197,6 +189,12 @@ Every stored entity has an ID of the form `<prefix>_<ULID>` (ULID: 26 characters
 | `trk` | tracking source | 3 |
 | `prp` | proposal | 3 |
 | `kno` | knowledge note | 3 |
+| `res` | result record | 4 |
+| `sig` | signal | 4 |
+| `rul` | pre-approved rule | 4 |
+| `hok` | action hook | 4 |
+| `win` | maintenance window | 4 |
+| `chk` | registered check | 4 |
 | `inc` | incident | 4 |
 
 Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`. Tracking record rows mirror another system's IDs and are keyed by their tracking source and that ID, with no prefix.
@@ -259,8 +257,8 @@ Role prompt.
 | `run` | Bash in the sandbox |
 | `message` | SendMessage, ScheduleWakeup |
 | `github` | OpenPullRequest, OpenIssue, CommentOnIssue |
-| `deploy` | train / deploy / rollback hooks |
-| `propose` | Propose (connections, handoff; later checks, parsers, deploy hooks) |
+| `deploy` | action hooks: the team's train, deploy, rollback, rerun, hold and fall-back commands |
+| `propose` | Propose (connections, handoff; stage 4: parsers, rules, action hooks, maintenance windows). Checks are delivered by PR (`github`). |
 
 Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec §5):
 
@@ -272,6 +270,14 @@ Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec 
 | bypass | allow | allow | allow | allow | allow | allow | ask |
 
 `propose` is the one class `bypass` does not skip: a proposal changes what agents may see or do, so the user always decides it.
+
+`deploy` exceptions (stage 4). For an action hook the gate also receives the hook's kind and the rule it cites, and evaluates that rule in code:
+
+| Hook kind | A cited rule holds, within its limits | Otherwise |
+|---|---|---|
+| train, deploy | ask at every level, `bypass` included | ask at every level, `bypass` included |
+| rollback, rerun, fall back | allow at `ask`, `autonomous`, `bypass`; deny at `suggest` | the `deploy` column above |
+| hold | allow at every level except `suggest`, where the person applies it in one click | same |
 
 ## Event and audit records (stage 2)
 
