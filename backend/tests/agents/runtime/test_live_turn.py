@@ -28,7 +28,6 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
-from tests.providers.fake_clock import FakeClock
 
 pytestmark = pytest.mark.live
 
@@ -71,7 +70,7 @@ async def test_live_turn_orchestrator_readme(
         )
         tools = default_registry()
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-        failover = KeyFailover(FakeClock())
+        failover = KeyFailover()  # a real provider: its rate limits clear in real time
         providers_svc = ProvidersService(databases, keystore, http, failover)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 

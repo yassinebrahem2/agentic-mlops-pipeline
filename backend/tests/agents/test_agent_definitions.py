@@ -40,7 +40,6 @@ from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
-from tests.providers.fake_clock import FakeClock
 
 STAGE_2_TOOLS = frozenset(
     {
@@ -379,7 +378,7 @@ async def test_live_orchestrator_adds_line_to_readme(
 
         tools = default_registry(tasks=tasks_svc)
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-        failover = KeyFailover(FakeClock())
+        failover = KeyFailover()  # a real provider: its rate limits clear in real time
         providers_svc = ProvidersService(databases, keystore, http, failover)
         agent_settings = AgentSettingsService(databases, providers_svc, catalog)
 
