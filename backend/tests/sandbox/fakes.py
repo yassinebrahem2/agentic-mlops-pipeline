@@ -10,12 +10,21 @@ from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog, EventRecord, EventType, Resync
 from mlops_agents.sandbox.docker import DockerResult, DockerRunner, DockerTimeoutError
+from mlops_agents.sandbox.projects import Mount
 
 
 class MemorySandboxProjects:
-    def __init__(self, roots: dict[str, Path] | None = None) -> None:
+    def __init__(
+        self,
+        roots: dict[str, Path] | None = None,
+        *,
+        connections: Any = None,
+        mounts: dict[str, Sequence[Mount]] | None = None,
+    ) -> None:
         self.roots = roots or {}
         self.network: dict[str, bool] = {}
+        self.connections = connections
+        self.mounts_map = mounts or {}
 
     async def root(self, project_id: str) -> Path:
         if project_id not in self.roots:
@@ -27,6 +36,11 @@ class MemorySandboxProjects:
 
     async def set_network(self, project_id: str, enabled: bool) -> None:
         self.network[project_id] = enabled
+
+    async def mounts(self, project_id: str) -> Sequence[Mount]:
+        if self.connections is not None:
+            return await self.connections.mounts(project_id)
+        return list(self.mounts_map.get(project_id, []))
 
 
 class FakeEventLog(EventLog):
