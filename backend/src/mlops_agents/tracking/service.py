@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -44,8 +43,6 @@ from mlops_agents.tracking.store import (
     query_versions,
     save_sync_result,
 )
-
-_log = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -181,13 +178,16 @@ class TrackingService(Tracking):
     async def sync(self, project_id: str, source_id: str | None = None) -> None:
         """Starts a sync in the background; tracking.synced reports its end."""
         await self._check_project(project_id)
-        task = asyncio.create_task(self.run_sync(project_id, source_id))
+        task = asyncio.create_task(self.run_sync(project_id, source_id, check_project=False))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
-    async def run_sync(self, project_id: str, source_id: str | None = None) -> None:
+    async def run_sync(
+        self, project_id: str, source_id: str | None = None, *, check_project: bool = True
+    ) -> None:
         """Runs the sync work, awaited."""
-        await self._check_project(project_id)
+        if check_project:
+            await self._check_project(project_id)
         if source_id is not None:
             await self._sync_source(project_id, source_id)
             return
