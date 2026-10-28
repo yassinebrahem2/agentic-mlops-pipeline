@@ -1,6 +1,6 @@
 """SQLAlchemy Core views of the tables created by migrations/. Kept in sync by test_tables.py."""
 
-from sqlalchemy import Column, Integer, MetaData, Table, Text
+from sqlalchemy import Column, Float, Integer, MetaData, Table, Text
 
 app_metadata = MetaData()
 project_metadata = MetaData()
@@ -32,6 +32,7 @@ providers = Table(
     Column("status", Text, nullable=False),
     Column("status_detail", Text),
     Column("created_at", Text, nullable=False),
+    Column("cooldown_minutes", Integer, nullable=False),
 )
 
 provider_keys = Table(
@@ -56,6 +57,8 @@ models = Table(
     Column("availability", Text, nullable=False),
     Column("availability_detail", Text),
     Column("verified_at", Text),
+    Column("model_type", Text, nullable=False),
+    Column("dimensions", Integer),
 )
 
 agent_model_defaults = Table(
@@ -81,6 +84,14 @@ app_settings = Table(
     Column("value", Text, nullable=False),
 )
 
+secret_refs = Table(
+    "secret_refs",
+    app_metadata,
+    Column("ref", Text, primary_key=True),
+    Column("project", Text, nullable=False),
+    Column("created", Text, nullable=False),
+)
+
 sessions = Table(
     "sessions",
     project_metadata,
@@ -102,6 +113,7 @@ turns = Table(
     Column("created_at", Text, nullable=False),
     Column("started_at", Text),
     Column("ended_at", Text),
+    Column("error_kind", Text),
 )
 
 messages = Table(
@@ -184,15 +196,18 @@ approvals = Table(
     Column("session_id", Text, nullable=False),
     Column("message_id", Text, nullable=False),
     Column("agent", Text, nullable=False),
-    Column("tool_call_id", Text, nullable=False),
-    Column("tool", Text, nullable=False),
-    Column("risk_class", Text, nullable=False),
+    Column("tool_call_id", Text),
+    Column("tool", Text),
+    Column("risk_class", Text),
     Column("preview", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("note", Text),
     Column("created_at", Text, nullable=False),
     Column("decided_at", Text),
     Column("task_id", Text),
+    Column("kind", Text, nullable=False),
+    Column("step", Integer),
+    Column("proposal_kind", Text),
 )
 
 events = Table(
@@ -239,4 +254,172 @@ wakeups = Table(
     Column("status", Text, nullable=False),
     Column("created_at", Text, nullable=False),
     Column("fired_at", Text),
+)
+
+# Stage 3, in the order 0004_stage3.sql creates them. notes_fts (FTS5) is not declared.
+
+connections = Table(
+    "connections",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("settings_json", Text, nullable=False),
+    Column("credential_ref", Text),
+    Column("status", Text, nullable=False),
+    Column("status_detail", Text),
+    Column("created", Text, nullable=False),
+    Column("updated", Text, nullable=False),
+)
+
+tracking_sources = Table(
+    "tracking_sources",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("type", Text, nullable=False),
+    Column("settings", Text, nullable=False),
+    Column("auth", Text, nullable=False),
+    Column("last_sync", Text),
+    Column("last_error", Text),
+    Column("created_at", Text, nullable=False),
+)
+
+tracked_models = Table(
+    "tracked_models",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("name", Text, primary_key=True),
+)
+
+model_versions = Table(
+    "model_versions",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("model", Text, primary_key=True),
+    Column("version", Text, primary_key=True),
+    Column("run_key", Text),
+    Column("aliases", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Column("evaluation", Text, nullable=False),
+)
+
+tracked_runs = Table(
+    "tracked_runs",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("key", Text, primary_key=True),
+    Column("experiment", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("started_at", Text),
+    Column("ended_at", Text),
+    Column("params", Text, nullable=False),
+    Column("tags", Text, nullable=False),
+    Column("git_commit", Text),
+    Column("datasets", Text, nullable=False),
+)
+
+run_metrics = Table(
+    "run_metrics",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("run_key", Text, primary_key=True),
+    Column("metric", Text, primary_key=True),
+    Column("step", Integer, primary_key=True, autoincrement=False),
+    Column("time", Text, primary_key=True),
+    Column("value", Float(), nullable=False),
+)
+
+deployments = Table(
+    "deployments",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("model", Text, primary_key=True),
+    Column("alias", Text, primary_key=True),
+    Column("seen_at", Text, primary_key=True),
+    Column("from_version", Text),
+    Column("to_version", Text),
+)
+
+ci_runs = Table(
+    "ci_runs",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("key", Text, primary_key=True),
+    Column("workflow", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("started_at", Text, nullable=False),
+    Column("duration_s", Float()),
+    Column("commit_sha", Text, nullable=False),
+    Column("url", Text, nullable=False),
+)
+
+evaluations = Table(
+    "evaluations",
+    project_metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("model", Text, primary_key=True),
+    Column("version", Text, primary_key=True),
+    Column("run_key", Text, nullable=False),
+    Column("schema_version", Integer, nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("fetched_at", Text, nullable=False),
+)
+
+notes = Table(
+    "notes",
+    project_metadata,
+    Column("seq", Integer, primary_key=True, autoincrement=True),
+    Column("id", Text, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("text", Text, nullable=False),
+    Column("source", Text),
+    Column("author", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
+)
+
+note_embeddings = Table(
+    "note_embeddings",
+    project_metadata,
+    Column("note_id", Text, primary_key=True),
+    Column("embedder", Text, nullable=False),
+    Column("dimensions", Integer, nullable=False),
+    Column("embedded_at", Text, nullable=False),
+)
+
+proposals = Table(
+    "proposals",
+    project_metadata,
+    Column("id", Text, primary_key=True),
+    Column("kind", Text, nullable=False),
+    Column("key", Text, nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("agent", Text, nullable=False),
+    Column("approval_id", Text),
+    Column("turn_id", Text, nullable=False),
+    Column("tool_call_id", Text, nullable=False),
+    Column("result", Text),
+    Column("created_at", Text, nullable=False),
+    Column("decided_at", Text),
+)
+
+handoff_versions = Table(
+    "handoff_versions",
+    project_metadata,
+    Column("version", Integer, primary_key=True, autoincrement=True),
+    Column("proposal_id", Text, nullable=False),
+    Column("approved_at", Text, nullable=False),
+    Column("payload", Text, nullable=False),
+)
+
+kickoff = Table(
+    "kickoff",
+    project_metadata,
+    Column("handoff_version", Integer, primary_key=True, autoincrement=False),
+    Column("agent", Text, primary_key=True),
+    Column("message_id", Text),
+    Column("posted_at", Text),
+    Column("status", Text, nullable=False),
 )

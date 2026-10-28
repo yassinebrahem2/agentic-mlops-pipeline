@@ -32,6 +32,7 @@ MESSAGE: dict[str, Any] = {
     "parts": [{"type": "text", "text": "hi"}],
     "status": "complete",
     "created_at": "2026-10-21T18:00:00Z",
+    "error_kind": None,
 }
 
 # One valid wire payload per event type: the shapes I1 fixes.
@@ -47,7 +48,7 @@ EVENT_DATA: dict[str, dict[str, Any]] = {
     },
     "message.updated": {"message": MESSAGE},
     "turn.waiting": {"turn_id": "trn_01"},
-    "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None},
+    "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None, "error_kind": None},
     "resync": {},
 }
 STREAM_EVENT: TypeAdapter[StreamEvent] = TypeAdapter(StreamEvent)

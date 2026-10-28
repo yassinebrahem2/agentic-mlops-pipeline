@@ -60,6 +60,7 @@ const provider: Provider = {
   keys: [],
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
 };
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {

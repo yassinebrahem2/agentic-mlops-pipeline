@@ -16,6 +16,9 @@ EventType = Literal[
     "pr.opened", "pr.updated", "issue.opened", "issue.commented", "issue.updated",
     "approval.requested", "approval.decided", "message.sent", "wakeup.scheduled",
     "sandbox.build.started", "sandbox.build.finished", "sandbox.build.failed",
+    "connection.created", "connection.updated", "connection.deleted", "tracking.synced",
+    "proposal.created", "proposal.decided", "handoff.approved", "turn.stalled", "turn.resumed",
+    "note.saved", "note.deleted",
 ]  # fmt: skip
 
 AuditDecision = Literal[

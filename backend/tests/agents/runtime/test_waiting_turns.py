@@ -36,7 +36,7 @@ from mlops_agents.storage.tables import turns
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -112,7 +112,13 @@ def _make_manager(
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     workspace_svc = WorkspaceService(
-        _get_settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
+        _get_settings(paths),
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        http,
+        memory_project_secrets(databases),
     )
     return SessionManager(
         databases=databases,
