@@ -81,3 +81,7 @@ def test_invalid_zip(tmp_path: Path) -> None:
     path = tmp_path / "mlops_agents-0.1.0-py3-none-any.whl"
     path.write_text("not a zip", encoding="utf-8")
     assert check_wheel(path)
+
+
+def test_duckdb_fragment_in_built_wheel() -> None:
+    assert (ROOT / "backend/src/mlops_agents/sandbox/templates/_duckdb.fragment").is_file()

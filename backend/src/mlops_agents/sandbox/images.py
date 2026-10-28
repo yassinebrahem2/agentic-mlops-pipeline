@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 
-from mlops_agents.config import APP_NAME
+from mlops_agents.config import APP_NAME, DUCKDB_VERSION
 from mlops_agents.sandbox.contract import EnvironmentStatus, SandboxUnavailable
 from mlops_agents.sandbox.dependencies import read_dependency_files
 from mlops_agents.sandbox.docker import (
@@ -19,6 +19,10 @@ from mlops_agents.sandbox.docker import (
     DockerRunner,
     DockerTimeoutError,
     docker_error_boundary,
+)
+from mlops_agents.sandbox.duckdb_cli import (
+    DUCKDB_CLI_SHA256_AMD64,
+    DUCKDB_CLI_SHA256_ARM64,
 )
 from mlops_agents.sandbox.environment import (
     DEFAULT_PYTHON_VERSION,
@@ -34,23 +38,37 @@ FAIL_DETAIL_LINES = 50
 
 
 def load_template(template_name: str, python_version: str) -> str:
-    """Loads a Dockerfile template and injects the target Python version literally."""
+    """Loads a Dockerfile template, composes the duckdb fragment, and injects ARG values literally."""
     if not VALID_PYTHON_VERSION_RE.fullmatch(python_version):
         python_version = DEFAULT_PYTHON_VERSION
 
     template_file = f"{template_name}.Dockerfile"
-    content = (
-        resources.files("mlops_agents.sandbox.templates")
-        .joinpath(template_file)
-        .read_text(encoding="utf-8")
-    )
+    templates_dir = resources.files("mlops_agents.sandbox.templates")
+    content = templates_dir.joinpath(template_file).read_text(encoding="utf-8")
+    fragment = templates_dir.joinpath("_duckdb.fragment").read_text(encoding="utf-8")
+
+    if "# @duckdb\n" in content:
+        content = content.replace("# @duckdb\n", fragment.strip() + "\n\n")
+    elif "# @duckdb" in content:
+        content = content.replace("# @duckdb", fragment.strip() + "\n")
+
+    arg_mapping: dict[str, str] = {
+        "PYTHON_VERSION": python_version,
+        "DUCKDB_VERSION": DUCKDB_VERSION,
+        "DUCKDB_CLI_SHA256_AMD64": DUCKDB_CLI_SHA256_AMD64,
+        "DUCKDB_CLI_SHA256_ARM64": DUCKDB_CLI_SHA256_ARM64,
+    }
 
     # Substitute literally line by line to prevent any regex or newline injection
     lines: list[str] = []
     for line in content.splitlines(keepends=True):
-        if line.startswith("ARG PYTHON_VERSION="):
-            lines.append(f"ARG PYTHON_VERSION={python_version}\n")
-        else:
+        replaced = False
+        for arg_name, arg_val in arg_mapping.items():
+            if line.startswith(f"ARG {arg_name}="):
+                lines.append(f"ARG {arg_name}={arg_val}\n")
+                replaced = True
+                break
+        if not replaced:
             lines.append(line)
     return "".join(lines)
 

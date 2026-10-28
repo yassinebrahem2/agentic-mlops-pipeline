@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import re
+import tomllib
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import pytest
 
-from mlops_agents.config import APP_NAME
+from mlops_agents.config import APP_NAME, DUCKDB_VERSION
 from mlops_agents.sandbox.docker import DockerResult
+from mlops_agents.sandbox.duckdb_cli import (
+    DUCKDB_CLI_SHA256_AMD64,
+    DUCKDB_CLI_SHA256_ARM64,
+)
 from mlops_agents.sandbox.environment import DetectedEnvironment
 from mlops_agents.sandbox.images import (
     BUILD_TIMEOUT_S,
@@ -243,3 +249,71 @@ def test_build_context_refuses_symlinks(tmp_path: Path) -> None:
 
     with pytest.raises(OSError, match="symlink"):
         snapshot_image("prj_123", worktree, detected)
+
+
+TEMPLATES = ("base", "micromamba", "pyproject", "requirements", "uv")
+
+
+@pytest.mark.parametrize("tmpl", TEMPLATES)
+def test_load_template_contains_duckdb_and_no_latest(tmpl: str) -> None:
+    content = load_template(tmpl, "3.12")
+    assert f"ARG DUCKDB_VERSION={DUCKDB_VERSION}\n" in content
+    assert f"ARG DUCKDB_CLI_SHA256_AMD64={DUCKDB_CLI_SHA256_AMD64}\n" in content
+    assert f"ARG DUCKDB_CLI_SHA256_ARM64={DUCKDB_CLI_SHA256_ARM64}\n" in content
+    assert "latest" not in content.lower()
+    assert "duckdb==${DUCKDB_VERSION}" in content or f"duckdb=={DUCKDB_VERSION}" in content
+    assert "/usr/local/bin/duckdb" in content
+
+
+def test_duckdb_version_in_dockerfile_equals_config() -> None:
+    for tmpl in TEMPLATES:
+        content = load_template(tmpl, "3.12")
+        match = re.search(r"^ARG DUCKDB_VERSION=(.+)$", content, re.MULTILINE)
+        assert match is not None
+        assert match.group(1).strip() == DUCKDB_VERSION
+
+
+def test_tag_changes_when_duckdb_version_or_digest_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    base_tag = compute_image_tag("prj_1", load_template("base", "3.12"), {})
+    # Same inputs -> stable
+    assert compute_image_tag("prj_1", load_template("base", "3.12"), {}) == base_tag
+
+    # Change DUCKDB_VERSION
+    import mlops_agents.sandbox.images as img_mod
+
+    monkeypatch.setattr(img_mod, "DUCKDB_VERSION", "9.9.9")
+    tag_ver = compute_image_tag("prj_1", load_template("base", "3.12"), {})
+    assert tag_ver != base_tag
+
+    # Reset and change AMD64 digest
+    monkeypatch.setattr(img_mod, "DUCKDB_VERSION", DUCKDB_VERSION)
+    monkeypatch.setattr(img_mod, "DUCKDB_CLI_SHA256_AMD64", "0" * 64)
+    tag_amd = compute_image_tag("prj_1", load_template("base", "3.12"), {})
+    assert tag_amd != base_tag
+
+    # Reset and change ARM64 digest
+    monkeypatch.setattr(img_mod, "DUCKDB_CLI_SHA256_AMD64", DUCKDB_CLI_SHA256_AMD64)
+    monkeypatch.setattr(img_mod, "DUCKDB_CLI_SHA256_ARM64", "1" * 64)
+    tag_arm = compute_image_tag("prj_1", load_template("base", "3.12"), {})
+    assert tag_arm != base_tag
+
+
+def test_duckdb_fragment_read_through_importlib_resources() -> None:
+    from importlib import resources
+
+    fragment = (
+        resources.files("mlops_agents.sandbox.templates")
+        .joinpath("_duckdb.fragment")
+        .read_text(encoding="utf-8")
+    )
+    assert "ARG DUCKDB_VERSION=" in fragment
+    assert "/usr/local/bin/duckdb" in fragment
+
+
+def test_pyproject_pins_duckdb_version() -> None:
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    content = pyproject_path.read_text(encoding="utf-8")
+    data = tomllib.loads(content)
+    dependencies: list[str] = data.get("project", {}).get("dependencies", [])
+    expected = f"duckdb=={DUCKDB_VERSION}"
+    assert expected in dependencies
