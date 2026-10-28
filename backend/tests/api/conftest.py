@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx2
 import pytest
@@ -74,16 +74,26 @@ async def started_app(
         yield app
 
 
-def signed_in(app: FastAPI, base_url: str, *, in_process: bool = True) -> httpx2.AsyncClient:
+def signed_in(
+    app: FastAPI,
+    base_url: str,
+    *,
+    in_process: bool = True,
+    timeout: httpx2.Timeout | float | None = None,
+) -> httpx2.AsyncClient:
     """A client holding a fresh session cookie and its CSRF token. In process it calls `app`
     through ASGITransport; otherwise it calls `base_url` over a real socket."""
     signer: SessionSigner = app.state.signer
     cookie, csrf = signer.issue()
+    client_kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
     return httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app) if in_process else None,
         base_url=base_url,
         cookies={SESSION_COOKIE: cookie, CSRF_COOKIE: csrf},
         headers={CSRF_HEADER: csrf},
+        **client_kwargs,
     )
 
 
@@ -142,6 +152,8 @@ class LiveServer:
     serving: asyncio.Task[None]
 
     async def stop(self) -> None:
+        if self.serving.done():
+            return
         self.server.should_exit = True
         await self.serving
 
@@ -180,7 +192,12 @@ async def live_app(tmp_path: Path) -> AsyncIterator[FastAPI]:
 async def live_client(live_app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
     """A signed-in client for `live_app` over a real socket, so it can read a stream."""
     port = live_app.state.services.settings.port
-    async with signed_in(live_app, f"http://127.0.0.1:{port}", in_process=False) as http:
+    async with signed_in(
+        live_app,
+        f"http://127.0.0.1:{port}",
+        in_process=False,
+        timeout=httpx2.Timeout(20.0, connect=10.0),
+    ) as http:
         yield http
 
 
