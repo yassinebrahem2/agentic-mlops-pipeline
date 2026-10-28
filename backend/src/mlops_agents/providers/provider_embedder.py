@@ -75,7 +75,7 @@ class ProviderEmbedder:
         except Exception as exc:
             keys = await self._providers.keys_for(self._provider.id)
             classified = classify(exc, keys)
-            raise EmbedderUnavailable(classified.message) from exc
+            raise EmbedderUnavailable(classified.message) from None
 
         if len(result) != len(texts):
             raise EmbedderUnavailable(

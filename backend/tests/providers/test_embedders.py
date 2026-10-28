@@ -9,7 +9,7 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.provider_embedder import ProviderEmbedder
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import app_settings, project_settings
+from mlops_agents.storage.tables import app_settings, models, project_settings
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
@@ -294,3 +294,97 @@ async def test_two_projects_have_independent_overrides(
     await embedders_svc.set_override("prj_1", None)
     assert await embedders_svc.chosen_override("prj_1") is None
     assert await embedders_svc.chosen_override("prj_2") == wide.address
+
+
+async def test_provider_marked_needs_attention_is_still_usable(
+    embedders_svc: EmbeddersService,
+    providers_svc: ProvidersService,
+    fake_openai: RunningFake,
+) -> None:
+    embed_addr, _ = await _setup_models(providers_svc, fake_openai)
+    provider = await providers_svc.get_provider("fake")
+    await providers_svc.mark_needs_attention(provider.id, "exhausted keys")
+    await embedders_svc.set_default(embed_addr)
+
+    st = await embedders_svc.default_status()
+    assert st.configured
+    assert st.problem is None
+    assert st.dimensions == 16
+
+    emb = await embedders_svc.for_project("prj_1")
+    assert emb is not None
+    assert emb.address == embed_addr
+
+
+async def test_hosted_provider_with_no_key_is_unusable(
+    embedders_svc: EmbeddersService,
+    providers_svc: ProvidersService,
+    fake_openai: RunningFake,
+    databases: Databases,
+) -> None:
+    await providers_svc.create_provider(
+        ProviderCreate(name="hosted-nokey", kind="hosted", base_url=fake_openai.base_url)
+    )
+    m = await providers_svc.add_model(
+        ModelCreate(provider="hosted-nokey", wire_model_id="fake-embed", model_type="embedder")
+    )
+    # Mark verified so verification check passes and "has no key" check is reached
+    app_engine = await databases.app()
+    async with app_engine.begin() as conn:
+        await conn.execute(
+            models.update()
+            .where(models.c.address == m.address)
+            .values(availability="verified", dimensions=16)
+        )
+    with pytest.raises(DomainError) as err:
+        await embedders_svc.set_default(m.address)
+    assert err.value.status == 409
+    assert "has no key" in err.value.message
+
+    # Force into app_settings to test status and for_project
+    async with app_engine.begin() as conn:
+        await conn.execute(
+            sqlite_insert(app_settings)
+            .values(key=EMBEDDER_KEY, value=m.address)
+            .on_conflict_do_update(
+                index_elements=[app_settings.c.key],
+                set_={"value": m.address},
+            )
+        )
+    st = await embedders_svc.default_status()
+    assert st.configured
+    assert st.problem is not None
+    assert "has no key" in st.problem
+    assert await embedders_svc.for_project("prj_1") is None
+
+
+async def test_provider_gone_gives_problem_and_none(
+    embedders_svc: EmbeddersService,
+    providers_svc: ProvidersService,
+    fake_openai: RunningFake,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embed_addr, _ = await _setup_models(providers_svc, fake_openai)
+    provider = await providers_svc.get_provider("fake")
+    await embedders_svc.set_default(embed_addr)
+
+    # Simulate provider row being absent when get_provider_by_id is called
+    orig_get = providers_svc.get_provider_by_id
+
+    async def get_missing(pid: str):
+        if pid == provider.id:
+            raise DomainError("provider_not_found", "Provider not found", status=404)
+        return await orig_get(pid)
+
+    monkeypatch.setattr(providers_svc, "get_provider_by_id", get_missing)
+
+    st = await embedders_svc.default_status()
+    assert st.configured
+    assert st.problem is not None
+    assert "no longer exists" in st.problem
+    assert await embedders_svc.for_project("prj_1") is None
+
+    with pytest.raises(DomainError) as err:
+        await embedders_svc.set_override("prj_1", embed_addr)
+    assert err.value.status == 409
+    assert "no longer exists" in err.value.message

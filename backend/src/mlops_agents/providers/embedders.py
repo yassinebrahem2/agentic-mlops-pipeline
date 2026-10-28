@@ -167,17 +167,6 @@ class EmbeddersService:
                 problem=problem,
             )
 
-        if provider.status == "needs_attention":
-            return EmbedderStatus(
-                configured=True,
-                address=address,
-                dimensions=None,
-                problem=(
-                    f"{provider.name} needs attention: {provider.status_detail}. "
-                    "Fix it in AI providers."
-                ),
-            )
-
         if provider.kind == "hosted" and not provider.keys:
             return EmbedderStatus(
                 configured=True,
@@ -194,21 +183,7 @@ class EmbeddersService:
         )
 
     async def _require_usable_embedder(self, address: str) -> None:
-        entry = await self._providers.require_model(address)
-        problem = entry.problem_for("embedder")
-        if problem is not None:
-            raise DomainError("model_not_usable", problem, status=409)
-
-        provider = await self._providers.get_provider_by_id(entry.provider_id)
-        if provider.status == "needs_attention":
-            raise DomainError(
-                "model_not_usable",
-                f"{provider.name} needs attention: {provider.status_detail}. Fix it in AI providers.",
-                status=409,
-            )
-        if provider.kind == "hosted" and not provider.keys:
-            raise DomainError(
-                "model_not_usable",
-                f"{provider.name} has no key. Add one in AI providers.",
-                status=409,
-            )
+        await self._providers.require_model(address)
+        status = await self._resolve_status(address)
+        if status.problem is not None:
+            raise DomainError("model_not_usable", status.problem, status=409)

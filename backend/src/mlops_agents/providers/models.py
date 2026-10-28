@@ -53,6 +53,7 @@ _TYPE_LABELS: dict[ModelType, str] = {
 }
 
 
+# openapi-typescript marks properties with defaults as required unless default is stripped from schema
 def _strip_default(schema: JsonDict) -> None:
     schema.pop("default", None)
 

@@ -152,6 +152,9 @@ async def test_two_keys_failover_on_rate_limit(
     res = await embedder.embed(["test failover"])
     assert len(res) == 1
     assert res[0] == fake_embedding("test failover", 16)
+    assert len(fake_openai.state.request_headers) == 2
+    assert fake_openai.state.request_headers[0]["authorization"] == "Bearer key_1"
+    assert fake_openai.state.request_headers[1]["authorization"] == "Bearer key_2"
 
 
 async def test_self_hosted_provider_called_with_attempt_none(
@@ -178,6 +181,7 @@ async def test_self_hosted_provider_called_with_attempt_none(
     assert len(failover.calls) == 1
     assert failover.calls[0]["cooldown_minutes"] == provider.cooldown_minutes
     assert failover.calls[0]["wait"] is False
+    assert fake_openai.state.request_headers[-1]["authorization"] == "Bearer not-needed"
 
 
 async def test_failover_all_keys_exhausted_mapping(
@@ -270,11 +274,14 @@ async def test_wrong_dimensions_raises_verify_again(
 ) -> None:
     svc = ProvidersService(databases, keystore, model_http)
     provider = await svc.create_provider(
-        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+        ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
-    failover = RecordingFailover()
+    await svc.add_key("fake-hosted", "key_1")
+    await svc.add_key("fake-hosted", "key_2")
+    provider = await svc.get_provider("fake-hosted")
+    failover = KeyFailover()
     embedder = ProviderEmbedder(
-        address="fake:fake-embed",
+        address="fake-hosted:fake-embed",
         dimensions=16,
         provider=provider,
         wire_model_id="fake-embed",
@@ -287,8 +294,35 @@ async def test_wrong_dimensions_raises_verify_again(
         await embedder.embed(["hello"])
     assert "8 dimensions" in str(err.value)
     assert "Verify it again in AI providers." in str(err.value)
-    # Raised after call returned, so recording failover saw 1 successful call
-    assert len(failover.calls) == 1
+    assert len(fake_openai.state.requests) == 1
+    assert all(st.status == "ok" for st in failover.states(provider, "fake-embed"))
+
+
+async def test_returned_count_mismatch_raises_unavailable(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    svc = ProvidersService(databases, keystore, model_http)
+    provider = await svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    failover = KeyFailover()
+    embedder = ProviderEmbedder(
+        address="fake:fake-embed",
+        dimensions=16,
+        provider=provider,
+        wire_model_id="fake-embed",
+        failover=failover,
+        providers=svc,
+        http=model_http,
+    )
+    fake_openai.state.embedding_truncate_count = 1
+    with pytest.raises(EmbedderUnavailable) as err:
+        await embedder.embed(["first text", "second text"])
+    assert "returned 1 embeddings for 2 texts" in str(err.value)
+    assert "Verify it again in AI providers." in str(err.value)
 
 
 async def test_unreachable_provider_raises_scrubbed(
