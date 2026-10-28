@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import RowMapping, insert, select, update
@@ -77,6 +77,23 @@ class ConnectionsService:
                 status=422,
                 detail={"errors": errors},
             ) from None
+
+    def _stored(self, settings_json: str) -> dict[str, Any]:
+        """A row's stored settings, for `_parse`; never the text of the decode error."""
+        try:
+            value = json.loads(settings_json)
+        except json.JSONDecodeError:
+            value = None
+        if not isinstance(value, dict):
+            raise DomainError(
+                "connection_invalid", "The stored settings are not valid JSON.", status=422
+            )
+        return cast(dict[str, Any], value)
+
+    async def _load(self, project_id: str, connection_id: str) -> tuple[ConnectionKind, BaseModel]:
+        row = await self._get_row(project_id, connection_id)
+        kind_obj = self._registry.get(row["kind"])
+        return kind_obj, self._parse(kind_obj, self._stored(row["settings_json"]))
 
     async def _read(self, kind: ConnectionKind, parsed: BaseModel) -> tuple[Findings, str | None]:
         findings = await asyncio.to_thread(kind.findings, parsed)
@@ -210,15 +227,11 @@ class ConnectionsService:
         )
 
     async def tables(self, project_id: str, connection_id: str) -> list[TableRef]:
-        row = await self._get_row(project_id, connection_id)
-        kind_obj = self._registry.get(row["kind"])
-        parsed = kind_obj.settings_model.model_validate(json.loads(row["settings_json"]))
+        kind_obj, parsed = await self._load(project_id, connection_id)
         return await asyncio.to_thread(kind_obj.tables, parsed)
 
     async def data_version(self, project_id: str, connection_id: str, table: str) -> str:
-        row = await self._get_row(project_id, connection_id)
-        kind_obj = self._registry.get(row["kind"])
-        parsed = kind_obj.settings_model.model_validate(json.loads(row["settings_json"]))
+        kind_obj, parsed = await self._load(project_id, connection_id)
         tables = await asyncio.to_thread(kind_obj.tables, parsed)
         matching = next((t for t in tables if t.name == table), None)
         if matching is None:
@@ -231,9 +244,7 @@ class ConnectionsService:
         return await asyncio.to_thread(kind_obj.data_version, parsed, matching)
 
     async def duckdb_source(self, project_id: str, connection_id: str, table: str) -> DuckDbSource:
-        row = await self._get_row(project_id, connection_id)
-        kind_obj = self._registry.get(row["kind"])
-        parsed = kind_obj.settings_model.model_validate(json.loads(row["settings_json"]))
+        kind_obj, parsed = await self._load(project_id, connection_id)
         tables = await asyncio.to_thread(kind_obj.tables, parsed)
         matching = next((t for t in tables if t.name == table), None)
         if matching is None:
@@ -254,13 +265,13 @@ class ConnectionsService:
         for row in rows:
             try:
                 kind_obj = self._registry.get(row.kind)
-                parsed = kind_obj.settings_model.model_validate(json.loads(row.settings_json))
+                parsed = self._parse(kind_obj, self._stored(row.settings_json))
                 await asyncio.to_thread(kind_obj.validate, parsed, None)
                 m = await asyncio.to_thread(kind_obj.sandbox_mount, row.name, parsed)
                 if m is not None:
                     mounts_list.append(m)
-            except (DomainError, OSError, ValidationError, KeyError, json.JSONDecodeError) as exc:
-                logger.debug("Skipping mount for connection %s: %s", row.name, exc)
+            except (DomainError, OSError) as exc:
+                logger.debug("Skipping mount for connection %s: %s", row.name, error_text(exc))
                 continue
 
         mounts_list.sort(key=lambda m: m.container_path)
@@ -277,10 +288,12 @@ class ConnectionsService:
             status_detail: str | None = None
             findings = Findings(unsupported_files=[], secret_files=[], truncated=False)
             data_ver: str | None = None
+            settings: dict[str, Any] = {}
 
             try:
+                settings = self._stored(row.settings_json)
                 kind_obj = self._registry.get(row.kind)
-                parsed = kind_obj.settings_model.model_validate(json.loads(row.settings_json))
+                parsed = self._parse(kind_obj, settings)
                 await asyncio.to_thread(kind_obj.validate, parsed, None)
                 findings, data_ver = await self._read(kind_obj, parsed)
             except (DomainError, OSError) as exc:
@@ -301,7 +314,7 @@ class ConnectionsService:
                     id=row.id,
                     name=row.name,
                     kind=row.kind,
-                    settings=json.loads(row.settings_json),
+                    settings=settings,
                     status=status,
                     status_detail=status_detail,
                     findings=findings,

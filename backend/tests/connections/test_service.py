@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -12,33 +11,9 @@ from sqlalchemy import select
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Findings
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
-from mlops_agents.connections.registry import KindRegistry
-from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.errors import DomainError
-from mlops_agents.events.log import SqliteEventLog
-from mlops_agents.paths import DataPaths
-from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import connections
-
-ServiceEnv = tuple[ConnectionsService, Databases, SqliteEventLog, DataPaths]
-
-
-@pytest.fixture
-async def service_env(tmp_path: Path) -> AsyncIterator[ServiceEnv]:
-    home = tmp_path / "home"
-    home.mkdir()
-    paths = DataPaths(home)
-    paths.ensure()
-
-    databases = Databases(paths)
-    await databases.app()
-
-    events = SqliteEventLog(databases)
-    registry = KindRegistry([LocalFolderKind(paths.root)])
-    service = ConnectionsService(databases, events, registry)
-
-    yield service, databases, events, paths
-    await databases.dispose()
+from tests.connections.conftest import ServiceEnv
 
 
 async def test_service_lifecycle(service_env: ServiceEnv, tmp_path: Path) -> None:
