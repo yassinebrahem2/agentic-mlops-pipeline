@@ -246,6 +246,16 @@ def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     assert "ScheduleWakeup" in str(exc_info_sched.value)
 
 
+def _load_local_env() -> None:
+    env_file = Path(__file__).resolve().parents[2] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s and not s.startswith("#") and "=" in s:
+                k, v = s.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
 _BASE_URLS = {
     "groq": "https://api.groq.com/openai/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -261,6 +271,7 @@ async def test_live_agent_definitions(
     keystore: MemoryKeyStore,
     git_env: dict[str, str],
 ) -> None:
+    _load_local_env()
     live_model = os.environ.get("MLOPS_AGENTS_LIVE_MODEL")
     if not live_model:
         pytest.skip("set MLOPS_AGENTS_LIVE_MODEL to run this live test")
