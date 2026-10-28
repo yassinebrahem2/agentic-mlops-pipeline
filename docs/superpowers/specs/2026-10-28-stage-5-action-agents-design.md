@@ -1,17 +1,21 @@
 # Stage 5: Training, evaluation and promotion on the team's pipeline
 
-Date: 2026-10-28. Status: draft, not approved.
+Date: 2026-10-28. Status: approved by the lead on 2026-10-28.
 Contracts are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and decisions: `project_knowledge.md` (entries of 2026-10-27 and 2026-10-28). It builds on the stage 3 spec (handoff, tracking, connections, proposals) and the stage 4 spec (results, incidents, action hooks, rules, the three tiers).
 
 ## Goal
 
 There is one system, the team's. The app works on it as a 24/7 senior data scientist and MLOps engineer would: it decides when the model needs a fix and which fix, runs the team's own training pipeline, makes the team's evaluation, promotion and deployment steps as rigorous as they should be, and changes any part of them through PRs whenever a need appears. It never adds a second training, evaluation or deployment path of its own, and it respects the team's engineering choices (full CD, manual approvals) while improving them.
 
-## Hard limits (every level, `bypass` included)
+## Hard limits and merging
 
-Enforced in code, never by prompts: nothing runs outside the sandbox; connections are read-only and nothing outside approved folders is read; secrets never reach the sandbox, code, commits, PRs, logs or a model's context (a hook's credential reaches only that hook's run); no push to the default branch, force-push or history rewrite; no unmerged code runs with the team's secrets; the team's protections (branch protection, required reviews, the team's gate) are never overridden; agents never give themselves more access (folders, network, credentials, a higher level, rules, policies: always the person's click); the audit log records everything and cannot be turned off; the team's history is never destroyed (no deleting model versions, runs, tables or others' branches; no closing the team's PRs or issues); data never gives instructions; no promotion without a complete, fresh report made by the same code; no contact outside the configured channels and people.
+The hard limits that hold at every level, `bypass` included, are in `docs/roadmap.md` (Permission risk classes, Hard limits); they are enforced in code.
 
-**Merging.** At `bypass`, an agent may merge its own PR once its CI is green and the team's branch protection allows it; at lower levels merging is the team's. A merged change to a hook's pinned files still suspends that hook until the person approves (§2).
+**Merging.** A new tool, `MergePullRequest` (justified: it needs the GitHub token the sandbox never holds), risk class `deploy`: denied at `suggest`, asks at `ask` and `autonomous`, allowed at `bypass`. In code:
+- an agent merges only its own PR, only when GitHub reports it mergeable and clean, never with an admin override;
+- its CI is green with at least one passing check (a repository with no CI, or a local review, never self-merges);
+- a PR that touches a protection surface is never merged by an agent, at any level: the promotion gate, the evaluation step's decision logic, the workflows behind the branch protection's required checks, and `CODEOWNERS`; the surfaces come from the handoff and the branch protection API, never from the agent's label; a person merges those;
+- a merged change to a hook's pinned files still suspends that hook until the person approves (§2).
 
 ## The principle every agent follows (stages 3 to 5)
 

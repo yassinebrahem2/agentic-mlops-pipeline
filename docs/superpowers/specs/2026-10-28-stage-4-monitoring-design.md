@@ -1,6 +1,6 @@
 # Stage 4: The monitoring loop
 
-Date: 2026-10-28. Status: approved by the lead on 2026-10-28; amended with the stage 5 spec (training policies, fix requests, evaluation in the team's pipeline, continuous PRs), pending that spec's approval.
+Date: 2026-10-28. Status: approved by the lead on 2026-10-28; amended with the stage 5 spec (training policies, fix requests, evaluation in the team's pipeline, continuous PRs), approved with it on 2026-10-28.
 Contracts (IDs, folder layout, SQLite rules, agent definitions, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and decisions: `project_knowledge.md` (entries of 2026-10-27 and 2026-10-28). Stages 1 to 3 stay as their specs say, unless changed here.
 
 ## Goal
