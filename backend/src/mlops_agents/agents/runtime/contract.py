@@ -33,6 +33,8 @@ MessageStatus = Literal["complete", "streaming", "queued", "stopped", "interrupt
 DecidedApprovalStatus = Literal["approved", "rejected", "cancelled", "expired"]
 ApprovalStatus = Literal["pending", DecidedApprovalStatus]
 TurnEnd = Literal["done", "stopped", "interrupted", "failed"]
+# Why a turn failed, when the UI offers a remedy for it (Try again after keys_exhausted).
+ErrorKind = Literal["keys_exhausted"]
 
 
 class TextPart(BaseModel):
@@ -77,6 +79,7 @@ class MessageView(BaseModel):
     parts: list[Part]
     status: MessageStatus
     created_at: str
+    error_kind: ErrorKind | None = None  # set on a failed turn's agent message
 
 
 class TaskView(BaseModel):
@@ -126,6 +129,7 @@ class TurnEndedData(BaseModel):
     turn_id: str
     status: TurnEnd
     error: str | None
+    error_kind: ErrorKind | None = None
 
 
 class ResyncData(BaseModel):
@@ -260,6 +264,7 @@ __all__ = [
     "ApprovalStatus",
     "AuthorKind",
     "DecidedApprovalStatus",
+    "ErrorKind",
     "MessageCreated",
     "MessageData",
     "MessageStatus",

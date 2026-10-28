@@ -7,6 +7,8 @@ from mlops_agents.credentials.scrub import base_url_problem
 ProviderKind = Literal["hosted", "self_hosted"]
 ProviderStatus = Literal["ok", "needs_attention"]
 Availability = Literal["untested", "verified", "needs_attention"]
+# Equal to the providers.cooldown_minutes column default in app.db (a test pins the two).
+DEFAULT_COOLDOWN_MINUTES = 15
 
 
 class ProviderCreate(BaseModel):
@@ -40,6 +42,7 @@ class Provider(BaseModel):
     status: ProviderStatus
     status_detail: str | None
     keys: list[KeyHint]
+    cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES
 
 
 class ModelCreate(BaseModel):

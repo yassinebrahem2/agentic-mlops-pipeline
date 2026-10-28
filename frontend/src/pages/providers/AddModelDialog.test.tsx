@@ -14,6 +14,7 @@ const groq: Provider = {
   base_url: "https://api.groq.com/openai/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [{ position: 1, hint: "gsk_...abcd" }],
 };
 
