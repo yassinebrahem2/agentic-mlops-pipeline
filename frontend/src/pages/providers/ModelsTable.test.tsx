@@ -60,6 +60,7 @@ const groq: Provider = {
 
 const untested: ModelEntry = {
   address: "fake:fake-tools",
+  model_type: "chat",
   provider_id: "prv_2",
   provider_name: "fake",
   wire_model_id: "fake-tools",
@@ -83,6 +84,7 @@ const verified: ModelEntry = {
 
 const slashed: ModelEntry = {
   address: "groq:openai/gpt-oss-120b",
+  model_type: "chat",
   provider_id: "prv_1",
   provider_name: "groq",
   wire_model_id: "openai/gpt-oss-120b",
