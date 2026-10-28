@@ -30,7 +30,9 @@ class ApprovalView(BaseModel):
 
 class ApprovalObserver(Protocol):
     """Told of every approval asked, and of every move out of pending (approve, reject,
-    cancel, Stop, expiry), each after it is stored."""
+    cancel, Stop, expiry), each after it is stored. `decided` may run under the recovery or
+    the session lock: an observer must not block, and must not call back into Approvals or
+    AgentSessions from `decided`."""
 
     async def asked(self, view: ApprovalView) -> None: ...
 

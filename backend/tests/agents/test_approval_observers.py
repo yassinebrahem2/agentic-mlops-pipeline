@@ -5,8 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
@@ -14,6 +19,7 @@ from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.sqlite import connect_sync
 from tests.agents.approval_env import (
     STALL_PREVIEW,
     RaisingObserver,
@@ -222,3 +228,68 @@ async def test_the_service_registers_observers_on_its_store(databases: Databases
     approval = await _tool_approval(store, message_id)
 
     assert observer.calls == [("asked", approval.id, "pending")]
+
+
+@contextmanager
+def _decided_before_the_sweep_updates(
+    engine: AsyncEngine, db_path: Path, approval_id: str, sweep_status: str
+) -> Generator[None]:
+    """Approves `approval_id` through a second connection right before the sweep's UPDATE
+    runs: the window a user's Approve can commit in while Stop or recovery sweeps."""
+
+    def before(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("UPDATE APPROVALS") and sweep_status in str(
+            parameters
+        ):
+            other = connect_sync(db_path)
+            try:
+                other.execute(
+                    "UPDATE approvals SET status = 'approved', decided_at = '2026-10-28T10:05:00Z'"
+                    " WHERE id = ? AND status = 'pending'",
+                    (approval_id,),
+                )
+            finally:
+                other.close()
+
+    event.listen(engine.sync_engine, "before_cursor_execute", before)
+    try:
+        yield
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", before)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sweep", ["cancel_for_turn", "expire_non_waiting"])
+async def test_a_sweep_reports_only_the_approvals_it_changed(
+    databases: Databases, sweep: str
+) -> None:
+    turn_status = "waiting" if sweep == "cancel_for_turn" else "interrupted"
+    message_id = await add_turn(databases, PROJECT, status=turn_status)
+    store = ApprovalStore(databases)
+    approval = await _tool_approval(store, message_id)
+    observer = RecordingObserver()
+    store.add_observer(observer)
+    engine = await databases.project(PROJECT)
+    sweep_status = "cancelled" if sweep == "cancel_for_turn" else "expired"
+
+    with _decided_before_the_sweep_updates(
+        engine, databases.paths.project_db(PROJECT), approval.id, sweep_status
+    ):
+        if sweep == "cancel_for_turn":
+            swept = await store.cancel_for_turn(PROJECT, "trn_1")
+        else:
+            swept = await store.expire_non_waiting(PROJECT)
+
+    # The approval was decided first: the sweep changed nothing, so it reports nothing and
+    # tells no observer (its decision tells them, once, as approved).
+    assert swept == []
+    assert observer.calls == []
+    stored = await store.get(PROJECT, approval.id)
+    assert stored is not None and stored.status == "approved"

@@ -10,6 +10,7 @@ from typing import ClassVar
 import httpx2
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
@@ -24,8 +25,11 @@ from mlops_agents.agents.tools.base import (
     ToolContext,
     ToolOutput,
 )
+from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import audit as audit_table
+from tests.agents.approval_env import STALL_PREVIEW
 from tests.agents.runtime.session_env import SessionEnv, build_session_env
 from tests.agents.runtime.test_resuming_turns import (
     collect_until_turn_ended,
@@ -179,3 +183,53 @@ async def test_a_call_of_another_class_has_no_proposal_kind(
     [part] = await _stored_approval_parts(env, "writer")
     assert part.proposal_kind is None
     await env.manager.stop(env.project_id, "writer")
+
+
+@pytest.mark.asyncio
+async def test_rejecting_a_stall_ends_its_turn_stopped_with_no_audit_record(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    store = ApprovalStore(databases)
+    audit = SqliteAuditLog(databases, secrets=[])
+    env = await build_session_env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        extra_dirs=[_definition(tmp_path)],
+        tools=make_tool_reg(RecordingProposeTool()),
+        gate=ApprovalGate(databases, store=store),
+        approval_store=store,
+        audit_log=audit,
+    )
+    await set_permission_level(databases, env.project_id, "ask")
+    await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
+    approvals = ApprovalsService(databases, env.manager, store=store, audit_log=audit)
+    fake_openai.state.scripted_tool_calls = [
+        {"name": "propose_test", "arguments": {"kind": "handoff", "payload": {}}}
+    ]
+    sub = env.manager.subscribe(env.project_id, "proposer", after_seq=None)
+    await anext(sub)
+    await env.manager.send(env.project_id, "proposer", "Propose the handoff")
+    await collect_until_turn_waiting(sub)
+    [waiting] = await approvals.pending(env.project_id)
+    # A real waiting turn; its proposal is cancelled so that only the stall is pending.
+    await store.cancel_for_turn(env.project_id, waiting.turn_id)
+
+    stall = await approvals.create_stall(env.project_id, waiting.turn_id, 1, STALL_PREVIEW)
+    await approvals.decide(env.project_id, stall.id, approve=False)
+
+    assert await env.store.turn_status(env.project_id, waiting.turn_id) == "stopped"
+    engine = await databases.project(env.project_id)
+    async with engine.connect() as conn:
+        details = (await conn.execute(select(audit_table.c.detail))).scalars().all()
+    assert not any(stall.id in str(detail) for detail in details)
