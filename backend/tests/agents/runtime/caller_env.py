@@ -90,35 +90,44 @@ def keys_used(fake: RunningFake) -> list[str]:
     return [h["authorization"].removeprefix("Bearer ") for h in fake.state.request_headers]
 
 
-class _TextThenFailure:
-    """A chat client that streams some text, then fails with `error` (a 429, say). The fake
-    server cannot do this over HTTP: its status line goes out before any text."""
+class ScriptedClient:
+    """A chat client that streams `chunks`, then fails with `error` when one is given (a 429
+    after text, say). The fake server cannot fail after text over HTTP: its status line goes
+    out before any text."""
 
-    def __init__(self, error: Exception) -> None:
+    def __init__(self, chunks: list[AIMessageChunk], error: Exception | None = None) -> None:
+        self._chunks = chunks
         self._error = error
 
-    def bind_tools(self, _: list[dict[str, Any]]) -> _TextThenFailure:
+    def bind_tools(self, _: list[dict[str, Any]]) -> ScriptedClient:
         return self
 
     async def astream(self, _: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
-        yield AIMessageChunk(content="Partial ")
-        raise self._error
+        for chunk in self._chunks:
+            yield chunk
+        if self._error is not None:
+            raise self._error
 
 
-def script_builds(monkeypatch: pytest.MonkeyPatch, outcomes: list[Exception | None]) -> list[int]:
+def script_builds(
+    monkeypatch: pytest.MonkeyPatch, outcomes: list[Exception | ScriptedClient | None]
+) -> list[int]:
     """The caller's next client builds, one outcome each, in order: an exception gives a client
-    that streams some text then fails with it; None, or a build after the outcomes are used up,
-    the real client on the fake server. Returns the key index of each build."""
+    that streams some text then fails with it; a `ScriptedClient` is used as it is; None, or a
+    build after the outcomes are used up, the real client on the fake server. Returns the key
+    index of each build."""
     built: list[int] = []
     real_build = ResolvedModel.build
     pending = list(outcomes)
 
     def build(self: ResolvedModel, http: httpx2.AsyncClient, key_index: int = 0) -> Any:
         built.append(key_index)
-        error = pending.pop(0) if pending else None
-        if error is None:
+        outcome = pending.pop(0) if pending else None
+        if outcome is None:
             return real_build(self, http, key_index)
-        return _TextThenFailure(error)
+        if isinstance(outcome, ScriptedClient):
+            return outcome
+        return ScriptedClient([AIMessageChunk(content="Partial ")], outcome)
 
     monkeypatch.setattr(ResolvedModel, "build", build)
     return built

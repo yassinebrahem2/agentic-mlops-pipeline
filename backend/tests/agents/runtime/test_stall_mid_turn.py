@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
@@ -22,7 +22,7 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.caller_env import script_builds
+from tests.agents.runtime.caller_env import ScriptedClient, script_builds
 from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
 from tests.agents.runtime.stall_env import KEY, StallEnv, build_stall_env, send_until_waiting
 from tests.agents.runtime.test_resuming_turns import (
@@ -37,6 +37,7 @@ from tests.providers.fake_clock import FakeClock, bad_request, rate_limit, unaut
 
 SECOND_KEY = "gsk_second_stall_secret"
 PARTIAL = TextPart(type="text", text="Partial ")
+STEP_0_TEXT = "I will write a.py now. "
 
 
 def _ended(events: list[StreamEvent]) -> TurnEnded:
@@ -183,6 +184,65 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
     await env.session.manager.close()
 
 
+async def test_a_take_back_keeps_the_text_of_the_steps_before_it(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_tool = DummyWriteTool()
+    env = await _env(
+        tmp_path,
+        paths,
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        git_env,
+        write_tool=write_tool,
+    )
+    # Step 0 answers with text and a tool call; step 1 streams text and its key runs out.
+    args = '{"file_path": "a.py", "content": "print(1)"}'
+    step_0 = ScriptedClient(
+        [
+            AIMessageChunk(content=STEP_0_TEXT),
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {"name": "write_code_tool", "args": args, "id": "call_s0", "index": 0}
+                ],
+            ),
+        ]
+    )
+    script_builds(monkeypatch, [step_0, unauthorized()])
+    stream, _, turn_id = await send_until_waiting(env, "Please write a.py", agent="writer")
+    [tool_approval] = await env.session.approval_store.pending(env.project_id)
+    await env.approvals.decide(env.project_id, tool_approval.id, approve=True, note=None)
+    events = await collect_until_turn_waiting(stream)
+
+    [stall] = await env.stalls(turn_id)
+    taken_back = _take_back(events).data.message
+    assert _texts(list(taken_back.parts)) == [STEP_0_TEXT]
+    message = await env.agent_message(turn_id, agent="writer")
+    assert _texts(list(message.parts)) == [STEP_0_TEXT]
+
+    await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
+    ended = _ended(await collect_until_turn_ended(stream, timeout=10))
+
+    assert ended.data.status == "done"
+    assert len(write_tool.invoked) == 1
+    message = await env.agent_message(turn_id, agent="writer")
+    assert _texts(list(message.parts)) == [
+        STEP_0_TEXT,
+        "Done. First line: File written successfully.",
+    ]
+    await env.session.manager.close()
+
+
 async def test_a_429_after_text_is_gone_before_the_wait_and_a_stop_in_the_wait_keeps_none(
     tmp_path: Path,
     paths: DataPaths,
@@ -203,12 +263,11 @@ async def test_a_429_after_text_is_gone_before_the_wait_and_a_stop_in_the_wait_k
 
     await env.session.manager.send(env.project_id, "orchestrator", "hi")
     await asyncio.wait_for(clock.sleeping.wait(), timeout=10)
-    session_id = await env.session.store.session_id(env.project_id, "orchestrator")
+    # The session view of a busy turn is the hub's live copy, which holds the streamed text.
     view = await env.session.manager.get(env.project_id, "orchestrator")
     [waiting_message] = [m for m in view.messages if m.author_kind == "agent"]
-    stored = await env.session.store.message(env.project_id, session_id, waiting_message.id)
-    assert stored is not None
-    assert PARTIAL not in stored.parts
+    assert waiting_message.status == "streaming"
+    assert PARTIAL not in waiting_message.parts
 
     await env.session.manager.stop(env.project_id, "orchestrator")
     ended = _ended(await collect_until_turn_ended(stream))
