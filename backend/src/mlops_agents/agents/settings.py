@@ -210,15 +210,6 @@ class AgentSettingsService:
         if entry.problem is not None:
             return _ModelProblem(code="model_not_usable", message=entry.problem)
 
-        if provider.status == "needs_attention":
-            return _ModelProblem(
-                code="provider_needs_attention",
-                message=(
-                    f"{provider.name} needs attention: {provider.status_detail}. "
-                    "Fix it in AI providers."
-                ),
-            )
-
         keys: list[str] = []
         if provider.kind == "hosted":
             keys = await self._providers.keys_for(provider.id) if fetch_keys else []
