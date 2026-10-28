@@ -12,7 +12,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
 
 from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted, TurnFailed
-from mlops_agents.providers.bridge import ResolvedModel
+from mlops_agents.providers.bridge import KEYLESS, ResolvedModel
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.caller_env import CallerEnv, build_caller_env, keys_used, resolve
 from tests.conftest import MemoryKeyStore
@@ -257,3 +257,31 @@ async def test_keys_changed_twice_fail_the_call_unexpectedly(
 
     # Not a TurnFailed: the turn ends with the unexpected-failure text.
     assert not isinstance(raised.value, TurnFailed)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "provider_message"), [("401", "Invalid API key"), ("402", "Payment required")]
+)
+async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_the_provider(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    outcome: KeyOutcome,
+    provider_message: str,
+) -> None:
+    # As built while the Decision on keyless providers is open: no key to exhaust or fix.
+    env = await build_caller_env(
+        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
+    )
+    fake_openai.state.script_for_key(KEYLESS, [outcome])
+
+    with pytest.raises(TurnFailed) as raised:
+        await env.caller.call(env.model, HI, [], _noop)
+
+    assert not isinstance(raised.value, ModelKeysExhausted)
+    assert raised.value.error_kind is None
+    assert provider_message in raised.value.message
+    assert keys_used(fake_openai) == [KEYLESS]
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    assert provider.status == "ok"
