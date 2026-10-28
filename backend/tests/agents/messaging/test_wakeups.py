@@ -41,6 +41,7 @@ def _ctx(
         turn_id=turn_id,
         files=cast(FileAccess, object()),
         task=None,
+        tool_call_id="call_1",
     )
 
 

@@ -36,7 +36,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
@@ -94,7 +94,13 @@ def _workspace_svc(
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     return WorkspaceService(
-        _settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
+        _settings(paths),
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        http,
+        memory_project_secrets(databases),
     )
 
 
@@ -134,7 +140,7 @@ async def test_executor_cancellation_during_slow_tool(
         workspaces=workspaces,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(
@@ -230,7 +236,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
         workspaces=workspaces,
     )
     executor = TurnExecutor(
-        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces)
+        store=store, caller=caller, builder=builder, hooks=stage1_hooks(workspaces, databases)
     )
 
     prov = await providers_svc.create_provider(

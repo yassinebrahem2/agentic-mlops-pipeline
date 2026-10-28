@@ -122,7 +122,7 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
         message_id=agent_msg.id,
         current_parts=[],
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
         checkpointer=saver,
     )
     config: RunnableConfig = {"configurable": {"thread_id": turn_id}}

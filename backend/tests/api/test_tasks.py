@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import ToolFinished
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -34,7 +35,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
@@ -165,6 +166,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         runner,
         github,
         http,
+        memory_project_secrets(databases),
     )
     events = SqliteEventLog(databases)
     _audit = SqliteAuditLog(databases, secrets=lambda: [])
@@ -209,6 +211,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=tasks_svc,
+        approval_store=ApprovalStore(databases),
         status_board=status_board,
     )
 

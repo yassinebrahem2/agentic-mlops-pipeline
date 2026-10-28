@@ -29,6 +29,11 @@ EXPECTED: list[tuple[PermissionLevel, RiskClass, PolicyDecision]] = [
     ("bypass", RiskClass.MESSAGE, "allow"),
     ("bypass", RiskClass.GITHUB, "allow"),
     ("bypass", RiskClass.DEPLOY, "allow"),
+    # The roadmap's propose column: a proposal is always the user's call, bypass included.
+    ("suggest", RiskClass.PROPOSE, "ask"),
+    ("ask", RiskClass.PROPOSE, "ask"),
+    ("autonomous", RiskClass.PROPOSE, "ask"),
+    ("bypass", RiskClass.PROPOSE, "ask"),
 ]
 
 

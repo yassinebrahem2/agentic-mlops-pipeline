@@ -2,8 +2,11 @@ from ulid import ULID
 
 # Registered in docs/roadmap.md. Add a prefix there first.
 PREFIXES = frozenset(
-    {"prj", "prv", "ses", "msg", "trn", "llm", "tsk", "apr", "evt", "aud", "xch", "wak"}
-)
+    {
+        "prj", "prv", "ses", "msg", "trn", "llm", "tsk", "apr", "evt", "aud", "xch", "wak",
+        "con", "trk", "prp", "kno",
+    }
+)  # fmt: skip
 
 
 def new_id(prefix: str) -> str:

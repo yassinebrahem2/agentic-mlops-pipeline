@@ -68,6 +68,7 @@ def _setup_mock_github(app: FastAPI, ctx: MockGitHubContext) -> None:
         git,
         github,
         mock_http,
+        services.project_secrets,
         remote_url=remote_url,
     )
     services.github = github

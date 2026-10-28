@@ -11,6 +11,8 @@ from platformdirs import user_data_dir
 APP_NAME = "mlops-agents"
 ENV_PREFIX = "MLOPS_AGENTS_"
 DEFAULT_PORT = 8765
+# The one DuckDB version: the backend's dependency and the sandbox image install this release.
+DUCKDB_VERSION = "2.0.0"
 
 
 class RunMode(StrEnum):

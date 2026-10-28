@@ -39,7 +39,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -212,6 +212,7 @@ async def test_resuming_turn_approve(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -303,6 +304,7 @@ async def test_resuming_turn_reject_with_note(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -386,6 +388,7 @@ async def test_resuming_turn_two_asks_in_one_step(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -498,7 +501,13 @@ async def test_resuming_turn_after_rebuilding_manager(
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
     workspace_svc = WorkspaceService(
-        settings, paths, databases, GitRunner(paths.bin, github.token), github, http
+        settings,
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        http,
+        memory_project_secrets(databases),
     )
     new_manager = SessionManager(
         databases=databases,
@@ -509,6 +518,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         providers=providers_svc,
         http=model_http,
         gate=gate,
+        approval_store=store,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
@@ -516,6 +526,7 @@ async def test_resuming_turn_after_rebuilding_manager(
     new_approvals_service = ApprovalsService(
         databases=databases,
         sessions=new_manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -583,6 +594,7 @@ async def test_resuming_turn_no_duplicates(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )
@@ -668,7 +680,9 @@ async def test_resuming_turn_task_mismatch(
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     git = GitRunner(paths.bin, github.token)
     settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    workspace_svc = WorkspaceService(settings, paths, databases, git, github, http)
+    workspace_svc = WorkspaceService(
+        settings, paths, databases, git, github, http, memory_project_secrets(databases)
+    )
 
     workspaces = MutableTaskWorkspaces(workspace=workspace_svc, git=git)
     # Start with task A
@@ -685,6 +699,7 @@ async def test_resuming_turn_task_mismatch(
         providers=providers_svc,
         http=model_http,
         gate=gate,
+        approval_store=store,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=workspaces,
@@ -702,6 +717,7 @@ async def test_resuming_turn_task_mismatch(
     approvals_service = ApprovalsService(
         databases=databases,
         sessions=manager,
+        store=store,
         audit_log=audit_log,
         event_log=event_log,
     )

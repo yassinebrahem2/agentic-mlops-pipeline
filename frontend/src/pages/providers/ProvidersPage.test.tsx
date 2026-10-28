@@ -59,6 +59,7 @@ const groq: Provider = {
   base_url: "https://api.groq.com/openai/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [
     { position: 1, hint: "gsk_...abcd" },
     { position: 2, hint: "gsk_...wxyz" },
@@ -72,6 +73,7 @@ const ollama: Provider = {
   base_url: "http://localhost:11434/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [],
 };
 

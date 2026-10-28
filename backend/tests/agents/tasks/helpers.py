@@ -21,7 +21,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import integrations, sessions
 from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -118,7 +118,9 @@ async def setup_service(
                 )
             )
     runner = GitRunner(paths.bin, github.token)
-    workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(
+        settings(paths), paths, databases, runner, github, http, memory_project_secrets(databases)
+    )
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     service = TasksService(

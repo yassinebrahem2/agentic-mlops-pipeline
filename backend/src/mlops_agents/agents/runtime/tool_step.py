@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -54,7 +55,7 @@ class ToolStep:
         current_parts: list[Part],
         lock: AbstractAsyncContextManager[Any],
         update_parts: Callable[[], Awaitable[None]],
-        approval_store: ApprovalStore | None = None,
+        approval_store: ApprovalStore,
     ) -> None:
         self._agent = agent
         self._tools = {t.name: t for t in agent.tools}
@@ -72,8 +73,9 @@ class ToolStep:
         # The builder read the layout through the repository's view; its listing is reused.
         self._files: dict[str | None, FileAccess] = {None: agent.files}
 
-    async def context(self) -> ToolContext:
-        """The context as it stands now: the session's current task, else the repository."""
+    async def context(self, tool_call_id: str) -> ToolContext:
+        """The context of one call as it stands now: the session's current task, else the
+        repository."""
         task = await self._workspaces.current(self._project_id, self._session_id)
         key = None if task is None else task.id
         files = self._files.get(key)
@@ -87,17 +89,22 @@ class ToolStep:
             turn_id=self._turn_id,
             files=files,
             task=task,
+            tool_call_id=tool_call_id,
         )
 
     async def decide(self, state: TurnState) -> dict[str, Any]:
         """Answers the calls that cannot run, and asks the gate about the rest. Never pauses."""
         calls, errors = _calls(state)
-        ctx = await self.context()
+        # The task and its files are looked up once per step; each call gets its own ID.
+        step_ctx: ToolContext | None = None
         gate_calls: list[GateCall] = []
         for call in calls:
             call_id = str(call["id"])
             if call_id in errors:
                 continue
+            if step_ctx is None:
+                step_ctx = await self.context(call_id)
+            ctx = replace(step_ctx, tool_call_id=call_id)
             tool = self._tools.get(call["name"])
             if tool is None:
                 errors[call_id] = f"There is no tool named {call['name']}."
@@ -164,13 +171,14 @@ class ToolStep:
     async def _run_decided(
         self, tool: AgentTool[Any], call: ToolCall, decision: GateDecision
     ) -> ToolOutput:
+        call_id = str(call["id"])
         match decision.outcome:
             case "allow":
-                return await tool.invoke(await self.context(), call["args"])
+                return await tool.invoke(await self.context(call_id), call["args"])
             case "approved":
-                ctx = await self.context()
+                ctx = await self.context(call_id)
                 current_task_id = ctx.task.id if ctx.task is not None else None
-                if decision.approval_id and self._approval_store is not None:
+                if decision.approval_id:
                     approval = await self._approval_store.get(
                         self._project_id, decision.approval_id
                     )

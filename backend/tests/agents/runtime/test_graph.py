@@ -101,7 +101,7 @@ async def test_graph_loops_model_to_tools_to_model(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {
@@ -186,7 +186,7 @@ async def test_graph_step_limits_enforcement(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {
@@ -269,7 +269,7 @@ async def test_graph_checkpointer_thread_lifecycle(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
         checkpointer=checkpointer,
     )
 

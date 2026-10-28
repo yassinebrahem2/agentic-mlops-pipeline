@@ -614,6 +614,9 @@ Resolved in this draft as stated; each needs the lead's confirmation or a Decisi
 11. The report in `team_gate` mode is "written to the run" (S5 §4), but the app has no tracker write path; this draft stores it as a `rep` record and shows it, and the team's pipeline writes its own.
 12. Milestones: the contracts plan spans both stages. This draft proposes the stage 4 milestone for it and for the stage 4 plans, and the stage 5 milestone for the stage 5 plans.
 13. The shared working rules (stage 3 onboarding adds the hard limits and the continuous-PR principle to `context.py` from packaged files) and S5 §5's "all seven definitions state it": the definitions plan references the packaged text rather than repeating it.
+14. Template filling (pipeline-runs' `PlaceholderResolver`, hooks' runners) follows the stage 3 overview's template grammar: parse with `string.Formatter`, fill with `str.format_map`, never a plain text replace, for `command` templates and `ci_dispatch` `inputs` alike.
+15. The pipeline graph may have cycles (stage 3 allows them: predictions feed back into training); incidents' downstream search and severity's "production depends on" path keep a visited set.
+16. `ProposalView.payload` is the closed union `ConnectionsPayload | HandoffPayload` (I19). The stage 4/5 kinds (`hooks`, `maintenance`, `training_policy`, `promotion`, ...) need it widened, preferably to a union discriminated by kind; the contracts plan changes I19 through a Decision.
 
 ## Files shared by these plans
 

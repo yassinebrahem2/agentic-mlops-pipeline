@@ -22,6 +22,7 @@ _POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingP
                 _R.MESSAGE: "allow",
                 _R.GITHUB: "ask",
                 _R.DEPLOY: "deny",
+                _R.PROPOSE: "ask",
             }
         ),
         "ask": MappingProxyType(
@@ -32,6 +33,7 @@ _POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingP
                 _R.MESSAGE: "allow",
                 _R.GITHUB: "ask",
                 _R.DEPLOY: "ask",
+                _R.PROPOSE: "ask",
             }
         ),
         "autonomous": MappingProxyType(
@@ -42,6 +44,7 @@ _POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingP
                 _R.MESSAGE: "allow",
                 _R.GITHUB: "allow",
                 _R.DEPLOY: "ask",
+                _R.PROPOSE: "ask",
             }
         ),
         "bypass": MappingProxyType(
@@ -52,6 +55,7 @@ _POLICY: Mapping[PermissionLevel, Mapping[RiskClass, PolicyDecision]] = MappingP
                 _R.MESSAGE: "allow",
                 _R.GITHUB: "allow",
                 _R.DEPLOY: "allow",
+                _R.PROPOSE: "ask",
             }
         ),
     }
