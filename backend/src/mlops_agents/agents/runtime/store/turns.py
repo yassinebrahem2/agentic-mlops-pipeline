@@ -51,7 +51,9 @@ class TurnsStore(StoreBase):
         error: str | None = None,
         error_kind: ErrorKind | None = None,
     ) -> None:
-        """Update turn status, error and error kind, setting started_at/ended_at appropriately."""
+        """Update turn status and error, setting started_at/ended_at appropriately. An end also
+        writes `error_kind`, None included: a turn that does not fail has none, also when a
+        failure record stored one before a Stop or a close ended it otherwise."""
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
             current = (
@@ -63,21 +65,23 @@ class TurnsStore(StoreBase):
             values: dict[str, Any] = {"status": status}
             if error is not None:
                 values["error"] = error
-            if error_kind is not None:
-                values["error_kind"] = error_kind
 
             now = now_iso()
             if status == "running" and current["started_at"] is None:
                 values["started_at"] = now
             if status in ("done", "stopped", "interrupted", "failed"):
                 values["ended_at"] = now
+                values["error_kind"] = error_kind
 
             await conn.execute(update(turns).where(turns.c.id == turn_id).values(**values))
 
     @shielded
-    async def set_error_kind(self, project_id: str, turn_id: str, error_kind: ErrorKind) -> None:
+    async def set_error_kind(
+        self, project_id: str, turn_id: str, error_kind: ErrorKind | None
+    ) -> None:
         """Record why a turn failed before its end is stored, so the failed agent message that is
-        published first carries it. Only that column: the status changes with the turn's end."""
+        published first carries it; None takes it back. Only that column: the status changes
+        with the turn's end."""
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
             await conn.execute(

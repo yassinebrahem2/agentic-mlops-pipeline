@@ -275,11 +275,15 @@ class TurnExecutor:
 
         A cancel (Stop, close) marks the agent message stopped wherever it lands, also inside
         the failure handlers: a cancel raised from one of them is not caught by its siblings.
+        A turn so stopped did not fail, so it takes back an error kind its failure record stored,
+        before the stopped message is published.
         """
+        recorded_kind: ErrorKind | None = None
         try:
             try:
                 return await body()
             except TurnFailed as err:
+                recorded_kind = err.error_kind
                 await self.record_failure(
                     project_id,
                     session_id,
@@ -304,6 +308,8 @@ class TurnExecutor:
                 )
                 return ("failed", UNEXPECTED_FAILURE_TEXT, None)
         except asyncio.CancelledError:
+            if recorded_kind is not None:
+                await self._store.set_error_kind(project_id, turn_id, None)
             if message.id is not None:
                 await self._finish_message(
                     project_id, sink, lock, message.id, message.parts, "stopped"
