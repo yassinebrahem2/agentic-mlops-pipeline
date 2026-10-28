@@ -111,6 +111,21 @@ def test_context_hooks_are_validated_against_the_registered_names() -> None:
         AgentCatalog([uses_profile], TOOLS, hook_names=frozenset({"other"}))
 
 
+def test_a_context_hook_listed_twice_is_rejected() -> None:
+    twice = parse_definition(_with("context_hooks: [profile, status_board, profile]"), "a.md")
+    names = frozenset({"profile", STATUS_BOARD_HOOK})
+    with pytest.raises(DefinitionError, match="agent helper lists context hooks twice: profile"):
+        AgentCatalog([twice], TOOLS, hook_names=names)
+
+
+def test_load_rejects_a_context_hook_listed_twice(tmp_path: Path) -> None:
+    (tmp_path / "helper.md").write_text(
+        _with("context_hooks: [status_board, status_board]"), encoding="utf-8"
+    )
+    with pytest.raises(DefinitionError, match="lists context hooks twice: status_board"):
+        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=frozenset({STATUS_BOARD_HOOK}))
+
+
 def test_status_board_true_is_the_status_board_hook_and_needs_no_registered_name() -> None:
     definition = parse_definition(_with("status_board: true"), "a.md")
     assert definition.hook_names == (STATUS_BOARD_HOOK,)
