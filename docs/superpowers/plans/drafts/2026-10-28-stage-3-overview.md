@@ -61,7 +61,7 @@ contracts writes these into code exactly as here (except where a line names anot
 - The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (`approvals/gate.py`).
 - Deciding a stall: approve resumes the turn with no audit record; reject ends it `stopped`.
 - A stall's preview is `Preview(kind="text", title="Stalled: no usable key", body=<per-key states>)`. A stall writes no audit record; events `turn.stalled {turn_id, provider, model}` and `turn.resumed {turn_id}` record it.
-- `turn.ended` and the turn view gain `error_kind: Literal["keys_exhausted"] | None` (column `turns.error_kind`; rate-limits writes it through the executor's failure path); the UI offers Try again on a failed turn with that kind, which re-sends its trigger message.
+- `turn.ended` and the turn view gain `error_kind: Literal["keys_exhausted"] | None` (column `turns.error_kind`; rate-limits writes it through the executor's failure path, the `TurnObserver` protocol and its implementers); the failed agent message's `MessageView` carries the same `error_kind`, so the UI knows it after a reload; the UI offers Try again on a failed turn with that kind, which re-sends its trigger message.
 - The policy gains the class `propose`: `ask` at every level, `bypass` included.
 - Frontend: `ApprovalCard.tsx` dispatches on `kind` and `proposal_kind` to one component per card; contracts exports the note field with the Approve and Reject controls as one component (`ApprovalControls`) that every card reuses.
 
@@ -288,14 +288,15 @@ class KeyFailover:   # one per app (build_services), shared by every call; state
 
 - `attempt(key_index)` raises the provider's raw exception; `KeyFailover` classifies it with `providers/errors.classify`. A provider with no keys gets `attempt(None)` once, with no failover.
 - `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider) -> None` (Try again) and `describe_keys(states) -> str` (the one wording, used by the stall card and the embedder's message). Its clock is injected (`Clock` protocol: `now()`, `async sleep(seconds)`).
-- `TurnHooks` gains `approvals: Approvals`, so the model node can create a stall.
+- `TurnHooks` gains `approvals: Approvals` and `events: EventLog`, so the model node can create a stall and record `turn.stalled` and `turn.resumed`.
+- `KeyFailover` takes the cooldown per call (`cooldown_minutes` argument), so task 1 does not depend on contracts; task 2 passes `Provider.cooldown_minutes`.
 - The rules are the spec's §2. A wait round lasts at most until the earliest key clears, never more than 60 seconds.
 
 ## Files shared by these plans
 
 Each file below is edited by one plan only, except where a line says otherwise:
 - `storage/migrations/app/0002_stage3.sql`, `storage/migrations/project/0004_stage3.sql`, `storage/tables.py`, `ids.py`, `config.py`, `credentials/project_secrets.py`, `agents/approvals/service.py`, `agents/approvals/gate.py`, `agents/approvals/store*`, the event type lists: contracts. contracts also adds `cooldown_minutes` to `providers/models.py` in task 1 (its only line there). A later plan that needs a change opens a Decision.
-- `agents/runtime/model_caller.py`, `agents/runtime/graph.py`, `agents/runtime/graph_run.py`, `agents/runtime/waiting.py`, `providers/errors.py`, `providers/failover.py`: rate-limits; it also adds its key-failover lines to `providers/service.py`, its stall lines to `agents/runtime/sessions.py`, and the `error_kind` write to `agents/runtime/executor.py`.
+- `agents/runtime/model_caller.py`, `agents/runtime/graph.py`, `agents/runtime/graph_run.py`, `agents/runtime/waiting.py`, `providers/errors.py`, `providers/failover.py`: rate-limits; it also adds its key-failover lines to `providers/service.py`, its stall lines to `agents/runtime/sessions.py`, the `error_kind` path (`agents/runtime/executor.py`, the `TurnObserver` protocol and implementers, `MessageView`), and the cooldown field's lines to `api/routers/providers.py`.
 - `providers/models.py`, `providers/service.py`, `providers/verification.py`: embedders, except the lines named for contracts and rate-limits.
 - `agents/runtime/agent.py` (the injection point), `agents/catalog.py`: data-summary, which also adds its one line to `agents/runtime/executor.py` and to `agents/runtime/sessions.py` (onboarding later removes the `status_board` field from `catalog.py`).
 - `sandbox/containers.py`, `sandbox/templates/*`: connections.
