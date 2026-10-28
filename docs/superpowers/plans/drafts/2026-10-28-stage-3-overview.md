@@ -262,3 +262,51 @@ Each file below is edited by one plan only, except where a line says otherwise:
 - `frontend/src/pages/agents/ApprovalCard.tsx`: contracts (the dispatcher and `ApprovalControls`); rate-limits (the stall card) and proposals (the two proposal cards) each add their own component file and one line in the dispatcher.
 - `frontend/e2e/flow.spec.ts`: onboarding only.
 - Pages: each page's `route.tsx` carries its own nav entry, so the route table and `Sidebar.tsx` need no edit.
+
+## Decisions, round 2 (2026-10-28; binding, they extend I13 to I21)
+
+The specs of stages 4 and 5 are approved and added fields that stage 3 must freeze now. Their roadmap changes are made. Every plan aligns to this section.
+
+**`HandoffPayload`** (contracts; the exact shape, every field required unless marked optional):
+```python
+class Profile(BaseModel): objective: str; problem_type: str; target_column: str; positive_class: str | None; primary_metric: str; metric_rationale: str; operating_threshold: float | None; label_delay: str; label_maturity: str; serving_mode: Literal["batch", "online", "streaming"]; error_costs: str; cost_ratio: float | None; groups: list[GroupSpec]   # GroupSpec(column, values: list[str] | None)
+class ModelSpec(BaseModel): name: str; profile: Profile; prediction_table: TableRole | None; label_table: TableRole | None; commands: list[CommandSpec]; promotion: Literal["team_gate", "person"]; environments: dict[str, str]; production_signal: ProductionSignal | None   # environments: tracker alias -> environment name
+class TableRole(BaseModel): connection: str; table: str; id_column: str; time_column: str
+class DataRole(BaseModel): connection: str; table: str; role: Literal["training", "serving_inputs", "predictions", "labels", "other"]; id_column: str | None; time_column: str | None   # serving_inputs = the model's raw inputs as served
+class CommandSpec(BaseModel): kind: Literal["train", "evaluate", "deploy", "rollback", "rerun", "hold", "fall_back"]; type: Literal["command", "ci_dispatch"]; template: str | None; workflow: str | None; inputs: dict[str, str]; placeholders: list[Placeholder]; deploys: bool; entry_files: list[str]
+Placeholder = Literal["request_id", "model", "candidate_version", "champion_version", "window_start", "window_end", "mode", "threshold"]
+class ProductionSignal(BaseModel): kind: Literal["tracker_alias", "ci_job", "file"]; ref: str
+class PipelineStage(BaseModel): name: str; entry: str; inputs: list[str]; outputs: list[str]
+class PipelineEdge(BaseModel): from_stage: str; to_stage: str
+class Feed(BaseModel): name: str; kind: Literal["data", "job"]; ref: str; expected: str; grace_minutes: int; timezone: str   # expected: a cron expression or "every N minutes|hours|days"
+class OnCall(BaseModel): name: str; contact: str; channel: Literal["discord", "email"]; hours: str; timezone: str; escalation_order: int
+class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: str; timezone: str; results: FileResults | CiResults | MlflowResults
+class Operations(BaseModel): scheduler: Scheduler | None; feeds: list[Feed]; on_call: list[OnCall]; checks: list[CheckSpec]; results_location: FileResults | MlflowResults
+class HandoffPayload(BaseModel): models: list[ModelSpec]; data_roles: list[DataRole]; tracking: list[TrackingSourceSpec]; pipeline: list[PipelineStage]; edges: list[PipelineEdge]; operations: Operations; gaps: list[Gap]; grants: Grants
+```
+`Grants(network: bool, permission_level: GrantableLevel)`; `GrantableLevel` excludes `bypass`. `extra="forbid"` everywhere.
+
+**Proposals:** `Proposals.create(..., key: str)` and `ProposalView.key`; superseding is by kind and key (`connections` and `handoff` use the project ID as key). `Proposals.latest_for_turn(project_id, turn_id, kind)`.
+- The approval observer's `asked(view)` carries the approval only; proposals reads the payload from its own record (created before the approval is asked).
+- The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (contracts, `approvals/gate.py`).
+- The `decided` observer completes before the turn resumes (approvals service awaits observers before signalling resume).
+- Two `Propose` calls of the same kind in one model step: the second gets a tool error (proposals).
+
+**Tracking (I16):** add `EvaluationRecord(source_id, model, version, run_key, schema_version, payload: dict[str, Any], fetched_at)` and route `GET .../tracking/evaluations?model=&version=`; the MLflow adapter fetches `mlops_agents/evaluation.json` for model-version runs through the artifact API (`SyncResult.evaluations`). Tracking rows that concern a model carry its name (already in `ModelVersionRow`, `DeploymentRow`). The default sync interval is 1 minute. `run_metrics` unique key: source, run key, metric, step, time. List routes take `limit` (default 50, max 500) and `offset`; `/runs` takes `run_key`; `/deployments` and `/versions` take `model` and `source_id`; `/metrics` takes `latest=true` (the latest point per metric).
+
+**Connections (I15):** local folders work in server mode too (a folder on the server, browsed with the server-side folder browser); `ConnectionView` gains `data_version: str | None` (the newest table's); `Findings` entries are `{path, reason}` objects with a `truncated: bool` on `Findings`; the `connections` table columns: `id, project_id, name, kind, settings_json, credential_ref, status, status_detail, created, updated`.
+
+**Contracts additions:**
+- `secret_refs` table (ref, project, created): `project_secrets` records each ref it puts, so `delete_prefix` works without listing the keystore.
+- `turns.error_kind` column; rate-limits writes it through the executor's failure path and the turn view reads it.
+- `Provider.cooldown_minutes` (providers/models.py) is added by contracts in task 1, with a migration column; rate-limits reads it, embedders leaves it alone.
+- The stall decision: approving a stall resumes the turn with no audit record; rejecting it ends the turn `stopped` (contracts task 2, in the approvals service).
+- `notes_fts` is an FTS5 external-content table on `notes(title, text)` with `content_rowid='seq'` and insert, update, delete triggers; `note_embeddings` is keyed by `note_id`.
+
+**Files shared (corrections):** the waiting module is `agents/runtime/waiting.py` (rate-limits); data-summary also edits `agents/runtime/executor.py` (the injection point's caller) and adds one line in `agents/runtime/sessions.py`; rate-limits owns its stall lines there; rate-limits adds its lines to `providers/service.py` (key failover use), embedders the rest.
+
+**I21:** `KeyFailover` also exposes `states(provider, model) -> list[KeyState]`, `clear(provider)` (Try again) and `describe_keys(states) -> str` (one wording, used by the stall card and the embedder message); the clock is injected (`Clock` protocol: `now()`, `sleep()`). `TurnHooks` gains `approvals: Approvals` so the model node can create a stall.
+
+**Definitions:** onboarding writes the seven definition files for stage 3; stages 4 and 5 edit them later through their own plans (named in their overviews).
+
+**Pages:** the field names above are the ones the pages show (`Profile.primary_metric`, `DataRole.role`).
