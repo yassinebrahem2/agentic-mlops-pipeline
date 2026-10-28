@@ -116,6 +116,18 @@ class ProvidersService:
         await self._stored_keys.delete_provider(provider.id)
         self._failover.clear(provider)
 
+    async def set_cooldown(self, name: str, minutes: int) -> Provider:
+        """How long an exhausted key rests before it is tried again."""
+        provider = await self.get_provider(name)
+        engine = await self._dbs.app()
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(providers)
+                .where(providers.c.id == provider.id)
+                .values(cooldown_minutes=minutes)
+            )
+        return await self.get_provider(name)
+
     async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
         engine = await self._dbs.app()
         async with engine.begin() as conn:
@@ -366,6 +378,7 @@ def _provider(row: RowMapping, keys: list[KeyHint]) -> Provider:
         status=row["status"],
         status_detail=row["status_detail"],
         keys=keys,
+        cooldown_minutes=row["cooldown_minutes"],
     )
 
 

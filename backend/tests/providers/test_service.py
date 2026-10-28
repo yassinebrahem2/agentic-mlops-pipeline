@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.models import DEFAULT_COOLDOWN_MINUTES, ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
@@ -333,3 +333,16 @@ async def test_a_key_change_clears_the_providers_failover_state(
         await svc.add_key("groq", GOOD)
         assert statuses(failover.states(provider, "m1")) == ["ok"]
 
+
+async def test_cooldown_is_stored_and_read_back(make_service: MakeService) -> None:
+    svc = make_service()
+    created = await svc.create_provider(HOSTED)
+    assert created.cooldown_minutes == DEFAULT_COOLDOWN_MINUTES
+
+    updated = await svc.set_cooldown("groq", 90)
+
+    assert updated.cooldown_minutes == 90
+    assert (await svc.get_provider_by_id(created.id)).cooldown_minutes == 90
+    with pytest.raises(DomainError) as err:
+        await svc.set_cooldown("missing", 30)
+    assert err.value.status == 404

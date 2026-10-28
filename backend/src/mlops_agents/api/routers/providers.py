@@ -21,6 +21,14 @@ class AddProviderKey(BaseModel):
     key: str = Field(repr=False)
 
 
+class ProviderSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # At most a day: providers reset their daily limits within one.
+    cooldown_minutes: int = Field(
+        ge=1, le=1440, description="Minutes an exhausted key rests before it is tried again."
+    )
+
+
 @router.get("/providers", response_model=list[Provider])
 async def list_providers(services: ServicesDep) -> list[Provider]:
     return await services.providers.list_providers()
@@ -34,6 +42,13 @@ async def create_provider(body: ProviderCreate, services: ServicesDep) -> Provid
 @router.delete("/providers/{name}", status_code=204)
 async def delete_provider(name: str, services: ServicesDep) -> None:
     await services.providers.delete_provider(name)
+
+
+@router.put("/providers/{name}/settings", response_model=Provider)
+async def update_provider_settings(
+    name: str, body: ProviderSettings, services: ServicesDep
+) -> Provider:
+    return await services.providers.set_cooldown(name, body.cooldown_minutes)
 
 
 @router.post("/providers/{name}/keys", response_model=Provider)
