@@ -19,6 +19,7 @@ from tests.providers.fake_clock import (
     at,
     bad_generation,
     bad_request,
+    billing,
     overloaded,
     provider,
     rate_limit,
@@ -55,6 +56,29 @@ async def test_a_rate_limit_moves_to_the_next_key_without_sleeping(
         KeyState(key_index=0, status="limited", since=at(0)),
         KeyState(key_index=1, status="ok", since=None),
     ]
+
+
+async def test_a_non_finite_retry_after_is_absent_and_the_call_moves_to_key_2(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    script = Script(rate_limit("inf"), "ok")
+    result = await failover.call(provider(2), MODEL, script, cooldown_minutes=COOLDOWN)
+    assert result == "ok"
+    assert script.keys == [0, 1]
+    assert clock.sleeps == []
+
+
+async def test_a_wait_round_ends_at_the_probe_time_when_it_is_the_earliest_wake(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    two = provider(2)
+    await failover.call(two, MODEL, Script(billing(), "ok"), cooldown_minutes=1)
+    clock.advance(10)
+    # Key 2 is limited until 70 s (the 60 s cap); key 1 is due for a probe at 60 s.
+    script = Script(rate_limit("600"), "ok")
+    assert await failover.call(two, MODEL, script, cooldown_minutes=1) == "ok"
+    assert clock.sleeps == [50.0]
+    assert script.keys == [1, 0]
 
 
 async def test_a_success_clears_the_limit_time(clock: FakeClock, failover: KeyFailover) -> None:
