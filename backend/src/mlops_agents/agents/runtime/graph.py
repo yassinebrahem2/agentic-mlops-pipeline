@@ -140,7 +140,8 @@ def create_turn_graph(
         active = await store.messages(project_id, session_id, after=compacted_through)
         messages: list[BaseMessage] = [system_message(agent, summary)]
         messages.extend(history_messages([m for m in active if m.id != message_id]))
-        # A resolved stall is cleared, or a later wait for a tool approval would come back here.
+        # A resolved stall ends here. The model node, which always runs next, clears it too on
+        # success; this keeps the stall's lifetime within the node that set it.
         return {"messages": messages, "stall": None}
 
     async def model_node(state: TurnState) -> dict[str, Any]:
