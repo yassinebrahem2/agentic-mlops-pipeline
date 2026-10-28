@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic.config import JsonDict
 
 from mlops_agents.credentials.scrub import base_url_problem
 from mlops_agents.providers.embedder import ModelType
@@ -52,11 +53,15 @@ _TYPE_LABELS: dict[ModelType, str] = {
 }
 
 
+def _strip_default(schema: JsonDict) -> None:
+    schema.pop("default", None)
+
+
 class ModelCreate(BaseModel):
     provider: str
     wire_model_id: str = Field(min_length=1)
     context_window: int | None = Field(default=None, gt=0)
-    model_type: ModelType = "chat"
+    model_type: ModelType = Field(default="chat", json_schema_extra=_strip_default)
 
 
 class ModelEntry(BaseModel):

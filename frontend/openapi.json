@@ -1212,7 +1212,6 @@
             "title": "Context Window"
           },
           "model_type": {
-            "default": "chat",
             "enum": [
               "chat",
               "embedder"
