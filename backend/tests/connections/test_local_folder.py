@@ -11,20 +11,7 @@ import pytest
 from mlops_agents.connections.contract import LocalFolderSettings
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
 from mlops_agents.errors import DomainError
-
-
-def _make_link_or_junction(target: Path, link: Path) -> bool:
-    try:
-        link.symlink_to(target, target_is_directory=True)
-        return True
-    except OSError:
-        if os.name == "nt":
-            res = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                capture_output=True,
-            )
-            return res.returncode == 0
-        return False
+from tests.connections.helpers import make_link_or_junction
 
 
 def test_data_folder_containment_refused(tmp_path: Path) -> None:
@@ -81,7 +68,7 @@ def test_link_or_junction_into_home_refused(tmp_path: Path) -> None:
     secret_target.mkdir()
 
     link = data / "link_to_home"
-    if not _make_link_or_junction(secret_target, link):
+    if not make_link_or_junction(secret_target, link):
         pytest.skip("Symlinks and junctions not supported in this environment")
 
     kind = LocalFolderKind(home)
@@ -96,7 +83,7 @@ def test_link_or_junction_into_home_refused(tmp_path: Path) -> None:
     valid_target = tmp_path / "valid_target"
     valid_target.mkdir()
     retargetable = data / "retargetable"
-    if not _make_link_or_junction(valid_target, retargetable):
+    if not make_link_or_junction(valid_target, retargetable):
         pytest.skip("Symlinks/junctions failed")
 
     settings = LocalFolderSettings(path=str(retargetable))
@@ -107,7 +94,7 @@ def test_link_or_junction_into_home_refused(tmp_path: Path) -> None:
         retargetable.unlink()
     elif os.name == "nt":
         subprocess.run(["cmd", "/c", "rmdir", str(retargetable)], capture_output=True)
-    assert _make_link_or_junction(secret_target, retargetable)
+    assert make_link_or_junction(secret_target, retargetable)
 
     # Now tables and sandbox_mount must refuse it
     with pytest.raises(DomainError) as err_tables:

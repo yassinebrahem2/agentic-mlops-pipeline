@@ -3,39 +3,17 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
+from sqlalchemy import select
 
-from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
+from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Findings
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
-from mlops_agents.connections.registry import KindRegistry
-from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.errors import DomainError
-from mlops_agents.events.log import SqliteEventLog
-from mlops_agents.paths import DataPaths
-from mlops_agents.storage.databases import Databases
-
-ServiceEnv = tuple[ConnectionsService, Databases, SqliteEventLog, DataPaths]
-
-
-@pytest.fixture
-async def service_env(tmp_path: Path) -> AsyncIterator[ServiceEnv]:
-    home = tmp_path / "home"
-    home.mkdir()
-    paths = DataPaths(home)
-    paths.ensure()
-
-    databases = Databases(paths)
-    await databases.app()
-
-    events = SqliteEventLog(databases)
-    registry = KindRegistry([LocalFolderKind(paths.root)])
-    service = ConnectionsService(databases, events, registry)
-
-    yield service, databases, events, paths
-    await databases.dispose()
+from mlops_agents.storage.tables import connections
+from tests.connections.conftest import ServiceEnv
 
 
 async def test_service_lifecycle(service_env: ServiceEnv, tmp_path: Path) -> None:
@@ -183,17 +161,19 @@ async def test_service_unreachable_handling(service_env: ServiceEnv, tmp_path: P
     item2 = next(x for x in listing if x.id == c2.id)
 
     assert item1.status == "unreachable"
-    assert item1.status_detail is not None
+    assert item1.status_detail == f"Folder does not exist: {d1}"
     assert item1.data_version is None
     assert item1.findings.unsupported_files == []
 
     assert item2.status == "ok"
     assert item2.status_detail is None
 
-    # Mounts leaves out unreachable connection
-    mounts = await service.mounts(project_id)
-    assert len(mounts) == 1
-    assert mounts[0].container_path == "/data/c2"
+    # Mounts fails when a connection is unreachable
+    with pytest.raises(DomainError) as exc_info:
+        await service.mounts(project_id)
+    assert exc_info.value.code == "connection_unreachable"
+    assert "c1" in exc_info.value.message
+    assert f"Folder does not exist: {d1}" in exc_info.value.message
 
 
 async def test_service_list_data_version_updates_on_mtime_change(
@@ -227,3 +207,109 @@ async def test_service_list_data_version_updates_on_mtime_change(
     v2 = listing2[0].data_version
     assert v2 is not None
     assert v2 != v1
+
+
+async def test_a_name_with_a_trailing_newline_is_refused(
+    service_env: ServiceEnv, tmp_path: Path
+) -> None:
+    service, databases, _, _ = service_env
+    await databases.project("prj_name")
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+
+    with pytest.raises(DomainError) as err:
+        await service.create("prj_name", LOCAL_FOLDER_KIND, "abc\n", {"path": str(data_dir)})
+    assert err.value.code == "invalid_connection_name"
+
+
+async def test_settings_errors_never_echo_the_submitted_values(
+    service_env: ServiceEnv, tmp_path: Path
+) -> None:
+    service, databases, _, _ = service_env
+    await databases.project("prj_echo")
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    secret = "sk-secret-xyz-123"
+    bad = {"path": str(data_dir), "token": secret}
+    view = await service.create("prj_echo", LOCAL_FOLDER_KIND, "ok", {"path": str(data_dir)})
+
+    for call in (
+        service.inspect("prj_echo", LOCAL_FOLDER_KIND, bad),
+        service.create("prj_echo", LOCAL_FOLDER_KIND, "new", bad),
+        service.update("prj_echo", view.id, bad),
+    ):
+        with pytest.raises(DomainError) as err:
+            await call
+        assert err.value.code == "connection_invalid"
+        assert err.value.status == 422
+        assert err.value.detail == {
+            "errors": [{"field": "token", "message": "Extra inputs are not permitted"}]
+        }
+        assert secret not in err.value.message
+        assert secret not in repr(err.value.detail)
+
+
+async def test_list_stores_and_returns_the_kind_error_scrubbed(
+    service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, databases, _, _ = service_env
+    engine = await databases.project("prj_scrub")
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    view = await service.create("prj_scrub", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
+
+    def leaky_findings(self: LocalFolderKind, settings: BaseModel) -> Findings:
+        raise OSError("fetch https://user:hunter2@host/x?token=abc failed")
+
+    monkeypatch.setattr(LocalFolderKind, "findings", leaky_findings)
+
+    (listed,) = await service.list("prj_scrub")
+
+    assert listed.status == "unreachable"
+    assert listed.status_detail == "fetch https://***@host/x?token=*** failed"
+    async with engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                select(connections.c.status_detail).where(connections.c.id == view.id)
+            )
+        ).scalar_one()
+    assert stored == listed.status_detail
+
+
+async def test_list_lets_an_unexpected_error_through(
+    service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, databases, _, _ = service_env
+    await databases.project("prj_bug")
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    await service.create("prj_bug", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
+
+    def broken_findings(self: LocalFolderKind, settings: BaseModel) -> Findings:
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(LocalFolderKind, "findings", broken_findings)
+
+    with pytest.raises(RuntimeError):
+        await service.list("prj_bug")
+
+
+async def test_a_failure_while_reading_the_folder_creates_no_connection(
+    service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, databases, events, _ = service_env
+    await databases.project("prj_late")
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+
+    def vanished(self: LocalFolderKind, settings: BaseModel) -> Findings:
+        raise DomainError("connection_invalid", "Folder does not exist: x")
+
+    monkeypatch.setattr(LocalFolderKind, "findings", vanished)
+
+    with pytest.raises(DomainError) as err:
+        await service.create("prj_late", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
+    assert err.value.status == 400
+    monkeypatch.undo()
+    assert await service.list("prj_late") == []
+    assert await events.history("prj_late", types=["connection.created"]) == []

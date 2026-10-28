@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from pathlib import Path
 
@@ -12,20 +11,7 @@ import pytest
 from mlops_agents.connections.contract import LocalFolderSettings, TableRef
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
 from mlops_agents.errors import DomainError
-
-
-def _make_link_or_junction(target: Path, link: Path) -> bool:
-    try:
-        link.symlink_to(target, target_is_directory=True)
-        return True
-    except OSError:
-        if os.name == "nt":
-            res = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                capture_output=True,
-            )
-            return res.returncode == 0
-        return False
+from tests.connections.helpers import make_link_or_junction
 
 
 def test_tables_scan_formats_and_rules(tmp_path: Path) -> None:
@@ -114,7 +100,7 @@ def test_table_links_and_too_many_files(tmp_path: Path) -> None:
     (real_target / "linked.csv").write_text("a,b", encoding="utf-8")
 
     link_entry = data / "link_folder"
-    has_links = _make_link_or_junction(real_target, link_entry)
+    has_links = make_link_or_junction(real_target, link_entry)
 
     # Subfolder with link inside makes whole subfolder unsupported
     sub_with_link = data / "sub_with_link"
@@ -122,7 +108,7 @@ def test_table_links_and_too_many_files(tmp_path: Path) -> None:
     (sub_with_link / "real.parquet").write_bytes(b"PAR1")
     sub_inner_link = sub_with_link / "inner_link"
     if has_links:
-        _make_link_or_junction(real_target, sub_inner_link)
+        make_link_or_junction(real_target, sub_inner_link)
 
     kind = LocalFolderKind(home)
     tables = kind.tables(LocalFolderSettings(path=str(data)))
