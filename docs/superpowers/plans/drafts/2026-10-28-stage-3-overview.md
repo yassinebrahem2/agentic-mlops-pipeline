@@ -53,6 +53,7 @@ contracts writes these into code exactly as here (except where a line names anot
 ### I13: approvals, parts and turns (changes to I9 and the approvals contract; contracts task 2)
 
 - `ApprovalKind = Literal["tool", "stall"]`. The approval record, `ApprovalView` and `ApprovalPart` gain `kind`, `step: int | None` and `proposal_kind: str | None`. For a `stall`, `tool`, `tool_call_id` and `risk_class` are null; existing rows are `tool`.
+- `ToolContext` gains `tool_call_id` (I19 needs it).
 - `Approvals` gains:
   - `create_stall(project_id, turn_id, step, preview) -> ApprovalView`: idempotent; a stall is unique among the pending approvals of its turn and step, so a later stall at the same step after Try again is allowed.
   - `cancel(project_id, approval_id) -> None`: marks a pending approval `cancelled` (used to supersede a proposal).
@@ -205,7 +206,7 @@ ProposalStatus = Literal["pending", "approved", "rejected", "superseded"]
 class CredentialSlot(BaseModel): index: int; label: str; source_type: str
 class SlotState(BaseModel): index: int; label: str; set: bool
 class ApplyResult(BaseModel): applied: list[str]; failed: dict[str, str]   # part -> reason
-class ProposalView(BaseModel): id: str; kind: str; key: str; payload: dict[str, Any]; status: ProposalStatus; agent: str; approval_id: str; turn_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime
+class ProposalView(BaseModel): id: str; kind: str; key: str; payload: dict[str, Any]; status: ProposalStatus; agent: str; approval_id: str | None; turn_id: str; tool_call_id: str; result: ApplyResult | None; slots: list[SlotState]; created: datetime
 
 # Payloads (contracts), extra="forbid" everywhere
 class ConnectionSpec(BaseModel): kind: str; name: str; settings: dict[str, Any]; why: str      # name follows CONNECTION_NAME_PATTERN
@@ -248,13 +249,15 @@ class ProposalKinds:                # proposals; onboarding registers both kinds
     def get(self, name: str) -> ProposalKind: ...
 
 class Proposals(Protocol):          # proposals
-    async def create(self, project_id: str, agent: str, kind: str, key: str, payload: dict[str, Any], approval_id: str, turn_id: str) -> ProposalView: ...
+    async def create(self, project_id: str, agent: str, kind: str, key: str, payload: dict[str, Any], turn_id: str, tool_call_id: str) -> ProposalView: ...   # a draft: idempotent by (turn_id, tool_call_id); approval_id is None until attached
+    async def attach(self, project_id: str, proposal_id: str, approval_id: str) -> None: ...   # called on asked(view), found by (turn_id, tool_call_id)
     async def get_by_approval(self, project_id: str, approval_id: str) -> ProposalView | None: ...
     async def pending(self, project_id: str, kind: str, key: str) -> ProposalView | None: ...   # superseding is by kind and key; key = the project for connections and handoff
     async def latest_for_turn(self, project_id: str, turn_id: str, kind: str) -> ProposalView | None: ...
 ```
 
-- `asked(view)` carries the approval only; proposals reads the payload from its own record, created before the approval is asked.
+- **The record before the approval.** `Propose.preview` (run by the gate before it creates the approval) calls `create`, which writes a draft keyed by `(turn_id, tool_call_id)`: a re-run of the same call finds its draft. `asked(view)` then calls `attach` with the approval ID (the approval carries the tool call ID). A second `Propose` of the same kind in the same turn step, with a different tool call ID, is marked a duplicate by `create`, and its `run` returns a tool error.
+- `ToolContext` gains `tool_call_id: str` (contracts, in `agents/tools/base.py`).
 - proposals registers an `ApprovalObserver`: on `decided` it marks the proposal, applies it on approval, and deletes its credential slots on reject, cancel or expiry. A newer proposal of the same kind cancels the pending one (`Approvals.cancel`). A second proposal of the same kind in one model step gets a tool error. At startup, an approved proposal with no `result` is applied again, and orphaned slots are deleted.
 - Routes: `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}` (keystore only; refused unless pending); `GET .../proposals/by-approval/{apr}`. Events `proposal.created`, `proposal.decided`, `handoff.approved`.
 

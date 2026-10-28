@@ -32,11 +32,12 @@ Task 1 gets an early PR, from `plan/stage-3-embedders-task1`: the knowledge plan
 - `backend/tests/fakes/fake_openai.py`: the `/embeddings` route and its own functions (`embeddings`, `fake_embedding`), plus a shared helper for the scripted failures (below). Rate-limits edits other parts of this file (429 and 402 scripts); keep this plan's additions in separate functions and a separate block of `FakeState` fields.
 - `backend/src/mlops_agents/providers/bridge.py` (`build_embeddings`).
 - `backend/src/mlops_agents/providers/verification.py` (`probe_embedder`, `EmbedderProbe`).
-- `backend/src/mlops_agents/providers/models.py` (`ModelEntry.model_type: ModelType` and `dimensions: int | None`, `ModelCreate.model_type: ModelType = "chat"`, `ModelEntry.problem` per type, `ModelEntry.problem_for`). Rate-limits adds one `Provider` field in the same file: keep each plan's lines apart.
+- `backend/src/mlops_agents/providers/models.py` (`ModelEntry.model_type: ModelType` and `dimensions: int | None`, `ModelCreate.model_type: ModelType = "chat"`, `ModelEntry.problem` per type, `ModelEntry.problem_for`). Contracts already added `Provider.cooldown_minutes` there (its only line): do not touch it. Rate-limits adds its key-failover lines to `providers/service.py`: keep each plan's lines apart there.
 - `backend/src/mlops_agents/providers/service.py` (`add_model`, `_model`, `verify_model`, `record_verification`).
 - New `backend/src/mlops_agents/providers/provider_embedder.py` (`ProviderEmbedder`; `providers/embedder.py` is contracts' file of I14 types), new `providers/embedders.py` (`EmbeddersService`, the settings key).
 - `backend/src/mlops_agents/agents/settings.py` (chat models only).
 - `backend/src/mlops_agents/api/services.py` (one line: the `embedders` service).
+- `frontend/openapi.json`, regenerated (never edited by hand): `ModelEntry` and `ModelCreate` change `/api/models`, and both `test_committed_contract_matches_a_fresh_export` and the Backend CI step `openapi_export --check` fail on a stale file.
 - Tests: additions to `tests/fakes/test_fake_openai.py`, `tests/providers/test_embedder_verify.py`, `tests/providers/test_provider_embedder.py`, `tests/providers/test_embedders.py`, additions to `tests/providers/test_model_problem.py` and `tests/agents/test_settings.py`.
 
 **Interfaces:**
@@ -73,7 +74,7 @@ Task 1 gets an early PR, from `plan/stage-3-embedders-task1`: the knowledge plan
   - Built by `EmbeddersService`, holds the `Provider`, the wire model ID, `KeyFailover`, `ProvidersService` (for `keys_for`) and the shared `http`.
   - `embed(texts)`: empty input returns `[]` with no call; otherwise `failover.call(provider, wire_model_id, attempt, wait=False)` (an embedding never waits out a rate limit: it runs at turn start and in `SaveNote`). `attempt(key_index)` builds `build_embeddings(..., key)` with `key = None` when `key_index is None` (a provider with no keys: the failover calls `attempt(None)` once), else `keys[key_index]` where `keys = await ProvidersService.keys_for(provider.id)` (the same position-ordered list the failover's `key_index` and `provider.keys` follow), and awaits `aembed_documents(list(texts))`. `attempt` raises the raw exception and does nothing else: it neither classifies nor checks the answer (the failover would treat an exception raised there as a provider error, retry it or mark the key).
   - After `call` returns, `embed` checks the answer: as many vectors as texts, each of `self.dimensions` floats. A mismatch is an `EmbedderUnavailable` saying the model now answers N dimensions and to verify it again in AI providers (never a silent truncation: mixing sizes corrupts the vector table).
-  - Mapping to `EmbedderUnavailable` (user-facing, scrubbed): `AllKeysExhausted` gives `"<provider>: no usable key for <model>. " + describe_keys(provider, exc.keys)` (rate-limits' formatter in `failover.py`, the one source for key states); `RateLimited` says every key of the provider is rate-limited right now and search uses full text; any other exception (the failover re-raises what it does not handle, raw) goes through `classify(exc, keys)` and gives its `message`. Nothing else escapes `embed` except `asyncio.CancelledError`.
+  - Mapping to `EmbedderUnavailable` (user-facing, scrubbed): `AllKeysExhausted` gives `"<provider>: no usable key for <model>. " + failover.describe_keys(exc.keys)` (`KeyFailover.describe_keys(states) -> str`, I21: the one wording, shared with the stall card); `RateLimited` says every key of the provider is rate-limited right now and search uses full text; any other exception (the failover re-raises what it does not handle, raw) goes through `classify(exc, keys)` and gives its `message`. Nothing else escapes `embed` except `asyncio.CancelledError`.
   - It never raises a stall: nothing here touches approvals or the turn graph.
 - **`EmbeddersService(databases, providers, failover, http)`:**
   - `for_project(project_id)` (I14): reads the project override, else the app default; `None` when neither is set. The override wins even when unusable: it returns `None` rather than falling back to the default (a user who chose a self-hosted embedder for one project does not want its notes sent to a hosted default).
@@ -92,7 +93,7 @@ Task 1 gets an early PR, from `plan/stage-3-embedders-task1`: the knowledge plan
 - `EmbeddersService`: default only, override only, both (override wins), neither (`None`, `configured` false, no problem); an override that is not usable returns `None` and does not fall back; a deleted model, a chat model and an unverified embedder give `None` with `problem` set to their messages; `dimensions` is filled when usable; `set_default`/`set_override` validation and clearing; two projects have independent overrides.
 - Full backend suite; checks.
 
-Checks: `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv run pytest`.
+Checks: `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv run pytest` (includes the openapi check), `uv run python -m mlops_agents.api.openapi_export --check`.
 
 **PR:** open an early PR into `main` from `plan/stage-3-embedders-task1` (`Closes #<task issue>`).
 
@@ -159,7 +160,4 @@ Checks: `npm run lint`, `npm run format:check`, `npm test`, `npm run build`, `np
 
 ## Interface gaps
 
-The overview's I13 to I21 settle what the first draft listed. Still open:
-
-1. **`describe_keys` is rate-limits' addition to I21.** `ProviderEmbedder` formats `AllKeysExhausted.keys` with `describe_keys(provider, states)` from `providers/failover.py` (rate-limits task 1, listed there as an addition awaiting the lead's confirmation) so the embedder and the stall card word key states from one source. If it is not confirmed, the embedder message falls back to "<provider>: no usable key for <model>" with no per-key detail.
-2. **Shared edits in `providers/models.py` and `providers/service.py`.** The overview gives both to embedders, but rate-limits also adds its `Provider.exhausted_cooldown_minutes` field and its settings read and write there (its gap 2). The lead should say in the overview that rate-limits adds those lines; each plan then touches only its own.
+None. The overview's I14, I21 and "Files shared" settle every earlier gap. One assumption, stated so a change is noticed: `probe_embedder` raises `ProviderCallError` of kind `UNKNOWN` for an answer with no usable vector and classifies probe errors with `classify(exc, secrets)`, both as `providers/errors.py` has them now and as rate-limits keeps them.
