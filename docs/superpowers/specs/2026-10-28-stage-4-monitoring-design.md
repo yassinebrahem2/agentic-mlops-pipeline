@@ -1,6 +1,6 @@
 # Stage 4: The monitoring loop
 
-Date: 2026-10-28. Status: draft, not approved.
+Date: 2026-10-28. Status: approved by the lead on 2026-10-28.
 Contracts (IDs, folder layout, SQLite rules, agent definitions, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and decisions: `project_knowledge.md` (entries of 2026-10-27 and 2026-10-28). Stages 1 to 3 stay as their specs say, unless changed here.
 
 ## Goal
@@ -202,7 +202,7 @@ New in `project.db`: results, sources and cursors, parsers (versioned), expectat
   |---|---|---|
   | train, deploy | asks at every level, `bypass` included | asks at every level, `bypass` included |
   | rollback, rerun, fall back | runs without asking at `ask`, `autonomous`, `bypass`; denied at `suggest` | the stage 2 `deploy` row |
-  | hold | runs without asking at every level except `suggest` (tier 1) | same |
+  | hold | runs without asking at every level except `suggest` (tier 1); at `suggest` the alert recommends the hold and the person applies it in one click through the approval path | same |
 - Stage 5's "train/deploy hooks" become the action hooks of this stage. Stage 5 keeps Retraining's and Deployment & Rollback's behavior (when to propose a retrain, evaluating a candidate against production, promotion) and the Deployments page.
 
 ## 13. Error handling

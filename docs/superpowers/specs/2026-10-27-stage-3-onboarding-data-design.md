@@ -1,6 +1,6 @@
 # Stage 3: Onboarding and data access
 
-Date: 2026-10-27. Status: approved by the lead on 2026-10-28.
+Date: 2026-10-27. Status: approved by the lead on 2026-10-28; the additions required by stage 4 (pipeline edges, the results location, time zones, serving mode, error costs, groups, feeds and deadlines, commands, on-call, server-mode folders, one-minute sync) approved on 2026-10-28 with the stage 4 spec.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and the decisions behind it: `project_knowledge.md` (entries of 2026-10-27). Stage 1 and stage 2 behavior not mentioned here stays as their specs say.
 
 ## Goal
