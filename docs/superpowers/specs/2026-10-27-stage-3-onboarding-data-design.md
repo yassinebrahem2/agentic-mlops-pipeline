@@ -1,6 +1,6 @@
 # Stage 3: Onboarding and data access
 
-Date: 2026-10-27. Status: draft, not approved.
+Date: 2026-10-27. Status: approved by the lead on 2026-10-28; the additions required by stage 4 (pipeline edges, the results location, time zones, serving mode, error costs, groups, feeds and deadlines, commands, on-call, server-mode folders, one-minute sync) approved on 2026-10-28 with the stage 4 spec; the additions required by stage 5 (several models per project, per-model commands in the `command` or `ci_dispatch` shape with placeholders and `deploys`, who promotes, the alias-to-environment map, the production signal, tracking fetching the evaluation record, superseding by kind and key) approved on 2026-10-28 with the stage 5 spec.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and the decisions behind it: `project_knowledge.md` (entries of 2026-10-27). Stage 1 and stage 2 behavior not mentioned here stays as their specs say.
 
 ## Goal
@@ -38,9 +38,10 @@ In:
 
 Out:
 - Connection kinds other than local folder: PostgreSQL first, then S3, GCS, Azure, MySQL, SQLite files and others. The kind interface (§4) takes each as one new file; none ships now. Excel files: they need a DuckDB extension shipped per platform.
-- File connections in server mode: they would read the server's disk. The connections section says so in server mode.
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
+- Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
+- A read-only tracker credential inside the sandbox (§7): not built in this stage; agents read tracking history through `TrackingHistory` and `tracking_summary`, which use the credential in the app. Giving a credential to the agent's own Bash needs a design of its own (stage 4's hook credentials reach one hook run only, never the agent's Bash) and is not scheduled.
 - Reading monitoring results and checks (stage 4), deploy hooks (stage 5), the Knowledge, Stats, Activity and Usage pages (stage 6). Stage 3 stores what they read.
 - The Data page's quality and drift history: empty until stage 4; the page says so.
 
@@ -74,9 +75,12 @@ backend/src/mlops_agents/
 
 A change to the merged model call (`agents/runtime/model_caller.py`), modeled on the key failover engine of the Multimodal RAG Agent project (`providers/retry_engine.py` there):
 - **Error kinds.** Permanent (bad request, a rejected tool call already handled in stage 2) ends the call at once. Transient (a server error, a dropped connection, a timeout) retries with backoff a few times on the same key; a different key would not fix it. Every 429 is a rate limit, handled below, whatever its message says: providers such as Gemini word per-minute limits as "quota exceeded". Only an explicit billing signal (HTTP 402, `insufficient_quota`) or an authentication failure exhausts a key at once. The classification in `providers/errors.py` changes accordingly.
-- **Rate limits.** The call waits `max(retry_after, interval)` and retries the same key. Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn. When a key has been continuously rate-limited for longer than a threshold (a provider setting, default 90 seconds), it is treated as exhausted for the day.
-- **Key state is shared.** Each key's rate-limit streak and exhausted mark live in one place per provider in the app, shared by every turn and every call (the four kickoff audits share a key). A success on a key ends its streak.
-- **Exhausted keys.** An exhausted key is skipped and the call moves to the next key of the provider. After a cooldown (a provider setting, default 15 minutes) the next call tries it once again, since providers reset their daily limits at different times; a success clears the mark. Try again (below) clears every mark at once.
+- **Rate limits: the user never waits on one key.** On a 429 the call moves at once to the next key of the provider that is not exhausted for that model, and cycles through the keys like that. Each key remembers when it was last rate-limited.
+  - When the cycle comes back to a key whose last rate limit is more than a minute old (a per-minute limit has had time to clear) and that key is rate-limited again, it is marked exhausted: it reached its daily limit.
+  - When every remaining key was rate-limited less than a minute ago, the call waits only until the earliest of them clears (its `Retry-After`, else a minute after its limit), then tries that key.
+  - Rate-limit retries never count against any retry budget, so a per-minute limit never ends a turn.
+- **Key state is per key and model.** Providers count limits per model, so a key's last rate limit and exhausted mark are kept per key and model: the same key can be exhausted for one model and fine for another. The state lives in one place in the app, shared by every turn and every call (the four kickoff audits share keys). A success clears that key and model's rate-limit time.
+- **Exhausted keys** are skipped. After a cooldown (a provider setting, default 15 minutes) the next call tries an exhausted key once again, since providers reset their daily limits at different times; a success clears the mark. Try again (below) clears every mark at once.
 - **Every key exhausted.** The turn does not fail: it pauses on an approval of a new kind, `stall`, which has no tool call.
   - The model node records the `stall` approval (keyed by turn ID and model-step index, so a re-run finds it instead of duplicating it) and returns without a model message. The graph routes model → wait while a stall is pending; once it is approved, `wait` routes back to `model`, which calls the model again. A change to the merged turn graph.
   - The approval record, the card, the Inbox entry, surviving a restart and resuming are stage 2's. The card shows the provider and each key's state and why (daily limit, billing, rejected), with Try again (approves: clears the marks and resumes, so no work is lost) and Stop (cancels: the turn ends `stopped`). A change to the merged approvals and Part interfaces: the approval kind `stall` and its preview.
@@ -119,6 +123,7 @@ class ConnectionKind(Protocol):
 **Rules:**
 - Only the user creates, changes or deletes a connection: in project settings, or by approving a `connections` proposal (§9). No agent tool creates one.
 - A local folder must exist and be readable, and must not be inside the app's data folder. Links are resolved before the check.
+- In server mode (the app running continuously on a server, as it is meant to run), a local folder is a folder on that server, for example a mounted data disk; the folder picker browses the server's disk as the add-project wizard does in local mode, and the same checks apply.
 - Files in it that match the secret denylist are listed as a warning in the form and the proposal card. A read-only mount cannot hide them; the user decides.
 - The UI lists only the kinds that ship.
 
@@ -150,14 +155,14 @@ class ConnectionKind(Protocol):
 - `tracked_models` (name), `model_versions` (version, source run, aliases, created), `tracked_runs` (run ID, experiment, status, start, end, params, tags including the git commit, dataset inputs where recorded), `run_metrics` (run, key, step, value, time), `deployments` (model, alias, from version, to version, seen at: the alias history, since MLflow keeps only current aliases), `ci_runs` (workflow, run ID, status, conclusion, start, duration, commit, URL).
 
 **Adapters**, one file each under `tracking/adapters/`, one interface `sync(source, since) -> SyncResult`:
-- **MLflow** over its REST API with the app's HTTP client (no MLflow package): experiments, runs and metric history, registered models, versions and aliases.
+- **MLflow** over its REST API with the app's HTTP client (no MLflow package): experiments, runs and metric history, registered models, versions and aliases, and, for each model version's run, the standard evaluation record artifact (`mlops_agents/evaluation.json`, stage 5) when present, fetched through the tracker's artifact API and stored with the version.
 - **GitHub Actions** over the stage 2 GitHub client: workflow runs.
-- A sync loop per project runs each source on an interval (a project setting, default 5 minutes) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
+- A sync loop per project runs each source on an interval (a project setting, default 1 minute, so the app is the first to know when a job or a run fails) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
 
 **For agents:**
 - `tracking_summary` hook: the production model and version, its latest metrics, the last runs and CI runs; capped.
 - `TrackingHistory` tool (`read`; justified: the record is in the app's database): models, versions, runs, metrics over time, deployments and CI runs, filtered, with a row cap.
-- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox gets a read-only credential only if the user grants one, so it can read and never write. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
+- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox holds no credential in this stage (see Out); agents read its history through the app. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
 
 ## 8. The Knowledge store
 
@@ -174,7 +179,7 @@ class ConnectionKind(Protocol):
 
 ## 9. Proposals
 
-**One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version (a newer pending proposal of the same kind supersedes the older one).
+**One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version, and a key (a newer pending proposal of the same kind and key supersedes the older one; the key is the kind's choice: the project for `connections` and `handoff`).
 - A proposal is a stage 2 approval: the tool call asks, the card renders the payload by its kind, the user approves or rejects with a note, the turn resumes. On approval the app runs the kind's `apply()`; the tool result tells the agent what was applied, what failed and why.
 - **Secrets never pass through a proposal.** A card that needs a credential (a tracker's) has a field that posts it straight to the keystore through its own endpoint, keyed by the proposal's ID and the source's position in the payload; the approval, its preview, the audit record, the events and the checkpoint only ever hold "credential set: yes or no". Applying the proposal moves the credential to the new tracking source; rejecting it, superseding it or failing to create that source deletes it, so no orphan secret stays in the keystore.
 - **New risk class `propose`:** it asks at every permission level, `bypass` included. A proposal changes what the agents may do or see, so the user always decides it. Roadmap change below.
@@ -183,12 +188,15 @@ class ConnectionKind(Protocol):
 **`connections` payload:** the connections to create (kind, name, settings) and why each, from what Onboarding found in the code and heard from the user. Applying creates them (§4).
 
 **`handoff` payload** (needs the project's connections to exist):
-- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive.
-- **Data roles:** per table of the connections: `training`, `serving_inputs`, `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
+- **Models:** a project can have several production models; the profile below, the data roles' prediction and label tables, the commands and the promotion mode are given per model (one model is the common case).
+- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive, how the model is served (`batch`, `online` or `streaming`), the cost of each kind of error (a false alarm against a miss, in the user's words and as a ratio when known), and the groups that matter (columns and values, such as a region or customer type, whose metrics are watched separately).
+- **Data roles:** per table of the connections: `training`, `serving_inputs` (the model's raw inputs as served), `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
 - **Tracking:** the sources to create (MLflow URL and whether it needs a credential; the GitHub workflows that matter).
-- **Pipeline:** the stages (name, entry file or command, inputs, outputs, order). The Dashboard draws them in stage 4.
-- **Commands:** the team's train, evaluate, deploy and rollback commands where found. Stage 5 registers them as deploy hooks.
-- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured), and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
+- **Pipeline:** the stages (name, entry file or command, inputs, outputs, order) and the edges between them (which stage's output feeds which), so stage 4 groups a cascade of failures into one incident. The Dashboard draws them in stage 4.
+- **Results location:** where the agents' checks will write their standard result records (a connection path or the tracker's metrics).
+- **Commands:** the team's action commands where found, each with what it does (train, evaluate, deploy, rollback, rerun a job, hold or quarantine a batch, fall back), its type (`command`: a template; `ci_dispatch`: workflow, ref and inputs), the placeholders it takes (`{request_id}`, `{model}`, `{candidate_version}`, `{champion_version}`, `{window_start}`, `{window_end}`, `{mode}`, `{threshold}`), and whether its pipeline deploys at its end (`deploys`). Stage 4 and stage 5 run them as hooks; Onboarding only records them.
+- **Promotion:** per model, who promotes new versions (`team_gate`: the team's automated gate, full CD; or `person`), which tracker alias means which environment, and the production signal the app reads to know a deploy happened (a tracker alias, a CI deploy job, or a file path a connection reads).
+- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured); every data feed and scheduled job with its expected time or cadence, its grace period and its time zone (a missing result past it is an incident in stage 4); on-call people (who, their hours and time zone, how to reach them, and who to escalate to); and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
 - **Gaps:** what Onboarding could not find or set up, each with its next step (for example "predictions are not saved: PR #12 adds logging with a shared ID"; "MLflow has no authentication: PR #13 enables it").
 - **Grants:** sandbox network on or off, and the permission level, which can never be set to `bypass` by a proposal.
 
@@ -229,7 +237,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 - **Project settings, Connections:** connections with status and data version; add (a folder picker in local mode, as the add-project wizard has), edit, remove; the denylist warning. Tracking sources: URL, credential (posted to the keystore), last sync. The embedder override.
 - **Proposal cards:** `connections` and `handoff` cards render their payloads readably; the handoff card has the credential field and the network sentence of §7. The Inbox lists them like any approval.
 - **Stalled-turn card** (§2), in the session and the Inbox.
-- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the rate-limit threshold per provider.
+- **AI providers:** the model type column, type-filtered pickers, the embedder default in app settings, the exhausted-key cooldown per provider.
 - **Models page:** tracked models; per model, its versions with their metrics side by side, the production alias, and each version's lineage (run, git commit, training data where recorded).
 - **Data page:** connections and their tables (schema, rows, data version, roles from the handoff), and "quality and drift history arrives with monitoring".
 - **Runs page:** tracked runs and CI runs in one list with status, duration and failures; Sync now.
@@ -237,7 +245,7 @@ Onboarding's `max_steps` rises to 60. Agents that had `status_board: true` get t
 
 ## 13. Storage
 
-New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the rate-limit threshold and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. Each plan adds its own numbered migration.
+New tables in `project.db`: connections, tracking sources, the tracking record, notes with their FTS and vector tables, proposals, the current handoff, the kickoff state. App settings gain the default embedder; providers gain the exhausted-key cooldown and models the type and dimensions (`app.db`). `projects/<id>/cache/` holds the data-summary cache. One plan (the overview's contracts) writes the stage 3 schema, as in stage 2.
 
 ## Changes to the roadmap
 
@@ -260,7 +268,7 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 ## 15. Testing
 
 - Fakes, no real service: `/embeddings` and rate-limit and quota responses on the fake OpenAI server; a fake MLflow REST server; workflow runs on the fake GitHub server; small data folder fixtures.
-- Rate limits (§2), with a fake clock: per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a key limited past the threshold is skipped; quota or authentication exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
+- Rate limits (§2), with a fake clock: a 429 moves to the next key at once, without waiting; a key limited again after more than a minute is marked exhausted; with every key limited within the last minute, the call waits only until the earliest clears; per-minute limits never end a turn, a 429 saying "quota" included; an exhausted key is tried again after the cooldown; an exhausted embedder degrades search and never stalls; a billing signal (402, `insufficient_quota`) or an authentication failure exhausts a key at once; every key exhausted pauses the turn with the card, Try again resumes from the checkpoint, Stop ends it; Stop during a wait.
 - Connections: a folder inside the data folder is refused; a link out is resolved and checked; the mount is read-only (a write from Bash fails); denylisted files are listed; changing connections recreates the container.
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
