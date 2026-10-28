@@ -14,6 +14,7 @@ from mlops_agents.agents.tools.issues import (
     SearchIssuesTool,
 )
 from mlops_agents.agents.tools.list_agents import ListAgentsTool
+from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
@@ -29,11 +30,14 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
+    from mlops_agents.proposals.kinds import ProposalKinds
+    from mlops_agents.proposals.service import ProposalsService
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
     from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
+    "PROPOSE_TOOL_NAME",
     "BashTool",
     "CommentOnIssueTool",
     "EditTool",
@@ -42,6 +46,7 @@ __all__ = [
     "ListAgentsTool",
     "OpenIssueTool",
     "OpenPullRequestTool",
+    "ProposeTool",
     "ReadTool",
     "ResumeTaskTool",
     "ScheduleWakeupTool",
@@ -51,6 +56,11 @@ __all__ = [
     "WriteTool",
     "default_registry",
 ]
+
+
+class _DefaultToolRegistry(ToolRegistry):
+    def register(self, tool: AgentTool[Any]) -> None:
+        self._tools[tool.name] = tool
 
 
 def default_registry(
@@ -66,10 +76,14 @@ def default_registry(
     events: EventLog | None = None,
     http: httpx2.AsyncClient | None = None,
     databases: Databases | None = None,
+    proposals: ProposalsService | None = None,
+    proposal_kinds: ProposalKinds | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
     tools: list[AgentTool[Any]] = [ReadTool(tasks=tasks), GlobTool(), GrepTool(shutil.which("rg"))]
+    if proposals is not None and proposal_kinds is not None:
+        tools.append(ProposeTool(proposals, proposal_kinds))
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(
@@ -104,7 +118,7 @@ def default_registry(
                 CommentOnIssueTool(tasks, github, events, http),
             ]
         )
-    registry = ToolRegistry(tools)
+    registry = _DefaultToolRegistry(tools)
     if bus is not None:
         # Imported here: the bus reaches this package through the session contract, so a
         # top-level import would be circular.

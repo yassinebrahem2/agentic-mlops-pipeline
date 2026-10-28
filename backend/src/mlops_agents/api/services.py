@@ -172,6 +172,9 @@ async def build_services(
     )
 
     wakeups = WakeupService(databases, events=events)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+    handoffs = SqliteHandoffs(databases)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -182,6 +185,8 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -233,9 +238,6 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
-    proposal_kinds = ProposalKinds()
-    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
-    handoffs = SqliteHandoffs(databases)
 
     proposal_observer = ProposalApprovalObserver(proposals, approvals, workspace)
     approvals.add_observer(proposal_observer)
