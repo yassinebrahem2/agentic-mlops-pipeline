@@ -178,8 +178,10 @@ class ModelCaller:
                 call_messages.append(HumanMessage(content=corrective))
 
     async def reset_keys(self, provider_id: str) -> None:
-        """Forget the provider's key states, so the next call tries every key again."""
+        """Try again: forget the provider's key states, so the next call tries every key again,
+        and its needs-attention mark."""
         self._failover.clear(await self._providers.get_provider_by_id(provider_id))
+        await self._providers.clear_attention(provider_id)
 
     async def _call_restarting(
         self,
@@ -211,7 +213,7 @@ class ModelCaller:
             return await self._attempt(call, key_index, messages, tools, on_text)
 
         try:
-            return await self._failover.call(
+            reply = await self._failover.call(
                 provider, wire_model, attempt, cooldown_minutes=provider.cooldown_minutes
             )
         except _OnTextCallbackError as wrapper:
@@ -244,6 +246,10 @@ class ModelCaller:
             if error.kind is ProviderErrorKind.BAD_GENERATION:
                 raise _Rejected(error.message) from exc
             raise TurnFailed(error.message) from exc
+        if provider.status == "needs_attention":
+            # The provider answered: whatever it needed is fixed.
+            await self._providers.clear_attention(provider.id)
+        return reply
 
     async def _attempt(
         self,

@@ -23,6 +23,7 @@ from mlops_agents.providers.models import (
     ModelEntry,
     Provider,
     ProviderCreate,
+    ProviderStatus,
     RemoteModel,
 )
 from mlops_agents.providers.verification import probe_model
@@ -129,12 +130,22 @@ class ProvidersService:
         return await self.get_provider(name)
 
     async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
+        """Shown on the AI providers page; it never refuses a turn (Decision #384)."""
+        await self._set_status(provider_id, "needs_attention", detail)
+
+    async def clear_attention(self, provider_id: str) -> None:
+        """The provider works again: a call succeeded, or Try again."""
+        await self._set_status(provider_id, "ok", None)
+
+    async def _set_status(
+        self, provider_id: str, status: ProviderStatus, detail: str | None
+    ) -> None:
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(
                 update(providers)
                 .where(providers.c.id == provider_id)
-                .values(status="needs_attention", status_detail=detail)
+                .values(status=status, status_detail=detail)
             )
 
     # Keys

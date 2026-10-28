@@ -260,7 +260,12 @@ async def test_keys_changed_twice_fail_the_call_unexpectedly(
 
 
 @pytest.mark.parametrize(
-    ("outcome", "provider_message"), [("401", "Invalid API key"), ("402", "Payment required")]
+    ("outcome", "provider_message"),
+    [
+        ("401", "Invalid API key"),
+        ("402", "Payment required"),
+        (("429", None), "Rate limit reached"),
+    ],
 )
 async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_the_provider(
     databases: Databases,
@@ -270,7 +275,7 @@ async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_th
     outcome: KeyOutcome,
     provider_message: str,
 ) -> None:
-    # As built while the Decision on keyless providers is open: no key to exhaust or fix.
+    # No key to fix or rotate: the turn fails plainly and the user can send again (#384).
     env = await build_caller_env(
         databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
     )
