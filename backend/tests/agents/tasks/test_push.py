@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import stat
@@ -442,3 +443,90 @@ async def test_has_commits_beyond_base_is_false_when_the_base_commit_is_gone(
     # The failure is not swallowed silently: it is logged with the task, the ref and git's reason.
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert any(task.id in w and "0" * 40 in w and "Invalid revision range" in w for w in warnings)
+
+
+async def _push_with_init_hook(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    after_init: Any,
+) -> list[Path]:
+    """Push a committed task; `after_init(temp_push)` runs once the temp bare repo exists."""
+    bare = make_bare_remote(tmp_path, git_env, name=f"remote_{name}.git")
+    service, _, _, project_id, repo = await setup_service(
+        tmp_path / f"prj_{name}", paths, databases, keystore, git_env
+    )
+    cmd(["git", "remote", "add", "origin", "https://github.com/test-owner/test-repo.git"], cwd=repo)
+    temp_dirs: list[Path] = []
+    orig_run_safe_git = push_module.run_safe_git
+
+    async def spy_run_safe_git(*args: Any, **kwargs: Any) -> Any:
+        res = await orig_run_safe_git(*args, **kwargs)
+        git_args = cast(Sequence[str], kwargs.get("args") or [])
+        if "init" in git_args:
+            temp_dirs.append(Path(git_args[2]))
+            after_init(temp_dirs[0])
+        return res
+
+    monkeypatch.setattr(push_module, "run_safe_git", spy_run_safe_git)
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", f"Push {name}")
+        (task.worktree / "test.txt").write_text("content\n", encoding="utf-8")
+        await service.commit(project_id, task, "feat: commit")
+        await service.push(project_id, task)
+    return temp_dirs
+
+
+async def test_push_removes_a_read_only_file_in_its_temp_folder(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Git marks pack files read-only; Windows refuses to delete them unless the flag is cleared.
+    def add_read_only_file(temp_push: Path) -> None:
+        pack = temp_push / "objects" / "pack" / "pack-test.pack"
+        pack.parent.mkdir(parents=True, exist_ok=True)
+        pack.write_bytes(b"pack")
+        pack.chmod(stat.S_IREAD)
+
+    temp_dirs = await _push_with_init_hook(
+        tmp_path, paths, databases, keystore, git_env, monkeypatch, "ro", add_read_only_file
+    )
+
+    assert len(temp_dirs) == 1
+    assert not temp_dirs[0].exists()
+
+
+async def test_push_logs_a_failed_cleanup_of_its_temp_folder(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing_rmtree(path: Path) -> None:
+        raise PermissionError(f"locked: {path}")
+
+    monkeypatch.setattr(push_module, "rmtree", failing_rmtree)
+
+    with caplog.at_level(logging.ERROR, logger="mlops_agents.agents.tasks.push"):
+        temp_dirs = await _push_with_init_hook(
+            tmp_path, paths, databases, keystore, git_env, monkeypatch, "fail", lambda _: None
+        )
+
+    assert len(temp_dirs) == 1
+    failures = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(failures) == 1
+    assert str(temp_dirs[0]) in failures[0].getMessage()
+    assert failures[0].exc_info is not None
+    remove_dir(temp_dirs[0])
