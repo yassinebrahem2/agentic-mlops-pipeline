@@ -51,32 +51,47 @@ def _retry_after(response: httpx2.Response) -> float | None:
         return None
 
 
+_BAD_GENERATION_CODES = ("tool_use_failed", "json_validate_failed")
+_BILLING_CODE = "insufficient_quota"
+_PAYMENT_REQUIRED = 402
+
+
+def _code(e: openai.APIError) -> object:
+    """The error code: the attribute, else the body's `code`, else its nested `error.code`."""
+    code: object = getattr(e, "code", None)
+    body = getattr(e, "body", None)
+    if not code and isinstance(body, dict):
+        body_dict = cast(dict[str, Any], body)
+        code = body_dict.get("code")
+        if not code:
+            nested_err = body_dict.get("error")
+            if isinstance(nested_err, dict):
+                nested_dict = cast(dict[str, Any], nested_err)
+                code = nested_dict.get("code")
+    return code
+
+
 def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:
     for e in _chain(exc):
         if isinstance(e, openai.APIError):
-            body = getattr(e, "body", None)
-            code: object = getattr(e, "code", None)
-            if not code and isinstance(body, dict):
-                body_dict = cast(dict[str, Any], body)
-                code = body_dict.get("code")
-                if not code:
-                    nested_err = body_dict.get("error")
-                    if isinstance(nested_err, dict):
-                        nested_dict = cast(dict[str, Any], nested_err)
-                        code = nested_dict.get("code")
-            if code in ("tool_use_failed", "json_validate_failed"):
+            code = _code(e)
+            if code in _BAD_GENERATION_CODES:
                 return ProviderErrorKind.BAD_GENERATION, None
+            # Only an explicit billing signal is quota: providers word per-minute 429s as
+            # "quota exceeded" too, and those are rate limits.
+            if code == _BILLING_CODE:
+                return ProviderErrorKind.QUOTA, None
 
         if isinstance(e, openai.AuthenticationError | openai.PermissionDeniedError):
             return ProviderErrorKind.AUTH, None
         if isinstance(e, openai.RateLimitError):
-            body = str(e.body).lower() if e.body is not None else ""
-            if "quota" in str(e).lower() or "insufficient_quota" in body:
-                return ProviderErrorKind.QUOTA, None
             return ProviderErrorKind.RATE_LIMIT, _retry_after(e.response)
         if isinstance(e, openai.APIConnectionError | httpx2.TransportError):
             return ProviderErrorKind.UNREACHABLE, None
         if isinstance(e, openai.APIStatusError):
+            # The openai SDK has no class for 402; it raises a plain APIStatusError.
+            if e.status_code == _PAYMENT_REQUIRED:
+                return ProviderErrorKind.QUOTA, None
             if e.status_code >= 500:
                 return ProviderErrorKind.TRANSIENT, None
             return ProviderErrorKind.BAD_REQUEST, None

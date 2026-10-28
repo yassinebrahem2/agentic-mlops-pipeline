@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Huma
 
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderErrorKind, classify
+from mlops_agents.providers.failover import TRANSIENT_BACKOFFS
 from mlops_agents.providers.service import ProvidersService
 
 
@@ -53,7 +54,6 @@ def _extract_text_deltas(content: object) -> list[str]:
 
 
 MAX_ATTEMPTS = 6
-TRANSIENT_BACKOFFS = (1.0, 2.0)
 MAX_REJECTED_RETRIES = 2
 
 
