@@ -123,7 +123,7 @@ Every other plan starts on task 1 or 2 (overview, Plans table), so task 1 stays 
 **Files:**
 - `backend/src/mlops_agents/agents/tools/base.py` (`RiskClass.PROPOSE = "propose"`), `agents/policy/table.py`.
 - `backend/src/mlops_agents/agents/approvals/contract.py` (`Approvals` additions, `ApprovalObserver`), `store.py`, `service.py`, `decisions.py`, `gate.py` (the `proposal_kind` line).
-- `backend/src/mlops_agents/agents/tools/base.py` also: `ToolContext.tool_call_id: str`; `agents/runtime/tool_step.py` (the per-call `ToolContext` builder) and the test helper `tests/agents/ctx.py` pass it. `agents/runtime/hooks.py`: `GateDecision.proposal_kind: str | None = None`. `agents/runtime/waiting.py`: the lines that build `ApprovalPart` from a `GateDecision` set `kind="tool"` and `proposal_kind` (see Interface gaps 1).
+- `backend/src/mlops_agents/agents/tools/base.py` also: `ToolContext.tool_call_id: str`; `agents/runtime/tool_step.py` (the per-call `ToolContext` builder) and the test helper `tests/agents/ctx.py` pass it. `agents/runtime/hooks.py`: `GateDecision.proposal_kind: str | None = None`. `agents/runtime/waiting.py`: the lines that build `ApprovalPart` from a `GateDecision` set `kind="tool"` and `proposal_kind`.
 - Frontend: `frontend/src/pages/agents/ApprovalCard.tsx` (becomes the dispatcher), new `GenericApprovalCard.tsx` (the stage 2 card body and its diff, command and text views, moved unchanged) and `ApprovalControls.tsx`; `InboxPage.tsx` (it builds an `ApprovalPart` from each `ApprovalView` by hand: it must pass `kind`, `step`, `proposal_kind` and the nullable `tool_call_id`, or the stall and proposal cards never appear there) and `MessageView.tsx` only if its props change; `frontend/openapi.json` and `schema.d.ts` regenerated.
 - Tests: `tests/agents/policy/`, `tests/agents/test_approval_store.py`, `test_approvals_service.py`, `test_approval_gate.py`, `frontend/src/pages/agents/ApprovalCard.test.tsx`, new `ApprovalControls.test.tsx`.
 
@@ -176,9 +176,3 @@ Every other plan starts on task 1 or 2 (overview, Plans table), so task 1 stays 
 - Frontend lint, format, tests, build and `npm run e2e` pass; full backend suite, ruff, format, pyright; CI green on Linux and Windows on the plan branch commit. This is the plan's last task: it merges through the plan PR (`Closes #<plan issue>`), no early PR.
 
 ---
-
-## Interface gaps
-
-Still open:
-
-1. **`proposal_kind` on the live part.** The overview gives contracts one line in `agents/runtime/waiting.py` (a stall's part). The part of a `Propose` call is built there too, from a `GateDecision`, which has no `proposal_kind`; without it the proposal cards never render. This plan adds the `GateDecision.proposal_kind` field (`runtime/hooks.py`) and a second line in `waiting.py` setting it; the overview should name it next to the stall line.
