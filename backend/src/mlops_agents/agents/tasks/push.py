@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
-import stat
 import uuid
 from collections.abc import Awaitable
 from pathlib import Path
@@ -16,6 +14,7 @@ from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.config import APP_NAME
 from mlops_agents.errors import DomainError
 from mlops_agents.storage.tables import tasks
+from mlops_agents.workspace.fs import rmtree
 from mlops_agents.workspace.refs import https_url
 
 if TYPE_CHECKING:
@@ -26,24 +25,6 @@ if TYPE_CHECKING:
     from mlops_agents.workspace.refs import RepoRef
 
 logger = logging.getLogger(__name__)
-
-
-def _rmtree(path: Path) -> None:
-    def on_exc(func: Any, target: str, exc: Any) -> None:
-        try:
-            Path(target).chmod(stat.S_IWRITE | stat.S_IREAD)
-        except Exception as chmod_exc:
-            logger.warning("Failed to reset permissions on %s: %s", target, chmod_exc)
-        try:
-            func(target)
-        except Exception as retry_exc:
-            logger.warning("Failed to remove %s: %s", target, retry_exc)
-
-    if path.exists():
-        try:
-            shutil.rmtree(path, onexc=on_exc)
-        except Exception as exc:
-            logger.warning("Failed to remove directory %s: %s", path, exc)
 
 
 async def push_task(
@@ -130,9 +111,9 @@ async def push_task(
 
         async def _cleanup() -> None:
             try:
-                await asyncio.to_thread(_rmtree, temp_push)
-            except Exception as exc:
-                logger.warning("Failed to clean up temp bare repo %s: %s", temp_push, exc)
+                await asyncio.to_thread(rmtree, temp_push)
+            except OSError:
+                logger.exception("Could not delete the temporary push folder %s", temp_push)
 
         await asyncio.shield(_cleanup())
 
