@@ -17,7 +17,7 @@ Stage 3 is built through several plans. This overview holds what they share. Rea
 - The generated contract check is `python -m mlops_agents.api.openapi_export --check`; `npm run gen:api` only writes `schema.d.ts`.
 - Frontend types come only from the generated `schema.d.ts` (`npm run gen:api`), which is gitignored and never committed; a plan that changes the API commits the regenerated `frontend/openapi.json`.
 - Routers are discovered by `include_routers` in `api/app.py`; a plan adds its router file and no registration line.
-- A pydantic validation error never reaches a user or a log with its input values (a pasted secret would come back): one helper in `api/errors.py` turns a `ValidationError`'s errors into location plus message only (`include_input=False`, `include_url=False`), used by the request-validation handler and by every service that validates settings (`DomainError` 422). Connections task 1 (#383) extracts it from the handler; tracking task 1 (#389) and later plans use it.
+- A pydantic validation error never reaches a user or a log with its input values (a pasted secret would come back): one helper, `validation_error_message(err)` in `mlops_agents/errors.py` (next to `DomainError`, so domain services import it without importing the `api` layer), turns a `ValidationError`'s errors into location plus message only (`include_input=False`, `include_url=False`); the request-validation handler in `api/errors.py` and every service that validates settings (`DomainError` 422) use it. Proposals task 1 (#403) adds it (it reached `main` first); connections (#383), tracking (#389) and later plans import it.
 
 ## Plans
 
