@@ -14,12 +14,10 @@ from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mlops_agents.credentials import KeyStoreError
-from mlops_agents.errors import DomainError
+from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.sandbox.contract import SandboxUnavailable
 
 _log = logging.getLogger(__name__)
-
-_VALUE_ERROR_PREFIX = "Value error, "
 
 
 def error_response(
@@ -41,16 +39,11 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
-        # Only the location and the sentence: the submitted input may hold a key.
-        errors = [
-            {
-                "field": ".".join(str(part) for part in error["loc"]),
-                "message": str(error["msg"]).removeprefix(_VALUE_ERROR_PREFIX),
-            }
-            for error in exc.errors()
-        ]
         return error_response(
-            422, "invalid_request", "Some fields are missing or invalid.", {"errors": errors}
+            422,
+            "invalid_request",
+            "Some fields are missing or invalid.",
+            {"errors": validation_error_message(exc).errors},
         )
 
     @app.exception_handler(KeyStoreError)
