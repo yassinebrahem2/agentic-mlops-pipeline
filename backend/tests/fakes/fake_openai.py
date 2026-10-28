@@ -85,6 +85,7 @@ class FakeState:
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     # Embeddings
     embedding_wrong_dimensions: int | None = None
+    embedding_truncate_count: int | None = None
     _slow_gate: threading.Event = field(default_factory=_open_gate)
 
     def hold_slow(self) -> None:
@@ -109,6 +110,7 @@ class FakeState:
         self.sse_error_code = "tool_use_failed"
         self.sse_error_message = "Tool call validation failed in stream"
         self.embedding_wrong_dimensions = None
+        self.embedding_truncate_count = None
         self.requests.clear()
         self.request_headers.clear()
 
@@ -286,7 +288,9 @@ def _is_authorized(state: FakeState, request: Request) -> bool:
 
 def embeddings_failure(state: FakeState, request: Request) -> Response | None:
     if not _is_authorized(state, request):
-        return _error(401, "Invalid API key", "invalid_api_key")
+        auth_hdr = request.headers.get("authorization") or ""
+        msg = f"Invalid API key: {auth_hdr}" if auth_hdr else "Invalid API key"
+        return _error(401, msg, "invalid_api_key")
     if state.rate_limit_remaining > 0:
         state.rate_limit_remaining -= 1
         return _error(429, "Rate limit reached", "rate_limit_exceeded", {"retry-after": "0"})
@@ -374,6 +378,8 @@ def create_fake_app(state: FakeState) -> FastAPI:
             }
             for i, text in enumerate(inputs)
         ]
+        if state.embedding_truncate_count is not None:
+            data = data[: state.embedding_truncate_count]
         return JSONResponse(
             {
                 "object": "list",
