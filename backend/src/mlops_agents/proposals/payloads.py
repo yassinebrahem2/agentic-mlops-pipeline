@@ -48,8 +48,9 @@ _CRON_FIELDS = 5
 def _check_timezone(value: str) -> str:
     try:
         ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError) as err:
-        # ValueError: a malformed key such as "" or a path escape.
+    except (ZoneInfoNotFoundError, ValueError, OSError) as err:
+        # ValueError: a malformed key such as "" or a path escape. OSError: a region folder such
+        # as "Europe" is a directory in the zone database, which some platforms report as one.
         raise ValueError(
             f"{value!r} is not an IANA time zone name (for example Europe/Paris)"
         ) from err

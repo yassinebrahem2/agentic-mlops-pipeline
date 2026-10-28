@@ -1,6 +1,7 @@
 """The stage 3 contract modules import cleanly (no cycles) and expose the I13 to I18 names."""
 
 import importlib
+import importlib.util
 import inspect
 import json
 import re
@@ -314,6 +315,5 @@ def test_proposal_models_have_the_overview_fields() -> None:
 
 
 def test_tzdata_supplies_the_zone_database() -> None:
-    import tzdata  # noqa: F401  # pyright: ignore[reportUnusedImport]
-
+    assert importlib.util.find_spec("tzdata") is not None
     assert ZoneInfo("Europe/Paris").key == "Europe/Paris"

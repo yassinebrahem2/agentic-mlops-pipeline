@@ -378,7 +378,7 @@ def test_valid_timezones_pass(zone: str) -> None:
     assert OnCall.model_validate({**on_call, "timezone": zone}).timezone == zone
 
 
-@pytest.mark.parametrize("zone", ["Mars/Base", "", "../etc/passwd", "Paris"])
+@pytest.mark.parametrize("zone", ["Mars/Base", "", "../etc/passwd", "Paris", "Europe", "zone.tab"])
 def test_invalid_timezones_fail_on_every_carrier(zone: str) -> None:
     ops = _handoff()["operations"]
     with pytest.raises(ValidationError):
