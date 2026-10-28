@@ -137,6 +137,10 @@ async def get_issue(
         token,
         permission=PERMISSION_ISSUES_WRITE,
     )
+    # GitHub answers 410 for a deleted issue; its 404 also means the token cannot see it, which
+    # `request` reports as the missing permission.
+    if response.status_code == 410:
+        raise DomainError("issue_gone", f"Issue #{number} was deleted on GitHub.", status=404)
     if response.status_code != 200:
         raise DomainError(
             "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
