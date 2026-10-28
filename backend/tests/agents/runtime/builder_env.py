@@ -10,12 +10,14 @@ import httpx2
 
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.agent import AgentBuilder
 from mlops_agents.agents.runtime.contract import TextPart
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
+from mlops_agents.events.contract import StatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -58,6 +60,15 @@ def workspace_service(
         http,
         memory_project_secrets(databases),
     )
+
+
+def status_board_hooks(board: StatusBoard) -> HookRegistry:
+    """A hook registry holding the status_board hook, bound to `board`."""
+    hook = StatusBoardHook()
+    hook.bind(board)
+    hooks = HookRegistry()
+    hooks.register(hook)
+    return hooks
 
 
 async def start_turn(

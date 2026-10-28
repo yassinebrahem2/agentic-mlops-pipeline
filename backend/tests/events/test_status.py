@@ -8,8 +8,6 @@ import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.hooks.contract import HookContext
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.events.hub import EventHub
@@ -20,6 +18,7 @@ from mlops_agents.events.status import (
     format_agent_status_line,
 )
 from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.builder_env import status_board_hooks
 from tests.api.fake_sessions import FakeSessions
 from tests.fakes.fake_tasks import FakeTasks
 
@@ -359,10 +358,7 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
         last_opened_at=None,
     )
 
-    hook = StatusBoardHook()
-    hook.bind(board)
-    hooks = HookRegistry()
-    hooks.register(hook)
+    hooks = status_board_hooks(board)
 
     async def hook_context(definition: AgentDefinition) -> str:
         ctx = HookContext(project_id=project_id, agent=definition.name, trigger_text="")
