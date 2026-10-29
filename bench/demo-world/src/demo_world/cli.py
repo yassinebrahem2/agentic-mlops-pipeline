@@ -23,6 +23,7 @@ from demo_world import (
     scenarios,
     simulate,
     source,
+    up,
 )
 
 log = logging.getLogger(__name__)
@@ -106,15 +107,32 @@ def _steps(args: argparse.Namespace, scenario: scenarios.Scenario) -> tuple[simu
     return tuple(steps)
 
 
-def _simulate(args: argparse.Namespace) -> None:
+def _world(args: argparse.Namespace) -> simulate.World:
     scenario_path: Path | None = args.scenario
     # Read the scenario and the settings first, so they fail before the source loads.
     scenario = scenarios.NO_SCENARIO if scenario_path is None else scenarios.load(scenario_path)
     the_company = _company()
     steps = _steps(args, scenario)
-    world = simulate.World(
+    return simulate.World(
         _loaded_source(), paths.data_dir(), paths.world_dir(), scenario, the_company, steps
     )
+
+
+def _simulate(args: argparse.Namespace) -> None:
+    _play(_world(args), args)
+
+
+def _up(args: argparse.Namespace) -> None:
+    world = _world(args)
+    if world.company is None:
+        raise company.CompanyError(
+            f"up runs the company's MLflow server from its checkout; set {paths.COMPANY_VARIABLE} "
+            "or use --run"
+        )
+    up.up(world.company, paths.world_dir(), paths.mlflow_port(), lambda: _play(world, args))
+
+
+def _play(world: simulate.World, args: argparse.Namespace) -> None:
     end: date = args.end
     summary = simulate.simulate(world, args.start, end, simulate.Pace(args.seconds_per_day))
     if summary.first is None:
@@ -177,39 +195,49 @@ def _parser() -> argparse.ArgumentParser:
         "--until", type=date.fromisoformat, required=True, help="first day not in the history"
     )
     backfill_command.set_defaults(run_command=_backfill)
+    play = _play_options()
     simulate_command = commands.add_parser(
         "simulate",
-        parents=[run],
+        parents=[run, play],
         help="play the business days one by one, resuming after the last day done",
     )
-    simulate_command.add_argument(
+    simulate_command.set_defaults(run_command=_simulate)
+    up_command = commands.add_parser(
+        "up",
+        parents=[run, play],
+        help="start the company's MLflow server, then simulate against it; Ctrl+C stops both",
+    )
+    up_command.set_defaults(run_command=_up)
+    return parser
+
+
+def _play_options() -> argparse.ArgumentParser:
+    options = argparse.ArgumentParser(add_help=False)
+    options.add_argument(
         "--start", type=date.fromisoformat, required=True, help="first day, unless resuming"
     )
-    simulate_command.add_argument(
-        "--end", type=date.fromisoformat, required=True, help="last day, included"
-    )
-    simulate_command.add_argument(
+    options.add_argument("--end", type=date.fromisoformat, required=True, help="last day, included")
+    options.add_argument(
         "--seconds-per-day", type=_seconds, required=True, help="pace; 0 runs as fast as it can"
     )
-    simulate_command.add_argument(
+    options.add_argument(
         "--scenario", type=Path, help="TOML file of injected problems; none are injected without it"
     )
-    simulate_command.add_argument(
+    options.add_argument(
         "--ci-every",
         type=_at_least(1),
         metavar="N",
         help=f"dispatch the company's scheduled CI every N simulated days (default "
         f"{ci.DEFAULT_EVERY}; needs {paths.REPO_VARIABLE})",
     )
-    simulate_command.add_argument(
+    options.add_argument(
         "--merge-after-days",
         type=_at_least(0),
         metavar="N",
         help="evaluation runs only: merge an agent's PR N simulated days after it opened, once "
         f"its checks are green (needs {paths.REPO_VARIABLE}); without it the world never merges",
     )
-    simulate_command.set_defaults(run_command=_simulate)
-    return parser
+    return options
 
 
 def _settle_settings(args: argparse.Namespace) -> None:
@@ -239,7 +267,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         company.CompanyError,
         github.GitHubError,
         newrun.RunError,
+        up.UpError,
     ) as error:
         print(f"demo-world: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        # Everything the world started is stopped by now; a rerun resumes after the last day.
+        print("demo-world: stopped", file=sys.stderr)
+        return 130
     return 0

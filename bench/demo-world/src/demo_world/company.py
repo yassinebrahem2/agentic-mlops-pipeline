@@ -146,7 +146,12 @@ class Company:
     ) -> "Company":
         return cls(checkout, data, mlflow, uv_launcher(checkout), runner)
 
-    def _environment(self, tracking_uri: str | None = None) -> dict[str, str]:
+    def store(self) -> Path:
+        """The company's documented default MLflow store, the one its server serves."""
+        return (self.mlflow / "mlflow.db").resolve()
+
+    def environment(self, tracking_uri: str | None = None) -> dict[str, str]:
+        """The environment the company's programs run with: the world's folders set."""
         env = dict(os.environ)
         # The world's own uv environment; uv would only warn that it ignores it.
         env.pop("VIRTUAL_ENV", None)
@@ -177,18 +182,18 @@ class Company:
 
     def update(self) -> Finished:
         """Bring the checkout to the latest `main`, so merged PRs take effect."""
-        return self._run(["git", "pull", "--ff-only"], self._environment(), launched=False)
+        return self._run(["git", "pull", "--ff-only"], self.environment(), launched=False)
 
     def cli(self, args: Sequence[str]) -> Finished:
         """Run `hotel-demo <args>` in the company's environment."""
-        return self._run([CLI, *args], self._environment(), launched=True)
+        return self._run([CLI, *args], self.environment(), launched=True)
 
     def production_model(self) -> Production:
         """Ask MLflow, from the company's environment, whether `production` names a model."""
         # Empty counts as unset, as in the company's `paths.tracking_uri()`.
         tracking_uri = os.environ.get(paths.TRACKING_URI_VARIABLE) or None
         if tracking_uri is None:
-            store = (self.mlflow / "mlflow.db").resolve()
+            store = self.store()
             if not store.exists():
                 return Production.ABSENT
             # The company's documented default store; set for this probe only, since the
@@ -197,7 +202,7 @@ class Company:
         with tempfile.TemporaryDirectory(prefix="demo-world-probe-") as folder:
             command = ["mlflow", "artifacts", "download", "--artifact-uri", PRODUCTION_MODEL_URI]
             command += ["--dst-path", folder]
-            env = self._environment(tracking_uri)
+            env = self.environment(tracking_uri)
             result = self._run(command, env, launched=True, quiet=True)
         if result.ok:
             return Production.PRESENT
