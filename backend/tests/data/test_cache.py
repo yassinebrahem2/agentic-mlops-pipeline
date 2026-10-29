@@ -135,6 +135,18 @@ async def test_a_changed_format_version_computes_again(
     assert compute.calls == 2
 
 
+async def test_entries_from_before_decision_430_are_misses(
+    cache: ProfileCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Format 2 stored timed-out profiles without a count that had finished: none is reused."""
+    with monkeypatch.context() as patch:
+        patch.setattr(cache_module, "SUMMARY_FORMAT_VERSION", 2)
+        await fetch(cache, Counting())
+    compute = Counting()
+    await fetch(cache, compute)
+    assert compute.calls == 1
+
+
 async def test_the_file_name_is_two_hashes_and_holds_the_profile(
     cache: ProfileCache, paths: DataPaths
 ) -> None:

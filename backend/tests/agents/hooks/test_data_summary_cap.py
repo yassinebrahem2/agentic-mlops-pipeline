@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from mlops_agents.agents.hooks import data_summary as hook_module
+from mlops_agents.data import render
 from mlops_agents.data.constants import DATA_SUMMARY_MAX_CHARS, TEXT_CUT
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -93,3 +95,39 @@ async def test_a_full_cap_then_many_long_named_tables(env: SummaryEnv, tmp_path:
     assert _accounted(text) == (1 + 20) + 4 * (1 + 60)
     assert all(name.startswith("t") for name in env.spy.calls)
     _assert_no_host_path(text, tmp_path)
+
+
+async def test_a_reason_naming_the_folder_names_its_sandbox_path(
+    env: SummaryEnv, tmp_path: Path
+) -> None:
+    """Parquet and JSON errors name the file on their first line: the host folder must
+    become the connection's /data path there (Decision #430)."""
+    await env.connect("broken", {"bad.parquet": b"not a parquet file", "bad.json": b'{"a": 1,,}'})
+
+    text = await env.render()
+
+    lines = text.split("\n")
+    assert any(line.startswith('Table "bad.json" (json): unreadable: ') for line in lines)
+    assert any(line.startswith('Table "bad.parquet" (parquet): unreadable: ') for line in lines)
+    assert "/data/broken/bad.parquet" in text
+    assert "/data/broken/bad.json" in text
+    _assert_no_host_path(text, tmp_path)
+
+
+async def test_tables_after_a_stop_on_a_listed_line_are_never_profiled(
+    env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stop can fall on an unreadable line while table detail still fits: the rest of
+    the connection is counted, not profiled."""
+    await env.connect(
+        "sales", {"a.csv": b"a,b\n1,\xff\xfe\n", "b.csv": "x\n1\n", "c.csv": "x\n1\n"}
+    )
+    kept = f'{render.header()}\nConnection "sales" (local_folder, ok) at /data/sales:'
+    monkeypatch.setattr(
+        hook_module, "DATA_SUMMARY_MAX_CHARS", len(kept) + hook_module.COUNTED_LINE_RESERVE
+    )
+
+    text = await env.render()
+
+    assert text == f"{kept}\nand 3 more entries left out: size cap"
+    assert dict(env.spy.calls) == {"a.csv": 1}
