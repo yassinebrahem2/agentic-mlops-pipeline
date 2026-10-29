@@ -58,9 +58,12 @@ def test_the_company_is_run_with_uv_from_its_checkout(checkout: Path) -> None:
     real.cli(["daily", "--date", "2016-01-01"])
 
     assert argvs[0] == ["git", "pull", "--ff-only"]
+    # --locked: a stale uv.lock fails the command instead of being rewritten in the checkout,
+    # which would block every later `git pull --ff-only`.
     assert argvs[1] == [
         "uv",
         "run",
+        "--locked",
         "--project",
         str(checkout),
         "hotel-demo",
@@ -69,6 +72,36 @@ def test_the_company_is_run_with_uv_from_its_checkout(checkout: Path) -> None:
         "2016-01-01",
     ]
     assert cwds == [checkout, checkout]
+
+
+def test_the_production_probe_runs_mlflow_from_the_locked_environment(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argvs: list[list[str]] = []
+
+    def runner(argv: Sequence[str], cwd: Path, env: Mapping[str, str]) -> company.Finished:
+        argvs.append(list(argv))
+        return company.Finished(0, "", "")
+
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5123")
+    real = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir(), runner=runner)
+
+    assert real.production_model() is company.Production.PRESENT
+    assert argvs[0][:6] == ["uv", "run", "--locked", "--project", str(checkout), "mlflow"]
+
+
+def test_relative_folders_are_made_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The company runs in its checkout: a path relative to the world's folder would miss.
+    monkeypatch.chdir(tmp_path)
+
+    real = company.Company.at(Path("company"), Path("data"), Path("mlflow"))
+
+    assert real.checkout == tmp_path.resolve() / "company"
+    assert real.data == tmp_path.resolve() / "data"
+    assert real.mlflow == tmp_path.resolve() / "mlflow"
+    assert real.launcher[-1] == str(tmp_path.resolve() / "company")
 
 
 def test_a_failing_command_is_logged_with_its_exit_code_and_output(

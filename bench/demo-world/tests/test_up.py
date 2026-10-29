@@ -9,7 +9,7 @@ import shutil
 import sys
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
 
@@ -203,6 +203,26 @@ def test_the_server_serves_the_companys_store_and_keeps_artifacts_in_its_folder(
     assert server[server.index("--artifacts-destination") + 1] == artifacts
     assert server[server.index("--host") + 1] == "127.0.0.1"
     assert the_company.store() == paths.mlflow_dir().resolve() / "mlflow.db"
+
+
+def test_the_environment_and_the_server_come_from_the_locked_company_environment(
+    checkout: Path,
+) -> None:
+    argvs: list[list[str]] = []
+
+    def runner(argv: Sequence[str], cwd: Path, env: Mapping[str, str]) -> company.Finished:
+        # Records only, and fails, so `up` stops before starting any server.
+        argvs.append(list(argv))
+        return company.Finished(1, "", "uv.lock needs to be updated")
+
+    the_company = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir(), runner)
+    locked = ["uv", "run", "--locked", "--project", str(checkout), "mlflow"]
+
+    with pytest.raises(up.UpError, match=r"uv\.lock needs to be updated"):
+        up.up(the_company, paths.world_dir(), 5000, lambda: None)
+
+    assert [argv[:6] for argv in argvs] == [locked]
+    assert up.server_command(the_company, 5000)[:7] == [*locked, "server"]
 
 
 def _place_source() -> None:

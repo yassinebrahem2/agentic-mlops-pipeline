@@ -1,7 +1,7 @@
 """The one place the world runs the company: its CLI, its schedule, its checkout.
 
 The world shares no code with the company. It runs the company's commands in the company's own
-environment (`uv run --project <checkout>`), as the company's ops host would, and knows only what
+environment (`uv run --locked --project <checkout>`), as the company's ops host would, and knows only what
 the company documents: the `hotel-demo` CLI, the `ops/schedule.toml` format, and where its MLflow
 store is. A failing command is logged with its output and never raised, so a broken company day
 never stops the world's clock.
@@ -74,8 +74,12 @@ def run_process(argv: Sequence[str], cwd: Path, env: Mapping[str, str]) -> Finis
 
 
 def uv_launcher(checkout: Path) -> tuple[str, ...]:
-    """The prefix that runs a program of the company's environment."""
-    return ("uv", "run", "--project", str(checkout))
+    """The prefix that runs a program of the company's environment.
+
+    `--locked`: a stale uv.lock fails the command, loudly, instead of being rewritten in the
+    checkout, where the change would block every later `git pull --ff-only`.
+    """
+    return ("uv", "run", "--locked", "--project", str(checkout))
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,9 @@ class Company:
     def at(
         cls, checkout: Path, data: Path, mlflow: Path, runner: Runner = run_process
     ) -> "Company":
+        # Absolute: the company runs in its checkout, where a path relative to the world's
+        # working folder would point elsewhere.
+        checkout, data, mlflow = checkout.resolve(), data.resolve(), mlflow.resolve()
         return cls(checkout, data, mlflow, uv_launcher(checkout), runner)
 
     def store(self) -> Path:
