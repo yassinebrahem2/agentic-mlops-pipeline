@@ -81,6 +81,8 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
     }
 
     let disposed = false;
+    let taskRefreshSeq = 0;
+    let appliedTaskRefreshSeq = 0;
 
     const queryKey = ["session", projectId, agent] as const;
 
@@ -111,6 +113,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
           retry: false,
         });
         if (!disposed) {
+          appliedTaskRefreshSeq = ++taskRefreshSeq;
           stateRef.current = next;
           setState(next);
           setError(undefined);
@@ -134,9 +137,11 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
     };
 
     const refreshTask = () => {
+      const seq = ++taskRefreshSeq;
       void fetchSessionSnapshot()
         .then((snapshot) => {
-          if (!disposed && stateRef.current) {
+          if (!disposed && stateRef.current && seq > appliedTaskRefreshSeq) {
+            appliedTaskRefreshSeq = seq;
             const updated: SessionState = {
               ...stateRef.current,
               current_task: snapshot.current_task,

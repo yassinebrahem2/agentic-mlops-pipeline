@@ -6,10 +6,13 @@ from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Response, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
-from mlops_agents.tracking.constants import QUERY_LIMIT_DEFAULT
+from mlops_agents.tracking.constants import (
+    MIN_SYNC_INTERVAL_S,
+    QUERY_LIMIT_DEFAULT,
+)
 from mlops_agents.tracking.contract import (
     CiRunRow,
     DeploymentRow,
@@ -39,6 +42,11 @@ class SetCredentialBody(BaseModel):
 
 class SyncBody(BaseModel):
     source_id: str | None = None
+
+
+class TrackingSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sync_interval_s: int = Field(ge=MIN_SYNC_INTERVAL_S)
 
 
 @router.get("/projects/{project_id}/tracking/sources", response_model=list[TrackingSourceView])
@@ -93,6 +101,25 @@ async def sync_sources(
     source_id = body.source_id if body else None
     await services.tracking.sync(project.id, source_id=source_id)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.get("/projects/{project_id}/tracking/settings", response_model=TrackingSettings)
+async def get_tracking_settings(
+    project: ProjectDep,
+    services: ServicesDep,
+) -> TrackingSettings:
+    interval = await services.tracking.sync_interval(project.id)
+    return TrackingSettings(sync_interval_s=interval)
+
+
+@router.put("/projects/{project_id}/tracking/settings", response_model=TrackingSettings)
+async def set_tracking_settings(
+    project: ProjectDep,
+    body: TrackingSettings,
+    services: ServicesDep,
+) -> TrackingSettings:
+    interval = await services.tracking.set_sync_interval(project.id, body.sync_interval_s)
+    return TrackingSettings(sync_interval_s=interval)
 
 
 def _tracking_query(

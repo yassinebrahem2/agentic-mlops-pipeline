@@ -27,7 +27,10 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": [
         "warn",
-        { allowConstantExport: true, allowExportNames: ["route"] },
+        {
+          allowConstantExport: true,
+          allowExportNames: ["route", "CARD_FOR_KIND", "CARD_FOR_PROPOSAL"],
+        },
       ],
       "@typescript-eslint/no-explicit-any": "error",
     },

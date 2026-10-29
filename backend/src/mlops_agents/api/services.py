@@ -16,6 +16,7 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.data_summary import DataSummaryHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
+from mlops_agents.agents.hooks.tracking_summary import TrackingSummaryHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
@@ -60,6 +61,7 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -91,6 +93,7 @@ class Services:
     failover: KeyFailover
     embedders: EmbeddersService
     tracking: TrackingService
+    tracking_loop: TrackingLoop
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
@@ -193,6 +196,21 @@ async def build_services(
         sandbox=sandbox,
     )
 
+    handoffs = SqliteHandoffs(databases)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http),
+        github_token=github.token,
+        handoffs=handoffs,
+    )
+    stack.push_async_callback(tracking.close)
+
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
         tasks=tasks,
@@ -204,6 +222,7 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        tracking=tracking,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -213,6 +232,7 @@ async def build_services(
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     hooks.register(DataSummaryHook(connections, data_summaries))
+    hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -264,20 +284,21 @@ async def build_services(
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
     handoffs = SqliteHandoffs(databases)
 
-    tracking = TrackingService(
-        databases=databases,
-        keystore=keystore,
-        secrets=project_secrets,
-        events=events,
-        adapters=default_adapters(http, github),
-        github_token=github.token,
+    async def _list_project_ids() -> list[str]:
+        return [p.id for p in await workspace.list_projects()]
+
+    tracking_loop = TrackingLoop(
+        tracking=tracking,
+        projects=_list_project_ids,
     )
-    stack.push_async_callback(tracking.close)
+    stack.push_async_callback(tracking_loop.close)
+    await tracking_loop.start()
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
-    # transition. Later plans register their observers above this line. Close is registered
-    # first so a failed start still stops the timer.
+    # transition. Later plans register their observers on the store
+    # (`approval_store.observers.add(...)`) above this line. Close is registered first so a
+    # failed start still stops the timer.
     stack.push_async_callback(wakeups.close)
     await wakeups.start()
 
@@ -307,6 +328,7 @@ async def build_services(
         failover=failover,
         embedders=embedders,
         tracking=tracking,
+        tracking_loop=tracking_loop,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
