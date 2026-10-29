@@ -328,5 +328,5 @@ def test_tracking_summary_registered() -> None:
     assert TRACKING_SUMMARY_HOOK in registry.names()
     assert "tracking_summary" in registry.names()
 
-    tools = default_registry()
+    tools = default_registry(tracking=object())  # pyright: ignore[reportArgumentType]
     assert "TrackingHistory" in tools.names()

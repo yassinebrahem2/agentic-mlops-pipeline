@@ -77,8 +77,9 @@ def default_registry(
         ReadTool(tasks=tasks),
         GlobTool(),
         GrepTool(shutil.which("rg")),
-        TrackingHistory(tracking=tracking),
     ]
+    if tracking is not None:
+        tools.append(TrackingHistory(tracking=tracking))
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(

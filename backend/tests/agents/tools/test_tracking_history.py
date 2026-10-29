@@ -317,3 +317,11 @@ async def test_tracking_history_limit_clamped() -> None:
     assert not res.is_error
     assert tracking.last_query is not None
     assert tracking.last_query.limit == QUERY_LIMIT_MAX
+
+
+def test_tracking_history_default_registry_registration() -> None:
+    from mlops_agents.agents.tools import default_registry
+
+    assert "TrackingHistory" not in default_registry().names()
+    reg = default_registry(tracking=FakeTrackingService())  # type: ignore[arg-type]
+    assert "TrackingHistory" in reg.names()
