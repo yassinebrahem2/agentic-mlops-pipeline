@@ -684,6 +684,24 @@
         "title": "CiResults",
         "type": "object"
       },
+      "ColumnInfo": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ColumnInfo",
+        "type": "object"
+      },
       "CommandSpec": {
         "additionalProperties": false,
         "properties": {
@@ -3470,6 +3488,54 @@
         "title": "SlotState",
         "type": "object"
       },
+      "TableDetail": {
+        "description": "Served by data-summary from its cache.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnInfo"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "data_version": {
+            "title": "Data Version",
+            "type": "string"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TableRef"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "row_count",
+          "timed_out",
+          "data_version",
+          "summary"
+        ],
+        "title": "TableDetail",
+        "type": "object"
+      },
       "TableRef": {
         "properties": {
           "files": {
@@ -5764,6 +5830,66 @@
         "summary": "List Connection Tables",
         "tags": [
           "connections"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/connections/{connection_id}/tables/{table}": {
+      "get": {
+        "operationId": "get_table_detail_api_projects__project_id__connections__connection_id__tables__table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Table Detail",
+        "tags": [
+          "data"
         ]
       }
     },
