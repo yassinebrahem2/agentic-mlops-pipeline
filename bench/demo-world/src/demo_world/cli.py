@@ -1,6 +1,7 @@
 """The `demo-world` command line."""
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 from datetime import date
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from demo_world import backfill, fetch, paths, scenarios, simulate, source
+from demo_world import backfill, company, fetch, paths, scenarios, simulate, source
 
 
 class SourceMissingError(Exception):
@@ -36,11 +37,25 @@ def _backfill(args: argparse.Namespace) -> None:
     )
 
 
+def _company() -> company.Company | None:
+    checkout = paths.company_dir()
+    if checkout is None:
+        return None
+    if not checkout.is_dir():
+        raise company.CompanyError(
+            f"{paths.COMPANY_VARIABLE} names {checkout}, which is not a checkout of the demo repository"
+        )
+    return company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir())
+
+
 def _simulate(args: argparse.Namespace) -> None:
     scenario_path: Path | None = args.scenario
-    # Read the scenario first, so a bad file fails before the source is loaded.
+    # Read the scenario and the company setting first, so they fail before the source loads.
     scenario = scenarios.NO_SCENARIO if scenario_path is None else scenarios.load(scenario_path)
-    world = simulate.World(_loaded_source(), paths.data_dir(), paths.world_dir(), scenario)
+    the_company = _company()
+    world = simulate.World(
+        _loaded_source(), paths.data_dir(), paths.world_dir(), scenario, the_company
+    )
     end: date = args.end
     summary = simulate.simulate(world, args.start, end, simulate.Pace(args.seconds_per_day))
     if summary.first is None:
@@ -96,6 +111,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    # The company's commands and their failures are reported through logging, on stderr.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         args.run(args)
     except (
@@ -104,6 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         backfill.BackfillError,
         scenarios.ScenarioError,
         simulate.SimulateError,
+        company.CompanyError,
     ) as error:
         print(f"demo-world: {error}", file=sys.stderr)
         return 1

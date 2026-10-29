@@ -1,10 +1,12 @@
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
-from demo_world import cli, fetch, paths
+from demo_world import cli, company, fetch, paths
+from tests.company_fixture import FAKE_CLI, commands, make_checkout
 from tests.fixture import DEFAULT_SCENARIO, FIXTURE_CSV, Served
 
 FIVE_DAYS = ["--start", "2016-01-01", "--end", "2016-01-05", "--seconds-per-day", "0"]
@@ -150,3 +152,29 @@ def test_seconds_per_day_must_not_be_negative() -> None:
         cli.main(argv)
 
     assert raised.value.code == 2
+
+
+def test_simulate_runs_the_company_named_by_hotel_demo_company(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _place_source()
+    checkout = make_checkout(tmp_path)
+    monkeypatch.setenv("HOTEL_DEMO_COMPANY", str(checkout))
+    monkeypatch.setattr(company, "uv_launcher", lambda _: (sys.executable, str(FAKE_CLI)))
+
+    assert cli.main(["simulate", *FIVE_DAYS]) == 0
+
+    assert commands(checkout)[0] == "hotel-demo train --cutoff 2016-01-01"
+    assert commands(checkout)[-1] == "hotel-demo daily --date 2016-01-05"
+
+
+def test_simulate_refuses_a_company_checkout_that_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _place_source()
+    monkeypatch.setenv("HOTEL_DEMO_COMPANY", str(tmp_path / "nowhere"))
+
+    assert cli.main(["simulate", *FIVE_DAYS]) == 1
+
+    assert "nowhere" in capsys.readouterr().err
+    assert not paths.data_dir().exists()

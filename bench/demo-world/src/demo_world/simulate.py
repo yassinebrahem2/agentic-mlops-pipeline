@@ -2,7 +2,8 @@
 
 Every calendar day is a business date (the overview states no weekend rule, and the company
 counts its schedule in simulated days). A day without bookings or releases gets no file, as in
-the backfill, but it is still a day done.
+the backfill, but it is still a day done. With a company, each day also updates its checkout
+and runs the jobs its schedule makes due, after the day's files.
 """
 
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from demo_world import answer_key, paths, source
+from demo_world.company import Company
 from demo_world.scenarios import NO_SCENARIO, Scenario
 
 STATE_FILE = "state.json"
@@ -26,12 +28,16 @@ class SimulateError(Exception):
 
 @dataclass(frozen=True)
 class World:
-    """What the loop plays: the loaded source, the two folders and the scenario."""
+    """What the loop plays: the loaded source, the two folders, the scenario and the company.
+
+    Without a company the loop writes the day's files only.
+    """
 
     loaded: pd.DataFrame
     data: Path
     folder: Path
     scenario: Scenario = NO_SCENARIO
+    company: Company | None = None
 
 
 @dataclass(frozen=True)
@@ -66,37 +72,69 @@ def write_labels(world: World, day: date) -> None:
         source.write_frame(frame, source.LABELS_SCHEMA, paths.labels_file(world.data, day))
 
 
-type DayStep = Callable[[World, date], None]
-
-# One business day, in order. A day is done only once every step has run, so a stop between
-# steps replays the whole day; each file is written atomically and identically on a replay.
-DAY_STEPS: tuple[DayStep, ...] = (write_bookings, write_labels)
+def write_files(world: World, day: date) -> None:
+    write_bookings(world, day)
+    write_labels(world, day)
 
 
-def _last_done(folder: Path) -> date | None:
+def _delivered_late(scenario: Scenario, day: date) -> bool:
+    return any(p.kind == "score_failure" and p.active(day) for p in scenario.problems)
+
+
+def play_day(world: World, day: date, origin: date) -> None:
+    """One business day: its files, then the company's jobs due that day.
+
+    A day is done only once all of it has run, so a stop midway replays the whole day; each
+    file is written atomically and identically on a replay (the company's own records of a
+    replayed job are appended again).
+    """
+    company = world.company
+    if company is None:
+        write_files(world, day)
+        return
+    # A score failure is a late upstream delivery: the day's files land after its jobs ran,
+    # so the company's scoring finds no bookings file, and the history still ends up complete.
+    late = _delivered_late(world.scenario, day)
+    if not late:
+        write_files(world, day)
+    company.run_jobs(day, origin)
+    if late:
+        write_files(world, day)
+
+
+@dataclass(frozen=True)
+class _State:
+    """The first day the world ever played (the schedule counts from it) and the last day done."""
+
+    first: date
+    last_done: date
+
+
+def _read_state(folder: Path) -> _State | None:
     path = folder / STATE_FILE
     if not path.exists():
         return None
-    return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["last_done"])
+    state = json.loads(path.read_text(encoding="utf-8"))
+    return _State(date.fromisoformat(state["first"]), date.fromisoformat(state["last_done"]))
 
 
-def _mark_done(folder: Path, day: date) -> None:
+def _write_state(folder: Path, state: _State) -> None:
     path = folder / STATE_FILE
     temporary = path.with_name(f"{path.name}.tmp")
-    temporary.write_text(json.dumps({"last_done": day.isoformat()}) + "\n", encoding="utf-8")
+    text = json.dumps({"first": state.first.isoformat(), "last_done": state.last_done.isoformat()})
+    temporary.write_text(text + "\n", encoding="utf-8")
     temporary.replace(path)
 
 
-def _first_day(folder: Path, start: date, end: date) -> date:
+def _first_day(state: _State | None, start: date, end: date) -> date:
     if end < start:
         raise SimulateError(f"the end {end} is before the start {start}")
-    last = _last_done(folder)
-    if last is None:
+    if state is None:
         return start
-    resume = last + timedelta(days=1)
+    resume = state.last_done + timedelta(days=1)
     if start > resume:
         raise SimulateError(
-            f"the world has played up to {last}; a start after {resume} would skip days"
+            f"the world has played up to {state.last_done}; a start after {resume} would skip days"
         )
     return resume
 
@@ -108,7 +146,9 @@ def simulate(world: World, start: date, end: date, pace: Pace) -> Summary:
             f"the world folder {world.folder} is inside the data folder {world.data}; "
             "the answer key would be readable by the company and the agents"
         )
-    first = _first_day(world.folder, start, end)
+    state = _read_state(world.folder)
+    first = _first_day(state, start, end)
+    origin = first if state is None else state.first
     world.folder.mkdir(parents=True, exist_ok=True)
     answer_key.write_planted_flaws(world.folder)
 
@@ -120,9 +160,13 @@ def simulate(world: World, start: date, end: date, pace: Pace) -> Summary:
             pace.sleep(wait)
         began = pace.clock()
         answer_key.append_new(world.folder, world.scenario.key_records(day))
-        for step in DAY_STEPS:
-            step(world, day)
-        _mark_done(world.folder, day)
+        if world.company is not None:
+            world.company.update()
+            if offset == 0:
+                # Before the first day's files: `train` keeps the labels released on its cutoff.
+                world.company.bootstrap(cutoff=day)
+        play_day(world, day, origin)
+        _write_state(world.folder, _State(origin, day))
         next_day_at = began + pace.seconds_per_day
     if days <= 0:
         return Summary(first=None, last=None, days=0)
