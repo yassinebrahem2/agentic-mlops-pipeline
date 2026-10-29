@@ -1,0 +1,261 @@
+"""File-system scanning, table discovery, data version hashing and findings walk for local folders."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final, Literal
+
+from mlops_agents.agents.tools.files import is_secret
+from mlops_agents.connections.contract import Finding, Findings, TableRef
+from mlops_agents.errors import DomainError
+
+MAX_TABLE_FILES: Final = 10_000
+MAX_SCAN_ENTRIES: Final = 50_000
+MAX_SECRET_FINDINGS: Final = 100
+
+TableFormat = Literal["csv", "parquet", "json", "jsonl"]
+
+
+@dataclass
+class _CandidateTable:
+    type: str
+    entry_name: str
+    default_name: str
+    format: TableFormat
+    files: list[str]
+
+
+SUPPORTED_EXTENSIONS: Final[dict[str, TableFormat]] = {
+    ".csv": "csv",
+    ".parquet": "parquet",
+    ".json": "json",
+    ".jsonl": "jsonl",
+}
+
+
+# DuckDB 2.0.0 expands these in every path it reads and has no option to turn that off.
+WILDCARD_CHARACTERS: Final = frozenset("*?[")
+WILDCARD_REASON: Final = "a name with a wildcard"
+
+
+def has_wildcard(text: str) -> bool:
+    """True if DuckDB would read `text` as a glob pattern."""
+    return not WILDCARD_CHARACTERS.isdisjoint(text)
+
+
+def is_link(entry: os.DirEntry[str]) -> bool:
+    """True if entry is a symlink or Windows junction."""
+    return entry.is_symlink() or bool(getattr(entry, "is_junction", None) and entry.is_junction())
+
+
+def _is_link_path(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
+def scan_tables_and_unsupported(
+    folder: Path,
+) -> tuple[list[TableRef], list[Finding]]:
+    """Scans the top level of folder for supported table files and subfolders."""
+    candidate_tables: list[_CandidateTable] = []
+    unsupported: list[Finding] = []
+
+    try:
+        with os.scandir(folder) as it:
+            entries = sorted(it, key=lambda e: e.name.casefold())
+    except OSError as exc:
+        # The resolved path is not shown: the kind's messages name the folder as typed.
+        reason = getattr(exc, "strerror", None) or type(exc).__name__
+        raise DomainError(
+            "connection_invalid",
+            f"The folder could not be listed ({reason}).",
+            status=400,
+        ) from None
+
+    for entry in entries:
+        if is_link(entry):
+            unsupported.append(Finding(path=entry.name, reason="a link"))
+            continue
+
+        if has_wildcard(entry.name):
+            unsupported.append(Finding(path=entry.name, reason=WILDCARD_REASON))
+            continue
+
+        if entry.is_file(follow_symlinks=False):
+            ext = Path(entry.name).suffix.lower()
+            if ext in SUPPORTED_EXTENSIONS:
+                candidate_tables.append(
+                    _CandidateTable(
+                        type="file",
+                        entry_name=entry.name,
+                        default_name=Path(entry.name).stem,
+                        format=SUPPORTED_EXTENSIONS[ext],
+                        files=[entry.name],
+                    )
+                )
+            else:
+                unsupported.append(Finding(path=entry.name, reason="not a supported format"))
+            continue
+
+        if entry.is_dir(follow_symlinks=False):
+            try:
+                with os.scandir(entry.path) as child_it:
+                    child_entries = list(child_it)
+            except (PermissionError, OSError):
+                unsupported.append(Finding(path=entry.name, reason="not a supported format"))
+                continue
+
+            non_dot = [c for c in child_entries if not c.name.startswith(".")]
+            if not non_dot:
+                unsupported.append(Finding(path=entry.name, reason="not a supported format"))
+                continue
+
+            if any(is_link(c) for c in non_dot):
+                unsupported.append(Finding(path=entry.name, reason="a link"))
+                continue
+
+            if any(has_wildcard(c.name) for c in non_dot):
+                unsupported.append(Finding(path=entry.name, reason=WILDCARD_REASON))
+                continue
+
+            if len(non_dot) > MAX_TABLE_FILES:
+                unsupported.append(Finding(path=entry.name, reason="too many files"))
+                continue
+
+            if any(not c.is_file(follow_symlinks=False) for c in non_dot):
+                unsupported.append(Finding(path=entry.name, reason="not a supported format"))
+                continue
+
+            exts = {Path(c.name).suffix.lower() for c in non_dot}
+            if len(exts) > 1:
+                unsupported.append(Finding(path=entry.name, reason="mixed formats"))
+                continue
+
+            (the_ext,) = exts
+            if the_ext not in SUPPORTED_EXTENSIONS:
+                unsupported.append(Finding(path=entry.name, reason="not a supported format"))
+                continue
+
+            rel_files = sorted(f"{entry.name}/{c.name}" for c in non_dot)
+            candidate_tables.append(
+                _CandidateTable(
+                    type="folder",
+                    entry_name=entry.name,
+                    default_name=entry.name,
+                    format=SUPPORTED_EXTENSIONS[the_ext],
+                    files=rel_files,
+                )
+            )
+
+    tables = [
+        TableRef(name=name, files=c.files, format=c.format)
+        for c, name in zip(candidate_tables, _table_names(candidate_tables), strict=True)
+    ]
+
+    tables.sort(key=lambda t: t.name)
+    unsupported.sort(key=lambda u: u.path)
+    return tables, unsupported
+
+
+def _table_names(candidates: list[_CandidateTable]) -> list[str]:
+    """Default names, except that a file whose name is shared takes its full file name.
+
+    Repeated until no name is shared: a file's full name can equal another file's stem
+    (`a.csv` next to `a.csv.json`). Entry names are unique, so this ends."""
+    names = [c.default_name for c in candidates]
+    while True:
+        counts = Counter(names)
+        renamed = [
+            c.entry_name if c.type == "file" and counts[name] > 1 else name
+            for c, name in zip(candidates, names, strict=True)
+        ]
+        if renamed == names:
+            return names
+        names = renamed
+
+
+def compute_data_version(folder: Path, table: TableRef) -> str:
+    """Sha256 hex (first 16 chars) of relpath\\0size\\0mtime_ns lines."""
+    lines: list[str] = []
+    for rel in sorted(table.files):
+        file_path = folder / rel
+        try:
+            st = file_path.stat(follow_symlinks=False)
+        except (FileNotFoundError, OSError):
+            raise DomainError(
+                "connection_invalid",
+                f"File vanished or unreadable: {rel}",
+                status=400,
+            ) from None
+        lines.append(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}")
+
+    data = "\n".join(lines).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def latest_data_version(folder: Path, tables: list[TableRef]) -> str | None:
+    """The data version of the table whose newest file has the latest modified time."""
+    if not tables:
+        return None
+
+    latest_mtime = -1
+    newest_table: TableRef | None = None
+
+    for table in tables:
+        table_max_mtime = -1
+        for rel in table.files:
+            try:
+                st = (folder / rel).stat(follow_symlinks=False)
+                if st.st_mtime_ns > table_max_mtime:
+                    table_max_mtime = st.st_mtime_ns
+            except OSError:
+                continue
+        if table_max_mtime > latest_mtime:
+            latest_mtime = table_max_mtime
+            newest_table = table
+
+    if newest_table is None:
+        return None
+    return compute_data_version(folder, newest_table)
+
+
+def walk_findings(folder: Path, unsupported: list[Finding]) -> Findings:
+    """Walks the folder for secret files matching denylist, combining with unsupported files."""
+    secret_findings: list[Finding] = []
+    truncated = False
+    entries_count = 0
+
+    for root, dirs, files in os.walk(folder, followlinks=False):
+        entries_count += len(dirs)
+        # followlinks=False still enters Windows junctions; links and junctions are pruned here.
+        dirs[:] = sorted(d for d in dirs if not _is_link_path(Path(root) / d))
+        files.sort()
+        if entries_count > MAX_SCAN_ENTRIES:
+            truncated = True
+            break
+
+        for f in files:
+            entries_count += 1
+            if entries_count > MAX_SCAN_ENTRIES:
+                truncated = True
+                break
+            rel_posix = (Path(root) / f).relative_to(folder).as_posix()
+            if not is_secret(rel_posix):
+                continue
+            if len(secret_findings) == MAX_SECRET_FINDINGS:
+                truncated = True
+                break
+            secret_findings.append(Finding(path=rel_posix, reason="matches a secret file name"))
+
+        if truncated:
+            break
+
+    secret_findings.sort(key=lambda s: s.path)
+    return Findings(
+        unsupported_files=unsupported,
+        secret_files=secret_findings,
+        truncated=truncated,
+    )
