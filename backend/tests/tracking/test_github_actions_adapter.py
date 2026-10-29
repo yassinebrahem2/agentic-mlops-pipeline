@@ -305,6 +305,7 @@ async def test_sync_through_tracking_service_updates_in_place(
             adapters={"github_actions": adapter},
             github_token=tracking_env.get_github_token,
             clock=tracking_env.clock,
+            handoffs=tracking_env.handoffs,
         )
 
         source_view = await service.create_source(

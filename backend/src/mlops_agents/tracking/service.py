@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -18,12 +18,15 @@ from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
+from mlops_agents.proposals.contract import Handoffs, HandoffView
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import project_settings, projects, tracking_sources
 from mlops_agents.tracking.constants import (
     DEFAULT_SYNC_INTERVAL_S,
     ERROR_MAX_CHARS,
     MIN_SYNC_INTERVAL_S,
+    PRODUCTION_ALIAS,
+    PRODUCTION_ENVIRONMENT,
     QUERY_LIMIT_MAX,
     SYNC_INTERVAL_KEY,
 )
@@ -69,6 +72,7 @@ class TrackingService(Tracking):
         events: EventLog,
         adapters: Mapping[SourceType, TrackingAdapter],
         github_token: Callable[[], Awaitable[str | None]],
+        handoffs: Handoffs,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._databases = databases
@@ -78,6 +82,8 @@ class TrackingService(Tracking):
         self._adapters: dict[SourceType, TrackingAdapter] = dict(adapters)
         self._github_token = github_token
         self._clock = clock
+        self._handoffs = handoffs
+        self._handoff_error_logged: bool = False
 
         self._source_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
@@ -345,6 +351,34 @@ class TrackingService(Tracking):
             payload=payload,
         )
 
+    async def _resolve_candidate_aliases_fn(
+        self, project_id: str
+    ) -> Callable[[str], Sequence[str]]:
+        handoff: HandoffView | None = None
+        try:
+            handoff = await self._handoffs.current(project_id)
+        except Exception as exc:
+            if not self._handoff_error_logged:
+                _log.warning("Failed to read handoff for project %s: %s", project_id, exc)
+                self._handoff_error_logged = True
+            return lambda _model: [PRODUCTION_ALIAS]
+
+        if handoff is None or not handoff.payload.models:
+            return lambda _model: [PRODUCTION_ALIAS]
+
+        specs_by_name = {m.name: m for m in handoff.payload.models}
+
+        def _get_candidates(model_name: str) -> Sequence[str]:
+            spec = specs_by_name.get(model_name)
+            if spec is None:
+                return [PRODUCTION_ALIAS]
+            candidates = sorted(
+                alias for alias, env in spec.environments.items() if env == PRODUCTION_ENVIRONMENT
+            )
+            return candidates if candidates else [PRODUCTION_ALIAS]
+
+        return _get_candidates
+
     async def query(self, project_id: str, q: TrackingQuery) -> Page[Any]:
         await self._check_project(project_id)
 
@@ -362,7 +396,8 @@ class TrackingService(Tracking):
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             if q.what == "models":
-                return await query_models(conn, q)
+                candidate_fn = await self._resolve_candidate_aliases_fn(project_id)
+                return await query_models(conn, q, candidate_fn)
             if q.what == "versions":
                 return await query_versions(conn, q)
             if q.what == "runs":

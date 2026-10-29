@@ -15,6 +15,7 @@ from mlops_agents.clock import now_iso
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
+from mlops_agents.proposals.contract import HandoffPayload, HandoffView
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.tracking.contract import (
@@ -24,6 +25,40 @@ from mlops_agents.tracking.contract import (
 )
 from mlops_agents.tracking.service import TrackingService
 from tests.conftest import MemoryKeyStore
+
+
+class FakeHandoffs:
+    def __init__(self, current_view: HandoffView | None = None) -> None:
+        self._current_view: HandoffView | None = current_view
+        self._views_by_project: dict[str, HandoffView] = {}
+        self.error: Exception | None = None
+
+    async def current(self, project_id: str) -> HandoffView | None:
+        if self.error is not None:
+            raise self.error
+        if project_id in self._views_by_project:
+            return self._views_by_project[project_id]
+        return self._current_view
+
+    async def store(self, project_id: str, proposal_id: str, payload: HandoffPayload) -> int:
+        version = len(self._views_by_project) + 1
+        view = HandoffView(
+            proposal_id=proposal_id,
+            version=version,
+            approved=datetime.now(UTC),
+            payload=payload,
+        )
+        self._views_by_project[project_id] = view
+        self._current_view = view
+        return version
+
+    def set_current(self, project_id: str, view: HandoffView | None) -> None:
+        if view is None:
+            self._views_by_project.pop(project_id, None)
+            self._current_view = None
+        else:
+            self._views_by_project[project_id] = view
+            self._current_view = view
 
 
 class FakeTrackingAdapter:
@@ -83,6 +118,7 @@ class TrackingEnv:
     adapters: dict[SourceType, FakeTrackingAdapter]
     project_id: str
     clock: TestClock
+    handoffs: FakeHandoffs
     github_token_value: str | None = "fake-gh-token"
 
     async def get_github_token(self) -> str | None:
@@ -124,6 +160,7 @@ async def tracking_env(
     events = SqliteEventLog(databases)
     mlflow_adapter = FakeTrackingAdapter("mlflow")
     adapters: dict[SourceType, FakeTrackingAdapter] = {"mlflow": mlflow_adapter}
+    handoffs = FakeHandoffs()
 
     env = TrackingEnv(
         service=None,  # type: ignore[arg-type]
@@ -134,6 +171,7 @@ async def tracking_env(
         adapters=adapters,
         project_id=project_id,
         clock=test_clock,
+        handoffs=handoffs,
         github_token_value="fake-gh-token",
     )
 
@@ -148,6 +186,7 @@ async def tracking_env(
         adapters=adapters,  # type: ignore[arg-type]
         github_token=gh_token,
         clock=test_clock,
+        handoffs=handoffs,
     )
     env.service = service
 

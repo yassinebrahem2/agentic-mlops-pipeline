@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from mlops_agents.errors import DomainError
+from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.tracking.contract import (
     CiRunRow,
     DeploymentRow,
@@ -18,6 +19,7 @@ from mlops_agents.tracking.contract import (
     SyncResult,
     TrackingQuery,
 )
+from tests.proposals.samples import handoff, model
 from tests.tracking.conftest import TrackingEnv
 
 
@@ -308,3 +310,114 @@ async def test_query_each_what_typed(tracking_env: TrackingEnv) -> None:
 
     p_eval = await env.service.query(env.project_id, TrackingQuery(what="evaluations", model="mod"))
     assert isinstance(p_eval.rows[0], EvaluationRecord)
+
+
+async def test_query_production_alias_rules_with_handoffs(tracking_env: TrackingEnv) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+    t0 = datetime(2026, 10, 28, 10, 0, 0, tzinfo=UTC)
+    t1 = datetime(2026, 10, 28, 11, 0, 0, tzinfo=UTC)
+
+    # Sync model_x with v1 (alias 'production') and v2 (alias 'live')
+    # model_y with v1 (alias 'staging') - no production alias
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_x",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_x",
+                version="2",
+                run_key=None,
+                aliases=[],
+                created=t1,
+                evaluation="absent",
+            ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_y",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+        ],
+        runs=[],
+        metrics=[],
+        aliases={
+            "model_x": {"production": "1", "live": "2"},
+            "model_y": {"staging": "1"},
+        },
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, source.id)
+
+    # 1. No handoff yet: fallback to PRODUCTION_ALIAS ("production")
+    # model_x holding 'production' -> v1
+    # model_y no 'production' -> None
+    page = await env.service.query(env.project_id, TrackingQuery(what="models"))
+    by_name = {m.name: m for m in page.rows}
+    assert by_name["model_x"].production_version == "1"
+    assert by_name["model_y"].production_version is None
+
+    # 2. Handoff mapping alias 'live' to 'production' environment for model_x
+    # model_y has no spec in this handoff -> fallback to PRODUCTION_ALIAS -> None
+    p1 = HandoffPayload.model_validate(
+        handoff(
+            models=[
+                model(
+                    "model_x",
+                    environments={"live": "production", "preview": "staging"},
+                    production_signal=None,
+                )
+            ]
+        )
+    )
+    await env.handoffs.store(env.project_id, "prp_1", p1)
+
+    # Without a sync, querying models immediately uses the new handoff!
+    page = await env.service.query(env.project_id, TrackingQuery(what="models"))
+    by_name = {m.name: m for m in page.rows}
+    assert by_name["model_x"].production_version == "2"
+    assert by_name["model_y"].production_version is None
+
+    # 3. New handoff mapping both 'canary' and 'live' to 'production'
+    # Candidate aliases sorted: ['canary', 'live'].
+    # If no version has 'canary', first existing is 'live' -> v2.
+    # If a new handoff maps only 'champion' to 'production', but no version holds 'champion' -> None
+    p2 = HandoffPayload.model_validate(
+        handoff(
+            models=[
+                model(
+                    "model_x",
+                    environments={"champion": "production"},
+                    production_signal=None,
+                )
+            ]
+        )
+    )
+    await env.handoffs.store(env.project_id, "prp_2", p2)
+    page = await env.service.query(env.project_id, TrackingQuery(what="models"))
+    by_name = {m.name: m for m in page.rows}
+    assert by_name["model_x"].production_version is None
+
+    # 4. Handoff raises an exception: falls back to PRODUCTION_ALIAS ("production")
+    env.handoffs.error = RuntimeError("storage unavailable")
+    page = await env.service.query(env.project_id, TrackingQuery(what="models"))
+    by_name = {m.name: m for m in page.rows}
+    assert by_name["model_x"].production_version == "1"

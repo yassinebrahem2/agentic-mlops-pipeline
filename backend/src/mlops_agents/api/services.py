@@ -15,6 +15,7 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
+from mlops_agents.agents.hooks.tracking_summary import TrackingSummaryHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
@@ -183,6 +184,21 @@ async def build_services(
         sandbox=sandbox,
     )
 
+    handoffs = SqliteHandoffs(databases)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http, github),
+        github_token=github.token,
+        handoffs=handoffs,
+    )
+    stack.push_async_callback(tracking.close)
+
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
         tasks=tasks,
@@ -194,12 +210,14 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        tracking=tracking,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -245,19 +263,6 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
-    proposal_kinds = ProposalKinds()
-    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
-    handoffs = SqliteHandoffs(databases)
-
-    tracking = TrackingService(
-        databases=databases,
-        keystore=keystore,
-        secrets=project_secrets,
-        events=events,
-        adapters=default_adapters(http, github),
-        github_token=github.token,
-    )
-    stack.push_async_callback(tracking.close)
 
     async def _list_project_ids() -> list[str]:
         return [p.id for p in await workspace.list_projects()]

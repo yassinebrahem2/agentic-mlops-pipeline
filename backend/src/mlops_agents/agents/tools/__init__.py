@@ -18,6 +18,7 @@ from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
+from mlops_agents.agents.tools.tracking_history import TrackingHistory
 from mlops_agents.agents.tools.write import WriteTool
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
+    from mlops_agents.tracking.contract import Tracking
     from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "SearchIssuesTool",
     "StartTaskTool",
     "ToolRegistry",
+    "TrackingHistory",
     "WriteTool",
     "default_registry",
 ]
@@ -66,10 +69,16 @@ def default_registry(
     events: EventLog | None = None,
     http: httpx2.AsyncClient | None = None,
     databases: Databases | None = None,
+    tracking: Tracking | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
-    tools: list[AgentTool[Any]] = [ReadTool(tasks=tasks), GlobTool(), GrepTool(shutil.which("rg"))]
+    tools: list[AgentTool[Any]] = [
+        ReadTool(tasks=tasks),
+        GlobTool(),
+        GrepTool(shutil.which("rg")),
+        TrackingHistory(tracking=tracking),
+    ]
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(

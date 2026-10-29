@@ -463,6 +463,7 @@ async def test_e2e_tracking_service_with_fake_mlflow(tracking_env: TrackingEnv) 
             adapters={"mlflow": real_adapter},
             github_token=tracking_env.get_github_token,
             clock=tracking_env.clock,
+            handoffs=tracking_env.handoffs,
         )
 
         source_view = await service.create_source(
@@ -593,6 +594,7 @@ async def test_adapter_older_version_retains_evaluation_and_updates_alias(
             adapters={"mlflow": real_adapter},
             github_token=tracking_env.get_github_token,
             clock=tracking_env.clock,
+            handoffs=tracking_env.handoffs,
         )
 
         source_view = await service.create_source(

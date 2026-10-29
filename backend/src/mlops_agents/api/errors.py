@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -19,14 +18,6 @@ from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.sandbox.contract import SandboxUnavailable
 
 _log = logging.getLogger(__name__)
-
-
-def validation_error_message(exc: ValidationError) -> str:
-    """Summarizes a ValidationError without including raw input values (which may hold secrets)."""
-    return "; ".join(
-        f"{'.'.join(str(p) for p in error['loc']) or 'payload'}: {str(error['msg']).removeprefix(_VALUE_ERROR_PREFIX)}"
-        for error in exc.errors(include_input=False, include_url=False)
-    )
 
 
 def error_response(

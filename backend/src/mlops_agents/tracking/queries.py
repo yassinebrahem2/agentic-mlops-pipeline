@@ -62,7 +62,11 @@ async def _page_query[T](
     return Page[T](rows=rows, total=total, truncated=truncated)
 
 
-async def query_models(conn: AsyncConnection, q: TrackingQuery) -> Page[ModelSummary]:
+async def query_models(
+    conn: AsyncConnection,
+    q: TrackingQuery,
+    candidate_aliases_fn: Callable[[str], Sequence[str]] | None = None,
+) -> Page[ModelSummary]:
     stmt = select(tracked_models.c.source_id, tracked_models.c.name)
     if q.source_id:
         stmt = stmt.where(tracked_models.c.source_id == q.source_id)
@@ -104,11 +108,17 @@ async def query_models(conn: AsyncConnection, q: TrackingQuery) -> Page[ModelSum
         v_rows = versions_by_model.get((src_id, name), [])
         versions_count = len(v_rows)
         latest_version = v_rows[0].version if v_rows else None
+        candidate_aliases = (
+            candidate_aliases_fn(name) if candidate_aliases_fn is not None else [PRODUCTION_ALIAS]
+        )
         prod_version: str | None = None
-        for vr in v_rows:
-            aliases_list: list[str] = json.loads(vr.aliases)
-            if PRODUCTION_ALIAS in aliases_list:
-                prod_version = vr.version
+        for alias in candidate_aliases:
+            for vr in v_rows:
+                aliases_list: list[str] = json.loads(vr.aliases)
+                if alias in aliases_list:
+                    prod_version = vr.version
+                    break
+            if prod_version is not None:
                 break
 
         summaries.append(

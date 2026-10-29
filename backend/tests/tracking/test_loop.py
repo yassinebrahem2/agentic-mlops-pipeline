@@ -20,6 +20,7 @@ from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
 from tests.fakes.fake_mlflow import FakeMlflowState, create_fake_mlflow_app
+from tests.tracking.conftest import FakeHandoffs
 
 
 class FakeClock:
@@ -395,6 +396,7 @@ async def test_tracking_service_sync_interval(tmp_path: Path) -> None:
         events=events,
         adapters={},
         github_token=_dummy_token,
+        handoffs=FakeHandoffs(),
     )
 
     # Default
