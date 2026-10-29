@@ -275,4 +275,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Everything the world started is stopped by now; a rerun resumes after the last day.
         print("demo-world: stopped", file=sys.stderr)
         return 130
+    except up.Terminated as stop:
+        # As for Ctrl+C: `up` has stopped the server; the exit code says which signal.
+        print(f"demo-world: {stop}", file=sys.stderr)
+        return 128 + stop.signal_number
     return 0

@@ -145,14 +145,20 @@ class ProcessGroup:
             return
         self._stopped = True
         pid = self.process.pid
-        if self.process.poll() is None:
-            try:
+        try:
+            if self.process.poll() is None:
                 self._interrupt()
                 self.process.wait(grace)
-            except OSError as error:
-                log.warning("cannot interrupt process %d (%s); killing it", pid, error)
-            except subprocess.TimeoutExpired:
-                log.warning("process %d did not stop within %g s; killing it", pid, grace)
+        except OSError as error:
+            log.warning("cannot interrupt process %d (%s); killing it", pid, error)
+        except subprocess.TimeoutExpired:
+            log.warning("process %d did not stop within %g s; killing it", pid, grace)
+        finally:
+            # Even when a second Ctrl+C (or a signal) interrupts the wait: the guard above
+            # allows no second stop, so the group is killed here or never.
+            self._kill_rest(pid)
+
+    def _kill_rest(self, pid: int) -> None:
         try:
             self._kill_everything()
         except OSError as error:

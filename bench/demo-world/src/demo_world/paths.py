@@ -12,7 +12,8 @@ COMPANY_VARIABLE = "HOTEL_DEMO_COMPANY"
 # The company's repository on GitHub (`owner/name`): a run's own copy, never the original.
 REPO_VARIABLE = "HOTEL_DEMO_REPO"
 MLFLOW_PORT_VARIABLE = "HOTEL_DEMO_MLFLOW_PORT"
-# Read by the company and MLflow, never chosen by the world: under `up`, the tracking server.
+# Read by the company and MLflow. The world sets it only under `up`, to its MLflow server;
+# otherwise it passes through as the shell has it.
 TRACKING_URI_VARIABLE = "MLFLOW_TRACKING_URI"
 # Every setting a run writes to its run.env, in that order.
 RUN_SETTINGS = (

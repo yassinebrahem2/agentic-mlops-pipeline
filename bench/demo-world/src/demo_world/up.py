@@ -3,16 +3,19 @@
 The server runs from the company's environment, as its ops host would, on the company's own
 store, and the loop runs with `MLFLOW_TRACKING_URI` pointing at it. The server runs in a
 process group of its own (`process_group`), so the terminal's Ctrl+C reaches the world only,
-and the world stops the whole group on every exit: the end of the loop, Ctrl+C, an error, or a
-server that never answered.
+and the world stops the whole group on every exit: the end of the loop, Ctrl+C, SIGTERM or
+SIGHUP (`kill`, a closed terminal), an error, or a server that never answered.
 """
 
 import logging
 import os
+import signal
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 
 from demo_world import paths
 from demo_world.company import Company, tail
@@ -30,6 +33,34 @@ log = logging.getLogger(__name__)
 
 class UpError(Exception):
     """The MLflow server could not be brought up."""
+
+
+class Terminated(BaseException):
+    """The world received SIGTERM or SIGHUP; raised like Ctrl+C, so every `finally` runs."""
+
+    def __init__(self, signal_number: int) -> None:
+        super().__init__(f"stopped by signal {signal_number}")
+        self.signal_number = signal_number
+
+
+# Python's defaults end the process at once, skipping `finally`, and the server, in a session
+# of its own, never sees the terminal's SIGHUP.
+_TERMINATION_SIGNALS = tuple(
+    getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)
+)
+
+
+@contextmanager
+def _terminations_raise() -> Iterator[None]:
+    def handler(signal_number: int, frame: FrameType | None) -> None:
+        raise Terminated(signal_number)
+
+    previous = {number: signal.signal(number, handler) for number in _TERMINATION_SIGNALS}
+    try:
+        yield
+    finally:
+        for number, handler_before in previous.items():
+            signal.signal(number, handler_before)
 
 
 def tracking_uri(port: int) -> str:
@@ -113,7 +144,7 @@ def up[T](
     output = world / SERVER_LOG
     uri = tracking_uri(port)
     previous = os.environ.get(paths.TRACKING_URI_VARIABLE)
-    with output.open("ab") as server_output:
+    with output.open("ab") as server_output, _terminations_raise():
         server = ProcessGroup(
             server_command(the_company, port),
             the_company.checkout,
