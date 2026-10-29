@@ -12,7 +12,6 @@ from langchain_core.messages import (
 )
 
 from mlops_agents.agents.catalog import AgentDefinition, Limits
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     MessageStatus,
@@ -24,6 +23,7 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.workspace.models import Project
+from tests.agents.runtime.graph_env import prompt_messages
 
 
 def _make_definition() -> AgentDefinition:
@@ -56,13 +56,13 @@ def _make_project() -> Project:
     )
 
 
-def test_build_messages_system_message() -> None:
+def test_prompt_messages_system_message() -> None:
     definition = _make_definition()
     project = _make_project()
     layout = "src/\nREADME.md"
     summary = "Previous context summary"
 
-    messages = build_messages(definition, project, layout, summary, [])
+    messages = prompt_messages(definition, project, layout, summary, [])
     assert len(messages) == 1
     system_msg = messages[0]
     assert isinstance(system_msg, SystemMessage)
@@ -77,27 +77,27 @@ def test_build_messages_system_message() -> None:
     assert "Previous context summary" in content
 
 
-def test_build_messages_system_message_without_summary() -> None:
+def test_prompt_messages_system_message_without_summary() -> None:
     definition = _make_definition()
     project = _make_project()
     layout = "README.md"
 
-    messages = build_messages(definition, project, layout, None, [])
+    messages = prompt_messages(definition, project, layout, None, [])
     assert len(messages) == 1
     assert "Summary of the earlier conversation:" not in str(messages[0].content)
 
 
-def test_build_messages_system_message_without_default_branch() -> None:
+def test_prompt_messages_system_message_without_default_branch() -> None:
     definition = _make_definition()
     project = _make_project()
     project_no_branch = project.model_copy(update={"default_branch": None})
 
-    messages = build_messages(definition, project_no_branch, "README.md", None, [])
+    messages = prompt_messages(definition, project_no_branch, "README.md", None, [])
     assert len(messages) == 1
     assert "Default branch:" not in str(messages[0].content)
 
 
-def test_build_messages_user_and_agent_turn() -> None:
+def test_prompt_messages_user_and_agent_turn() -> None:
     definition = _make_definition()
     project = _make_project()
     history = [
@@ -135,7 +135,7 @@ def test_build_messages_user_and_agent_turn() -> None:
         ),
     ]
 
-    messages = build_messages(definition, project, "README.md", None, history)
+    messages = prompt_messages(definition, project, "README.md", None, history)
     assert len(messages) == 5  # System, Human, AI, Tool1, Tool2
     assert isinstance(messages[1], HumanMessage)
     assert messages[1].content == "Check the project layout"
@@ -168,7 +168,7 @@ def test_build_messages_user_and_agent_turn() -> None:
     assert tool_call_ids == tool_resp_ids == ["call_1", "call_2"]
 
 
-def test_build_messages_synthetic_tool_message_for_stopped_and_interrupted() -> None:
+def test_prompt_messages_synthetic_tool_message_for_stopped_and_interrupted() -> None:
     definition = _make_definition()
     project = _make_project()
 
@@ -208,7 +208,7 @@ def test_build_messages_synthetic_tool_message_for_stopped_and_interrupted() -> 
         ),
     ]
 
-    messages = build_messages(definition, project, "", None, history)
+    messages = prompt_messages(definition, project, "", None, history)
     # Expected: SystemMessage,
     # AIMessage(call_stopped), ToolMessage(call_stopped, "cancelled by the user"),
     # AIMessage(call_interrupted), ToolMessage(call_interrupted, "interrupted")
@@ -228,7 +228,7 @@ def test_build_messages_synthetic_tool_message_for_stopped_and_interrupted() -> 
     assert tool_call_ids == tool_resp_ids == ["call_stopped", "call_interrupted"]
 
 
-def test_build_messages_omits_queued_and_system_messages() -> None:
+def test_prompt_messages_omits_queued_and_system_messages() -> None:
     definition = _make_definition()
     project = _make_project()
 
@@ -265,12 +265,12 @@ def test_build_messages_omits_queued_and_system_messages() -> None:
         ),
     ]
 
-    messages = build_messages(definition, project, "", None, history)
+    messages = prompt_messages(definition, project, "", None, history)
     assert len(messages) == 2  # SystemMessage, HumanMessage("Valid user message")
     assert messages[1].content == "Valid user message"
 
 
-def test_build_messages_from_agent_prefix() -> None:
+def test_prompt_messages_from_agent_prefix() -> None:
     definition = _make_definition()
     project = _make_project()
 
@@ -287,7 +287,7 @@ def test_build_messages_from_agent_prefix() -> None:
         ),
     ]
 
-    messages = build_messages(definition, project, "", None, history)
+    messages = prompt_messages(definition, project, "", None, history)
     assert len(messages) == 2
     assert isinstance(messages[1], HumanMessage)
     assert messages[1].content == "Message from coder:\nPlease inspect tests"
@@ -327,18 +327,18 @@ TOOL_APPROVAL_PART = ApprovalPart(
 
 
 @pytest.mark.parametrize("approval", [TOOL_APPROVAL_PART, STALL_PART], ids=["tool", "stall"])
-def test_build_messages_skips_approval_parts(approval: ApprovalPart) -> None:
+def test_prompt_messages_skips_approval_parts(approval: ApprovalPart) -> None:
     call = ToolCallPart(type="tool_call", id="c1", name="Write", input={"path": "a.py"})
     result = ToolResultPart(type="tool_result", tool_call_id="c1", content="done", is_error=False)
     text = TextPart(type="text", text="Writing.")
-    with_approval = build_messages(
+    with_approval = prompt_messages(
         _make_definition(),
         _make_project(),
         "",
         None,
         [_agent_message([text, call, approval, result], "complete")],
     )
-    without = build_messages(
+    without = prompt_messages(
         _make_definition(),
         _make_project(),
         "",
@@ -349,7 +349,7 @@ def test_build_messages_skips_approval_parts(approval: ApprovalPart) -> None:
     assert [type(m) for m in with_approval[1:]] == [AIMessage, ToolMessage]
 
 
-def test_build_messages_appends_the_hook_context_as_the_last_system_section() -> None:
+def test_prompt_messages_appends_the_hook_context_as_the_last_system_section() -> None:
     definition = _make_definition()
     project = _make_project()
     layout = "README.md"
@@ -357,7 +357,7 @@ def test_build_messages_appends_the_hook_context_as_the_last_system_section() ->
         '<data source="hook:status_board">\nStatus board:\n- Orchestrator: running\n</data>'
     )
 
-    messages = build_messages(
+    messages = prompt_messages(
         definition, project, layout, "Earlier things.", [], hook_context=hook_context
     )
     content = str(messages[0].content)
@@ -365,5 +365,5 @@ def test_build_messages_appends_the_hook_context_as_the_last_system_section() ->
     assert content.index("Summary of the earlier conversation:") < content.index(hook_context)
 
     # Without hook context
-    messages_without = build_messages(definition, project, layout, None, [])
+    messages_without = prompt_messages(definition, project, layout, None, [])
     assert "<data" not in str(messages_without[0].content)
