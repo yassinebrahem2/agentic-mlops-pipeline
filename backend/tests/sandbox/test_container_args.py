@@ -4,12 +4,12 @@ from pathlib import Path
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.connections.contract import Mount
 from mlops_agents.sandbox.containers import (
     build_run_args,
     container_name,
     mounts_fingerprint,
 )
-from mlops_agents.sandbox.projects import SandboxMount as Mount
 
 
 def test_container_name() -> None:
@@ -182,3 +182,9 @@ def test_build_run_args_with_mounts(tmp_path: Path) -> None:
     assert f"{APP_NAME}.mounts={expected_fp}" in [
         args_two[i + 1] for i, v in enumerate(args_two) if v == "--label"
     ]
+
+
+def test_sandbox_mount_removed() -> None:
+    from mlops_agents.sandbox import projects
+
+    assert not hasattr(projects, "SandboxMount")

@@ -317,3 +317,12 @@ def test_pyproject_pins_duckdb_version() -> None:
     dependencies: list[str] = data.get("project", {}).get("dependencies", [])
     expected = f"duckdb=={DUCKDB_VERSION}"
     assert expected in dependencies
+
+
+def test_duckdb_cli_has_no_unused_dicts() -> None:
+    from mlops_agents.sandbox import duckdb_cli
+
+    assert not hasattr(duckdb_cli, "DUCKDB_CLI_ASSETS")
+    assert not hasattr(duckdb_cli, "DUCKDB_CLI_SHA256")
+    assert hasattr(duckdb_cli, "DUCKDB_CLI_SHA256_AMD64")
+    assert hasattr(duckdb_cli, "DUCKDB_CLI_SHA256_ARM64")

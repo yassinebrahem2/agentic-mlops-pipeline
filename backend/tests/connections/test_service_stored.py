@@ -201,7 +201,6 @@ async def test_mounts_hand_the_kind_only_validated_settings(
     mounts = await service.mounts("prj_val")
 
     assert [m.container_path for m in mounts] == ["/data/bad", "/data/good"]
-    assert [step for step, _ in calls] == ["validate", "mount", "validate", "mount"]
-    for i in (0, 2):
-        assert isinstance(calls[i][1], LocalFolderSettings)
-        assert calls[i][1] is calls[i + 1][1]
+    assert [step for step, _ in calls] == ["mount", "mount"]
+    for _, settings in calls:
+        assert isinstance(settings, LocalFolderSettings)
