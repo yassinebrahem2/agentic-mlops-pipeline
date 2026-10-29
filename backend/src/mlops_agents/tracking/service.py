@@ -19,7 +19,7 @@ from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects, tracking_sources
-from mlops_agents.tracking.constants import ERROR_MAX_CHARS, QUERY_LIMIT_MAX
+from mlops_agents.tracking.constants import ERROR_MAX_CHARS
 from mlops_agents.tracking.contract import (
     Page,
     SourceType,
@@ -198,7 +198,13 @@ class TrackingService(Tracking):
             await self._sync_source(project_id, source_id)
             return
 
-        all_sources = await self.sources(project_id)
+        try:
+            all_sources = await self.sources(project_id)
+        except Exception as exc:
+            _log.warning(
+                "Could not list sources for sync in project %s: %s", project_id, error_text(exc)
+            )
+            return
         if not all_sources:
             return
 
@@ -321,12 +327,17 @@ class TrackingService(Tracking):
         if len(scrubbed) > ERROR_MAX_CHARS:
             scrubbed = scrubbed[:ERROR_MAX_CHARS]
 
-        engine = await self._databases.project(project_id)
-        async with engine.begin() as conn:
-            await conn.execute(
-                update(tracking_sources)
-                .where(tracking_sources.c.id == source_id)
-                .values(last_error=scrubbed)
+        try:
+            engine = await self._databases.project(project_id)
+            async with engine.begin() as conn:
+                await conn.execute(
+                    update(tracking_sources)
+                    .where(tracking_sources.c.id == source_id)
+                    .values(last_error=scrubbed)
+                )
+        except Exception as exc:
+            _log.warning(
+                "Could not update last_error for source %s: %s", source_id, error_text(exc)
             )
 
         payload = {
@@ -354,16 +365,6 @@ class TrackingService(Tracking):
     async def query(self, project_id: str, q: TrackingQuery) -> Page[Any]:
         await self._check_project(project_id)
 
-        if q.limit > QUERY_LIMIT_MAX or q.limit < 1:
-            raise DomainError(
-                "tracking_bad_query",
-                f"Query limit must be between 1 and {QUERY_LIMIT_MAX}.",
-                status=422,
-            )
-        if q.offset < 0:
-            raise DomainError(
-                "tracking_bad_query", "Query offset must be non-negative.", status=422
-            )
         if q.what == "metrics" and not q.run_key:
             raise DomainError(
                 "tracking_bad_query", "Querying metrics requires run_key.", status=422

@@ -543,3 +543,105 @@ async def test_close_cancels_background_sync(tracking_env: TrackingEnv) -> None:
 
     await env.service.close()
     assert cancelled_seen.is_set()
+
+
+async def test_sync_resilient_to_events_record_failure(
+    tracking_env: TrackingEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+
+    async def fail_record(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Event store write failed")
+
+    monkeypatch.setattr(env.events, "record", fail_record)
+
+    # Both successful sync and error sync should not crash if events.record fails
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[], runs=[], metrics=[], aliases={}, ci_runs=[], evaluations=[], error=None
+    )
+    await env.service.run_sync(env.project_id, source.id)
+    updated = (await env.service.sources(env.project_id))[0]
+    assert updated.last_sync is not None
+
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[],
+        runs=[],
+        metrics=[],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error="Adapter error",
+    )
+    await env.service.run_sync(env.project_id, source.id)
+    updated = (await env.service.sources(env.project_id))[0]
+    assert updated.last_error == "Adapter error"
+
+
+async def test_sync_resilient_to_load_source_row_failure(
+    tracking_env: TrackingEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+
+    import mlops_agents.tracking.service as svc_mod
+
+    async def fail_load(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Database connection broken during load_source_row")
+
+    monkeypatch.setattr(svc_mod, "load_source_row", fail_load)
+    # Should catch exception and not raise
+    await env.service.run_sync(env.project_id, source.id)
+
+
+async def test_sync_all_resilient_to_gather_exception_and_sources_failure(
+    tracking_env: TrackingEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tracking_env
+    s1 = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://s1.example.com"},
+        auth="none",
+    )
+    s2 = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://s2.example.com"},
+        auth="none",
+    )
+
+    orig_sync_source: Any = getattr(env.service, "_sync_source")
+
+    async def fail_one_source(project_id: str, source_id: str) -> None:
+        if source_id == s1.id:
+            raise RuntimeError("Unexpected gather crash on source 1")
+        await orig_sync_source(project_id, source_id)
+
+    monkeypatch.setattr(env.service, "_sync_source", fail_one_source)
+
+    # Sync all sources: source 1 raises unexpected exception, source 2 completes cleanly
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[], runs=[], metrics=[], aliases={}, ci_runs=[], evaluations=[], error=None
+    )
+    await env.service.run_sync(env.project_id)
+
+    srcs = {s.id: s for s in await env.service.sources(env.project_id)}
+    assert srcs[s2.id].last_sync is not None
+
+    # Now test when self.sources() fails during sync-all
+    async def fail_sources(project_id: str) -> Any:
+        raise RuntimeError("sources query failed")
+
+    monkeypatch.setattr(env.service, "sources", fail_sources)
+    await env.service.run_sync(env.project_id)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from mlops_agents.errors import DomainError
 from mlops_agents.tracking.contract import (
@@ -29,15 +30,14 @@ async def test_query_unknown_project(tracking_env: TrackingEnv) -> None:
     assert exc_info.value.code == "project_not_found"
 
 
-async def test_query_limit_validation(tracking_env: TrackingEnv) -> None:
-    env = tracking_env
-    # Limit > 500
-    with pytest.raises(DomainError) as exc_info:
-        await env.service.query(
-            env.project_id, TrackingQuery.model_construct(what="models", limit=501)
-        )
-    assert exc_info.value.status == 422
-    assert exc_info.value.code == "tracking_bad_query"
+def test_query_limit_validation() -> None:
+    # Bounds live on TrackingQuery contract: > 500, < 1, or offset < 0 raise ValidationError
+    with pytest.raises(ValidationError):
+        TrackingQuery(what="models", limit=501)
+    with pytest.raises(ValidationError):
+        TrackingQuery(what="models", limit=0)
+    with pytest.raises(ValidationError):
+        TrackingQuery(what="models", offset=-1)
 
 
 async def test_query_metrics_requires_run_key(tracking_env: TrackingEnv) -> None:
@@ -393,6 +393,14 @@ async def test_query_since_filter_with_timezone_normalization(
     page_runs = await env.service.query(env.project_id, TrackingQuery(what="runs", since=since_dt))
     assert len(page_runs.rows) == 1
     assert page_runs.rows[0].key == "r2"
+
+    # Naive datetime is treated as UTC (13:00 UTC) rather than local system timezone
+    naive_since = datetime(2026, 10, 28, 13, 0, 0)
+    page_naive = await env.service.query(
+        env.project_id, TrackingQuery(what="versions", model="M", since=naive_since)
+    )
+    assert len(page_naive.rows) == 1
+    assert page_naive.rows[0].version == "2"
 
 
 async def test_query_source_id_filtering(tracking_env: TrackingEnv) -> None:

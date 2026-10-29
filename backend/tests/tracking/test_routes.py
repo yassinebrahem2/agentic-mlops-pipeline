@@ -288,15 +288,15 @@ async def test_query_routes_and_filters(
     assert res.status_code == 422
     assert res.json()["code"] == "tracking_bad_query"
 
-    # 8. Limit > 500 -> 422
+    # 8. Limit > 500 -> 422 invalid_request
     res = await client.get(f"/api/projects/{prj}/tracking/models?limit=501")
     assert res.status_code == 422
-    assert res.json()["code"] == "tracking_bad_query"
+    assert res.json()["code"] == "invalid_request"
 
-    # 9. Offset < 0 -> 422
+    # 9. Offset < 0 -> 422 invalid_request
     res = await client.get(f"/api/projects/{prj}/tracking/models?offset=-1")
     assert res.status_code == 422
-    assert res.json()["code"] == "tracking_bad_query"
+    assert res.json()["code"] == "invalid_request"
 
 
 async def test_build_services_wiring(tracking_app: FastAPI) -> None:

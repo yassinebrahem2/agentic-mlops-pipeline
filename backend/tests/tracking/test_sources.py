@@ -55,6 +55,10 @@ async def test_create_mlflow_bad_settings(tracking_env: TrackingEnv) -> None:
             auth="credential",
         )
     assert exc_info.value.status == 422
+    assert "pass" not in exc_info.value.message
+    assert "user:pass" not in exc_info.value.message
+    if exc_info.value.detail:
+        assert "pass" not in str(exc_info.value.detail)
 
     # file:// URL
     with pytest.raises(DomainError) as exc_info:
