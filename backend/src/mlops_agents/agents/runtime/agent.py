@@ -10,7 +10,7 @@ from langgraph.types import Command
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.runtime.context import build_messages, top_level_layout
+from mlops_agents.agents.runtime.context import system_message, top_level_layout
 from mlops_agents.agents.runtime.contract import TextPart
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
@@ -156,14 +156,9 @@ async def resume_command(
         [] if checkpoint is None else checkpoint.checkpoint["channel_values"].get("messages", [])
     )
     if not checkpointed:
+        # No message yet (a turn stalled in `prepare`): `prepare` builds them on the resume, with
+        # this build's hook context.
         return Command(resume=True)
-    system = build_messages(
-        agent.definition,
-        agent.project,
-        agent.layout,
-        summary,
-        [],
-        hook_context=agent.hook_context,
-    )[0]
+    system = system_message(agent, summary)
     system.id = checkpointed[0].id
     return Command(resume=True, update={"messages": [system]})

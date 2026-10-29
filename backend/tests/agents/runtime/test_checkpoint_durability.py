@@ -93,6 +93,7 @@ async def test_checkpoint_write_in_flight_at_cancel_commits_before_the_cancel_re
             messages: list[Any],
             tools: list[dict[str, Any]],
             on_text: Any,
+            on_restart: Any = None,
         ) -> ModelReply:
             self.calls += 1
             if self.calls == 1:

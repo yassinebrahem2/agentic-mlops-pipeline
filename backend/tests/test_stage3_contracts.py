@@ -50,6 +50,7 @@ def test_connection_protocols() -> None:
         "findings",
         "tables",
         "data_version",
+        "read",
         "duckdb_source",
         "sandbox_mount",
     }
@@ -188,25 +189,13 @@ def test_tool_schema_inlines_nested_models() -> None:
     assert props["deep"]["properties"]["inner"] == inner
 
 
-def test_error_kind_defaults_to_null() -> None:
-    from mlops_agents.agents.runtime.contract import ErrorKind, MessageView, TurnEndedData
+def test_no_turn_or_message_carries_an_error_kind() -> None:
+    # A key running out never fails a turn (rate-limits task 5): nothing says why one failed.
+    from mlops_agents.agents.runtime import contract
 
-    assert get_args(ErrorKind) == ("keys_exhausted",)
-    ended = TurnEndedData(turn_id="trn_1", status="failed", error="boom")
-    assert ended.error_kind is None
-    message = MessageView.model_validate(
-        {
-            "id": "msg_1",
-            "turn_id": None,
-            "author_kind": "agent",
-            "author_name": "coder",
-            "from_agent": None,
-            "parts": [],
-            "status": "complete",
-            "created_at": "2026-10-28T00:00:00Z",
-        }
-    )
-    assert message.error_kind is None
+    assert not hasattr(contract, "ErrorKind")
+    assert "error_kind" not in contract.MessageView.model_fields
+    assert "error_kind" not in contract.TurnEndedData.model_fields
 
 
 def test_provider_cooldown_default_matches_the_column(tmp_path: Path) -> None:

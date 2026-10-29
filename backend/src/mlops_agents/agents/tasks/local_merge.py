@@ -134,10 +134,20 @@ async def local_merge(
     )
 
     await asyncio.to_thread(temp_base_dir.mkdir, parents=True, exist_ok=True)
-    # A fresh folder per merge: a retry never meets what an earlier merge left behind.
-    temp_worktree = Path(
-        await asyncio.to_thread(tempfile.mkdtemp, prefix=f"merge_{task_id}_", dir=temp_base_dir)
+    # A fresh folder per merge: a retry never meets what an earlier merge left behind. It is
+    # made in a worker thread that a cancel cannot stop, so a cancel waits for it and removes it.
+    make_temp = asyncio.ensure_future(
+        asyncio.to_thread(tempfile.mkdtemp, prefix=f"merge_{task_id}_", dir=temp_base_dir)
     )
+    try:
+        temp_worktree = Path(await asyncio.shield(make_temp))
+    except asyncio.CancelledError:
+        await asyncio.wait({make_temp})
+        if make_temp.exception() is None:
+            await _remove_temp_worktree(
+                runner, repo_root, empty_hooks, Path(make_temp.result()), add_started=False
+            )
+        raise
     add_started = False
 
     try:

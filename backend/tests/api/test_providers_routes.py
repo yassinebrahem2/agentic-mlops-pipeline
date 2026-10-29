@@ -14,6 +14,7 @@ async def test_anonymous_cannot_access_providers(anonymous: httpx2.AsyncClient) 
     assert (await anonymous.delete("/api/providers/fake")).status_code == 401
     assert (await anonymous.post("/api/providers/fake/keys", json={})).status_code == 401
     assert (await anonymous.delete("/api/providers/fake/keys/1")).status_code == 401
+    assert (await anonymous.put("/api/providers/fake/settings", json={})).status_code == 401
     assert (await anonymous.get("/api/providers/fake/remote-models")).status_code == 401
     assert (await anonymous.get("/api/env-keys")).status_code == 401
     assert (await anonymous.post("/api/env-keys/GROQ_API_KEY/import")).status_code == 401
@@ -153,7 +154,7 @@ async def test_env_keys_detection_and_import(
     try:
         services = app.state.services
         app.state.services.providers = ProvidersService(
-            services.databases, services.keystore, mock_client
+            services.databases, services.keystore, mock_client, services.failover
         )
 
         # 3. POST /api/env-keys/GROQ_API_KEY/import -> 200 Provider
@@ -173,3 +174,28 @@ async def test_env_keys_detection_and_import(
         assert test_key not in res.text
     finally:
         await mock_client.aclose()
+
+
+async def test_provider_settings_round_trip_and_bounds(
+    client: httpx2.AsyncClient, fake_openai: RunningFake
+) -> None:
+    body = {"name": "fake", "kind": "self_hosted", "base_url": fake_openai.base_url}
+    assert (await client.post("/api/providers", json=body)).status_code == 201
+
+    res = await client.put("/api/providers/fake/settings", json={"cooldown_minutes": 45})
+    assert res.status_code == 200, res.text
+    assert res.json()["cooldown_minutes"] == 45
+    listed = (await client.get("/api/providers")).json()
+    assert [p["cooldown_minutes"] for p in listed] == [45]
+
+    for minutes in (1, 1440):
+        res = await client.put("/api/providers/fake/settings", json={"cooldown_minutes": minutes})
+        assert res.status_code == 200, res.text
+    for minutes in (0, 1441):
+        res = await client.put("/api/providers/fake/settings", json={"cooldown_minutes": minutes})
+        assert res.status_code == 422, res.text
+    res = await client.put("/api/providers/fake/settings", json={"cooldown_minutes": 5, "x": 1})
+    assert res.status_code == 422
+
+    res = await client.put("/api/providers/missing/settings", json={"cooldown_minutes": 30})
+    assert res.status_code == 404

@@ -105,8 +105,9 @@ async def test_server_mode_refuses_local_folders(
     with pytest.raises(DomainError) as err:
         await svc.add_local(str(tmp_path))
     assert err.value.code == "local_projects_disabled"
-    with pytest.raises(DomainError):
-        await svc.browse(None)
+    # Browse works in server mode
+    listing = await svc.browse(None)
+    assert listing.path == str(Path.home())
 
 
 async def test_missing_folder_and_relink(

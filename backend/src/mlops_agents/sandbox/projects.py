@@ -1,7 +1,8 @@
 """Project repository locations and persistent sandbox network settings."""
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
@@ -11,16 +12,38 @@ from mlops_agents.storage.tables import project_settings
 from mlops_agents.workspace.service import WorkspaceService
 
 
+@runtime_checkable
+class Mount(Protocol):
+    """Read-only container bind mount."""
+
+    @property
+    def host_path(self) -> Path: ...
+
+    @property
+    def container_path(self) -> str: ...
+
+
+class _Connections(Protocol):
+    async def mounts(self, project_id: str) -> Sequence[Mount]: ...
+
+
 class SandboxProjects(Protocol):
     async def root(self, project_id: str) -> Path: ...
     async def get_network(self, project_id: str) -> bool: ...
     async def set_network(self, project_id: str, enabled: bool) -> None: ...
+    async def mounts(self, project_id: str) -> Sequence[Mount]: ...
 
 
 class DatabaseSandboxProjects:
-    def __init__(self, databases: Databases, workspace: WorkspaceService) -> None:
+    def __init__(
+        self,
+        databases: Databases,
+        workspace: WorkspaceService,
+        connections: _Connections,
+    ) -> None:
         self._databases = databases
         self._workspace = workspace
+        self._connections = connections
 
     async def root(self, project_id: str) -> Path:
         project = await self._workspace.get(project_id)
@@ -45,3 +68,6 @@ class DatabaseSandboxProjects:
         statement = statement.on_conflict_do_update(index_elements=["key"], set_={"value": value})
         async with engine.begin() as conn:
             await conn.execute(statement)
+
+    async def mounts(self, project_id: str) -> Sequence[Mount]:
+        return await self._connections.mounts(project_id)

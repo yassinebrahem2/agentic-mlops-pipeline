@@ -3,3 +3,4 @@
 from __future__ import annotations
 
 STATUS_BOARD_HOOK = "status_board"
+DATA_SUMMARY_HOOK = "data_summary"

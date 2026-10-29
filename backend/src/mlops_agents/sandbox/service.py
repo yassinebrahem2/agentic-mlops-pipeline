@@ -256,10 +256,11 @@ class SandboxService(Sandbox):
                 f"Environment build failed: {status.detail or 'unknown error'}"
             )
         network = await self.get_network(project_id)
+        mounts = await self._projects.mounts(project_id)
         async with docker_error_boundary("ensure sandbox container"):
             return await _finish_operation(
                 self._container_manager.ensure_container(
-                    project_id, task, status.tag, network=network
+                    project_id, task, status.tag, network=network, mounts=mounts
                 )
             )
 

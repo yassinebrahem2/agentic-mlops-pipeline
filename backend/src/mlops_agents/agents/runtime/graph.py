@@ -15,8 +15,11 @@ from langgraph.graph.message import add_messages  # pyright: ignore[reportMissin
 from langgraph.graph.state import CompiledStateGraph  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.types import Command
 
+from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
+from mlops_agents.agents.runtime.compaction import compact_if_needed
+from mlops_agents.agents.runtime.context import history_messages, system_message
 from mlops_agents.agents.runtime.contract import (
     MessageView,
     Part,
@@ -25,11 +28,13 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.hooks import Gate, GateDecision, InboundSource, TurnEndCheck
-from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelKeysExhausted
+from mlops_agents.agents.runtime.stall import StallState, await_stall, pending_stall, record_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.tool_step import ToolStep, needs_wait
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import Preview
+from mlops_agents.events.contract import EventLog
 
 
 class TurnSink(Protocol):
@@ -48,6 +53,7 @@ class TurnState(TypedDict):
     call_errors: NotRequired[dict[str, str]]  # the step's calls answered before the gate
     turn_end_checked: NotRequired[bool]
     end_note: NotRequired[str | None]  # for the next model request only, never a message
+    stall: NotRequired[StallState | None]  # the step's stall: no usable key (stall.py)
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,8 @@ class TurnHooks:
     turn_end: TurnEndCheck
     workspaces: TaskWorkspaces
     approval_store: ApprovalStore  # the app's one store
+    approvals: Approvals  # a stall's approval
+    events: EventLog | None  # turn.stalled and turn.resumed; None records no event
 
 
 def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
@@ -65,7 +73,7 @@ def turn_checkpointer(conn: aiosqlite.Connection) -> AsyncSqliteSaver:
     Only these and LangGraph's safe types are read back as themselves; any other type would come
     back a plain dict. A type added to `TurnState` beyond LangChain's messages is added here.
     """
-    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview, Command)]
+    allowed = [(t.__module__, t.__name__) for t in (GateDecision, Preview, Command, StallState)]
     return AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
 
 
@@ -97,6 +105,45 @@ def create_turn_graph(
         async with lock:
             await store.update_message(project_id, message_id, parts=current_parts)
 
+    async def prepare_node(state: TurnState) -> dict[str, Any]:
+        """The turn's first node: compact the session when it needs it, then build the turn's
+        messages. Compaction's model call stalls the turn as the model node's does; compaction
+        reads the store again, so a run after Try again starts over and a stalled one wrote
+        nothing."""
+        summary, _ = await store.summary(project_id, session_id)
+        history = await store.messages(project_id, session_id)
+        try:
+            await compact_if_needed(
+                store,
+                caller,
+                agent.model,
+                project_id,
+                session_id,
+                [m for m in history if m.id != message_id],
+                str(system_message(agent, summary).content),
+                turn_id=turn_id,
+                agent_name=agent.definition.name,
+            )
+        except ModelKeysExhausted as error:
+            stall = await record_stall(
+                hooks.approvals,
+                hooks.events,
+                project_id=project_id,
+                agent=agent.definition.name,
+                turn_id=turn_id,
+                step=0,
+                exhausted=error,
+                node="prepare",
+            )
+            return {"stall": stall}
+        summary, compacted_through = await store.summary(project_id, session_id)
+        active = await store.messages(project_id, session_id, after=compacted_through)
+        messages: list[BaseMessage] = [system_message(agent, summary)]
+        messages.extend(history_messages([m for m in active if m.id != message_id]))
+        # A resolved stall ends here. The model node, which always runs next, clears it too on
+        # success; this keeps the stall's lifetime within the node that set it.
+        return {"messages": messages, "stall": None}
+
     async def model_node(state: TurnState) -> dict[str, Any]:
         step_count = state.get("step_count", 0)
         end_note = state.get("end_note")
@@ -122,6 +169,8 @@ def create_turn_graph(
             request.append(HumanMessage(content=end_note))
         tool_schemas = [t.schema() for t in agent.tools]
 
+        # The text of the step's current attempt: stored only when the step succeeds, or as the
+        # partial answer of a failed or stopped step.
         streamed_chunks: list[str] = []
 
         async def on_text(delta: str) -> None:
@@ -129,13 +178,38 @@ def create_turn_graph(
             async with lock:
                 await sink.text(message_id, delta)
 
+        async def take_back() -> None:
+            """Take back the attempt's text: the stored message and its live copy (in the hub
+            and the client) go back to the step's finished parts."""
+            streamed_chunks.clear()
+            async with lock:
+                updated = await store.update_message(project_id, message_id, parts=current_parts)
+                await sink.message(updated, created=False)
+
         t0 = time.monotonic()
         try:
-            reply = await caller.call(agent.model, request, tool_schemas, on_text)
-        except (Exception, asyncio.CancelledError):
+            reply = await caller.call(agent.model, request, tool_schemas, on_text, take_back)
+        except (Exception, asyncio.CancelledError) as error:
+            if isinstance(error, ModelKeysExhausted):
+                # No attempt follows the last one, so its text is still shown.
+                if streamed_chunks:
+                    await take_back()
+                stall = await record_stall(
+                    hooks.approvals,
+                    hooks.events,
+                    project_id=project_id,
+                    agent=agent.definition.name,
+                    turn_id=turn_id,
+                    step=step_count,
+                    exhausted=error,
+                    node="model",
+                )
+                # The step is taken again after Try again: no message and no step spent. The
+                # inbound messages are this turn's now (taken), so they stay in its state.
+                return {"messages": inbound, "stall": stall}
+            # A failure with no next attempt, and a Stop, keep the text still shown.
             if streamed_chunks:
-                partial_text = "".join(streamed_chunks)
-                current_parts.append(TextPart(type="text", text=partial_text))
+                current_parts.append(TextPart(type="text", text="".join(streamed_chunks)))
                 await _update_parts()
             raise
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -226,6 +300,7 @@ def create_turn_graph(
             "messages": [*inbound, new_message],
             "step_count": step_count if end_note else step_count + 1,
             "end_note": None,
+            "stall": None,
         }
 
     step = ToolStep(
@@ -247,9 +322,28 @@ def create_turn_graph(
         note = await hooks.turn_end.note(project_id, session_id, turn_id)
         return {"turn_end_checked": True, "end_note": note}
 
+    async def wait_node(state: TurnState) -> dict[str, Any]:
+        stall = pending_stall(state.get("stall"))
+        if stall is None:
+            return await step.wait(state)
+        return await await_stall(
+            stall,
+            store=hooks.approval_store,
+            caller=caller,
+            events=hooks.events,
+            project_id=project_id,
+            agent=agent.definition.name,
+            turn_id=turn_id,
+        )
+
+    def route_prepare(state: TurnState) -> str:
+        return "wait" if pending_stall(state.get("stall")) is not None else "model"
+
     def route_model(state: TurnState) -> str:
         if state.get("stopped_reason"):
             return END
+        if pending_stall(state.get("stall")) is not None:
+            return "wait"
         last_msg = state["messages"][-1]
         if isinstance(last_msg, AIMessage) and bool(last_msg.tool_calls):
             return "decide"
@@ -260,21 +354,35 @@ def create_turn_graph(
     def route_decide(state: TurnState) -> str:
         return "wait" if needs_wait(state) else "tools"
 
+    def route_wait(state: TurnState) -> str:
+        # Only a resolved stall leaves the wait node with the stall still set: back to the node
+        # that stalled.
+        stall = state.get("stall")
+        return stall.node if stall is not None else "tools"
+
     def route_turn_end(state: TurnState) -> str:
         return "model" if state.get("end_note") else END
 
     graph_builder = StateGraph(TurnState)
+    graph_builder.add_node("prepare", prepare_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("model", model_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("decide", step.decide)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
-    graph_builder.add_node("wait", step.wait)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
+    graph_builder.add_node("wait", wait_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("tools", step.run)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
     graph_builder.add_node("turn_end", turn_end_node)  # pyright: ignore[reportUnknownMemberType]  # LangGraph add_node overload is partially untyped
-    graph_builder.add_edge(START, "model")
+    graph_builder.add_edge(START, "prepare")
     graph_builder.add_conditional_edges(
-        "model", route_model, {"decide": "decide", "turn_end": "turn_end", END: END}
+        "prepare", route_prepare, {"wait": "wait", "model": "model"}
+    )
+    graph_builder.add_conditional_edges(
+        "model",
+        route_model,
+        {"wait": "wait", "decide": "decide", "turn_end": "turn_end", END: END},
     )
     graph_builder.add_conditional_edges("decide", route_decide, {"wait": "wait", "tools": "tools"})
-    graph_builder.add_edge("wait", "tools")
+    graph_builder.add_conditional_edges(
+        "wait", route_wait, {"prepare": "prepare", "model": "model", "tools": "tools"}
+    )
     graph_builder.add_edge("tools", "model")
     graph_builder.add_conditional_edges("turn_end", route_turn_end, {"model": "model", END: END})
 

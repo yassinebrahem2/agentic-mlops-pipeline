@@ -13,6 +13,7 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.data_summary import DataSummaryHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
@@ -29,8 +30,14 @@ from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import ListAgentsTool, default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import Settings
+from mlops_agents.connections.contract import Connections
+from mlops_agents.connections.kinds.local_folder import LocalFolderKind
+from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.data.cache import ProfileCache
+from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import StatusBoard
@@ -40,8 +47,13 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.proposals.contract import Handoffs
+from mlops_agents.proposals.handoffs import SqliteHandoffs
+from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
@@ -67,6 +79,8 @@ class Services:
     agent_settings: AgentSettingsService
     sessions: AgentSessions
     messaging_settings: MessagingSettings
+    connections: Connections
+    data_summaries: DataSummaries
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -77,6 +91,9 @@ class Services:
     failover: KeyFailover
     embedders: EmbeddersService
     tracking: TrackingService
+    proposals: ProposalsService
+    proposal_kinds: ProposalKinds
+    handoffs: Handoffs
 
 
 async def _app_secrets(
@@ -134,8 +151,15 @@ async def build_services(
     # The one instance: every consumer of project secrets gets it through its constructor.
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
-    providers = ProvidersService(databases, keystore, http)
-    failover = KeyFailover()
+
+    # The one key failover: every model and embedder call shares its key states. It is built
+    # before the providers service that holds it, so its success hook looks the service up
+    # when it runs.
+    async def clear_attention(provider: Provider) -> None:
+        await providers.clear_attention(provider.id)
+
+    failover = KeyFailover(on_success=clear_attention)
+    providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
 
     async def secret_source() -> list[str]:
@@ -149,9 +173,12 @@ async def build_services(
     approval_store = ApprovalStore(databases)
     gate = ApprovalGate(databases, store=approval_store, audit_log=audit, event_log=events)
 
+    kind_registry = KindRegistry([LocalFolderKind(paths.root)])
+    connections = ConnectionsService(databases, events, kind_registry)
+
     sandbox = SandboxService(
         docker_runner,
-        projects=DatabaseSandboxProjects(databases, workspace),
+        projects=DatabaseSandboxProjects(databases, workspace, connections),
         events=events,
     )
     await sandbox.cleanup_orphans()
@@ -183,6 +210,9 @@ async def build_services(
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    # One instance for the hook and the table-detail route: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
+    hooks.register(DataSummaryHook(connections, data_summaries))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -205,6 +235,7 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
+        failover=failover,
         gate=gate,
         inbound=inbound,
         turn_end=PrReminder(tasks),
@@ -228,6 +259,10 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+    sessions.bind_approvals(approvals)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+    handoffs = SqliteHandoffs(databases)
 
     tracking = TrackingService(
         databases=databases,
@@ -260,6 +295,8 @@ async def build_services(
         agent_settings=agent_settings,
         sessions=sessions,
         messaging_settings=messaging_settings,
+        connections=connections,
+        data_summaries=data_summaries,
         sandbox=sandbox,
         events=events,
         audit=audit,
@@ -270,4 +307,7 @@ async def build_services(
         failover=failover,
         embedders=embedders,
         tracking=tracking,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
+        handoffs=handoffs,
     )
