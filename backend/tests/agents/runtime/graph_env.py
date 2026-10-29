@@ -16,6 +16,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.graph import TurnHooks
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
@@ -55,6 +56,8 @@ def stage1_hooks(workspaces: TaskWorkspaces, databases: Databases) -> TurnHooks:
         turn_end=NoTurnEndCheck(),
         workspaces=workspaces,
         approval_store=store,
+        approvals=LateApprovals(),  # unbound: these graphs never stall
+        events=None,
     )
 
 

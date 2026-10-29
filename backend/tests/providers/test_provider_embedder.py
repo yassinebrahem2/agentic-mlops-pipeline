@@ -76,7 +76,7 @@ async def test_empty_input_makes_no_request(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
     )
@@ -103,7 +103,7 @@ async def test_embed_returns_vectors_equal_to_fake_embedding(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
     )
@@ -130,7 +130,7 @@ async def test_two_keys_failover_on_rate_limit(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -164,7 +164,7 @@ async def test_self_hosted_provider_called_with_attempt_none(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
     )
@@ -191,7 +191,7 @@ async def test_failover_all_keys_exhausted_mapping(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -217,7 +217,7 @@ async def test_failover_rate_limited_mapping(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -243,7 +243,7 @@ async def test_permanent_error_scrubs_secrets(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -276,7 +276,7 @@ async def test_wrong_dimensions_raises_verify_again(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -308,7 +308,7 @@ async def test_returned_count_mismatch_raises_unavailable(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
     )
@@ -335,7 +335,7 @@ async def test_unknown_model_permanent_error_scrubs_secrets(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
@@ -368,7 +368,7 @@ async def test_unreachable_provider_raises_unavailable(
     model_http: httpx2.AsyncClient,
 ) -> None:
     running = start_fake_server(FakeState())
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     secret = "secret_key_unreachable"
     provider = await svc.create_provider(
         ProviderCreate(name="fake-dead", kind="hosted", base_url=running.base_url)
@@ -400,7 +400,7 @@ async def test_cancellation_propagates(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
     )

@@ -31,6 +31,7 @@ class MockModelCaller(ModelCaller):
         messages: list[Any],
         tools: list[dict[str, Any]],
         on_text: Any,
+        on_restart: Any = None,
     ) -> ModelReply:
         self.call_count += 1
         reply = self._replies.pop(0)

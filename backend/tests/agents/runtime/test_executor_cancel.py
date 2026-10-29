@@ -30,6 +30,7 @@ from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -41,6 +42,7 @@ from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 class SlowDummyArgs(BaseModel):
@@ -126,11 +128,12 @@ async def test_executor_cancellation_during_slow_tool(
     tools.register(slow_tool)
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
 
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
-    caller = ModelCaller(providers_svc, model_http)
+    caller = ModelCaller(providers_svc, model_http, failover)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
@@ -223,11 +226,12 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
 ) -> None:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = _workspace_svc(paths, databases, keystore)
     store = SessionStore(databases)
-    caller = ModelCaller(providers_svc, model_http)
+    caller = ModelCaller(providers_svc, model_http, failover)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,

@@ -17,6 +17,7 @@ from mlops_agents.agents.runtime.contract import Part
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink, create_turn_graph
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.stall import StallState, pending_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import handle_turn_waiting, open_checkpointer
 
@@ -54,6 +55,7 @@ async def run_turn_graph(
     """
     is_interrupted = False
     decisions_to_record: dict[str, GateDecision] | None = None
+    stall: StallState | None = None
 
     # The checkpointer connection is closed before the end state is written, so once a turn
     # reports how it ended, nothing of it still holds the project file.
@@ -91,6 +93,7 @@ async def run_turn_graph(
             try:
                 chk_state = await graph.aget_state(config)
                 decisions_to_record = chk_state.values.get("decisions")
+                stall = pending_stall(chk_state.values.get("stall"))
             except Exception:
                 logger.debug(
                     "Could not read graph state decisions for turn %s", turn_id, exc_info=True
@@ -107,6 +110,7 @@ async def run_turn_graph(
             message_id=message_id,
             current_parts=parts,
             decisions=decisions_to_record,
+            stall=stall,
             lock=lock,
             observers=observers,
         )

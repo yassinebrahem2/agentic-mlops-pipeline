@@ -84,6 +84,7 @@ async def _env(
     for agent in ("writer", "plainwriter"):
         await env.settings.set_default_model(agent, f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases=databases, sessions=env.manager, store=store)
+    env.manager.bind_approvals(approvals)
     return env, approvals
 
 

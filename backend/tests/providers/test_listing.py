@@ -6,11 +6,13 @@ from collections.abc import AsyncIterator, Callable
 import httpx2
 import pytest
 
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.listing import ListedModel, match_model_id
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
+from tests.providers.fake_clock import FakeClock
 
 GEMINI_KEY = "AIzaSyTestGeminiKey12345"
 VLLM_KEY = "vllm_test_key_67890"
@@ -28,7 +30,7 @@ async def make_service(
     def make(handler: Handler) -> ProvidersService:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
         clients.append(client)
-        return ProvidersService(databases, keystore, client)
+        return ProvidersService(databases, keystore, client, KeyFailover(FakeClock()))
 
     yield make
     for client in clients:

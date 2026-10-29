@@ -43,12 +43,20 @@ def _chain(exc: BaseException) -> Iterator[BaseException]:
         current = current.__cause__ or current.__context__
 
 
+# Beyond a day a Retry-After is not a usable wait (and would overflow a timedelta).
+_MAX_RETRY_AFTER_S = 86400.0
+
+
 def _retry_after(response: httpx2.Response) -> float | None:
+    """The Retry-After seconds, or None when absent, malformed, non-positive or absurdly large."""
     value = response.headers.get("retry-after")
     try:
-        return float(value) if value is not None else None
+        seconds = float(value) if value is not None else None
     except ValueError:
         return None
+    if seconds is None or not 0 < seconds <= _MAX_RETRY_AFTER_S:
+        return None
+    return seconds
 
 
 _BAD_GENERATION_CODES = ("tool_use_failed", "json_validate_failed")
