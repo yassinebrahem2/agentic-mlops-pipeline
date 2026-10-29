@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from importlib.resources import files
 from pathlib import Path
@@ -89,6 +90,11 @@ class AgentCatalog:
             if unknown := sorted(set(d.context_hooks) - hook_names):
                 raise DefinitionError(
                     f"agent {d.name} uses unknown context hooks: {', '.join(unknown)}"
+                )
+            # A hook listed twice would render twice, concurrently.
+            if twice := sorted(n for n, c in Counter(d.context_hooks).items() if c > 1):
+                raise DefinitionError(
+                    f"agent {d.name} lists context hooks twice: {', '.join(twice)}"
                 )
 
     @classmethod

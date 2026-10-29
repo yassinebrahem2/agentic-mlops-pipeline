@@ -56,6 +56,10 @@ class DataPaths:
     def worktree_path(self, project_id: str, task_id: str) -> Path:
         return self.worktrees_dir(project_id) / task_id
 
+    def cache_dir(self, project_id: str) -> Path:
+        """Created by the profile cache on its first write, not by `ensure`."""
+        return self.project_dir(project_id) / "cache"
+
     def ensure(self) -> None:
         for folder in (self.root, self.backups, self.projects, self.bin, self.empty_hooks):
             folder.mkdir(parents=True, exist_ok=True)

@@ -17,8 +17,6 @@ from mlops_agents.agents.catalog import (
     DefinitionError,
     parse_definition,
 )
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -36,6 +34,7 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
@@ -338,10 +337,7 @@ async def test_live_agent_definitions(
             await agent_settings.set_default_model(agent, live_model)
 
         status_board = SqliteStatusBoard(catalog, events)
-        status_board_hook = StatusBoardHook()
-        status_board_hook.bind(status_board)
-        hooks = HookRegistry()
-        hooks.register(status_board_hook)
+        hooks = status_board_hooks(status_board)
         approval_store = ApprovalStore(databases)
 
         manager = SessionManager(
