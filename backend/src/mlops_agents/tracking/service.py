@@ -8,18 +8,18 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from mlops_agents.clock import utc_now
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
-from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
+from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
+from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import projects, tracking_sources
-from mlops_agents.tracking.constants import ERROR_MAX_CHARS
+from mlops_agents.storage.tables import projects
 from mlops_agents.tracking.contract import (
     Page,
     SourceType,
@@ -28,12 +28,15 @@ from mlops_agents.tracking.contract import (
     TrackingQuery,
     TrackingSourceView,
 )
+from mlops_agents.tracking.handoff_alias import resolve_candidate_aliases_fn
 from mlops_agents.tracking.sources import (
     insert_source_row,
     load_all_source_rows,
     load_source_row,
+    read_sync_interval,
     row_to_source_view,
     validate_source_input,
+    write_sync_interval,
 )
 from mlops_agents.tracking.store import (
     query_ci_runs,
@@ -45,6 +48,7 @@ from mlops_agents.tracking.store import (
     query_versions,
     save_sync_result,
 )
+from mlops_agents.tracking.sync_error import record_sync_error
 
 _log = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ class TrackingService(Tracking):
         events: EventLog,
         adapters: Mapping[SourceType, TrackingAdapter],
         github_token: Callable[[], Awaitable[str | None]],
+        handoffs: Handoffs,
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._databases = databases
@@ -75,7 +80,8 @@ class TrackingService(Tracking):
         self._adapters: dict[SourceType, TrackingAdapter] = dict(adapters)
         self._github_token = github_token
         self._clock = clock
-
+        self._handoffs = handoffs
+        self._handoff_error_logged: set[str] = set()
         self._source_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
         self._bg_tasks: set[asyncio.Task[None]] = set()
@@ -315,52 +321,16 @@ class TrackingService(Tracking):
         error_msg: str,
         credential: str | None,
     ) -> None:
-        secrets_to_scrub = [credential] if credential else []
-        try:
-            gh_token = await self._github_token()
-            if gh_token:
-                secrets_to_scrub.append(gh_token)
-        except Exception as exc:
-            _log.warning("Could not resolve github token for error scrubbing: %s", error_text(exc))
-        scrubbed = scrub_url_secrets(error_msg)
-        scrubbed = scrub_values(scrubbed, secrets_to_scrub)
-        if len(scrubbed) > ERROR_MAX_CHARS:
-            scrubbed = scrubbed[:ERROR_MAX_CHARS]
-
-        try:
-            engine = await self._databases.project(project_id)
-            async with engine.begin() as conn:
-                await conn.execute(
-                    update(tracking_sources)
-                    .where(tracking_sources.c.id == source_id)
-                    .values(last_error=scrubbed)
-                )
-        except Exception as exc:
-            _log.warning(
-                "Could not update last_error for source %s: %s", source_id, error_text(exc)
-            )
-
-        payload = {
-            "source_id": source_id,
-            "type": source_type,
-            "ok": False,
-            "versions": 0,
-            "runs": 0,
-            "metrics": 0,
-            "ci_runs": 0,
-            "evaluations": 0,
-            "error": scrubbed,
-        }
-        try:
-            await self._events.record(
-                project_id,
-                source="system",
-                type="tracking.synced",
-                subject_id=source_id,
-                payload=payload,
-            )
-        except Exception as exc:
-            _log.warning("Could not record tracking.synced error event: %s", error_text(exc))
+        await record_sync_error(
+            databases=self._databases,
+            events=self._events,
+            github_token=self._github_token,
+            project_id=project_id,
+            source_id=source_id,
+            source_type=source_type,
+            error_msg=error_msg,
+            credential=credential,
+        )
 
     async def query(self, project_id: str, q: TrackingQuery) -> Page[Any]:
         await self._check_project(project_id)
@@ -373,7 +343,10 @@ class TrackingService(Tracking):
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             if q.what == "models":
-                return await query_models(conn, q)
+                candidate_fn = await resolve_candidate_aliases_fn(
+                    self._handoffs, project_id, self._handoff_error_logged
+                )
+                return await query_models(conn, q, candidate_fn)
             if q.what == "versions":
                 return await query_versions(conn, q)
             if q.what == "runs":
@@ -388,6 +361,18 @@ class TrackingService(Tracking):
                 return await query_evaluations(conn, q)
 
         raise DomainError("tracking_bad_query", f"Unknown query target: {q.what!r}.", status=422)
+
+    async def sync_interval(self, project_id: str) -> int:
+        await self._check_project(project_id)
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            return await read_sync_interval(conn)
+
+    async def set_sync_interval(self, project_id: str, interval_s: int) -> int:
+        await self._check_project(project_id)
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            return await write_sync_interval(conn, interval_s)
 
     async def close(self) -> None:
         """Cancels background sync tasks."""
