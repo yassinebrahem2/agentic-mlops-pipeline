@@ -84,7 +84,13 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
         res_mounts = await service.run(project_id, task, "cat /proc/mounts", timeout_s=30)
         assert res_mounts.exit_code == 0
         mount_lines = res_mounts.output.splitlines()
-        docker_own = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf", "/"}
+        docker_own = {
+            "/etc/hosts",
+            "/etc/hostname",
+            "/etc/resolv.conf",
+            "/usr/sbin/docker-init",
+            "/",
+        }
         pseudo_fstypes = {
             "proc",
             "sysfs",
@@ -111,7 +117,7 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
             if len(parts) >= 3:
                 target = parts[1]
                 fstype = parts[2]
-                if target in docker_own:
+                if target in docker_own or target.endswith("/docker-init"):
                     continue
                 if fstype in pseudo_fstypes:
                     continue

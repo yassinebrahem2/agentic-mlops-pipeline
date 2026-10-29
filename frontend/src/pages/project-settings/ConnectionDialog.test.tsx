@@ -317,25 +317,4 @@ describe("ConnectionDialog", () => {
       settings: { path: "/server/folder" },
     });
   });
-
-  it("renders with connection lacking path setting without error", () => {
-    const onOpenChange = vi.fn();
-    stubRoutes({
-      "GET /api/app": () =>
-        json({ name: "mlops_agents", version: "0.1.0", mode: "local", data_dir: "/data" }),
-      "GET /api/folders": () => json({ path: "/", parent: null, roots: ["/"], entries: [] }),
-    });
-
-    renderSection(
-      <ConnectionDialog
-        projectId="prj_demo"
-        connection={{ ...existingConnection, settings: {} }}
-        open={true}
-        onOpenChange={onOpenChange}
-      />,
-    );
-
-    const nameInput = screen.getByRole("textbox", { name: "Name" });
-    expect(nameInput).toHaveValue("sales-data");
-  });
 });

@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from mlops_agents.connections.contract import (
     LOCAL_FOLDER_KIND,
     DuckDbSource,
-    Finding,
     Findings,
     LocalFolderSettings,
     Mount,
@@ -170,69 +169,34 @@ class LocalFolderKind:
     def read(self, settings: BaseModel) -> tuple[Findings, str | None]:
         resolved = self._resolve(settings)
         tables, unsupported = scan_tables_and_unsupported(resolved)
-        try:
-            findings = self.findings(settings, resolved=resolved, unsupported=unsupported)
-        except TypeError:
-            findings = self.findings(settings)
-        try:
-            data_ver = self.latest_data_version(settings, resolved=resolved, tables=tables)
-        except TypeError:
-            data_ver = self.latest_data_version(settings)
+        findings = walk_findings(resolved, unsupported)
+        data_ver = latest_data_version(resolved, tables)
         return findings, data_ver
 
-    def findings(
-        self,
-        settings: BaseModel,
-        resolved: Path | None = None,
-        unsupported: list[Finding] | None = None,
-    ) -> Findings:
-        target = resolved if resolved is not None else self._resolve(settings)
-        if unsupported is None:
-            _, unsupported = scan_tables_and_unsupported(target)
-        return walk_findings(target, unsupported)
+    def findings(self, settings: BaseModel) -> Findings:
+        resolved = self._resolve(settings)
+        _, unsupported = scan_tables_and_unsupported(resolved)
+        return walk_findings(resolved, unsupported)
 
-    def tables(
-        self,
-        settings: BaseModel,
-        resolved: Path | None = None,
-    ) -> list[TableRef]:
-        target = resolved if resolved is not None else self._resolve(settings)
-        tables, _ = scan_tables_and_unsupported(target)
+    def tables(self, settings: BaseModel) -> list[TableRef]:
+        resolved = self._resolve(settings)
+        tables, _ = scan_tables_and_unsupported(resolved)
         return tables
 
-    def data_version(
-        self,
-        settings: BaseModel,
-        table: TableRef,
-        resolved: Path | None = None,
-    ) -> str:
-        target = resolved if resolved is not None else self._resolve(settings)
-        return compute_data_version(target, table)
+    def data_version(self, settings: BaseModel, table: TableRef) -> str:
+        resolved = self._resolve(settings)
+        return compute_data_version(resolved, table)
 
-    def latest_data_version(
-        self,
-        settings: BaseModel,
-        resolved: Path | None = None,
-        tables: list[TableRef] | None = None,
-    ) -> str | None:
-        target = resolved if resolved is not None else self._resolve(settings)
-        if tables is None:
-            tables, _ = scan_tables_and_unsupported(target)
-        return latest_data_version(target, tables)
-
-    def duckdb_source(
-        self,
-        settings: BaseModel,
-        table: TableRef,
-        resolved: Path | None = None,
-    ) -> DuckDbSource:
-        target = resolved if resolved is not None else self._resolve(settings)
+    def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource:
+        resolved = self._resolve(settings)
 
         def _escape_sql_literal(s: str) -> str:
             return "'" + s.replace("'", "''") + "'"
 
         paths_str = (
-            "[" + ", ".join(_escape_sql_literal((target / f).as_posix()) for f in table.files) + "]"
+            "["
+            + ", ".join(_escape_sql_literal((resolved / f).as_posix()) for f in table.files)
+            + "]"
         )
         multi = len(table.files) > 1
 
@@ -265,13 +229,8 @@ class LocalFolderKind:
                 status=400,
             )
 
-        return DuckDbSource(sql_from=sql_from, allowed_directories=[target])
+        return DuckDbSource(sql_from=sql_from, allowed_directories=[resolved])
 
-    def sandbox_mount(
-        self,
-        name: str,
-        settings: BaseModel,
-        resolved: Path | None = None,
-    ) -> Mount | None:
-        target = resolved if resolved is not None else self._resolve(settings)
-        return Mount(host_path=target, container_path=f"{DATA_MOUNT_ROOT}/{name}")
+    def sandbox_mount(self, name: str, settings: BaseModel) -> Mount | None:
+        resolved = self._resolve(settings)
+        return Mount(host_path=resolved, container_path=f"{DATA_MOUNT_ROOT}/{name}")

@@ -50,7 +50,7 @@ def test_connection_protocols() -> None:
         "findings",
         "tables",
         "data_version",
-        "latest_data_version",
+        "read",
         "duckdb_source",
         "sandbox_mount",
     }

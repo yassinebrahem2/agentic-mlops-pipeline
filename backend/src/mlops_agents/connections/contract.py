@@ -93,9 +93,9 @@ class ConnectionKind(Protocol):
 
     def data_version(self, settings: BaseModel, table: TableRef) -> str: ...
 
-    def latest_data_version(self, settings: BaseModel) -> str | None:
-        """ConnectionView.data_version, from the kind's own scan; None when the kind cannot
-        tell cheaply."""
+    def read(self, settings: BaseModel) -> tuple[Findings, str | None]:
+        """One folder check and one scan: the findings and ConnectionView.data_version; None
+        when the kind cannot tell cheaply."""
         ...
 
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource: ...

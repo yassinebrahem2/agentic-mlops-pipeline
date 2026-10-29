@@ -176,7 +176,7 @@ async def test_mounts_scrub_an_os_error_of_the_kind(
     assert "https://***@host/x?token=***" in err.value.message
 
 
-async def test_mounts_hand_the_kind_only_validated_settings(
+async def test_mounts_hand_the_kind_only_parsed_settings(
     service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = service_env[0]

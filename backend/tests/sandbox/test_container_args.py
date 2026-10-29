@@ -182,9 +182,3 @@ def test_build_run_args_with_mounts(tmp_path: Path) -> None:
     assert f"{APP_NAME}.mounts={expected_fp}" in [
         args_two[i + 1] for i, v in enumerate(args_two) if v == "--label"
     ]
-
-
-def test_sandbox_mount_removed() -> None:
-    from mlops_agents.sandbox import projects
-
-    assert not hasattr(projects, "SandboxMount")

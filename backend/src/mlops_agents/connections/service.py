@@ -98,13 +98,7 @@ class ConnectionsService:
         return kind_obj, self._parse(kind_obj, self._stored(row["settings_json"]))
 
     async def _read(self, kind: ConnectionKind, parsed: BaseModel) -> tuple[Findings, str | None]:
-        read_fn = getattr(kind, "read", None)
-        if callable(read_fn):
-            res = await asyncio.to_thread(read_fn, parsed)
-            return cast(tuple[Findings, str | None], res)
-        findings = await asyncio.to_thread(kind.findings, parsed)
-        data_ver = await asyncio.to_thread(kind.latest_data_version, parsed)
-        return findings, data_ver
+        return await asyncio.to_thread(kind.read, parsed)
 
     async def inspect(self, project_id: str, kind: str, settings: dict[str, Any]) -> Findings:
         del project_id
