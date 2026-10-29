@@ -17,7 +17,9 @@ from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
+from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
+from mlops_agents.agents.tools.search_notes import SearchNotes
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.tracking_history import TrackingHistory
 from mlops_agents.agents.tools.write import WriteTool
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
+    from mlops_agents.knowledge.contract import Knowledge
     from mlops_agents.proposals.kinds import ProposalKinds
     from mlops_agents.proposals.service import ProposalsService
     from mlops_agents.sandbox.contract import Sandbox
@@ -51,8 +54,10 @@ __all__ = [
     "ProposeTool",
     "ReadTool",
     "ResumeTaskTool",
+    "SaveNote",
     "ScheduleWakeupTool",
     "SearchIssuesTool",
+    "SearchNotes",
     "StartTaskTool",
     "ToolRegistry",
     "TrackingHistory",
@@ -79,6 +84,7 @@ def default_registry(
     events: EventLog | None = None,
     http: httpx2.AsyncClient | None = None,
     databases: Databases | None = None,
+    knowledge: Knowledge | None = None,
     proposals: ProposalsService | None = None,
     proposal_kinds: ProposalKinds | None = None,
     tracking: Tracking | None = None,
@@ -143,4 +149,7 @@ def default_registry(
     if wakeups is not None:
         effective_catalog = catalog if catalog is not None else getattr(wakeups, "catalog", None)
         registry.register(ScheduleWakeupTool(wakeups, catalog=effective_catalog))
+    if knowledge is not None:
+        registry.register(SaveNote(knowledge))
+        registry.register(SearchNotes(knowledge))
     return registry
