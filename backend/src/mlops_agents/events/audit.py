@@ -7,7 +7,7 @@ import json
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, cast
 
-from sqlalchemy import insert
+from sqlalchemy import and_, insert, or_, select
 
 from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.tools.base import RiskClass
@@ -120,3 +120,42 @@ class SqliteAuditLog(AuditLog):
             target=target,
             detail=scrubbed_detail,
         )
+
+    async def page(
+        self,
+        project_id: str,
+        *,
+        actor: str | None = None,
+        before: tuple[str, str] | None = None,
+        limit: int = 50,
+    ) -> list[AuditRecord]:
+        """Newest first, keyset on (ts, id)."""
+        engine = await self._databases.project(project_id)
+        stmt = select(audit)
+        if actor is not None:
+            stmt = stmt.where(audit.c.actor == actor)
+        if before is not None:
+            before_ts, before_id = before
+            stmt = stmt.where(
+                or_(
+                    audit.c.ts < before_ts,
+                    and_(audit.c.ts == before_ts, audit.c.id < before_id),
+                )
+            )
+        stmt = stmt.order_by(audit.c.ts.desc(), audit.c.id.desc()).limit(limit)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return [
+            AuditRecord(
+                id=str(r.id),
+                ts=str(r.ts),
+                actor=str(r.actor),
+                action=str(r.action),
+                risk_class=r.risk_class,
+                permission_level=r.permission_level,
+                decision=r.decision,
+                target=str(r.target),
+                detail=json.loads(str(r.detail)),
+            )
+            for r in rows
+        ]

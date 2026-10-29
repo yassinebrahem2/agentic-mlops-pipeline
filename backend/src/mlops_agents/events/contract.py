@@ -19,6 +19,16 @@ EventType = Literal[
     "connection.created", "connection.updated", "connection.deleted", "tracking.synced",
     "proposal.created", "proposal.decided", "handoff.approved", "turn.stalled", "turn.resumed",
     "note.saved", "note.deleted",
+    "results.collected", "signal.raised", "incident.opened", "incident.updated",
+    "incident.acknowledged", "incident.snoozed", "incident.severity_changed",
+    "incident.reopened", "incident.merged", "incident.split", "incident.suspect_linked",
+    "incident.hold_recorded", "incident.wake_skipped", "incident.closed",
+    "check.registered", "parser.disabled", "notification.sent", "notification.failed",
+    "escalation.sent", "report.sent", "hook.ran", "hook.failed", "hook.suspended",
+    "rule.satisfied", "verdict.recorded", "miss.reported",
+    "fix.requested", "fix.chosen", "fix.declined", "fix.escalated",
+    "training.requested", "training.linked", "policy.suspended",
+    "report.saved", "promotion.applied", "promotion.refused", "pr.merged_by_agent",
 ]  # fmt: skip
 
 AuditDecision = Literal[
@@ -88,6 +98,19 @@ class EventLog(Protocol):
         """Newest first."""
         ...
 
+    async def page(
+        self,
+        project_id: str,
+        *,
+        subject_id: str | None = None,
+        types: Sequence[EventType] | None = None,
+        source: str | None = None,
+        before: int | None = None,
+        limit: int = 50,
+    ) -> list[EventRecord]:
+        """Newest first, keyset on seq, before exclusive."""
+        return []
+
 
 class AuditLog(Protocol):
     async def record(
@@ -102,6 +125,17 @@ class AuditLog(Protocol):
         target: str,
         detail: dict[str, Any],
     ) -> AuditRecord: ...
+
+    async def page(
+        self,
+        project_id: str,
+        *,
+        actor: str | None = None,
+        before: tuple[str, str] | None = None,
+        limit: int = 50,
+    ) -> list[AuditRecord]:
+        """Newest first, keyset on (ts, id)."""
+        ...
 
 
 class StatusBoard(Protocol):

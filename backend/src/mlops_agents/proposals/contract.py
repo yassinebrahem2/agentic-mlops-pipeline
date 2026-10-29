@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -107,6 +107,13 @@ class Proposals(Protocol):
     ) -> ProposalView | None: ...
 
 
+@runtime_checkable
+class ProposalCheck(Protocol):
+    """Refusals returned at propose time before the gate."""
+
+    async def check(self, project_id: str, payload: Any) -> list[str]: ...
+
+
 class HandoffView(BaseModel):
     proposal_id: str
     version: int
@@ -114,7 +121,13 @@ class HandoffView(BaseModel):
     payload: HandoffPayload
 
 
+class HandoffObserver(Protocol):
+    async def stored(self, project_id: str, handoff: HandoffView) -> None: ...
+
+
 class Handoffs(Protocol):
+    def add_observer(self, observer: HandoffObserver) -> None: ...
+
     async def current(self, project_id: str) -> HandoffView | None: ...
 
     async def store(self, project_id: str, proposal_id: str, payload: HandoffPayload) -> int:

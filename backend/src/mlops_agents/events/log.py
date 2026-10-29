@@ -101,6 +101,32 @@ class SqliteEventLog(EventLog):
 
         return [row_to_event(r) for r in rows]
 
+    async def page(
+        self,
+        project_id: str,
+        *,
+        subject_id: str | None = None,
+        types: Sequence[EventType] | None = None,
+        source: str | None = None,
+        before: int | None = None,
+        limit: int = 50,
+    ) -> list[EventRecord]:
+        """Newest first, keyset on seq, before exclusive."""
+        engine = await self._databases.project(project_id)
+        stmt = select(events)
+        if subject_id is not None:
+            stmt = stmt.where(events.c.subject_id == subject_id)
+        if types is not None:
+            stmt = stmt.where(events.c.type.in_(types))
+        if source is not None:
+            stmt = stmt.where(events.c.source == source)
+        if before is not None:
+            stmt = stmt.where(events.c.seq < before)
+        stmt = stmt.order_by(events.c.seq.desc()).limit(limit)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return [row_to_event(r) for r in rows]
+
     async def close_project(self, project_id: str) -> None:
         lock = self._get_record_lock(project_id)
         async with lock:

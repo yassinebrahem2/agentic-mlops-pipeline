@@ -130,3 +130,57 @@ async def test_event_log_close_project_cleans_locks(databases: Databases) -> Non
     await event_log.close_project(project_id)
     assert project_id not in rec_locks
     assert project_id not in hub_locks
+
+
+@pytest.mark.asyncio
+async def test_event_log_page_reads(databases: Databases) -> None:
+    project_id = "prj_page1"
+    event_log = SqliteEventLog(databases)
+
+    # Record events with different subjects, types, and sources
+    for i in range(1, 11):
+        subj = "inc_1" if i % 2 == 0 else "inc_2"
+        src = "agent_a" if i <= 5 else "agent_b"
+        ev_type = "incident.opened" if i % 3 == 0 else "turn.started"
+        await event_log.record(
+            project_id,
+            source=src,
+            type=ev_type,
+            subject_id=subj,
+            payload={"i": i},
+        )
+
+    # 1. Filter by subject
+    p_subj = await event_log.page(project_id, subject_id="inc_1")
+    assert all(e.subject_id == "inc_1" for e in p_subj)
+    assert len(p_subj) == 5
+
+    # 2. Filter by type
+    p_type = await event_log.page(project_id, types=["incident.opened"])
+    assert all(e.type == "incident.opened" for e in p_type)
+    assert len(p_type) == 3
+
+    # 3. Filter by source
+    p_src = await event_log.page(project_id, source="agent_a")
+    assert all(e.source == "agent_a" for e in p_src)
+    assert len(p_src) == 5
+
+    # 4. Keyset paging: newest first, before exclusive
+    page1 = await event_log.page(project_id, limit=4)
+    assert [e.seq for e in page1] == [10, 9, 8, 7]
+
+    # An event arrives between pages
+    await event_log.record(
+        project_id, source="agent_b", type="turn.started", subject_id="inc_1", payload={"i": 11}
+    )
+
+    # Request page 2 with before=7 (the seq of the last item on page1)
+    page2 = await event_log.page(project_id, before=page1[-1].seq, limit=4)
+    assert [e.seq for e in page2] == [6, 5, 4, 3]
+
+    page3 = await event_log.page(project_id, before=page2[-1].seq, limit=4)
+    assert [e.seq for e in page3] == [2, 1]
+
+    # No duplicates across pages
+    all_seqs = [e.seq for e in page1] + [e.seq for e in page2] + [e.seq for e in page3]
+    assert all_seqs == list(range(10, 0, -1))

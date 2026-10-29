@@ -134,3 +134,52 @@ async def test_fake_github_permission_simulation(fake_server: RunningFakeGitHub)
             json={"title": "PR", "head": "feat", "base": "main"},
         )
         assert resp.status_code == 403
+
+
+async def test_fake_github_pull_files_and_merged_at(fake_server: RunningFakeGitHub) -> None:
+    repo = "test-org/test-repo"
+    async with httpx2.AsyncClient(base_url=fake_server.base_url) as client:
+        # 1. Create PR
+        create_resp = await client.post(
+            f"/repos/{repo}/pulls",
+            json={"title": "Files PR", "head": "f", "base": "main"},
+        )
+        assert create_resp.status_code == 201
+        pr = create_resp.json()
+        pr_number = pr["number"]
+        assert pr["merged_at"] is None
+        assert pr["changed_files"] == 0
+
+        # Set files on fake github (including a rename)
+        fake_server.state.pr_files[(repo, pr_number)] = [
+            {"filename": "renamed.py", "previous_filename": "old.py"},
+            {"filename": "file2.py", "previous_filename": None},
+            {"filename": "file3.py", "previous_filename": None},
+        ]
+
+        # Get PR now reflects changed_files
+        get_resp = await client.get(f"/repos/{repo}/pulls/{pr_number}")
+        assert get_resp.json()["changed_files"] == 3
+
+        # Paged files request: page 1 (per_page=2)
+        f_resp1 = await client.get(f"/repos/{repo}/pulls/{pr_number}/files?per_page=2&page=1")
+        assert f_resp1.status_code == 200
+        page1 = f_resp1.json()
+        assert len(page1) == 2
+        assert page1[0]["filename"] == "renamed.py"
+        assert page1[0]["previous_filename"] == "old.py"
+        assert page1[1]["filename"] == "file2.py"
+
+        # page 2
+        f_resp2 = await client.get(f"/repos/{repo}/pulls/{pr_number}/files?per_page=2&page=2")
+        assert f_resp2.status_code == 200
+        page2 = f_resp2.json()
+        assert len(page2) == 1
+        assert page2[0]["filename"] == "file3.py"
+
+        # Merge via route
+        merge_resp = await client.put(f"/repos/{repo}/pulls/{pr_number}/merge")
+        assert merge_resp.status_code == 200
+        after_merge = (await client.get(f"/repos/{repo}/pulls/{pr_number}")).json()
+        assert after_merge["merged"] is True
+        assert after_merge["merged_at"] is not None
