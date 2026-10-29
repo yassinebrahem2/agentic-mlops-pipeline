@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import RowMapping, insert, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from mlops_agents.api.errors import validation_error_message
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
 from mlops_agents.errors import DomainError
 from mlops_agents.storage.tables import tracking_sources
@@ -57,7 +58,9 @@ def validate_source_input(
         else:
             validated_settings = GithubActionsSettings.model_validate(settings).model_dump()
     except ValidationError as err:
-        raise DomainError("tracking_bad_settings", str(err), status=422) from err
+        raise DomainError(
+            "tracking_bad_settings", validation_error_message(err), status=422
+        ) from err
 
     return source_type, validated_settings, auth_mode
 

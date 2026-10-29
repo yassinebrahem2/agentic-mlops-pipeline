@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
-from mlops_agents.errors import DomainError
 from mlops_agents.tracking.constants import QUERY_LIMIT_DEFAULT, QUERY_LIMIT_MAX
 from mlops_agents.tracking.contract import (
     CiRunRow,
@@ -34,22 +33,11 @@ class CreateSourceBody(BaseModel):
 
 
 class SetCredentialBody(BaseModel):
-    credential: str
+    credential: str = Field(min_length=1)
 
 
 class SyncBody(BaseModel):
     source_id: str | None = None
-
-
-def _check_paging(limit: int, offset: int) -> None:
-    if limit > QUERY_LIMIT_MAX or limit < 1:
-        raise DomainError(
-            "tracking_bad_query",
-            f"Query limit must be between 1 and {QUERY_LIMIT_MAX}.",
-            status=422,
-        )
-    if offset < 0:
-        raise DomainError("tracking_bad_query", "Query offset must be non-negative.", status=422)
 
 
 @router.get("/projects/{project_id}/tracking/sources", response_model=list[TrackingSourceView])
@@ -110,12 +98,12 @@ async def sync_sources(
 async def get_models(
     project: ProjectDep,
     services: ServicesDep,
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[ModelSummary]:
-    _check_paging(limit, offset)
     q = TrackingQuery(what="models", limit=limit, offset=offset)
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[ModelSummary], result)
 
 
 @router.get("/projects/{project_id}/tracking/versions", response_model=Page[ModelVersionRow])
@@ -124,12 +112,12 @@ async def get_versions(
     services: ServicesDep,
     model: str | None = Query(default=None),
     source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[ModelVersionRow]:
-    _check_paging(limit, offset)
     q = TrackingQuery(what="versions", model=model, source_id=source_id, limit=limit, offset=offset)
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[ModelVersionRow], result)
 
 
 @router.get("/projects/{project_id}/tracking/runs", response_model=Page[RunRow])
@@ -137,26 +125,24 @@ async def get_runs(
     project: ProjectDep,
     services: ServicesDep,
     run_key: str | None = Query(default=None),
-    source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[RunRow]:
-    _check_paging(limit, offset)
-    q = TrackingQuery(what="runs", run_key=run_key, source_id=source_id, limit=limit, offset=offset)
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    q = TrackingQuery(what="runs", run_key=run_key, limit=limit, offset=offset)
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[RunRow], result)
 
 
 @router.get("/projects/{project_id}/tracking/ci-runs", response_model=Page[CiRunRow])
 async def get_ci_runs(
     project: ProjectDep,
     services: ServicesDep,
-    source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[CiRunRow]:
-    _check_paging(limit, offset)
-    q = TrackingQuery(what="ci_runs", source_id=source_id, limit=limit, offset=offset)
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    q = TrackingQuery(what="ci_runs", limit=limit, offset=offset)
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[CiRunRow], result)
 
 
 @router.get("/projects/{project_id}/tracking/deployments", response_model=Page[DeploymentRow])
@@ -165,14 +151,14 @@ async def get_deployments(
     services: ServicesDep,
     model: str | None = Query(default=None),
     source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[DeploymentRow]:
-    _check_paging(limit, offset)
     q = TrackingQuery(
         what="deployments", model=model, source_id=source_id, limit=limit, offset=offset
     )
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[DeploymentRow], result)
 
 
 @router.get("/projects/{project_id}/tracking/metrics", response_model=Page[MetricPoint])
@@ -182,23 +168,19 @@ async def get_metrics(
     run_key: str | None = Query(default=None),
     metric: str | None = Query(default=None),
     latest: bool = Query(default=False),
-    source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[MetricPoint]:
-    _check_paging(limit, offset)
-    if run_key is None:
-        raise DomainError("tracking_bad_query", "Querying metrics requires run_key.", status=422)
     q = TrackingQuery(
         what="metrics",
         run_key=run_key,
         metric=metric,
         latest=latest,
-        source_id=source_id,
         limit=limit,
         offset=offset,
     )
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[MetricPoint], result)
 
 
 @router.get("/projects/{project_id}/tracking/evaluations", response_model=Page[EvaluationRecord])
@@ -207,17 +189,15 @@ async def get_evaluations(
     services: ServicesDep,
     model: str | None = Query(default=None),
     version: str | None = Query(default=None),
-    source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT),
-    offset: int = Query(default=0),
+    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
+    offset: int = Query(default=0, ge=0),
 ) -> Page[EvaluationRecord]:
-    _check_paging(limit, offset)
     q = TrackingQuery(
         what="evaluations",
         model=model,
         version=version,
-        source_id=source_id,
         limit=limit,
         offset=offset,
     )
-    return await services.tracking.query(project.id, q)  # type: ignore[return-value]
+    result = await services.tracking.query(project.id, q)
+    return cast(Page[EvaluationRecord], result)
