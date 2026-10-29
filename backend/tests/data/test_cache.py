@@ -217,15 +217,12 @@ async def test_a_changed_data_version_removes_that_tables_old_entry_only(
     assert compute.calls == 0
 
 
-async def entry_size(paths: DataPaths) -> int:
-    probe = ProfileCache(DataPaths(paths.root.parent / "probe"))
-    await probe.get_or_compute(PROJECT, "con_x", "t", "v", "s", Counting())
-    (entry,) = DataPaths(paths.root.parent / "probe").cache_dir(PROJECT).glob("*.json")
-    return entry.stat().st_size
-
-
-async def test_eviction_removes_the_least_recently_used_first(paths: DataPaths) -> None:
-    size = await entry_size(paths)
+async def two_entries_under_a_cap_of_two(paths: DataPaths) -> tuple[ProfileCache, Path, Path, int]:
+    """Entries a (older) and b in a cache whose cap holds two entries and not three."""
+    probe = DataPaths(paths.root.parent / "probe")
+    await ProfileCache(probe).get_or_compute(PROJECT, "con_x", "t", "v", "s", Counting())
+    (sized,) = entries(probe)
+    size = sized.stat().st_size
     cap = 2 * size + size // 2
     cache = ProfileCache(paths, cap_bytes=cap)
     await fetch(cache, Counting(), table="a")
@@ -234,6 +231,11 @@ async def test_eviction_removes_the_least_recently_used_first(paths: DataPaths) 
     (b,) = [p for p in entries(paths) if p != a]
     set_mtime(a, 200)
     set_mtime(b, 100)
+    return cache, a, b, cap
+
+
+async def test_eviction_removes_the_least_recently_used_first(paths: DataPaths) -> None:
+    cache, a, b, cap = await two_entries_under_a_cap_of_two(paths)
     await fetch(cache, Counting(), table="c")
     remaining = entries(paths)
     assert a not in remaining
@@ -243,15 +245,7 @@ async def test_eviction_removes_the_least_recently_used_first(paths: DataPaths) 
 
 
 async def test_a_hit_protects_an_entry_from_eviction(paths: DataPaths) -> None:
-    size = await entry_size(paths)
-    cap = 2 * size + size // 2
-    cache = ProfileCache(paths, cap_bytes=cap)
-    await fetch(cache, Counting(), table="a")
-    (a,) = entries(paths)
-    await fetch(cache, Counting(), table="b")
-    (b,) = [p for p in entries(paths) if p != a]
-    set_mtime(a, 200)
-    set_mtime(b, 100)
+    cache, a, b, cap = await two_entries_under_a_cap_of_two(paths)
     hit = Counting()
     await fetch(cache, hit, table="a")
     assert hit.calls == 0

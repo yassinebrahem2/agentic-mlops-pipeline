@@ -22,7 +22,10 @@ def test_ensure_creates_folders(tmp_path: Path) -> None:
     assert p.bin.is_dir()
 
 
-@pytest.mark.parametrize("invalid_id", ["../x", "a/b", "prj_..\\x", ""])
+UNSAFE_IDS = ["../x", "a/b", "prj_..\\x", ""]
+
+
+@pytest.mark.parametrize("invalid_id", UNSAFE_IDS)
 def test_project_id_validation_rejects_unsafe_paths(tmp_path: Path, invalid_id: str) -> None:
     p = DataPaths(tmp_path)
     with pytest.raises(ValueError):
@@ -36,7 +39,7 @@ def test_cache_dir_is_inside_the_project_and_not_made_by_ensure(tmp_path: Path) 
     assert not p.cache_dir("prj_1").exists()
 
 
-@pytest.mark.parametrize("invalid_id", ["../x", "a/b", "prj_..\\x", ""])
+@pytest.mark.parametrize("invalid_id", UNSAFE_IDS)
 def test_cache_dir_rejects_unsafe_project_ids(tmp_path: Path, invalid_id: str) -> None:
     p = DataPaths(tmp_path)
     with pytest.raises(ValueError):
