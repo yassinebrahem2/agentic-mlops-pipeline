@@ -11,6 +11,7 @@ from typing import Any, cast
 import httpx2
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 
+from mlops_agents.errors import DomainError
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderErrorKind, classify
 from mlops_agents.providers.failover import (
@@ -219,8 +220,15 @@ class ModelCaller:
 
     async def reset_keys(self, provider_id: str) -> None:
         """Try again: forget the provider's key states, so the next call tries every key again,
-        and its needs-attention mark."""
-        self._failover.clear(await self._providers.get_provider_by_id(provider_id))
+        and its needs-attention mark. A provider deleted since the stall has nothing to reset:
+        its deletion cleared both, and the turn goes on with the agent's model."""
+        try:
+            provider = await self._providers.get_provider_by_id(provider_id)
+        except DomainError as error:
+            if error.code == "provider_not_found":
+                return
+            raise
+        self._failover.clear(provider)
         await self._providers.clear_attention(provider_id)
 
     async def _call_restarting(

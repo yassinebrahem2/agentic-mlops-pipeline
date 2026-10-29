@@ -4,7 +4,6 @@ like any waiting turn, and its approval is never duplicated."""
 
 from __future__ import annotations
 
-import traceback
 from pathlib import Path
 
 import httpx2
@@ -26,11 +25,11 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import RunMode, load_settings
-from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.providers.failover import KeyFailover, KeyState
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
@@ -291,7 +290,7 @@ async def test_try_again_clears_the_needs_attention_mark_even_when_the_call_then
     await env.session.manager.close()
 
 
-async def test_try_again_after_switching_models_and_deleting_the_provider_fails_the_turn(
+async def test_try_again_after_switching_models_and_deleting_the_provider_continues_the_turn(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -299,10 +298,9 @@ async def test_try_again_after_switching_models_and_deleting_the_provider_fails_
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # Pins today's behaviour, which the lead decides on: the resume builds the agent on the
-    # second provider's model, then Try again resets the keys of the deleted, stalled provider.
+    # The user repairs the stall: another provider's model, the dead provider deleted. Deleting
+    # it cleared its key states, so Try again has nothing to reset and the turn goes on.
     env = await build_stall_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
@@ -317,19 +315,17 @@ async def test_try_again_after_switching_models_and_deleting_the_provider_fails_
     await providers.verify_model(f"{other.name}:fake-tools")
     await env.session.settings.set_default_model("orchestrator", f"{other.name}:fake-tools")
     await providers.delete_provider(env.session.provider)
+    fake_openai.state.request_headers.clear()
 
     await env.approvals.decide(env.project_id, stall.id, approve=True, note=None)
     events = await collect_until_turn_ended(stream, timeout=10)
 
     ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert (ended.data.status, ended.data.error) == ("failed", UNEXPECTED_FAILURE_TEXT)
-    [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
-    assert logged.exc_info is not None
-    error = logged.exc_info[1]
-    assert isinstance(error, DomainError)
-    assert error.code == "provider_not_found"
-    assert "reset_keys" in "".join(traceback.format_tb(error.__traceback__))
-    assert await env.event_payloads("turn.resumed") == []
+    assert (ended.data.turn_id, ended.data.status) == (turn_id, "done")
+    assert await env.event_payloads("turn.resumed") == [{"turn_id": turn_id}]
+    # The model node ran again on the new, keyless provider's model.
+    assert fake_openai.state.request_headers
+    assert {h["authorization"] for h in fake_openai.state.request_headers} == {f"Bearer {KEYLESS}"}
     await env.session.manager.close()
 
 
