@@ -4,22 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Sequence
 
 from mlops_agents.agents.hooks.contract import ContextHook, HookContext
 from mlops_agents.credentials.scrub import error_text
+from mlops_agents.monitoring.untrusted import untrusted
 
 logger = logging.getLogger(__name__)
 
-# Hook output is untrusted data: a data tag inside it, opening or closing, in any letter case or
-# spacing around its "/", must not end its block early or forge another, so its "<" becomes "<\".
-# Only the tag name "data" counts: "<database>" or "a < data" are ordinary text.
-_DATA_TAG = re.compile(r"<(?=(?:\s*/\s*)?data(?![\w-]))", re.IGNORECASE)
-
 
 def _block(name: str, text: str) -> str:
-    return f'<data source="hook:{name}">\n{_DATA_TAG.sub(r"<\\", text)}\n</data>'
+    return untrusted(text, f"hook:{name}")
 
 
 class HookRegistry:

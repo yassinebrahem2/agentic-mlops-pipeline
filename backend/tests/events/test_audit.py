@@ -143,3 +143,80 @@ async def test_audit_scrubs_tuples_and_handles_colliding_keys(databases: Databas
     assert len(long_k2) == 4000
     assert detail[long_k1] == "long_key_1"
     assert detail[long_k2] == "long_key_2"
+
+
+@pytest.mark.asyncio
+async def test_audit_page_keyset_with_equal_ts(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_auditpage"
+    audit_log = SqliteAuditLog(databases, secrets=[])
+
+    # Record 4 records with the exact same timestamp
+    same_ts = "2026-10-29T12:00:00.000Z"
+    monkeypatch.setattr("mlops_agents.events.audit.now_iso", lambda: same_ts)
+
+    r1 = await audit_log.record(
+        project_id,
+        actor="ActorA",
+        action="A1",
+        risk_class=RiskClass.READ,
+        permission_level="ask",
+        decision="allowed",
+        target="t1",
+        detail={"k": 1},
+    )
+    r2 = await audit_log.record(
+        project_id,
+        actor="ActorB",
+        action="A2",
+        risk_class=RiskClass.READ,
+        permission_level="ask",
+        decision="allowed",
+        target="t2",
+        detail={"k": 2},
+    )
+    r3 = await audit_log.record(
+        project_id,
+        actor="ActorA",
+        action="A3",
+        risk_class=RiskClass.READ,
+        permission_level="ask",
+        decision="allowed",
+        target="t3",
+        detail={"k": 3},
+    )
+    r4 = await audit_log.record(
+        project_id,
+        actor="ActorA",
+        action="A4",
+        risk_class=RiskClass.READ,
+        permission_level="ask",
+        decision="allowed",
+        target="t4",
+        detail={"k": 4},
+    )
+
+    # 1. Filter by actor
+    a_records = await audit_log.page(project_id, actor="ActorA")
+    assert len(a_records) == 3
+    assert all(r.actor == "ActorA" for r in a_records)
+
+    # 2. Keyset pagination on (ts, id) with equal ts
+    all_four = [r1, r2, r3, r4]
+    # In SQLite, sorted by ts.desc(), id.desc():
+    expected_order = sorted(all_four, key=lambda r: (r.ts, r.id), reverse=True)
+
+    page1 = await audit_log.page(project_id, limit=2)
+    assert len(page1) == 2
+    assert [r.id for r in page1] == [expected_order[0].id, expected_order[1].id]
+
+    cursor = (page1[-1].ts, page1[-1].id)
+    page2 = await audit_log.page(project_id, before=cursor, limit=2)
+    assert len(page2) == 2
+    assert [r.id for r in page2] == [expected_order[2].id, expected_order[3].id]
+
+    # No more records
+    cursor2 = (page2[-1].ts, page2[-1].id)
+    page3 = await audit_log.page(project_id, before=cursor2, limit=2)
+    assert page3 == []
