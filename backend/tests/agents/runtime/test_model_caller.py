@@ -243,6 +243,8 @@ async def test_error_after_streaming_started_retries_then_fails_with_partial_tex
     assert env.clock.sleeps == list(TRANSIENT_BACKOFFS)
     assert len(fake_openai.state.requests) == 1 + len(TRANSIENT_BACKOFFS)
     assert not failed.value.message.endswith(" ")
+    # Failing every attempt never marks a keyless provider (Decision #384)
+    assert (await env.providers.get_provider_by_id(env.model.provider_id)).status == "ok"
 
 
 async def test_on_text_error_is_raised_as_is_and_never_fails_over(

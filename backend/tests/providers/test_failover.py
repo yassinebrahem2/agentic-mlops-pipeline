@@ -260,7 +260,7 @@ async def test_a_keyless_provider_retries_a_transient_error_after_a_backoff(
 
 
 @pytest.mark.parametrize("make_error", [overloaded, unreachable])
-async def test_a_keyless_provider_failing_every_attempt_raises_the_last_error_unmarked(
+async def test_a_keyless_provider_failing_every_attempt_raises_the_last_error(
     clock: FakeClock, failover: KeyFailover, make_error: Callable[[], Exception]
 ) -> None:
     keyless = provider(0)
@@ -273,7 +273,6 @@ async def test_a_keyless_provider_failing_every_attempt_raises_the_last_error_un
     assert raised.value is last
     assert attempt.keys == [None] * (len(TRANSIENT_BACKOFFS) + 1)
     assert clock.sleeps == list(TRANSIENT_BACKOFFS)
-    assert failover.states(keyless, MODEL) == []
 
 
 async def test_two_concurrent_calls_limited_on_one_key_do_not_exhaust_it(
