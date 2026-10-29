@@ -28,21 +28,27 @@ def validate_source_input(
     auth: str,
 ) -> tuple[SourceType, dict[str, Any], Literal["none", "credential"]]:
     """Validates source type, settings model, and auth mode."""
-    if type_ not in ("mlflow", "github_actions"):
+    if type_ == "mlflow":
+        source_type: SourceType = "mlflow"
+    elif type_ == "github_actions":
+        source_type = "github_actions"
+    else:
         raise DomainError(
             "tracking_bad_source",
             f"Unknown tracking source type: {type_!r}. Must be 'mlflow' or 'github_actions'.",
             status=422,
         )
-    source_type: SourceType = type_  # type: ignore[assignment]
 
-    if auth not in ("none", "credential"):
+    if auth == "none":
+        auth_mode: Literal["none", "credential"] = "none"
+    elif auth == "credential":
+        auth_mode = "credential"
+    else:
         raise DomainError(
             "tracking_bad_source",
             f"Invalid auth mode: {auth!r}. Must be 'none' or 'credential'.",
             status=422,
         )
-    auth_mode: Literal["none", "credential"] = auth  # type: ignore[assignment]
 
     if source_type == "github_actions" and auth_mode != "none":
         raise DomainError(
@@ -70,9 +76,12 @@ async def row_to_source_view(
     secrets: ProjectSecrets,
 ) -> TrackingSourceView:
     source_id = str(row["id"])
-    auth = str(row["auth"])
+    auth_raw = str(row["auth"])
+    auth_mode: Literal["none", "credential"] = "credential" if auth_raw == "credential" else "none"
     credential_set = (
-        await secrets.is_set(tracking_ref(project_id, source_id)) if auth == "credential" else False
+        await secrets.is_set(tracking_ref(project_id, source_id))
+        if auth_mode == "credential"
+        else False
     )
     last_sync_raw = row["last_sync"]
     last_sync = datetime.fromisoformat(last_sync_raw) if last_sync_raw else None
@@ -81,7 +90,7 @@ async def row_to_source_view(
         id=source_id,
         type=row["type"],
         settings=json.loads(row["settings"]),
-        auth=auth,  # type: ignore[arg-type]
+        auth=auth_mode,
         credential_set=credential_set,
         last_sync=last_sync,
         last_error=row["last_error"],

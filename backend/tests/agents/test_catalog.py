@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
+from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
+from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.errors import DomainError
 
 TOOLS = frozenset({"Read", "Glob", "Grep"})
@@ -111,6 +113,21 @@ def test_context_hooks_are_validated_against_the_registered_names() -> None:
         AgentCatalog([uses_profile], TOOLS, hook_names=frozenset({"other"}))
 
 
+def test_a_context_hook_listed_twice_is_rejected() -> None:
+    twice = parse_definition(_with("context_hooks: [profile, status_board, profile]"), "a.md")
+    names = frozenset({"profile", STATUS_BOARD_HOOK})
+    with pytest.raises(DefinitionError, match="agent helper lists context hooks twice: profile"):
+        AgentCatalog([twice], TOOLS, hook_names=names)
+
+
+def test_load_rejects_a_context_hook_listed_twice(tmp_path: Path) -> None:
+    (tmp_path / "helper.md").write_text(
+        _with("context_hooks: [status_board, status_board]"), encoding="utf-8"
+    )
+    with pytest.raises(DefinitionError, match="lists context hooks twice: status_board"):
+        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=frozenset({STATUS_BOARD_HOOK}))
+
+
 def test_status_board_true_is_the_status_board_hook_and_needs_no_registered_name() -> None:
     definition = parse_definition(_with("status_board: true"), "a.md")
     assert definition.hook_names == (STATUS_BOARD_HOOK,)
@@ -122,6 +139,34 @@ def test_status_board_listed_and_declared_appears_once() -> None:
         _with("context_hooks: [profile, status_board]\nstatus_board: true"), "a.md"
     )
     assert definition.hook_names == ("profile", STATUS_BOARD_HOOK)
+
+
+class _CountingHook:
+    name = STATUS_BOARD_HOOK
+
+    def __init__(self) -> None:
+        self.renders = 0
+
+    async def render(self, ctx: HookContext) -> str:
+        self.renders += 1
+        return "board"
+
+
+async def test_status_board_listed_and_declared_loads_and_runs_once() -> None:
+    """Not a duplicate: the duplicate check counts only `context_hooks`."""
+    definition = parse_definition(
+        _with("context_hooks: [status_board]\nstatus_board: true"), "a.md"
+    )
+    catalog = AgentCatalog([definition], TOOLS, hook_names=frozenset({STATUS_BOARD_HOOK}))
+    hook = _CountingHook()
+    hooks = HookRegistry()
+    hooks.register(hook)
+
+    ctx = HookContext(project_id="prj_1", agent="helper", trigger_text="")
+    text = await hooks.run(catalog.get("helper").hook_names, ctx)
+
+    assert hook.renders == 1
+    assert text == '<data source="hook:status_board">\nboard\n</data>'
 
 
 def test_an_agent_without_hooks_has_no_hook_names() -> None:

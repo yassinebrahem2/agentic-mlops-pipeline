@@ -11,7 +11,6 @@ from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.tracking.constants import (
     MIN_SYNC_INTERVAL_S,
     QUERY_LIMIT_DEFAULT,
-    QUERY_LIMIT_MAX,
 )
 from mlops_agents.tracking.contract import (
     CiRunRow,
@@ -122,14 +121,39 @@ async def set_tracking_settings(
     return TrackingSettings(sync_interval_s=interval)
 
 
+def _tracking_query(
+    what: Literal["models", "versions", "runs", "metrics", "deployments", "ci_runs", "evaluations"],
+    *,
+    model: str | None = None,
+    version: str | None = None,
+    source_id: str | None = None,
+    run_key: str | None = None,
+    metric: str | None = None,
+    latest: bool = False,
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
+) -> TrackingQuery:
+    return TrackingQuery.model_construct(
+        what=what,
+        model=model,
+        version=version,
+        source_id=source_id,
+        run_key=run_key,
+        metric=metric,
+        latest=latest,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/projects/{project_id}/tracking/models", response_model=Page[ModelSummary])
 async def get_models(
     project: ProjectDep,
     services: ServicesDep,
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[ModelSummary]:
-    q = TrackingQuery(what="models", limit=limit, offset=offset)
+    q = _tracking_query("models", limit=limit, offset=offset)
     result = await services.tracking.query(project.id, q)
     return cast(Page[ModelSummary], result)
 
@@ -140,10 +164,10 @@ async def get_versions(
     services: ServicesDep,
     model: str | None = Query(default=None),
     source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[ModelVersionRow]:
-    q = TrackingQuery(what="versions", model=model, source_id=source_id, limit=limit, offset=offset)
+    q = _tracking_query("versions", model=model, source_id=source_id, limit=limit, offset=offset)
     result = await services.tracking.query(project.id, q)
     return cast(Page[ModelVersionRow], result)
 
@@ -153,10 +177,10 @@ async def get_runs(
     project: ProjectDep,
     services: ServicesDep,
     run_key: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[RunRow]:
-    q = TrackingQuery(what="runs", run_key=run_key, limit=limit, offset=offset)
+    q = _tracking_query("runs", run_key=run_key, limit=limit, offset=offset)
     result = await services.tracking.query(project.id, q)
     return cast(Page[RunRow], result)
 
@@ -165,10 +189,10 @@ async def get_runs(
 async def get_ci_runs(
     project: ProjectDep,
     services: ServicesDep,
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[CiRunRow]:
-    q = TrackingQuery(what="ci_runs", limit=limit, offset=offset)
+    q = _tracking_query("ci_runs", limit=limit, offset=offset)
     result = await services.tracking.query(project.id, q)
     return cast(Page[CiRunRow], result)
 
@@ -179,12 +203,10 @@ async def get_deployments(
     services: ServicesDep,
     model: str | None = Query(default=None),
     source_id: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[DeploymentRow]:
-    q = TrackingQuery(
-        what="deployments", model=model, source_id=source_id, limit=limit, offset=offset
-    )
+    q = _tracking_query("deployments", model=model, source_id=source_id, limit=limit, offset=offset)
     result = await services.tracking.query(project.id, q)
     return cast(Page[DeploymentRow], result)
 
@@ -196,11 +218,11 @@ async def get_metrics(
     run_key: str | None = Query(default=None),
     metric: str | None = Query(default=None),
     latest: bool = Query(default=False),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[MetricPoint]:
-    q = TrackingQuery(
-        what="metrics",
+    q = _tracking_query(
+        "metrics",
         run_key=run_key,
         metric=metric,
         latest=latest,
@@ -217,11 +239,11 @@ async def get_evaluations(
     services: ServicesDep,
     model: str | None = Query(default=None),
     version: str | None = Query(default=None),
-    limit: int = Query(default=QUERY_LIMIT_DEFAULT, ge=1, le=QUERY_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
+    limit: int = QUERY_LIMIT_DEFAULT,
+    offset: int = 0,
 ) -> Page[EvaluationRecord]:
-    q = TrackingQuery(
-        what="evaluations",
+    q = _tracking_query(
+        "evaluations",
         model=model,
         version=version,
         limit=limit,

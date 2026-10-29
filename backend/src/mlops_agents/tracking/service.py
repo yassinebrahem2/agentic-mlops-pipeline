@@ -6,12 +6,13 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from mlops_agents.clock import utc_now
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
 from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
@@ -59,8 +60,12 @@ from mlops_agents.tracking.store import (
 _log = logging.getLogger(__name__)
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
+def _source_not_found(source_id: str) -> DomainError:
+    return DomainError(
+        "tracking_source_not_found",
+        f"Tracking source '{source_id}' does not exist.",
+        status=404,
+    )
 
 
 class TrackingService(Tracking):
@@ -73,7 +78,7 @@ class TrackingService(Tracking):
         adapters: Mapping[SourceType, TrackingAdapter],
         github_token: Callable[[], Awaitable[str | None]],
         handoffs: Handoffs,
-        clock: Callable[[], datetime] = _utc_now,
+        clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._databases = databases
         self._keystore = keystore
@@ -166,11 +171,7 @@ class TrackingService(Tracking):
         async with engine.connect() as conn:
             row = await load_source_row(conn, source_id)
         if row is None:
-            raise DomainError(
-                "tracking_source_not_found",
-                f"Tracking source '{source_id}' does not exist.",
-                status=404,
-            )
+            raise _source_not_found(source_id)
 
         if row["auth"] != "credential":
             raise DomainError(
@@ -185,11 +186,7 @@ class TrackingService(Tracking):
         async with engine.connect() as conn:
             updated_row = await load_source_row(conn, source_id)
         if updated_row is None:
-            raise DomainError(
-                "tracking_source_not_found",
-                f"Tracking source '{source_id}' does not exist.",
-                status=404,
-            )
+            raise _source_not_found(source_id)
         return await row_to_source_view(updated_row, project_id, self._secrets)
 
     async def sync(self, project_id: str, source_id: str | None = None) -> None:
@@ -200,11 +197,7 @@ class TrackingService(Tracking):
             async with engine.connect() as conn:
                 row = await load_source_row(conn, source_id)
             if row is None:
-                raise DomainError(
-                    "tracking_source_not_found",
-                    f"Tracking source '{source_id}' does not exist.",
-                    status=404,
-                )
+                raise _source_not_found(source_id)
         task = asyncio.create_task(self.run_sync(project_id, source_id, check_project=False))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
@@ -223,10 +216,15 @@ class TrackingService(Tracking):
         if not all_sources:
             return
 
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(self._sync_source(project_id, s.id) for s in all_sources),
             return_exceptions=True,
         )
+        for res in results:
+            if isinstance(res, Exception):
+                _log.warning(
+                    "Sync failed for source in project %s: %s", project_id, error_text(res)
+                )
 
     async def _sync_source(self, project_id: str, source_id: str) -> None:
         lock = await self._get_source_lock(project_id, source_id)
@@ -239,23 +237,26 @@ class TrackingService(Tracking):
             await self._do_sync_source(project_id, source_id)
 
     async def _do_sync_source(self, project_id: str, source_id: str) -> None:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            row = await load_source_row(conn, source_id)
-        if row is None:
-            return
-
-        source = await row_to_source_view(row, project_id, self._secrets)
+        source_type: str = "unknown"
         credential: str | None = None
-
         try:
+            engine = await self._databases.project(project_id)
+            async with engine.connect() as conn:
+                row = await load_source_row(conn, source_id)
+            if row is None:
+                return
+
+            source = await row_to_source_view(row, project_id, self._secrets)
+            source_type = source.type
+
             if source.auth == "credential":
                 ref = tracking_ref(project_id, source.id)
                 credential = await asyncio.to_thread(self._keystore.get, ref)
                 if credential is None:
                     await self._record_sync_error(
                         project_id,
-                        source,
+                        source.id,
+                        source.type,
                         "The credential is missing from the key store; set it again",
                         credential=None,
                     )
@@ -266,14 +267,18 @@ class TrackingService(Tracking):
             adapter = self._adapters.get(source.type)
             if adapter is None:
                 await self._record_sync_error(
-                    project_id, source, "No adapter for this source type", credential=credential
+                    project_id,
+                    source.id,
+                    source.type,
+                    "No adapter for this source type",
+                    credential=credential,
                 )
                 return
 
             result = await adapter.sync(source, credential, since=source.last_sync)
             if result.error is not None:
                 await self._record_sync_error(
-                    project_id, source, result.error, credential=credential
+                    project_id, source.id, source.type, result.error, credential=credential
                 )
                 return
 
@@ -294,21 +299,27 @@ class TrackingService(Tracking):
                 "evaluations": len(result.evaluations),
                 "error": None,
             }
-            await self._events.record(
-                project_id,
-                source="system",
-                type="tracking.synced",
-                subject_id=source.id,
-                payload=payload,
-            )
+            try:
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="tracking.synced",
+                    subject_id=source.id,
+                    payload=payload,
+                )
+            except Exception as ev_exc:
+                _log.warning("Could not record tracking.synced event: %s", error_text(ev_exc))
         except Exception as exc:
             err = error_text(exc)
-            await self._record_sync_error(project_id, source, err, credential=credential)
+            await self._record_sync_error(
+                project_id, source_id, source_type, err, credential=credential
+            )
 
     async def _record_sync_error(
         self,
         project_id: str,
-        source: TrackingSourceView,
+        source_id: str,
+        source_type: str,
         error_msg: str,
         credential: str | None,
     ) -> None:
@@ -317,8 +328,8 @@ class TrackingService(Tracking):
             gh_token = await self._github_token()
             if gh_token:
                 secrets_to_scrub.append(gh_token)
-        except Exception:
-            _log.debug("Could not resolve github token for error scrubbing")
+        except Exception as exc:
+            _log.warning("Could not resolve github token for error scrubbing: %s", error_text(exc))
         scrubbed = scrub_url_secrets(error_msg)
         scrubbed = scrub_values(scrubbed, secrets_to_scrub)
         if len(scrubbed) > ERROR_MAX_CHARS:
@@ -328,13 +339,13 @@ class TrackingService(Tracking):
         async with engine.begin() as conn:
             await conn.execute(
                 update(tracking_sources)
-                .where(tracking_sources.c.id == source.id)
+                .where(tracking_sources.c.id == source_id)
                 .values(last_error=scrubbed)
             )
 
         payload = {
-            "source_id": source.id,
-            "type": source.type,
+            "source_id": source_id,
+            "type": source_type,
             "ok": False,
             "versions": 0,
             "runs": 0,
@@ -343,13 +354,16 @@ class TrackingService(Tracking):
             "evaluations": 0,
             "error": scrubbed,
         }
-        await self._events.record(
-            project_id,
-            source="system",
-            type="tracking.synced",
-            subject_id=source.id,
-            payload=payload,
-        )
+        try:
+            await self._events.record(
+                project_id,
+                source="system",
+                type="tracking.synced",
+                subject_id=source_id,
+                payload=payload,
+            )
+        except Exception as exc:
+            _log.warning("Could not record tracking.synced error event: %s", error_text(exc))
 
     async def _resolve_candidate_aliases_fn(
         self, project_id: str
@@ -391,6 +405,10 @@ class TrackingService(Tracking):
         if q.offset < 0:
             raise DomainError(
                 "tracking_bad_query", "Query offset must be non-negative.", status=422
+            )
+        if q.what == "metrics" and not q.run_key:
+            raise DomainError(
+                "tracking_bad_query", "Querying metrics requires run_key.", status=422
             )
 
         engine = await self._databases.project(project_id)

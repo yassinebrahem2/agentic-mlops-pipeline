@@ -117,6 +117,19 @@ async def test_sources_routes_crud_and_credential(
     assert res.status_code == 422
     assert "pasted_super_secret_456" not in res.text
 
+    res = await client.post(
+        f"/api/projects/{prj}/tracking/sources",
+        json={
+            "type": "mlflow",
+            "settings": {
+                "url": "https://mlflow.example.com?api_key=pasted_api_key_secret_789",
+            },
+            "auth": "none",
+        },
+    )
+    assert res.status_code == 422
+    assert "pasted_api_key_secret_789" not in res.text
+
 
 async def test_sync_unknown_source_id_returns_404(
     client: httpx2.AsyncClient,
@@ -278,6 +291,12 @@ async def test_query_routes_and_filters(
     # 8. Limit > 500 -> 422
     res = await client.get(f"/api/projects/{prj}/tracking/models?limit=501")
     assert res.status_code == 422
+    assert res.json()["code"] == "tracking_bad_query"
+
+    # 9. Offset < 0 -> 422
+    res = await client.get(f"/api/projects/{prj}/tracking/models?offset=-1")
+    assert res.status_code == 422
+    assert res.json()["code"] == "tracking_bad_query"
 
 
 async def test_build_services_wiring(tracking_app: FastAPI) -> None:

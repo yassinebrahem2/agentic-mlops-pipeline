@@ -84,7 +84,10 @@ class FakeTrackingAdapter:
         self.calls: list[dict[str, Any]] = []
 
     async def sync(
-        self, source: TrackingSourceView, credential: str | None, since: datetime | None
+        self,
+        source: TrackingSourceView,
+        credential: str | None,
+        since: datetime | None = None,
     ) -> SyncResult:
         if self.delay_s > 0:
             await asyncio.sleep(self.delay_s)
@@ -162,8 +165,24 @@ async def tracking_env(
     adapters: dict[SourceType, FakeTrackingAdapter] = {"mlflow": mlflow_adapter}
     handoffs = FakeHandoffs()
 
+    env_ref: list[TrackingEnv] = []
+
+    async def gh_token() -> str | None:
+        return env_ref[0].github_token_value if env_ref else "fake-gh-token"
+
+    service = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=secrets,
+        events=events,
+        adapters=adapters,
+        github_token=gh_token,
+        clock=test_clock,
+        handoffs=handoffs,
+    )
+
     env = TrackingEnv(
-        service=None,  # type: ignore[arg-type]
+        service=service,
         databases=databases,
         keystore=keystore,
         secrets=secrets,
@@ -174,21 +193,7 @@ async def tracking_env(
         handoffs=handoffs,
         github_token_value="fake-gh-token",
     )
-
-    async def gh_token() -> str | None:
-        return env.github_token_value
-
-    service = TrackingService(
-        databases=databases,
-        keystore=keystore,
-        secrets=secrets,
-        events=events,
-        adapters=adapters,  # type: ignore[arg-type]
-        github_token=gh_token,
-        clock=test_clock,
-        handoffs=handoffs,
-    )
-    env.service = service
+    env_ref.append(env)
 
     yield env
     await service.close()

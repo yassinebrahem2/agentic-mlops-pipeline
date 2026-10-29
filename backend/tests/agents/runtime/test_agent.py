@@ -7,8 +7,6 @@ import pytest
 from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.store import SessionStore
@@ -20,15 +18,22 @@ from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.events.contract import AgentStatus, StatusBoard
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.builder_env import build_builder_env, start_turn, workspace_service
+from tests.agents.runtime.builder_env import (
+    build_builder_env,
+    start_turn,
+    status_board_hooks,
+    workspace_service,
+)
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
+from tests.providers.fake_clock import FakeClock
 
 
 async def _set_project_status(
@@ -162,7 +167,8 @@ async def test_agent_builder_keystore_error_refusal(
 ) -> None:
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = workspace_service(paths, databases, keystore)
     git = GitRunner(paths.bin)
@@ -245,7 +251,8 @@ async def test_agent_builder_custom_agent_in_extra_dir(
 
     tools = default_registry()
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = workspace_service(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
@@ -345,16 +352,14 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
 
     tools = default_registry()
     catalog = AgentCatalog([d_orch, d_other], tool_names=tools.names())
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = workspace_service(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     fake_board = _FakeStatusBoard(summary_text="- Orchestrator: idle\n- Retraining: running")
 
-    status_hook = StatusBoardHook()
-    status_hook.bind(fake_board)
-    hooks = HookRegistry()
-    hooks.register(status_hook)
+    hooks = status_board_hooks(fake_board)
     store = SessionStore(databases)
 
     builder = AgentBuilder(

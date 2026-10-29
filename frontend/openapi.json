@@ -747,6 +747,24 @@
         "title": "CiRunRow",
         "type": "object"
       },
+      "ColumnInfo": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ColumnInfo",
+        "type": "object"
+      },
       "CommandSpec": {
         "additionalProperties": false,
         "properties": {
@@ -2220,18 +2238,6 @@
             "title": "Created At",
             "type": "string"
           },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
-          },
           "from_agent": {
             "anyOf": [
               {
@@ -3651,6 +3657,23 @@
         "title": "ProviderCreate",
         "type": "object"
       },
+      "ProviderSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "cooldown_minutes": {
+            "description": "Minutes an exhausted key rests before it is tried again.",
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Cooldown Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cooldown_minutes"
+        ],
+        "title": "ProviderSettings",
+        "type": "object"
+      },
       "RelinkProject": {
         "additionalProperties": false,
         "properties": {
@@ -4112,6 +4135,59 @@
           }
         },
         "title": "SyncBody",
+        "type": "object"
+      },
+      "TableDetail": {
+        "description": "Served by data-summary from its cache.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnInfo"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "data_version": {
+            "title": "Data Version",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TableRef"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "row_count",
+          "timed_out",
+          "incomplete",
+          "data_version",
+          "summary"
+        ],
+        "title": "TableDetail",
         "type": "object"
       },
       "TableRef": {
@@ -4637,18 +4713,6 @@
               }
             ],
             "title": "Error"
-          },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
           },
           "status": {
             "enum": [
@@ -6505,6 +6569,66 @@
         ]
       }
     },
+    "/api/projects/{project_id}/connections/{connection_id}/tables/{table}": {
+      "get": {
+        "operationId": "get_table_detail_api_projects__project_id__connections__connection_id__tables__table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Table Detail",
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/api/projects/{project_id}/events/stream": {
       "get": {
         "operationId": "stream_events_api_projects__project_id__events_stream_get",
@@ -7615,8 +7739,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -7627,7 +7749,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -7712,8 +7833,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -7724,7 +7843,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -7809,8 +7927,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -7821,7 +7937,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -7916,8 +8031,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -7928,7 +8041,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -7981,8 +8093,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -7993,7 +8103,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -8062,8 +8171,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -8074,7 +8181,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -8460,8 +8566,6 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 500,
-              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -8472,7 +8576,6 @@
             "required": false,
             "schema": {
               "default": 0,
-              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -8749,6 +8852,58 @@
           }
         },
         "summary": "List Remote Models",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/settings": {
+      "put": {
+        "operationId": "update_provider_settings_api_providers__name__settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Provider Settings",
         "tags": [
           "providers"
         ]

@@ -43,12 +43,13 @@ def fail_the_first_model_call(monkeypatch: pytest.MonkeyPatch, error: Exception)
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
         on_text: Callable[[str], Awaitable[None]],
+        on_restart: Callable[[], Awaitable[None]] | None = None,
     ) -> ModelReply:
         calls.append(1)
         if len(calls) == 1:
             await on_text(PARTIAL_TEXT)
             raise error
-        return await call(self, model, messages, tools, on_text)
+        return await call(self, model, messages, tools, on_text, on_restart)
 
     monkeypatch.setattr(ModelCaller, "call", failing_once)
 
@@ -72,7 +73,16 @@ def hold_the_first_failure_record(monkeypatch: pytest.MonkeyPatch) -> asyncio.Ev
         if not entered.is_set():
             entered.set()
             await asyncio.Event().wait()
-        await record_failure(self, project_id, session_id, turn_id, sink, lock, text, parts=parts)
+        await record_failure(
+            self,
+            project_id,
+            session_id,
+            turn_id,
+            sink,
+            lock,
+            text,
+            parts=parts,
+        )
 
     monkeypatch.setattr(TurnExecutor, "record_failure", held_once)
     return entered

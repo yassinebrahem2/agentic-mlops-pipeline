@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import RowMapping, Select, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from mlops_agents.errors import DomainError
+from mlops_agents.clock import to_iso
 from mlops_agents.storage.tables import (
     ci_runs,
     deployments,
@@ -67,23 +67,24 @@ async def query_models(
     q: TrackingQuery,
     candidate_aliases_fn: Callable[[str], Sequence[str]] | None = None,
 ) -> Page[ModelSummary]:
-    stmt = select(tracked_models.c.source_id, tracked_models.c.name)
+    stmt = select(tracked_models)
     if q.source_id:
         stmt = stmt.where(tracked_models.c.source_id == q.source_id)
     if q.model:
         stmt = stmt.where(tracked_models.c.name == q.model)
 
-    count_stmt = select(func.count()).select_from(stmt.subquery())
-    total: int = int((await conn.scalar(count_stmt)) or 0)
+    models_page = await _page_query(
+        conn,
+        stmt,
+        [tracked_models.c.name.asc(), tracked_models.c.source_id.asc()],
+        lambda r: (str(r["source_id"]), str(r["name"])),
+        q.limit,
+        q.offset,
+    )
+    if not models_page.rows:
+        return Page[ModelSummary](rows=[], total=models_page.total, truncated=False)
 
-    stmt = stmt.order_by(tracked_models.c.name.asc(), tracked_models.c.source_id.asc())
-    stmt = stmt.limit(q.limit).offset(q.offset)
-
-    model_rows = (await conn.execute(stmt)).all()
-    if not model_rows:
-        return Page[ModelSummary](rows=[], total=total, truncated=False)
-
-    models_on_page = [(r[0], r[1]) for r in model_rows]
+    models_on_page = models_page.rows
 
     # Fetch all versions for all models on this page in one batch query
     v_stmt = (
@@ -104,7 +105,7 @@ async def query_models(
         versions_by_model[(v.source_id, v.model)].append(v)
 
     summaries: list[ModelSummary] = []
-    for src_id, name in model_rows:
+    for src_id, name in models_on_page:
         v_rows = versions_by_model.get((src_id, name), [])
         versions_count = len(v_rows)
         latest_version = v_rows[0].version if v_rows else None
@@ -131,8 +132,9 @@ async def query_models(
             )
         )
 
-    truncated = total > q.offset + len(summaries)
-    return Page[ModelSummary](rows=summaries, total=total, truncated=truncated)
+    return Page[ModelSummary](
+        rows=summaries, total=models_page.total, truncated=models_page.truncated
+    )
 
 
 async def query_versions(conn: AsyncConnection, q: TrackingQuery) -> Page[ModelVersionRow]:
@@ -146,7 +148,7 @@ async def query_versions(conn: AsyncConnection, q: TrackingQuery) -> Page[ModelV
     if q.run_key:
         stmt = stmt.where(model_versions.c.run_key == q.run_key)
     if q.since:
-        stmt = stmt.where(model_versions.c.created_at >= q.since.isoformat())
+        stmt = stmt.where(model_versions.c.created_at >= to_iso(q.since))
 
     order_clauses = [
         model_versions.c.created_at.desc(),
@@ -176,7 +178,7 @@ async def query_runs(conn: AsyncConnection, q: TrackingQuery) -> Page[RunRow]:
     if q.run_key:
         stmt = stmt.where(tracked_runs.c.key == q.run_key)
     if q.since:
-        stmt = stmt.where(tracked_runs.c.started_at >= q.since.isoformat())
+        stmt = stmt.where(tracked_runs.c.started_at >= to_iso(q.since))
 
     order_clauses = [
         tracked_runs.c.started_at.desc(),
@@ -202,16 +204,13 @@ async def query_runs(conn: AsyncConnection, q: TrackingQuery) -> Page[RunRow]:
 
 
 async def query_metrics(conn: AsyncConnection, q: TrackingQuery) -> Page[MetricPoint]:
-    if not q.run_key:
-        raise DomainError("tracking_bad_query", "Querying metrics requires run_key.", status=422)
-
     base = select(run_metrics).where(run_metrics.c.run_key == q.run_key)
     if q.source_id:
         base = base.where(run_metrics.c.source_id == q.source_id)
     if q.metric:
         base = base.where(run_metrics.c.metric == q.metric)
     if q.since:
-        base = base.where(run_metrics.c.time >= q.since.isoformat())
+        base = base.where(run_metrics.c.time >= to_iso(q.since))
 
     if q.latest:
         subq = select(
@@ -232,7 +231,7 @@ async def query_metrics(conn: AsyncConnection, q: TrackingQuery) -> Page[MetricP
         if q.metric:
             subq = subq.where(run_metrics.c.metric == q.metric)
         if q.since:
-            subq = subq.where(run_metrics.c.time >= q.since.isoformat())
+            subq = subq.where(run_metrics.c.time >= to_iso(q.since))
 
         subq_aliased = subq.subquery()
         stmt = select(subq_aliased).where(subq_aliased.c.rn == 1)
@@ -270,7 +269,7 @@ async def query_deployments(conn: AsyncConnection, q: TrackingQuery) -> Page[Dep
     if q.model:
         stmt = stmt.where(deployments.c.model == q.model)
     if q.since:
-        stmt = stmt.where(deployments.c.seen_at >= q.since.isoformat())
+        stmt = stmt.where(deployments.c.seen_at >= to_iso(q.since))
 
     order_clauses = [
         deployments.c.seen_at.desc(),
@@ -297,7 +296,7 @@ async def query_ci_runs(conn: AsyncConnection, q: TrackingQuery) -> Page[CiRunRo
     if q.source_id:
         stmt = stmt.where(ci_runs.c.source_id == q.source_id)
     if q.since:
-        stmt = stmt.where(ci_runs.c.started_at >= q.since.isoformat())
+        stmt = stmt.where(ci_runs.c.started_at >= to_iso(q.since))
 
     order_clauses = [
         ci_runs.c.started_at.desc(),
@@ -331,7 +330,7 @@ async def query_evaluations(conn: AsyncConnection, q: TrackingQuery) -> Page[Eva
     if q.run_key:
         stmt = stmt.where(evaluations.c.run_key == q.run_key)
     if q.since:
-        stmt = stmt.where(evaluations.c.fetched_at >= q.since.isoformat())
+        stmt = stmt.where(evaluations.c.fetched_at >= to_iso(q.since))
 
     order_clauses = [
         evaluations.c.fetched_at.desc(),

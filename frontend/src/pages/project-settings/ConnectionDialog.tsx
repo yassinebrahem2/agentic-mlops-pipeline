@@ -19,6 +19,12 @@ import { useAppInfo } from "@/lib/useAppInfo";
 
 type ConnectionView = components["schemas"]["ConnectionView"];
 
+function connectionPath(connection?: ConnectionView | null): string | undefined {
+  return connection?.settings && typeof connection.settings.path === "string"
+    ? connection.settings.path
+    : undefined;
+}
+
 export interface ConnectionDialogProps {
   projectId: string;
   connection?: ConnectionView | null;
@@ -106,11 +112,7 @@ export function ConnectionDialog({
   useEffect(() => {
     if (open) {
       setName(connection?.name ?? "");
-      setChosenPath(
-        connection?.settings && typeof connection.settings.path === "string"
-          ? connection.settings.path
-          : "",
-      );
+      setChosenPath(connectionPath(connection) ?? "");
       setInspectedPath(null);
       latestInspectRef.current = null;
       resetInspect();
@@ -143,10 +145,7 @@ export function ConnectionDialog({
     }
   };
 
-  const initialPath =
-    connection?.settings && typeof connection.settings.path === "string"
-      ? connection.settings.path
-      : undefined;
+  const initialPath = connectionPath(connection);
 
   const connectionName = connection?.name ?? "";
 

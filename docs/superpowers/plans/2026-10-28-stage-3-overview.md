@@ -69,9 +69,9 @@ contracts writes these into code exactly as here (except where a line names anot
   - `ApprovalView.tool` and `risk_class` become nullable, and `step`, `proposal_kind` and `kind` appear, in contracts task 3 (with the frontend lines that read them), never in task 1, so task 1's early PR keeps the frontend building.
 - The gate sets `proposal_kind` on the approval from the `Propose` call's `kind` argument (`approvals/gate.py`).
 - Deciding a stall: approve resumes the turn with no audit record; reject ends it `stopped`.
-- A stall's preview is `Preview(kind="text", title="Stalled: no usable key", body=<per-key states>)`. A stall writes no audit record; events `turn.stalled {turn_id, provider, model}` and `turn.resumed {turn_id}` record it.
+- A stall's preview is `Preview(kind="text", title=no_usable_key(provider, model), body=<per-key states>)` (Decision #398). A stall writes no audit record; events `turn.stalled {turn_id, provider, model}` and `turn.resumed {turn_id}` record it.
 - contracts (task 1) adds the types and fields: `ErrorKind`, `TurnEndedData.error_kind`, `MessageView.error_kind`; rate-limits writes and reads them. **Removed by rate-limits task 5** (the user's rule, 2026-10-28: a key running out mid-turn never ends the turn, so nothing fails with `keys_exhausted`): `ErrorKind`, every `error_kind` and the `turns.error_kind` column go; later plans must not use them.
-- `turn.ended` and the turn view gain `error_kind: Literal["keys_exhausted"] | None` (column `turns.error_kind`; rate-limits writes it through the executor's failure path, the `TurnObserver` protocol and its implementers); the failed agent message's `MessageView` carries the same `error_kind`, so the UI knows it after a reload; the UI offers Try again on a failed turn with that kind, which re-sends its trigger message.
+- (Removed by rate-limits task 5: no `error_kind` on `turn.ended`, the turn view or the message view, and no `turns.error_kind` column; a key running out pauses the turn on a stall instead of failing it.)
 - The policy gains the class `propose`: `ask` at every level, `bypass` included.
 - Frontend: `ApprovalCard.tsx` dispatches on `kind` and `proposal_kind` to one component per card; contracts exports the note field with the Approve and Reject controls as one component (`ApprovalControls`) that every card reuses.
 
@@ -102,7 +102,7 @@ class Embedders(Protocol):            # injected into the services that need it,
 ConnectionStatus = Literal["ok", "unreachable"]
 class TableRef(BaseModel): name: str; files: list[str]; format: Literal["csv", "parquet", "json", "jsonl"]
 class ColumnInfo(BaseModel): name: str; type: str
-class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int; data_version: str; summary: str   # served by data-summary from its cache
+class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int | None; timed_out: bool; incomplete: bool; data_version: str; summary: str   # row_count None: not computed (a timed-out profile); Decision #425: the data-summary owner edits contracts' connections/contract.py and regenerates openapi.json in task 5   # served by data-summary from its cache
 class Mount(BaseModel): host_path: Path; container_path: str        # always read-only
 class DuckDbSource(BaseModel): sql_from: str; allowed_directories: list[Path]
 class Finding(BaseModel): path: str; reason: str

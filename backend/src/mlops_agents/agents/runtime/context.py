@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -20,6 +20,10 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.tools.base import FileAccess
 from mlops_agents.workspace.models import Project
+
+if TYPE_CHECKING:
+    # agent.py imports this module.
+    from mlops_agents.agents.runtime.agent import Agent
 
 
 async def top_level_layout(files: FileAccess) -> str:
@@ -49,7 +53,25 @@ def build_messages(
     hook_context: str | None = None,
 ) -> list[BaseMessage]:
     """Assemble the langchain BaseMessage list for an agent run."""
-    # 1. System message
+    system = _system_message(definition, project, layout, summary, hook_context)
+    return [system, *history_messages(history)]
+
+
+def system_message(agent: Agent, summary: str | None) -> SystemMessage:
+    """The turn's system message, with this build's hook context: the one place it is built for
+    a turn (the graph's `prepare` node and a resume)."""
+    return _system_message(
+        agent.definition, agent.project, agent.layout, summary, agent.hook_context
+    )
+
+
+def _system_message(
+    definition: AgentDefinition,
+    project: Project,
+    layout: str,
+    summary: str | None,
+    hook_context: str | None,
+) -> SystemMessage:
     sections = [definition.prompt.strip()]
 
     project_lines = [
@@ -70,10 +92,13 @@ def build_messages(
     if hook_context:
         sections.append(hook_context)
 
-    system_content = "\n\n".join(sections)
-    messages: list[BaseMessage] = [SystemMessage(content=system_content)]
+    return SystemMessage(content="\n\n".join(sections))
 
-    # 2. History
+
+def history_messages(history: list[MessageView]) -> list[BaseMessage]:
+    """The session's stored messages as the model reads them; queued and system ones are left
+    out."""
+    messages: list[BaseMessage] = []
     for message in history:
         if message.status == "queued" or message.author_kind == "system":
             continue

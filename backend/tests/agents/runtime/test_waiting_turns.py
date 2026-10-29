@@ -30,6 +30,7 @@ from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
@@ -42,6 +43,7 @@ from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 def _get_settings(paths: DataPaths) -> Settings:
@@ -108,7 +110,8 @@ def _make_manager(
 ) -> SessionManager:
     tool_reg = default_registry()
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -129,6 +132,7 @@ def _make_manager(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate,
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
