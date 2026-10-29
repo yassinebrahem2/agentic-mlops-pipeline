@@ -296,8 +296,9 @@ async def build_services(
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
-    # transition. Later plans register their observers above this line. Close is registered
-    # first so a failed start still stops the timer.
+    # transition. Later plans register their observers on the store
+    # (`approval_store.observers.add(...)`) above this line. Close is registered first so a
+    # failed start still stops the timer.
     stack.push_async_callback(wakeups.close)
     await wakeups.start()
 
