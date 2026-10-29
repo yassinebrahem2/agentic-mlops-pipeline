@@ -33,6 +33,8 @@ class Pull:
     branch: str
     mergeable: str = "MERGEABLE"
     rollup: list[dict[str, str]] = field(default_factory=lambda: checks("SUCCESS"))
+    # A PR from a fork of the public copy, not from a branch of the copy itself.
+    cross_repository: bool = False
 
 
 @dataclass
@@ -124,17 +126,19 @@ class FakeGh:
 
     def _pr(self, argv: list[str]) -> Finished:
         if argv[1] == "list":
-            return _json(
-                [
-                    {
-                        "number": p.number,
-                        "headRefName": p.branch,
-                        "mergeable": p.mergeable,
-                        "statusCheckRollup": p.rollup,
-                    }
-                    for p in self.pulls
-                ]
-            )
+            # As gh does, only the fields `--json` asks for.
+            wanted = argv[argv.index("--json") + 1].split(",")
+            listed = [
+                {
+                    "number": p.number,
+                    "headRefName": p.branch,
+                    "mergeable": p.mergeable,
+                    "statusCheckRollup": p.rollup,
+                    "isCrossRepository": p.cross_repository,
+                }
+                for p in self.pulls
+            ]
+            return _json([{k: v for k, v in item.items() if k in wanted} for item in listed])
         number = int(argv[2])
         self.merged.append(number)
         self.pulls = [p for p in self.pulls if p.number != number]

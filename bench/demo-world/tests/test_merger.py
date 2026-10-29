@@ -99,6 +99,22 @@ def test_a_branch_that_is_not_an_agent_branch_is_never_merged(gh: FakeGh, branch
     assert _decisions() == []
 
 
+def test_a_pr_from_a_fork_is_never_merged_whatever_its_branch(gh: FakeGh) -> None:
+    # The copy is public: a fork can name its branch like an agent's. Its code would run as
+    # the user once merged and pulled, so the world never merges it.
+    gh.pulls = [
+        Pull(20, BRANCH, cross_repository=True),
+        Pull(21, "feature/fork", cross_repository=True),
+    ]
+
+    _play(_merger(gh, after_days=1), 1, 5)
+
+    assert gh.named("pr", "merge") == []
+    assert [(d["pr"], d["kind"], d["reason"], d["date"]) for d in _decisions()] == [
+        (20, "pr_not_merged", "cross_repository", "2016-01-02")
+    ]
+
+
 def test_a_conflict_is_recorded_once_and_left_for_the_agents(gh: FakeGh) -> None:
     gh.pulls = [Pull(8, BRANCH, mergeable="CONFLICTING")]
 

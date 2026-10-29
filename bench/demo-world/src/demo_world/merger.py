@@ -2,8 +2,9 @@
 
 Each day it lists the open PRs of the run's copy. An agent's PR (head branch
 `agent/<agent>/<task>`) is merged once `after_days` simulated days have passed since the world
-first saw it open, if GitHub finds no conflict and its checks are green. A conflict, red checks
-or a failed merge is recorded as not merged and left for the agents; it is tried again every
+first saw it open, if GitHub finds no conflict and its checks are green. A PR from a fork is
+never merged, whatever its branch is called (recorded once, as `cross_repository`). A conflict,
+red checks or a failed merge is recorded as not merged and left for the agents; it is tried again every
 day, and recorded again only when the reason changes. A PR whose mergeability or checks are
 still being computed waits, unrecorded. Without `--merge-after-days` the world never merges
 (a live demo, where the user does).
@@ -24,7 +25,7 @@ from demo_world.simulate import Step
 # The stage 2 runtime's branch name for an agent's task: `agent/<agent>/<task>`.
 AGENT_BRANCH = re.compile(r"agent/[^/]+/.+")
 PULLS_FILE = "pull_requests.json"
-_LIST_FIELDS = "number,headRefName,mergeable,statusCheckRollup"
+_LIST_FIELDS = "number,headRefName,isCrossRepository,mergeable,statusCheckRollup"
 # Check run conclusions and commit status states GitHub counts as passing.
 _PASSED = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 _WAITING_STATES = {"PENDING", "EXPECTED"}
@@ -40,6 +41,7 @@ class _Pull:
     branch: str
     mergeable: str
     rollup: list[dict[str, Any]]
+    cross_repository: bool
 
 
 def _checks(rollup: list[dict[str, Any]]) -> Literal["green", "pending", "red"]:
@@ -60,6 +62,10 @@ def _checks(rollup: list[dict[str, Any]]) -> Literal["green", "pending", "red"]:
 
 
 def _verdict(pull: _Pull) -> Verdict:
+    if pull.cross_repository:
+        # Agents push to the copy itself; a fork's PR, whatever its branch is called, would
+        # run its code as the user once merged and pulled.
+        return "cross_repository"
     if pull.mergeable == "CONFLICTING":
         return "conflict"
     checks = _checks(pull.rollup)
@@ -146,6 +152,8 @@ class Merger(Step):
                 str(item["headRefName"]),
                 str(item["mergeable"]),
                 list(item["statusCheckRollup"] or []),
+                # A missing field fails the listing: never assume a PR is not from a fork.
+                bool(item["isCrossRepository"]),
             )
             for item in listed
         ]

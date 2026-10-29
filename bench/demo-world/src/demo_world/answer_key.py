@@ -45,7 +45,7 @@ class CiFailureEvent:
     set_at: str
 
 
-type Refusal = Literal["conflict", "checks_failed", "merge_failed"]
+type Refusal = Literal["conflict", "checks_failed", "merge_failed", "cross_repository"]
 
 
 @dataclass(frozen=True)
