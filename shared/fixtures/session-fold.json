@@ -23,8 +23,7 @@
             }
           ],
           "status": "complete",
-          "created_at": "2026-10-21T18:00:00Z",
-          "error_kind": null
+          "created_at": "2026-10-21T18:00:00Z"
         }
       }
     },
@@ -40,8 +39,7 @@
           "from_agent": null,
           "parts": [],
           "status": "streaming",
-          "created_at": "2026-10-21T18:00:01Z",
-          "error_kind": null
+          "created_at": "2026-10-21T18:00:01Z"
         }
       }
     },
@@ -114,8 +112,7 @@
             }
           ],
           "status": "complete",
-          "created_at": "2026-10-21T18:00:01Z",
-          "error_kind": null
+          "created_at": "2026-10-21T18:00:01Z"
         }
       }
     },
@@ -125,8 +122,7 @@
       "data": {
         "turn_id": "trn_1",
         "status": "done",
-        "error": null,
-        "error_kind": null
+        "error": null
       }
     }
   ],
@@ -146,8 +142,7 @@
             }
           ],
           "status": "complete",
-          "created_at": "2026-10-21T18:00:00Z",
-          "error_kind": null
+          "created_at": "2026-10-21T18:00:00Z"
         },
         {
           "id": "msg_a1",
@@ -176,8 +171,7 @@
             }
           ],
           "status": "streaming",
-          "created_at": "2026-10-21T18:00:01Z",
-          "error_kind": null
+          "created_at": "2026-10-21T18:00:01Z"
         }
       ],
       "busy": true,
@@ -199,8 +193,7 @@
           }
         ],
         "status": "complete",
-        "created_at": "2026-10-21T18:00:00Z",
-        "error_kind": null
+        "created_at": "2026-10-21T18:00:00Z"
       },
       {
         "id": "msg_a1",
@@ -229,8 +222,7 @@
           }
         ],
         "status": "complete",
-        "created_at": "2026-10-21T18:00:01Z",
-        "error_kind": null
+        "created_at": "2026-10-21T18:00:01Z"
       }
     ],
     "busy": false,

@@ -20,7 +20,7 @@ async def providers_svc(
     keystore: MemoryKeyStore,
     model_http: httpx2.AsyncClient,
 ) -> ProvidersService:
-    return ProvidersService(databases, keystore, model_http)
+    return ProvidersService(databases, keystore, model_http, KeyFailover())
 
 
 @pytest.fixture

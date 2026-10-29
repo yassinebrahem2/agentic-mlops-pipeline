@@ -28,6 +28,7 @@ from mlops_agents.agents.runtime.hooks import (
 )
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import (
@@ -179,6 +180,7 @@ class RecordingCaller(ModelCaller):
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
         on_text: Callable[[str], Awaitable[None]],
+        on_restart: Callable[[], Awaitable[None]] | None = None,
     ) -> ModelReply:
         self.requests.append(list(messages))
         return self._replies.pop(0)
@@ -262,6 +264,8 @@ async def run_graph(
         turn_end=turn_end or NoTurnEndCheck(),
         workspaces=workspaces or FixedWorkspaces(agent.files),
         approval_store=approval_store,
+        approvals=LateApprovals(),  # unbound: the recording caller never runs out of keys
+        events=None,
     )
     graph = create_turn_graph(
         agent=agent,

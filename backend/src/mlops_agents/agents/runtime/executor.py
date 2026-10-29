@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
-from mlops_agents.agents.runtime.compaction import compact_if_needed
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
     MessageStatus,
@@ -18,12 +16,13 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnd,
 )
-from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink, TurnState
+from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink
 from mlops_agents.agents.runtime.graph_run import run_turn_graph
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
+from mlops_agents.credentials.scrub import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -154,47 +153,8 @@ class TurnExecutor:
             agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             message.id = agent_msg.id
 
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            history = await self._store.messages(project_id, session_id)
-            history_for_compaction = [m for m in history if m.id != message.id]
-            system_msg = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                [],
-                hook_context=built_agent.hook_context,
-            )[0]
-            await compact_if_needed(
-                self._store,
-                self._caller,
-                built_agent.model,
-                project_id,
-                session_id,
-                history_for_compaction,
-                str(system_msg.content),
-                turn_id=turn_id,
-                agent_name=built_agent.definition.name,
-            )
-
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            active_history = await self._store.messages(
-                project_id, session_id, after=compacted_through
-            )
-            active_history = [m for m in active_history if m.id != message.id]
-            initial_messages = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                active_history,
-                hook_context=built_agent.hook_context,
-            )
-            initial_state: TurnState = {
-                "messages": initial_messages,
-                "step_count": 0,
-                "stopped_reason": None,
-            }
+            # The graph's `prepare` node compacts the session and builds the messages.
+            initial_state: dict[str, Any] = {"step_count": 0, "stopped_reason": None}
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -221,23 +181,41 @@ class TurnExecutor:
         message = _AgentMessage()
 
         async def body() -> TurnOutcome:
-            agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
-            if agent_msg is None:
-                raise RuntimeError(f"No agent message found for turn {turn_id}")
-            message.id = agent_msg.id
-            message.parts.extend(agent_msg.parts)
+            try:
+                agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
+                if agent_msg is None:
+                    raise RuntimeError(f"No agent message found for turn {turn_id}")
+                message.id = agent_msg.id
+                message.parts.extend(agent_msg.parts)
 
-            async with lock:
-                updated_msg = await self._store.update_message(
-                    project_id, agent_msg.id, parts=message.parts, status="streaming"
+                async with lock:
+                    updated_msg = await self._store.update_message(
+                        project_id, agent_msg.id, parts=message.parts, status="streaming"
+                    )
+                    await sink.message(updated_msg, created=False)
+                await self._store.set_turn(project_id, turn_id, "running")
+
+                built_agent = await self._builder.build(
+                    project_id, agent, session_id=session_id, turn_id=turn_id
                 )
-                await sink.message(updated_msg, created=False)
-            await self._store.set_turn(project_id, turn_id, "running")
-
-            built_agent = await self._builder.build(
-                project_id, agent, session_id=session_id, turn_id=turn_id
-            )
-            summary, _ = await self._store.summary(project_id, session_id)
+                summary, _ = await self._store.summary(project_id, session_id)
+                command = await resume_command(
+                    built_agent, summary, self._store.db_path(project_id), turn_id
+                )
+            except BaseException:
+                # The graph owns the thread once it runs; a failure or a Stop before that ends
+                # the turn, and would leave its checkpoint behind. A failing cleanup never
+                # replaces what ended the turn: a Stop stays a Stop.
+                try:
+                    await self.delete_checkpoint(project_id, turn_id)
+                except Exception as exc:
+                    logger.error(
+                        "Could not delete the checkpoint thread of turn %s: %s: %s",
+                        turn_id,
+                        type(exc).__name__,
+                        error_text(exc),
+                    )
+                raise
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -245,9 +223,7 @@ class TurnExecutor:
                 turn_id,
                 agent_msg.id,
                 message.parts,
-                await resume_command(
-                    built_agent, summary, self._store.db_path(project_id), turn_id
-                ),
+                command,
                 sink,
                 lock,
             )

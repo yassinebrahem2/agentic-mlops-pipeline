@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { components } from "@/api/schema";
+import { api, ApiError } from "@/lib/api";
 import { ProviderCard } from "./ProviderCard";
 
 type Provider = components["schemas"]["Provider"];
@@ -92,6 +93,74 @@ describe("ProviderCard", () => {
     const addKeyBtn = screen.getByRole("button", { name: "Add key" });
     expect(addKeyBtn).toBeInTheDocument();
     expect(addKeyBtn.parentElement).toHaveClass("flex", "justify-end");
+  });
+
+  describe("exhausted key cooldown", () => {
+    let putSpy: MockInstance;
+
+    beforeEach(() => {
+      putSpy = vi.spyOn(api, "PUT");
+    });
+
+    afterEach(() => {
+      putSpy.mockRestore();
+    });
+
+    it("shows the provider's cooldown and what it does", () => {
+      renderProviderCard(groqProvider);
+
+      expect(screen.getByLabelText("Exhausted key cooldown (minutes)")).toHaveValue(15);
+      expect(
+        screen.getByText(/how long an exhausted key is skipped before one retry/i),
+      ).toBeInTheDocument();
+    });
+
+    it("saves the cooldown with the settings route", async () => {
+      putSpy.mockResolvedValue({
+        data: { ...groqProvider, cooldown_minutes: 30 },
+        response: new Response(null, { status: 200 }),
+      });
+      const user = userEvent.setup();
+      renderProviderCard(groqProvider);
+
+      const input = screen.getByLabelText("Exhausted key cooldown (minutes)");
+      await user.clear(input);
+      await user.type(input, "30");
+      await user.click(screen.getByRole("button", { name: "Save cooldown" }));
+
+      expect(putSpy).toHaveBeenCalledExactlyOnceWith("/api/providers/{name}/settings", {
+        params: { path: { name: "groq" } },
+        body: { cooldown_minutes: 30 },
+      });
+    });
+
+    it.each(["0", "1441", "2.5", ""])("refuses %j and sends nothing", async (value) => {
+      const user = userEvent.setup();
+      renderProviderCard(groqProvider);
+
+      const input = screen.getByLabelText("Exhausted key cooldown (minutes)");
+      await user.clear(input);
+      if (value) await user.type(input, value);
+
+      expect(screen.getByText("Enter a whole number from 1 to 1440.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save cooldown" })).toBeDisabled();
+      expect(putSpy).not.toHaveBeenCalled();
+    });
+
+    it("shows the API's error when saving fails", async () => {
+      putSpy.mockRejectedValue(
+        new ApiError("invalid_request", "The cooldown is out of range.", 422),
+      );
+      const user = userEvent.setup();
+      renderProviderCard(groqProvider);
+
+      const input = screen.getByLabelText("Exhausted key cooldown (minutes)");
+      await user.clear(input);
+      await user.type(input, "45");
+      await user.click(screen.getByRole("button", { name: "Save cooldown" }));
+
+      expect(await screen.findByText("The cooldown is out of range.")).toBeInTheDocument();
+    });
   });
 
   it("allows opening and canceling the Add key form", async () => {

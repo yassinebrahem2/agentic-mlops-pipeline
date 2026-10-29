@@ -14,6 +14,7 @@ from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.providers import listing
 from mlops_agents.providers.errors import ProviderCallError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.keys import StoredKeys
 from mlops_agents.providers.models import (
     DetectedKey,
@@ -22,6 +23,7 @@ from mlops_agents.providers.models import (
     ModelEntry,
     Provider,
     ProviderCreate,
+    ProviderStatus,
     RemoteModel,
 )
 from mlops_agents.providers.verification import probe_embedder, probe_model
@@ -41,12 +43,21 @@ _ENV_VAR = re.compile(r"^(?P<base>[A-Z0-9_]+?)(?:_\d+)?$")
 class ProvidersService:
     """`http` is the app's one client for provider calls, model calls included. Its owner (the
     app factory) closes it. langchain-openai's default client must never be used: it is cached
-    for the whole process and bound to the first event loop that uses it."""
+    for the whole process and bound to the first event loop that uses it. `failover` is the
+    app's one key failover: a change to a provider's keys clears its key states, because key
+    indices shift."""
 
-    def __init__(self, databases: Databases, keystore: KeyStore, http: httpx2.AsyncClient) -> None:
+    def __init__(
+        self,
+        databases: Databases,
+        keystore: KeyStore,
+        http: httpx2.AsyncClient,
+        failover: KeyFailover,
+    ) -> None:
         self._dbs = databases
         self._stored_keys = StoredKeys(databases, keystore)
         self._http = http
+        self._failover = failover
 
     # Providers
 
@@ -104,14 +115,44 @@ class ProvidersService:
     async def delete_provider(self, name: str) -> None:
         provider = await self.get_provider(name)
         await self._stored_keys.delete_provider(provider.id)
+        self._failover.clear(provider)
 
-    async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
+    async def set_cooldown(self, name: str, minutes: int) -> Provider:
+        """How long an exhausted key rests before it is tried again."""
+        provider = await self.get_provider(name)
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(
                 update(providers)
-                .where(providers.c.id == provider_id)
-                .values(status="needs_attention", status_detail=detail)
+                .where(providers.c.id == provider.id)
+                .values(cooldown_minutes=minutes)
+            )
+        return await self.get_provider(name)
+
+    async def mark_needs_attention(self, provider_id: str, detail: str) -> None:
+        """Shown on the AI providers page; it never refuses a turn (Decision #384)."""
+        await self._set_status(provider_id, "needs_attention", detail)
+
+    async def clear_attention(self, provider_id: str) -> None:
+        """The provider works again: a call succeeded, or Try again. Only a marked provider is
+        written, so a healthy one costs no write."""
+        await self._set_status(provider_id, "ok", None, only_if="needs_attention")
+
+    async def _set_status(
+        self,
+        provider_id: str,
+        status: ProviderStatus,
+        detail: str | None,
+        *,
+        only_if: ProviderStatus | None = None,
+    ) -> None:
+        condition = providers.c.id == provider_id
+        if only_if is not None:
+            condition = condition & (providers.c.status == only_if)
+        engine = await self._dbs.app()
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(providers).where(condition).values(status=status, status_detail=detail)
             )
 
     # Keys
@@ -133,11 +174,13 @@ class ProvidersService:
             )
         await self._get(provider, "/models", value)  # proves the key works before storing it
         await self._stored_keys.add(provider.id, value)
+        self._failover.clear(provider)
         return await self.get_provider(name)
 
     async def remove_key(self, name: str, position: int) -> Provider:
         provider = await self.get_provider(name)
         await self._stored_keys.remove(provider.id, position)
+        self._failover.clear(provider)
         return await self.get_provider(name)
 
     # Remote calls
@@ -385,6 +428,7 @@ def _provider(row: RowMapping, keys: list[KeyHint]) -> Provider:
         status=row["status"],
         status_detail=row["status_detail"],
         keys=keys,
+        cooldown_minutes=row["cooldown_minutes"],
     )
 
 

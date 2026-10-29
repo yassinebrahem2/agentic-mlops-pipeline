@@ -17,8 +17,6 @@ from mlops_agents.agents.catalog import (
     DefinitionError,
     parse_definition,
 )
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -31,10 +29,12 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
@@ -321,7 +321,8 @@ async def test_live_agent_definitions(
 
         tools = default_registry(tasks=tasks_svc)
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-        providers_svc = ProvidersService(databases, keystore, http)
+        failover = KeyFailover()  # a real provider: its rate limits clear in real time
+        providers_svc = ProvidersService(databases, keystore, http, failover)
         agent_settings = AgentSettingsService(databases, providers_svc, catalog)
 
         prov = await providers_svc.create_provider(
@@ -336,10 +337,7 @@ async def test_live_agent_definitions(
             await agent_settings.set_default_model(agent, live_model)
 
         status_board = SqliteStatusBoard(catalog, events)
-        status_board_hook = StatusBoardHook()
-        status_board_hook.bind(status_board)
-        hooks = HookRegistry()
-        hooks.register(status_board_hook)
+        hooks = status_board_hooks(status_board)
         approval_store = ApprovalStore(databases)
 
         manager = SessionManager(
@@ -350,6 +348,7 @@ async def test_live_agent_definitions(
             settings=agent_settings,
             providers=providers_svc,
             http=http,
+            failover=failover,
             gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
