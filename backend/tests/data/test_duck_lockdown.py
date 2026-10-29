@@ -101,12 +101,16 @@ def test_the_lockdown_refuses(team: TeamFolder, monkeypatch: pytest.MonkeyPatch,
 
 
 async def test_hostile_file_and_column_names_change_nothing(team: TeamFolder) -> None:
+    # A file name cannot hold a path separator, so its payload's target stays relative.
     file_name = "a'); COPY (SELECT 1) TO 'pwned.csv'; --.csv"
+    # The headers aim inside the allowed folder, the one place the lock-down still lets
+    # DuckDB write, so a quoting defect would change the folder's files.
+    inside = team.folder.resolve().as_posix()
     headers = [
-        "x\"); ATTACH 'evil.db' AS e; --",
+        f"x\"); ATTACH '{inside}/evil.db' AS e; CREATE TABLE e.t AS SELECT 1; --",
         'say "hi"',
         "it's",
-        "\"); COPY (SELECT 1) TO 'pwned2.csv'; --",
+        f"\"); COPY (SELECT 1) TO '{inside}/pwned2.csv'; --",
     ]
     with (team.folder / file_name).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
