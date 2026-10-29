@@ -18,6 +18,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read only, and no token left in any checkout: the contract job runs the demo repository's
+# code (another repository's main, daily), which needs no token; both repositories are public.
+permissions:
+  contents: read
+
 jobs:
   demo-world:
     timeout-minutes: 15
@@ -31,6 +36,8 @@ jobs:
         working-directory: bench/demo-world
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -52,11 +59,14 @@ jobs:
         working-directory: bench/demo-world
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: yassinebrahem2/hotel-cancellation-demo
           ref: main
           path: company
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
