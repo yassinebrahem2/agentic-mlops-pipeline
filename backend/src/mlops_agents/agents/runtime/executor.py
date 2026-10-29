@@ -195,9 +195,14 @@ class TurnExecutor:
                     await sink.message(updated_msg, created=False)
                 await self._store.set_turn(project_id, turn_id, "running")
 
-                built_agent = await self._builder.build(
-                    project_id, agent, session_id=session_id, turn_id=turn_id
-                )
+                try:
+                    built_agent = await self._builder.build(
+                        project_id, agent, session_id=session_id, turn_id=turn_id
+                    )
+                except TurnRefused as refused:
+                    # The turn cannot go on (the agent's model or provider was deleted while it
+                    # stalled): it fails with the builder's own reason, not as unexpected.
+                    raise TurnFailed(refused.text) from refused
                 summary, _ = await self._store.summary(project_id, session_id)
                 command = await resume_command(
                     built_agent, summary, self._store.db_path(project_id), turn_id
