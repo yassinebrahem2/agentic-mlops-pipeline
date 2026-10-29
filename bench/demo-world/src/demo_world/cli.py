@@ -13,6 +13,7 @@ import pandas as pd
 from demo_world import (
     backfill,
     ci,
+    ci_failure,
     company,
     fetch,
     github,
@@ -22,6 +23,8 @@ from demo_world import (
     simulate,
     source,
 )
+
+log = logging.getLogger(__name__)
 
 
 class SourceMissingError(Exception):
@@ -69,7 +72,7 @@ def _company() -> company.Company | None:
     return company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir())
 
 
-def _steps(args: argparse.Namespace) -> tuple[simulate.Step, ...]:
+def _steps(args: argparse.Namespace, scenario: scenarios.Scenario) -> tuple[simulate.Step, ...]:
     """The world's work on the company's repository; none without HOTEL_DEMO_REPO."""
     name = paths.repository()
     if name is None:
@@ -78,10 +81,21 @@ def _steps(args: argparse.Namespace) -> tuple[simulate.Step, ...]:
                 f"--ci-every dispatches the company's CI; it needs {paths.REPO_VARIABLE} "
                 "(see `demo-world new-run`)"
             )
+        if any(p.kind == "ci_failure" for p in scenario.problems):
+            log.warning(
+                "without %s the ci_failure windows are recorded in the answer key only; "
+                "nothing on GitHub changes",
+                paths.REPO_VARIABLE,
+            )
         return ()
     repository = github.Repository(name, github.RUNNER)
     every: int = ci.DEFAULT_EVERY if args.ci_every is None else args.ci_every
-    return (ci.Dispatcher(repository, paths.world_dir(), every),)
+    # The CI failure step comes first even without a window: it repairs a variable a killed
+    # run left pointing at a missing file, and it switches before the day's dispatch.
+    return (
+        ci_failure.CiFailure(repository, paths.world_dir(), scenario.problems),
+        ci.Dispatcher(repository, paths.world_dir(), every),
+    )
 
 
 def _simulate(args: argparse.Namespace) -> None:
@@ -89,7 +103,7 @@ def _simulate(args: argparse.Namespace) -> None:
     # Read the scenario and the settings first, so they fail before the source loads.
     scenario = scenarios.NO_SCENARIO if scenario_path is None else scenarios.load(scenario_path)
     the_company = _company()
-    steps = _steps(args)
+    steps = _steps(args, scenario)
     world = simulate.World(
         _loaded_source(), paths.data_dir(), paths.world_dir(), scenario, the_company, steps
     )

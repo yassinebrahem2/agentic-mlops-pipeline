@@ -43,12 +43,16 @@ class FakeGh:
     merged: list[int] = field(default_factory=list)
     runs: list[int] = field(default_factory=list)
     created: list[str] = field(default_factory=list)
-    # Calls (by their first words) that fail, as GitHub being down would make them.
+    # Calls (by their first words) that fail, as GitHub being down would make them; the
+    # `failing_once` ones fail on their first call only.
     failing: list[tuple[str, ...]] = field(default_factory=list)
+    failing_once: list[tuple[str, ...]] = field(default_factory=list)
     # How many readiness checks a new copy fails before its template content lands.
     empty_checks: int = 0
     # Whether a dispatched run shows in the workflow's runs list.
     runs_listed: bool = True
+    # The SAMPLE_DATA_URL variable's value at each dispatch (None when unset).
+    dispatched_with: list[str | None] = field(default_factory=list)
     calls: list[list[str]] = field(default_factory=list)
 
     def __call__(self, args: Sequence[str]) -> Finished:
@@ -56,6 +60,10 @@ class FakeGh:
         self.calls.append(argv)
         if any(tuple(argv[: len(f)]) == f for f in self.failing):
             return Finished(1, "", "gh: Server Error (HTTP 502)")
+        for once in self.failing_once:
+            if tuple(argv[: len(once)]) == once:
+                self.failing_once.remove(once)
+                return Finished(1, "", "gh: Server Error (HTTP 502)")
         if argv[0] == "repo":
             return self._clone(argv)
         if argv[0] == "pr":
@@ -66,6 +74,10 @@ class FakeGh:
     def named(self, *words: str) -> list[list[str]]:
         """The calls that start with `words`."""
         return [c for c in self.calls if c[: len(words)] == list(words)]
+
+    def sample_data_url(self) -> str | None:
+        variable = self.variables.get("SAMPLE_DATA_URL")
+        return None if variable is None else variable["value"]
 
     def _api(self, method: str, endpoint: str, fields: dict[str, str]) -> Finished:
         if endpoint == "user":
@@ -83,6 +95,7 @@ class FakeGh:
             return self._variable(method, parts, fields)
         if method == "POST" and parts[-1] == "dispatches":
             self.runs.append(1000 + len(self.runs))
+            self.dispatched_with.append(self.sample_data_url())
             return Finished(0, "", "")
         if parts[-1] == "runs":
             listed = self.runs if self.runs_listed else []

@@ -8,7 +8,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 ANSWER_KEY_FILE = "answer_key.jsonl"
 PLANTED_FLAWS_FILE = "planted_flaws.json"
@@ -26,6 +26,26 @@ class Record:
     column: str | None
     start: str
     end: str
+
+
+@dataclass(frozen=True)
+class CiFailureEvent:
+    """When the world broke, or restored, the company CI's sample data in a ci_failure window.
+
+    A second line beside the window's `Record`, which it leaves as it was. `start` and `end` are
+    that window's business dates; `date` is the business date of the event and `time` its real
+    time, which the CI adapter sees; `set_at` ties a restore to the break it undoes.
+    """
+
+    kind: Literal["ci_failure_set", "ci_failure_restored"]
+    start: str
+    end: str
+    date: str
+    time: str
+    set_at: str
+
+
+type KeyLine = Record | CiFailureEvent
 
 
 @dataclass(frozen=True)
@@ -97,18 +117,23 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True)
 
 
-def _present(path: Path) -> set[str]:
-    # Compared as canonical JSON, not as records: the key also holds lines of other shapes.
+def lines(world: Path) -> list[dict[str, Any]]:
+    """Every line of the answer key, as read back."""
+    path = world / ANSWER_KEY_FILE
     if not path.exists():
-        return set()
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return {_canonical(json.loads(line)) for line in lines}
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def append_new(world: Path, records: Iterable[Record]) -> None:
+def _present(world: Path) -> set[str]:
+    # Compared as canonical JSON, not as records: the key holds lines of several shapes.
+    return {_canonical(line) for line in lines(world)}
+
+
+def append_new(world: Path, records: Iterable[KeyLine]) -> None:
     """Append the records the key does not hold yet, so a restart or a rerun adds no line."""
     path = world / ANSWER_KEY_FILE
-    present = _present(path)
+    present = _present(world)
     new = [r for r in dict.fromkeys(records) if _canonical(asdict(r)) not in present]
     if not new:
         return
