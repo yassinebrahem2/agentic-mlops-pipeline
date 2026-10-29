@@ -71,8 +71,10 @@ async def test_a_stop_stored_before_the_resumed_worker_takes_the_turn_is_kept(
     # The approve's resume holds the session lock before it starts its worker; Stop looks (the
     # turn waits, no worker yet) and queues on that lock. The resume then starts the worker,
     # but Stop takes the lock first and stores the turn stopped: the worker takes a resumed
-    # turn only while it still waits, so it leaves it (Decision #445). A Stop that looks after
-    # the worker took the turn is bug #446, not driven here.
+    # turn only while it still waits, so it leaves it (Decision #445). Not covered: a Stop whose
+    # worker check comes before the resume's worker exists while its look comes after the
+    # worker took the turn (window A, bug #446), and a Stop that finds the resume's worker
+    # already started and waits it out without stopping it.
     resuming = hold(monkeypatch, SessionStore, "turn_status")
     looked = signalled(monkeypatch, SessionStore, "waiting_turn")
 
