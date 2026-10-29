@@ -9,11 +9,17 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 from sqlalchemy import RowMapping, insert, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
 from mlops_agents.errors import DomainError, validation_error_message
-from mlops_agents.storage.tables import tracking_sources
+from mlops_agents.storage.tables import project_settings, tracking_sources
+from mlops_agents.tracking.constants import (
+    DEFAULT_SYNC_INTERVAL_S,
+    MIN_SYNC_INTERVAL_S,
+    SYNC_INTERVAL_KEY,
+)
 from mlops_agents.tracking.contract import (
     GithubActionsSettings,
     MlflowSettings,
@@ -130,3 +136,37 @@ async def insert_source_row(
         created_at=created_at,
     )
     await conn.execute(stmt)
+
+
+async def read_sync_interval(conn: AsyncConnection) -> int:
+    row = (
+        await conn.execute(
+            select(project_settings.c.value).where(project_settings.c.key == SYNC_INTERVAL_KEY)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return DEFAULT_SYNC_INTERVAL_S
+    try:
+        val = int(json.loads(str(row)))
+        return val if val >= MIN_SYNC_INTERVAL_S else DEFAULT_SYNC_INTERVAL_S
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return DEFAULT_SYNC_INTERVAL_S
+
+
+async def write_sync_interval(conn: AsyncConnection, interval_s: int) -> int:
+    if interval_s < MIN_SYNC_INTERVAL_S:
+        raise DomainError(
+            "tracking_invalid_interval",
+            f"Sync interval must be at least {MIN_SYNC_INTERVAL_S} seconds.",
+            status=422,
+        )
+    encoded = json.dumps(interval_s)
+    await conn.execute(
+        sqlite_insert(project_settings)
+        .values(key=SYNC_INTERVAL_KEY, value=encoded)
+        .on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": encoded},
+        )
+    )
+    return interval_s

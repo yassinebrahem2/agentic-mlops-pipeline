@@ -29,8 +29,6 @@ def _is_due(
     last_attempt: datetime | None,
     interval_s: int,
 ) -> bool:
-    if last_sync is None and last_attempt is None:
-        return True
     if last_sync is None:
         if last_attempt is None:
             return True

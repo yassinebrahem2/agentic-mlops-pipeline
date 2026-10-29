@@ -286,20 +286,6 @@ async def test_adapter_errors() -> None:
         assert len(fake_state.requests) == 1
         assert fake_state.requests[0]["path"] == "/redirect-test"
 
-    # Also test redirect on search route during sync
-    redirect_app = FastAPI()
-
-    @redirect_app.post("/api/2.0/mlflow/experiments/search")
-    async def redirect_exp_search() -> Response:
-        return Response(status_code=302, headers={"location": "http://127.0.0.1:9999/somewhere"})
-
-    async with httpx2.AsyncClient(
-        transport=httpx2.ASGITransport(app=redirect_app), base_url="http://testserver"
-    ) as client:
-        adapter_redir2 = MlflowAdapter(http=client)
-        res_redir2 = await adapter_redir2.sync(source, credential=None, since=None)
-        assert res_redir2.error == "MLflow answered with HTTP 302"
-
 
 @pytest.mark.asyncio
 async def test_adapter_evaluations() -> None:

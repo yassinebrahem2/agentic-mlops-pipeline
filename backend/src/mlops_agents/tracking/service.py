@@ -3,33 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import select
 
 from mlops_agents.clock import utc_now
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
-from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
+from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
-from mlops_agents.proposals.contract import Handoffs, HandoffView
+from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import project_settings, projects, tracking_sources
-from mlops_agents.tracking.constants import (
-    DEFAULT_SYNC_INTERVAL_S,
-    ERROR_MAX_CHARS,
-    MIN_SYNC_INTERVAL_S,
-    PRODUCTION_ALIAS,
-    PRODUCTION_ENVIRONMENT,
-    SYNC_INTERVAL_KEY,
-)
+from mlops_agents.storage.tables import projects
 from mlops_agents.tracking.contract import (
     Page,
     SourceType,
@@ -38,12 +28,15 @@ from mlops_agents.tracking.contract import (
     TrackingQuery,
     TrackingSourceView,
 )
+from mlops_agents.tracking.handoff_alias import resolve_candidate_aliases_fn
 from mlops_agents.tracking.sources import (
     insert_source_row,
     load_all_source_rows,
     load_source_row,
+    read_sync_interval,
     row_to_source_view,
     validate_source_input,
+    write_sync_interval,
 )
 from mlops_agents.tracking.store import (
     query_ci_runs,
@@ -55,6 +48,7 @@ from mlops_agents.tracking.store import (
     query_versions,
     save_sync_result,
 )
+from mlops_agents.tracking.sync_error import record_sync_error
 
 _log = logging.getLogger(__name__)
 
@@ -91,10 +85,6 @@ class TrackingService(Tracking):
         self._source_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
         self._bg_tasks: set[asyncio.Task[None]] = set()
-
-    def register_adapter(self, adapter: TrackingAdapter) -> None:
-        """Register or replace an adapter for a source type."""
-        self._adapters[adapter.type] = adapter
 
     async def _check_project(self, project_id: str) -> None:
         try:
@@ -331,79 +321,16 @@ class TrackingService(Tracking):
         error_msg: str,
         credential: str | None,
     ) -> None:
-        secrets_to_scrub = [credential] if credential else []
-        try:
-            gh_token = await self._github_token()
-            if gh_token:
-                secrets_to_scrub.append(gh_token)
-        except Exception as exc:
-            _log.warning("Could not resolve github token for error scrubbing: %s", error_text(exc))
-        scrubbed = scrub_url_secrets(error_msg)
-        scrubbed = scrub_values(scrubbed, secrets_to_scrub)
-        if len(scrubbed) > ERROR_MAX_CHARS:
-            scrubbed = scrubbed[:ERROR_MAX_CHARS]
-
-        try:
-            engine = await self._databases.project(project_id)
-            async with engine.begin() as conn:
-                await conn.execute(
-                    update(tracking_sources)
-                    .where(tracking_sources.c.id == source_id)
-                    .values(last_error=scrubbed)
-                )
-        except Exception as exc:
-            _log.warning(
-                "Could not update last_error for source %s: %s", source_id, error_text(exc)
-            )
-
-        payload = {
-            "source_id": source_id,
-            "type": source_type,
-            "ok": False,
-            "versions": 0,
-            "runs": 0,
-            "metrics": 0,
-            "ci_runs": 0,
-            "evaluations": 0,
-            "error": scrubbed,
-        }
-        try:
-            await self._events.record(
-                project_id,
-                source="system",
-                type="tracking.synced",
-                subject_id=source_id,
-                payload=payload,
-            )
-        except Exception as exc:
-            _log.warning("Could not record tracking.synced error event: %s", error_text(exc))
-
-    async def _resolve_candidate_aliases_fn(
-        self, project_id: str
-    ) -> Callable[[str], Sequence[str]]:
-        handoff: HandoffView | None = None
-        try:
-            handoff = await self._handoffs.current(project_id)
-        except Exception as exc:
-            if project_id not in self._handoff_error_logged:
-                _log.warning("Failed to read handoff for project %s: %s", project_id, exc)
-                self._handoff_error_logged.add(project_id)
-            return lambda _model: [PRODUCTION_ALIAS]
-
-        if handoff is None or not handoff.payload.models:
-            return lambda _model: [PRODUCTION_ALIAS]
-
-        specs_by_name = {m.name: m for m in handoff.payload.models}
-
-        def _get_candidates(model_name: str) -> Sequence[str]:
-            spec = specs_by_name.get(model_name)
-            if spec is None:
-                return [PRODUCTION_ALIAS]
-            return sorted(
-                alias for alias, env in spec.environments.items() if env == PRODUCTION_ENVIRONMENT
-            )
-
-        return _get_candidates
+        await record_sync_error(
+            databases=self._databases,
+            events=self._events,
+            github_token=self._github_token,
+            project_id=project_id,
+            source_id=source_id,
+            source_type=source_type,
+            error_msg=error_msg,
+            credential=credential,
+        )
 
     async def query(self, project_id: str, q: TrackingQuery) -> Page[Any]:
         await self._check_project(project_id)
@@ -416,7 +343,9 @@ class TrackingService(Tracking):
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             if q.what == "models":
-                candidate_fn = await self._resolve_candidate_aliases_fn(project_id)
+                candidate_fn = await resolve_candidate_aliases_fn(
+                    self._handoffs, project_id, self._handoff_error_logged
+                )
                 return await query_models(conn, q, candidate_fn)
             if q.what == "versions":
                 return await query_versions(conn, q)
@@ -437,38 +366,13 @@ class TrackingService(Tracking):
         await self._check_project(project_id)
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    select(project_settings.c.value).where(
-                        project_settings.c.key == SYNC_INTERVAL_KEY
-                    )
-                )
-            ).scalar_one_or_none()
-        if row is None:
-            return DEFAULT_SYNC_INTERVAL_S
-        try:
-            val = int(json.loads(str(row)))
-            return val if val >= MIN_SYNC_INTERVAL_S else DEFAULT_SYNC_INTERVAL_S
-        except (ValueError, TypeError, json.JSONDecodeError):
-            return DEFAULT_SYNC_INTERVAL_S
+            return await read_sync_interval(conn)
 
     async def set_sync_interval(self, project_id: str, interval_s: int) -> int:
         await self._check_project(project_id)
-        if interval_s < MIN_SYNC_INTERVAL_S:
-            raise DomainError(
-                "tracking_invalid_interval",
-                f"Sync interval must be at least {MIN_SYNC_INTERVAL_S} seconds.",
-                status=422,
-            )
         engine = await self._databases.project(project_id)
-        encoded = json.dumps(interval_s)
         async with engine.begin() as conn:
-            await conn.execute(
-                sqlite_insert(project_settings)
-                .values(key=SYNC_INTERVAL_KEY, value=encoded)
-                .on_conflict_do_update(index_elements=["key"], set_={"value": encoded})
-            )
-        return interval_s
+            return await write_sync_interval(conn, interval_s)
 
     async def close(self) -> None:
         """Cancels background sync tasks."""

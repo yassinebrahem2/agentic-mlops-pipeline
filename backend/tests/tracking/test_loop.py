@@ -6,13 +6,11 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github import api
 from mlops_agents.storage.databases import Databases
-from mlops_agents.tracking.adapters.mlflow import MlflowAdapter
 from mlops_agents.tracking.constants import (
     DEFAULT_SYNC_INTERVAL_S,
 )
@@ -21,7 +19,7 @@ from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
 from tests.fakes.fake_github import FakeGitHubState, start_fake_github
-from tests.fakes.fake_mlflow import FakeMlflowState, create_fake_mlflow_app
+from tests.fakes.fake_mlflow import FakeMlflowState, start_fake_mlflow
 from tests.tracking.conftest import FakeHandoffs
 
 
@@ -278,8 +276,7 @@ async def test_loop_with_real_service_fills_record_and_records_event(
         status="FINISHED",
     )
     fake_mlflow_state.log_metric(run_id="run_1", key="loss", value=0.42)
-    mlflow_app = create_fake_mlflow_app(fake_mlflow_state)
-    mlflow_transport = httpx2.ASGITransport(app=mlflow_app)
+    running_mlflow = start_fake_mlflow(fake_mlflow_state)
 
     fake_gh_state = FakeGitHubState()
     fake_gh_state.workflow_runs["org/demo"] = [
@@ -305,22 +302,17 @@ async def test_loop_with_real_service_fills_record_and_records_event(
             project_id = await add_local_project(app, tmp_path, git_env)
             services = app.state.services
 
-            # Register fake MLflow adapter using public register_adapter
-            fake_client = httpx2.AsyncClient(
-                transport=mlflow_transport, base_url="http://fake-mlflow"
-            )
-            services.tracking.register_adapter(MlflowAdapter(fake_client))
+            # Set GitHub token through the public GitHub service
+            await services.github.set_token("fake-gh-token")
 
-            async def _fake_token() -> str | None:
-                return "fake-gh-token"
+            # Set short sync interval through existing tracking settings
+            await services.tracking.set_sync_interval(project_id, 15)
 
-            services.tracking._github_token = _fake_token
-
-            # Create both sources
+            # Create both sources pointing to the real running fakes
             source_mlflow = await services.tracking.create_source(
                 project_id=project_id,
                 type="mlflow",
-                settings={"url": "http://fake-mlflow"},
+                settings={"url": running_mlflow.base_url},
                 auth="none",
             )
             source_gh = await services.tracking.create_source(
@@ -330,8 +322,16 @@ async def test_loop_with_real_service_fills_record_and_records_event(
                 auth="none",
             )
 
-            # Trigger a pass on the app's real tracking loop
-            await services.tracking_loop.run_pass()
+            # Wait for the app's started tracking loop to sync both sources on its own
+            async with asyncio.timeout(30):
+                while True:
+                    events = await services.events.history(project_id, types=["tracking.synced"])
+                    synced_source_ids = {
+                        e.payload["source_id"] for e in events if e.payload.get("ok")
+                    }
+                    if source_mlflow.id in synced_source_ids and source_gh.id in synced_source_ids:
+                        break
+                    await asyncio.sleep(0.5)
 
             # Check MLflow runs are synced
             q_runs = await services.tracking.query(
@@ -357,6 +357,7 @@ async def test_loop_with_real_service_fills_record_and_records_event(
     finally:
         api.GITHUB_API = original_api
         running_gh.stop()
+        running_mlflow.stop()
 
 
 async def test_loop_start_returns_at_once_with_blackholed_source() -> None:

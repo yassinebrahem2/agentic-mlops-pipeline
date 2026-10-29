@@ -62,7 +62,7 @@ async def fetch_one_evaluation(
 
         try:
             raw_payload: Any = json.loads(body_bytes.decode("utf-8"))
-        except Exception:
+        except (ValueError, UnicodeDecodeError):
             return "fetch_failed", None, True
 
         if isinstance(raw_payload, dict):
