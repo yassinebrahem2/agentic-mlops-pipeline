@@ -178,6 +178,7 @@ async def test_a_slow_table_times_out_with_its_columns(
     assert time.monotonic() - started < 1
     assert profile.timed_out
     assert profile.timeout_s == 0.2
+    assert profile.row_count is None  # not computed, never reported as 0 rows
     assert [(c.name, c.type) for c in profile.columns] == [("range", "BIGINT")]
     assert len(opened) == 1
     with pytest.raises(duckdb.ConnectionException):

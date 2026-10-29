@@ -76,9 +76,7 @@ async def test_a_table_timed_out_under_the_full_timeout_is_a_cache_hit_that_says
     await env.connect("sales", {"a.csv": csv_rows(3), "b.csv": csv_rows(3)})
     env.spy.slow.add("a.csv")
     _short_full_timeout(monkeypatch, 0.3)
-    timed_out = (
-        "Profile timed out after 0.3 s: the row count, statistics and sample rows are unknown."
-    )
+    timed_out = "Profile timed out after 0.3 s: the statistics and sample rows are unknown."
 
     first = await env.render()
     second = await env.render()
@@ -86,7 +84,9 @@ async def test_a_table_timed_out_under_the_full_timeout_is_a_cache_hit_that_says
     assert env.spy.count("a.csv") == 1
     assert second == first
     lines = first.split("\n")
-    assert lines[lines.index(timed_out) - 1].startswith('Table "a" (csv, files ["a.csv"], ')
+    title = lines[lines.index(timed_out) - 1]
+    assert title.startswith('Table "a" (csv, files ["a.csv"], ')
+    assert title.endswith("): row count unknown (timed out)")
     assert any(line.startswith('Table "b" (csv, ') and line.endswith("3 rows") for line in lines)
 
 

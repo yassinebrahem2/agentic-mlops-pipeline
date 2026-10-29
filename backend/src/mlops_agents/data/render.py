@@ -14,11 +14,13 @@ from typing import Final
 
 from mlops_agents.connections.contract import ConnectionView, TableRef
 from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
+from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES
 from mlops_agents.data.profile import ColumnProfile, TableProfile
 
 SIZE_CAP: Final = "size cap"
 TIME_BUDGET: Final = "time budget"
 CACHE_UNAVAILABLE: Final = "profile cache unavailable"
+UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
 
 # What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them),
 # the Unicode line and paragraph separators, and lone surrogates (a file name whose bytes
@@ -76,8 +78,12 @@ def unreadable_line(ref: TableRef, reason: str) -> str:
 
 
 def more_tables_line(refs: Sequence[TableRef]) -> str:
-    names = ", ".join(quoted(ref.name) for ref in refs)
-    return f"and {len(refs)} more tables: {names}"
+    names = ", ".join(quoted(ref.name) for ref in refs[:LISTED_TABLE_NAMES])
+    line = f"and {len(refs)} more tables: {names}"
+    unnamed = len(refs) - LISTED_TABLE_NAMES
+    if unnamed > 0:
+        line += f", and {unnamed} more"
+    return line
 
 
 def render_table(ref: TableRef, profile: TableProfile) -> str:
@@ -91,26 +97,35 @@ def render_versioned_table(ref: TableRef, data_version: str, profile: TableProfi
 
 
 def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> str:
-    about = f"{ref.format}, files {_json(ref.files)}"
+    about = f"{ref.format}, files {_files(ref.files)}"
     if data_version is not None:
         about += f", data version {one_line(data_version)}"
-    title = f"Table {quoted(ref.name)} ({about})"
+    rows = UNKNOWN_ROW_COUNT if profile.row_count is None else f"{profile.row_count} rows"
+    title = f"Table {quoted(ref.name)} ({about}): {rows}"
     if profile.timed_out:
         # Only DESCRIBE's names and types are known; the counts are not facts.
         lines = [
             title,
-            f"Profile timed out after {profile.timeout_s:g} s: the row count, statistics "
-            "and sample rows are unknown.",
+            f"Profile timed out after {profile.timeout_s:g} s: the statistics and sample rows "
+            "are unknown.",
             *_columns(profile, lambda c: f"- {quoted(c.name)} {one_line(c.type)}"),
         ]
         return "\n".join(lines)
-    lines = [f"{title}: {profile.row_count} rows", *_columns(profile, _column_line)]
+    lines = [title, *_columns(profile, _column_line)]
     if profile.sample:
         lines.append(f"Sample rows (first {len(profile.sample)}):")
         lines += [_json(row) for row in profile.sample]
     else:
         lines.append("Sample rows: none")
     return "\n".join(lines)
+
+
+def _files(files: Sequence[str]) -> str:
+    text = _json(files[:LISTED_FILES])
+    unlisted = len(files) - LISTED_FILES
+    if unlisted > 0:
+        text += f" and {unlisted} more files"
+    return text
 
 
 def _columns(profile: TableProfile, line: Callable[[ColumnProfile], str]) -> list[str]:

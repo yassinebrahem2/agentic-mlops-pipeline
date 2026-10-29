@@ -38,7 +38,8 @@ class TableDetail(BaseModel):
 
     table: TableRef
     columns: list[ColumnInfo]
-    row_count: int
+    row_count: int | None  # None: not computed (a timed-out profile)
+    timed_out: bool
     data_version: str
     summary: str
 

@@ -10,11 +10,20 @@ from mlops_agents.data.cache import ProfileCache
 from mlops_agents.data.constants import PROFILE_TIMEOUT_S
 from mlops_agents.data.profile import TableProfile, profile_table
 from mlops_agents.data.render import render_table
+from mlops_agents.errors import DomainError
 
 # How long past its own `timeout_s` a caller waits. A profile stops itself at `timeout_s`
 # (its Deadline interrupts DuckDB; cancelling the worker thread would not), so the wait only
 # bounds a caller queued behind another caller's longer profile of the same table.
 _WAIT_GRACE_S: Final = 1.0
+
+PROFILE_TIMEOUT_CODE: Final = "profile_timeout"
+# Fixed: nothing from the request or the team's files goes into it.
+PROFILE_TIMEOUT_MESSAGE: Final = "The table's profile did not finish within the time limit."
+
+
+def _profile_timeout() -> DomainError:
+    return DomainError(PROFILE_TIMEOUT_CODE, PROFILE_TIMEOUT_MESSAGE, status=504)
 
 
 class DataSummaries:
@@ -25,15 +34,25 @@ class DataSummaries:
     async def table_detail(
         self, project_id: str, connection_id: str, table: TableRef
     ) -> TableDetail:
-        """Raises `DomainError` as `Connections` and `profile_table` do, and `TimeoutError`
-        as `versioned_profile` does."""
-        data_version, profile = await self.versioned_profile(
-            project_id, connection_id, table, PROFILE_TIMEOUT_S
-        )
+        """A timed-out profile with columns is a detail (`timed_out`, `row_count` None).
+
+        Raises `DomainError` as `Connections` and `profile_table` do, and
+        `DomainError("profile_timeout")` (504) when nothing was computed or waiting on
+        another caller's profile of the table timed out.
+        """
+        try:
+            data_version, profile = await self.versioned_profile(
+                project_id, connection_id, table, PROFILE_TIMEOUT_S
+            )
+        except TimeoutError as exc:
+            raise _profile_timeout() from exc
+        if profile.timed_out and not profile.columns:
+            raise _profile_timeout()
         return TableDetail(
             table=table,
             columns=[ColumnInfo(name=c.name, type=c.type) for c in profile.columns],
             row_count=profile.row_count,
+            timed_out=profile.timed_out,
             data_version=data_version,
             summary=render_table(table, profile),
         )
@@ -45,7 +64,12 @@ class DataSummaries:
         table: TableRef,
         timeout_s: float = PROFILE_TIMEOUT_S,
     ) -> TableProfile:
-        _, profile = await self.versioned_profile(project_id, connection_id, table, timeout_s)
+        """Raises `DomainError` as `table_detail` does, except that a timed-out profile is
+        returned as it is, with or without columns."""
+        try:
+            _, profile = await self.versioned_profile(project_id, connection_id, table, timeout_s)
+        except TimeoutError as exc:
+            raise _profile_timeout() from exc
         return profile
 
     async def versioned_profile(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mlops_agents.connections.contract import TableRef
+from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES
 from mlops_agents.data.profile import ColumnProfile, TableProfile
 from mlops_agents.data.render import (
     SIZE_CAP,
@@ -80,7 +81,7 @@ def test_an_empty_table_says_it_has_no_sample_rows() -> None:
 
 def test_a_timed_out_profile_shows_only_names_and_types() -> None:
     profile = _profile(
-        row_count=0,
+        row_count=None,
         columns=[_column("id", "BIGINT"), _column("name", "VARCHAR")],
         more_columns=4,
         sample=[],
@@ -88,8 +89,9 @@ def test_a_timed_out_profile_shows_only_names_and_types() -> None:
         timeout_s=30,
     )
     assert render_versioned_table(PEOPLE, "v1", profile) == (
-        'Table "people" (csv, files ["people.csv"], data version v1)\n'
-        "Profile timed out after 30 s: the row count, statistics and sample rows are unknown.\n"
+        'Table "people" (csv, files ["people.csv"], data version v1): '
+        "row count unknown (timed out)\n"
+        "Profile timed out after 30 s: the statistics and sample rows are unknown.\n"
         "Columns:\n"
         '- "id" BIGINT\n'
         '- "name" VARCHAR\n'
@@ -98,10 +100,37 @@ def test_a_timed_out_profile_shows_only_names_and_types() -> None:
 
 
 def test_a_profile_that_timed_out_before_its_columns_shows_none() -> None:
-    profile = _profile(row_count=0, columns=[], sample=[], timed_out=True, timeout_s=0.5)
+    profile = _profile(row_count=None, columns=[], sample=[], timed_out=True, timeout_s=0.5)
     assert render_table(PEOPLE, profile) == (
-        'Table "people" (csv, files ["people.csv"])\n'
-        "Profile timed out after 0.5 s: the row count, statistics and sample rows are unknown."
+        'Table "people" (csv, files ["people.csv"]): row count unknown (timed out)\n'
+        "Profile timed out after 0.5 s: the statistics and sample rows are unknown."
+    )
+
+
+def test_a_table_lists_its_first_files_and_counts_the_rest() -> None:
+    files = [f"events/part-{i:05}.csv" for i in range(LISTED_FILES + 7)]
+    ref = TableRef(name="events", files=files, format="csv")
+    first = render_table(ref, _profile()).split("\n", 1)[0]
+    listed = ", ".join(f'"{name}"' for name in files[:LISTED_FILES])
+    assert first == f'Table "events" (csv, files [{listed}] and 7 more files): 3 rows'
+
+
+def test_a_table_with_exactly_the_listed_files_counts_none() -> None:
+    files = [f"events/part-{i:05}.csv" for i in range(LISTED_FILES)]
+    ref = TableRef(name="events", files=files, format="csv")
+    first = render_table(ref, _profile()).split("\n", 1)[0]
+    listed = ", ".join(f'"{name}"' for name in files)
+    assert first == f'Table "events" (csv, files [{listed}]): 3 rows'
+
+
+def test_the_more_tables_line_names_the_first_tables_and_counts_the_rest() -> None:
+    refs = [TableRef(name=f"t{i}", files=[f"t{i}.csv"], format="csv") for i in range(30)]
+    names = ", ".join(f'"t{i}"' for i in range(LISTED_TABLE_NAMES))
+    assert more_tables_line(refs) == (
+        f"and 30 more tables: {names}, and {30 - LISTED_TABLE_NAMES} more"
+    )
+    assert more_tables_line(refs[:LISTED_TABLE_NAMES]) == (
+        f"and {LISTED_TABLE_NAMES} more tables: {names}"
     )
 
 

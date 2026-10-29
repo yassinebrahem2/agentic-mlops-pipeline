@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import shutil
+import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,13 @@ from mlops_agents.agents.hooks import data_summary as hook_module
 from mlops_agents.agents.hooks.names import DATA_SUMMARY_HOOK
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.data import cache as cache_module
-from mlops_agents.data.constants import MAX_TABLES, SAMPLE_ROWS
+from mlops_agents.data.constants import (
+    DATA_SUMMARY_MAX_CHARS,
+    LISTED_FILES,
+    LISTED_TABLE_NAMES,
+    MAX_TABLES,
+    SAMPLE_ROWS,
+)
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.hooks.test_registry import TextHook
@@ -135,6 +143,53 @@ async def test_a_table_larger_than_the_whole_cap_is_listed(
         'Table "b" (csv): detail left out: size cap'
     )
     assert (env.spy.count("a.csv"), env.spy.count("b.csv")) == (1, 0)
+
+
+async def test_a_table_of_many_part_files_lists_a_few_and_later_tables_keep_detail(
+    env: SummaryEnv,
+) -> None:
+    """Spark-style output: one folder table of 300 part files with long names."""
+    parts = [f"events/part-{i:05}-{uuid.UUID(int=i)}-c000.csv" for i in range(300)]
+    await env.connect(
+        "sales", {**{part: "id\n1\n" for part in parts}, "z1.csv": csv_rows(2), "z2.csv": "a\n1\n"}
+    )
+
+    text = await env.render()
+
+    assert len(text) <= DATA_SUMMARY_MAX_CHARS
+    lines = text.split("\n")
+    (events,) = [line for line in lines if line.startswith('Table "events"')]
+    listed = ", ".join(f'"{part}"' for part in parts[:LISTED_FILES])
+    assert events.startswith(
+        f'Table "events" (csv, files [{listed}] and {300 - LISTED_FILES} more files, data version '
+    )
+    assert events.endswith("): 300 rows")
+    assert any(line.startswith('Table "z1" (csv, ') and line.endswith("2 rows") for line in lines)
+    assert any(line.startswith('Table "z2" (csv, ') and line.endswith("1 rows") for line in lines)
+
+
+async def test_a_thousand_tables_name_a_few_and_later_connections_keep_detail(
+    env: SummaryEnv,
+) -> None:
+    """Daily files at the top of a folder: one table each."""
+    days = [f"sales_{date.fromordinal(738000 + i).isoformat()}" for i in range(1000)]
+    await env.connect("daily", {f"{day}.csv": "a\n1\n" for day in days})
+    await env.connect("later", {"people.csv": csv_rows(2)})
+
+    text = await env.render()
+
+    assert len(text) <= DATA_SUMMARY_MAX_CHARS
+    lines = text.split("\n")
+    rest = days[MAX_TABLES:]
+    names = ", ".join(f'"{day}"' for day in rest[:LISTED_TABLE_NAMES])
+    assert (
+        f"and {len(rest)} more tables: {names}, and {len(rest) - LISTED_TABLE_NAMES} more"
+    ) in lines
+    assert 'Connection "later" (local_folder, ok) at /data/later:' in lines
+    assert any(
+        line.startswith('Table "people" (csv, ') and line.endswith("2 rows") for line in lines
+    )
+    assert env.spy.total == MAX_TABLES + 1
 
 
 async def test_a_second_render_is_served_from_the_cache_until_a_file_changes(

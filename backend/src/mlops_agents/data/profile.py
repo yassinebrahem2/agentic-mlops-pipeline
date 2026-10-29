@@ -45,9 +45,10 @@ class ColumnProfile(BaseModel):
 
 class TableProfile(BaseModel):
     """When `timed_out` is true, only what was computed before the limit is filled in: the
-    other counts are 0 and the other lists empty."""
+    other counts are 0 and the other lists empty, and `row_count` is None (not computed;
+    an unknown count is never reported as 0 rows)."""
 
-    row_count: int
+    row_count: int | None
     columns: list[ColumnProfile]
     more_columns: int
     sample_columns: list[str]
@@ -105,7 +106,7 @@ class _ProfileBuilder:
     def __init__(self, sql_from: str) -> None:
         # sql_from is the connection kind's, built from a validated folder and quoted file names.
         self._relation = f"(SELECT * FROM {sql_from})"  # noqa: S608 -- DuckDB boundary; the kind quotes it
-        self._row_count = 0
+        self._row_count: int | None = None
         self._columns: list[ColumnProfile] = []
         self._more_columns = 0
         self._sample_columns: list[str] = []
@@ -119,7 +120,8 @@ class _ProfileBuilder:
 
     def result(self, *, timed_out: bool, timeout_s: float) -> TableProfile:
         return TableProfile(
-            row_count=self._row_count,
+            # The rest of a timed-out profile's counts are not shown as facts; neither is this.
+            row_count=None if timed_out else self._row_count,
             columns=self._columns,
             more_columns=self._more_columns,
             sample_columns=self._sample_columns,
