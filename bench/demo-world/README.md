@@ -95,7 +95,7 @@ A live demo uses its own run too, without `--merge-after-days` (the user merges)
 ```
 uv run demo-world new-run live
 uv run demo-world backfill --run live --until 2016-07-01
-uv run demo-world up --run live --start 2016-07-01 --end 2016-10-31 --seconds-per-day 0 --scenario scenarios/default.toml
+uv run demo-world up --run live --start 2016-07-01 --end 2016-07-31 --seconds-per-day 0 --scenario scenarios/default.toml
 uv run demo-world up --run live --start 2016-07-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
 ```
 

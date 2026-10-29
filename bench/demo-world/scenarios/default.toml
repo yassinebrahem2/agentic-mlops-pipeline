@@ -1,7 +1,7 @@
 # The default scenario: one injected problem of each kind, and the natural shift the evaluation
 # scores. Dates are business dates (a bookings file's date is the day the bookings were made).
-# The simulation starts on 2016-07-01, and its first month, July, is the quiet baseline the
-# legacy checks must pass without firing, so the windows start in August. They end before the
+# The simulation starts on 2016-07-01, and its first month, July, is the quiet baseline (each
+# legacy check fires on at most 2 of its days), so the windows start in August. They end before the
 # natural shift of November and December, and lie over 7 days apart, beyond the 7-day lookbacks
 # of the cancellation-rate and drift checks; neighbouring windows do fall within the accuracy
 # check's 30-day label window.
