@@ -335,7 +335,7 @@ async def test_unknown_model_permanent_error_scrubs_secrets(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     provider = await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )
