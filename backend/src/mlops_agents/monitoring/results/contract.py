@@ -77,14 +77,16 @@ class CollectionReport(BaseModel):
 
 
 def source_id(kind: SourceKind, ref: str, connection: str | None = None) -> str:
-    """Builds a canonical source_id for file, ci, or mlflow."""
+    """Builds a canonical source_id for file, ci, or mlflow.
+
+    `connection` is required for 'file' and refused for 'ci' and 'mlflow'.
+    """
     if kind == "file":
-        if connection is not None:
-            return f"file:{connection}:{ref}"
-        if not ref.startswith("file:"):
-            # If connection was omitted, ref may already be "<connection>:<pattern>"
-            return f"file:{ref}"
-        return ref
+        if not connection:
+            raise ValueError("connection is required for file source_id")
+        return f"file:{connection}:{ref}"
+    if connection is not None:
+        raise ValueError(f"connection is not allowed for {kind} source_id")
     return f"{kind}:{ref}"
 
 
