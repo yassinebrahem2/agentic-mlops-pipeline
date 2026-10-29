@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -308,3 +308,194 @@ async def test_query_each_what_typed(tracking_env: TrackingEnv) -> None:
 
     p_eval = await env.service.query(env.project_id, TrackingQuery(what="evaluations", model="mod"))
     assert isinstance(p_eval.rows[0], EvaluationRecord)
+
+
+async def test_query_since_filter_with_timezone_normalization(
+    tracking_env: TrackingEnv,
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "http://testserver"},
+        auth="none",
+    )
+    t0 = datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
+    t1 = datetime(2026, 10, 28, 14, 0, 0, tzinfo=UTC)
+
+    adapter = env.adapters["mlflow"]
+    adapter.result = SyncResult(
+        versions=[
+            ModelVersionRow(
+                source_id=source.id,
+                model="M",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="M",
+                version="2",
+                run_key=None,
+                aliases=[],
+                created=t1,
+                evaluation="absent",
+            ),
+        ],
+        runs=[
+            RunRow(
+                source_id=source.id,
+                key="r1",
+                experiment="exp",
+                status="succeeded",
+                start=t0,
+                end=t0,
+                params={},
+                tags={},
+                git_commit=None,
+                datasets=[],
+            ),
+            RunRow(
+                source_id=source.id,
+                key="r2",
+                experiment="exp",
+                status="succeeded",
+                start=t1,
+                end=t1,
+                params={},
+                tags={},
+                git_commit=None,
+                datasets=[],
+            ),
+        ],
+        metrics=[],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, source.id)
+
+    # Filter with since as 15:00 in +02:00 (= 13:00 UTC).
+    # t0 (12:00 UTC) should be excluded, t1 (14:00 UTC) should be included.
+    tz_plus_2 = timezone(timedelta(hours=2))
+    since_dt = datetime(2026, 10, 28, 15, 0, 0, tzinfo=tz_plus_2)
+
+    page = await env.service.query(
+        env.project_id, TrackingQuery(what="versions", model="M", since=since_dt)
+    )
+    assert len(page.rows) == 1
+    assert page.rows[0].version == "2"
+
+    page_runs = await env.service.query(env.project_id, TrackingQuery(what="runs", since=since_dt))
+    assert len(page_runs.rows) == 1
+    assert page_runs.rows[0].key == "r2"
+
+
+async def test_query_source_id_filtering(tracking_env: TrackingEnv) -> None:
+    env = tracking_env
+    s1 = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "http://s1"},
+        auth="none",
+    )
+    s2 = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "http://s2"},
+        auth="none",
+    )
+    t0 = datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
+    adapter = env.adapters["mlflow"]
+    adapter.result = SyncResult(
+        versions=[
+            ModelVersionRow(
+                source_id=s1.id,
+                model="Model1",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+        ],
+        runs=[
+            RunRow(
+                source_id=s1.id,
+                key="run1",
+                experiment="exp",
+                status="succeeded",
+                start=t0,
+                end=t0,
+                params={},
+                tags={},
+                git_commit=None,
+                datasets=[],
+            ),
+        ],
+        metrics=[],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, s1.id)
+
+    adapter.result = SyncResult(
+        versions=[
+            ModelVersionRow(
+                source_id=s2.id,
+                model="Model2",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+        ],
+        runs=[
+            RunRow(
+                source_id=s2.id,
+                key="run2",
+                experiment="exp",
+                status="succeeded",
+                start=t0,
+                end=t0,
+                params={},
+                tags={},
+                git_commit=None,
+                datasets=[],
+            ),
+        ],
+        metrics=[],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, s2.id)
+
+    # Query without source_id filter -> returns both
+    all_models = await env.service.query(env.project_id, TrackingQuery(what="models"))
+    assert len(all_models.rows) == 2
+
+    # Query with source_id filter -> returns only matching source
+    s1_models = await env.service.query(
+        env.project_id, TrackingQuery(what="models", source_id=s1.id)
+    )
+    assert len(s1_models.rows) == 1
+    assert s1_models.rows[0].source_id == s1.id
+
+    s2_models = await env.service.query(
+        env.project_id, TrackingQuery(what="models", source_id=s2.id)
+    )
+    assert len(s2_models.rows) == 1
+    assert s2_models.rows[0].source_id == s2.id
+
+    s1_runs = await env.service.query(env.project_id, TrackingQuery(what="runs", source_id=s1.id))
+    assert len(s1_runs.rows) == 1
+    assert s1_runs.rows[0].source_id == s1.id

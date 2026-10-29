@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from mlops_agents.clock import to_iso
 from mlops_agents.storage.tables import (
     ci_runs,
     deployments,
@@ -41,10 +42,6 @@ __all__ = [
     "query_versions",
     "save_sync_result",
 ]
-
-
-def _format_utc_iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 async def _save_models(conn: AsyncConnection, source_id: str, result: SyncResult) -> None:
@@ -173,7 +170,7 @@ async def _save_versions(
             version=v.version,
             run_key=v.run_key,
             aliases=json.dumps(derived_aliases),
-            created_at=_format_utc_iso(v.created),
+            created_at=to_iso(v.created),
             evaluation=v.evaluation,
         )
         mv_stmt = mv_stmt.on_conflict_do_update(
@@ -198,8 +195,8 @@ async def _save_runs(conn: AsyncConnection, source_id: str, result: SyncResult) 
             key=r.key,
             experiment=r.experiment,
             status=r.status,
-            started_at=_format_utc_iso(r.start) if r.start else None,
-            ended_at=_format_utc_iso(r.end) if r.end else None,
+            started_at=to_iso(r.start) if r.start else None,
+            ended_at=to_iso(r.end) if r.end else None,
             params=json.dumps(r.params),
             tags=json.dumps(r.tags),
             git_commit=r.git_commit,
@@ -228,7 +225,7 @@ async def _save_metrics(conn: AsyncConnection, source_id: str, result: SyncResul
             run_key=m.run_key,
             metric=m.metric,
             step=m.step,
-            time=_format_utc_iso(m.time),
+            time=to_iso(m.time),
             value=m.value,
         )
         m_stmt = m_stmt.on_conflict_do_update(
@@ -251,7 +248,7 @@ async def _save_ci_runs(conn: AsyncConnection, source_id: str, result: SyncResul
             key=c.key,
             workflow=c.workflow,
             status=c.status,
-            started_at=_format_utc_iso(c.start),
+            started_at=to_iso(c.start),
             duration_s=c.duration_s,
             commit_sha=c.commit,
             url=c.url,
@@ -279,7 +276,7 @@ async def _save_evaluations(conn: AsyncConnection, source_id: str, result: SyncR
             run_key=e.run_key,
             schema_version=e.schema_version,
             payload=json.dumps(e.payload),
-            fetched_at=_format_utc_iso(e.fetched_at),
+            fetched_at=to_iso(e.fetched_at),
         )
         e_stmt = e_stmt.on_conflict_do_update(
             index_elements=[evaluations.c.source_id, evaluations.c.model, evaluations.c.version],
@@ -299,7 +296,7 @@ async def save_sync_result(
     result: SyncResult,
     clock_now: datetime,
 ) -> None:
-    now_iso = _format_utc_iso(clock_now)
+    now_iso = to_iso(clock_now)
 
     await _save_models(conn, source_id, result)
     await _save_deployments(conn, source_id, result, now_iso)
