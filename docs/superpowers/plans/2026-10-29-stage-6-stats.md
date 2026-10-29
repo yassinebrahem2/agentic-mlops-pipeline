@@ -1,7 +1,5 @@
 # Stage 6 — Stats Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1 and 2 also get early PRs (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
 
 **Goal:** a person judges every incident (real issue, not an issue, wrong type) and reports what the app missed; labels confirm or refute model performance incidents on their own; the team's own monitoring is kept as the baseline, linked to each incident, and its alerts the agents stayed silent on are listed for verdicts; the Stats page shows how the agents do against that baseline, per category and time window, each number with what it rests on and "collecting data" below 5 verdicts (S4 §10, roadmap stage 6, `project_knowledge.md` Process 2026-10-29).

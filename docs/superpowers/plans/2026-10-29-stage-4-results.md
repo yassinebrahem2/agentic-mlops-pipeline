@@ -1,7 +1,5 @@
 # Stage 4 — Results Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. One PR for the branch, plus the early PRs marked below (`AGENTS.md` rule 5). Each task lists its files, interfaces, tests (its stop condition) and checks.
 
 **Goal:** every result the app can read becomes one stored standard result record, read on the app's own scheduler, once and in order, also after downtime; every feed, job and check the team or an agent declared has a deadline, and a miss is a silence signal; agents register the checks they deliver by PR (S4 §2, §3, §3a, §3b, §4, §13).

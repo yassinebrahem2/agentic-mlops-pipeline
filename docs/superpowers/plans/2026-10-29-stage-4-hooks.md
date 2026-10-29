@@ -1,7 +1,5 @@
 # Stage 4 — Hooks Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1, 2 and 3 get early PRs (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition). Read the [stages 4-6 overview](../2026-10-29-stage-4-6-overview.md) first: it holds the shared constraints and every interface named here (I23, I29, I30, I32, I33, "Routes"); this plan does not repeat them.
 
 **Goal:** the team's own commands become action hooks (`hok`) the agents can run, and only through the gate (S4 §6): the handoff's commands are registered as hooks, a hook's credential reaches only its own container run, `RunHook` and `Hold` run them and record every outcome on the incident, and, last, pre-approved rules (`rul`) let a rollback, rerun or fall back run without asking when their condition holds in code against the stored results.

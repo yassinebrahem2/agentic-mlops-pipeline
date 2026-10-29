@@ -1,7 +1,5 @@
 # Stage 4 — Incidents Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1, 2 and 6 also get early PRs (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
 
 **Goal:** fired results, silences and the app's own failures become a few incidents (S4 §5): grouped by cause and down the pipeline graph, with a lifecycle, a timeline made of events, a severity decided in code, a page that never waits for a model (S4 §7), the matching agent woken to diagnose (S4 §6), the agents' incident tools and `MonitoringQuery`, Alert Prioritization's run, and the extras last: maintenance windows and snooze.

@@ -1,7 +1,5 @@
 # Stage 4 — Notifications Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1 and 2 get early PRs (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition). Read the [stages 4-6 overview](../2026-10-29-stage-4-6-overview.md) first (I24, I26 to I28, "Shared by contracts", "Routes", "Files shared"); this plan does not repeat it.
 
 **Goal:** the app tells the right person at the right time (S4 §8): Discord and email channels with retries and a log, the Integrations settings behind them, the on-call people, escalation of unacknowledged critical incidents, and the morning report. Backend only: ui task 4 builds the Integrations and on-call screens on these routes. Who is told what and when is incidents' (the reactor sends every immediate delivery); this plan delivers, retries, escalates and reports.

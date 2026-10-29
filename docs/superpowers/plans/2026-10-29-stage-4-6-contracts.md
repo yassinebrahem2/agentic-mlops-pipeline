@@ -1,7 +1,5 @@
 # Stages 4 to 6 — Contracts Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. Tasks 1 to 4 each get an early PR (`AGENTS.md` rule 5); task 5 is pushed to the plan branch and the plan PR closes it. Each task lists its files, the interfaces it consumes and produces, and its tests (its stop condition).
 
 **Goal:** land, once, what every stage 4-6 plan shares, so each of them only adds its own module: the IDs, event types, constants, reads and seams of "Shared by contracts"; every type of I22 to I42; the schema; the gate's second input (I30); the condition language and the six proposal payloads (I23, I32). A user sees nothing new: every default keeps today's behaviour until the plan that owns it replaces it.

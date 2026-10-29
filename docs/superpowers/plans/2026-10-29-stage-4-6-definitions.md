@@ -1,7 +1,5 @@
 # Stages 4 to 6 — Definitions Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; task 1 also gets an early PR (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
 
 **Goal:** the seven agents do their stage 4 and 5 work: each definition holds the tools its role needs and a prompt that says what it can now do (S4 §4, §6, §7; S5 §1 to §5); two end-to-end tests prove the monitoring night (S4 §14, Done when) and the path from an incident to a fix and a promotion (S5 §8).

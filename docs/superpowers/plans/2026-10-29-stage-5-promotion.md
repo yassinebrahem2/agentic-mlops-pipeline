@@ -1,7 +1,5 @@
 # Stage 5 — Promotion Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1, 2 and 5 get early PRs (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
 
 **Goal:** the app reads the team's evaluation record, keeps the agent's report on each candidate, and promotes the way the team decided: in `person` mode a `promotion` proposal whose approval re-validates in code and then runs the team's deploy hook; in `team_gate` mode it never deploys and reports the gate's decision. A moved production alias wakes Deployment & Rollback for the post-deploy comparison. The Deployments page gets its data, and agents merge their own PRs under the merge rules in code (S5 §3, §4, §6, "Hard limits and merging"; S4 §6 post-deploy comparison).

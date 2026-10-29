@@ -1,7 +1,5 @@
 # Stage 5 — Training Implementation Plan
 
-> **Draft.** Missing: the lead's last review of the stage 4-6 plan set after the consistency pass.
-
 > **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; tasks 1, 2, 3 and 6 get early PRs (`AGENTS.md` rule 5). Each task lists its files, interfaces, the notes that matter and its tests (the stop condition).
 
 **Goal:** a diagnosing agent requests a model fix, Retraining chooses it and runs the team's own pipeline through a parameterised hook, guarded in code and linked back to the tracker by a request ID (S5 §1, §2); then the extras: the circuit breaker, pins and the alias-history check that verify `deploys`, `GateFacts`, and training policies.
