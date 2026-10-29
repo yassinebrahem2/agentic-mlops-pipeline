@@ -29,6 +29,20 @@ def test_project_id_validation_rejects_unsafe_paths(tmp_path: Path, invalid_id: 
         p.project_dir(invalid_id)
 
 
+def test_cache_dir_is_inside_the_project_and_not_made_by_ensure(tmp_path: Path) -> None:
+    p = DataPaths(tmp_path)
+    p.ensure()
+    assert p.cache_dir("prj_1") == tmp_path / "projects" / "prj_1" / "cache"
+    assert not p.cache_dir("prj_1").exists()
+
+
+@pytest.mark.parametrize("invalid_id", ["../x", "a/b", "prj_..\\x", ""])
+def test_cache_dir_rejects_unsafe_project_ids(tmp_path: Path, invalid_id: str) -> None:
+    p = DataPaths(tmp_path)
+    with pytest.raises(ValueError):
+        p.cache_dir(invalid_id)
+
+
 def test_project_id_validation_accepts_valid_ids(tmp_path: Path) -> None:
     p = DataPaths(tmp_path)
     assert p.project_dir("prj_1") == tmp_path / "projects" / "prj_1"
