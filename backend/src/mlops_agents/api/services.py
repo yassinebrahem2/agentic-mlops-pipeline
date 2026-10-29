@@ -51,6 +51,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.observer import ProposalApprovalObserver
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
@@ -222,6 +223,8 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
         tracking=tracking,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
@@ -280,9 +283,12 @@ async def build_services(
         event_log=events,
     )
     sessions.bind_approvals(approvals)
-    proposal_kinds = ProposalKinds()
-    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
-    handoffs = SqliteHandoffs(databases)
+
+    proposal_observer = ProposalApprovalObserver(proposals, approvals, workspace)
+    approvals.add_observer(proposal_observer)
+
+    for project in await workspace.list_projects():
+        await proposals.recover(project.id)
 
     async def _list_project_ids() -> list[str]:
         return [p.id for p in await workspace.list_projects()]
