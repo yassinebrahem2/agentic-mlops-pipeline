@@ -8,9 +8,17 @@ import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
+from mlops_agents.connections.kinds.local_folder import LocalFolderKind
+from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.connections.service import ConnectionsService
+from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.containers import mounts_fingerprint
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import DockerResult
 from mlops_agents.sandbox.service import SandboxService
+from mlops_agents.storage.databases import Databases
 from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog, MemorySandboxProjects
 
 
@@ -252,3 +260,106 @@ async def test_service_task_lock_serializes_paused(tmp_path: Path) -> None:
         "p1_ending",
         "p2_started",
     ]
+
+
+async def test_service_connection_lifecycle_recreates_container(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = DataPaths(home)
+    paths.ensure()
+
+    databases = Databases(paths)
+    await databases.app()
+    project_id = "prj_conlifecycle"
+    await databases.project(project_id)
+
+    events = SqliteEventLog(databases)
+    registry = KindRegistry([LocalFolderKind(paths.root)])
+    conns_service = ConnectionsService(databases, events, registry)
+
+    runner = FakeDockerRunner()
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    projects = MemorySandboxProjects(
+        roots={project_id: worktree},
+        connections=conns_service,
+    )
+    service = SandboxService(runner=runner, projects=projects, events=events)
+    task = TaskRef("tsk_con_1", "Con Task", "branch", worktree, "active")
+
+    try:
+        # 1. No connections: container starts with empty fingerprint
+        cname = await service.ensure_container(project_id, task)
+        info1 = runner.containers[cname]
+        labels1 = cast(dict[str, str], cast(dict[str, object], info1["Config"])["Labels"])
+        assert labels1[f"{APP_NAME}.mounts"] == mounts_fingerprint([])
+
+        # 2. Add connection
+        data_a = tmp_path / "data_a"
+        data_a.mkdir()
+        (data_a / "a.csv").write_text("col1\nval1", encoding="utf-8")
+        con_a = await conns_service.create(
+            project_id, LOCAL_FOLDER_KIND, "data-a", {"path": str(data_a)}
+        )
+        mounts_a = await conns_service.mounts(project_id)
+        assert len(mounts_a) == 1
+
+        # Calling ensure_container recreates container because mounts fingerprint changed
+        calls_before = len(runner.calls)
+        cname2 = await service.ensure_container(project_id, task)
+        assert cname2 == cname
+        assert any(c[0] == "rm" for c in runner.calls[calls_before:])
+        info2 = runner.containers[cname]
+        labels2 = cast(dict[str, str], cast(dict[str, object], info2["Config"])["Labels"])
+        assert labels2[f"{APP_NAME}.mounts"] == mounts_fingerprint(mounts_a)
+
+        # Calling ensure_container again with same connection reuses it
+        calls_reuse = len(runner.calls)
+        await service.ensure_container(project_id, task)
+        assert not any(c[0] in ("rm", "run") for c in runner.calls[calls_reuse:])
+
+        # 3. Update connection data_a to data_a_new
+        data_a_new = tmp_path / "data_a_new"
+        data_a_new.mkdir()
+        (data_a_new / "a.csv").write_text("col1\nval2", encoding="utf-8")
+        await conns_service.update(project_id, con_a.id, {"path": str(data_a_new)})
+        mounts_updated = await conns_service.mounts(project_id)
+
+        calls_update = len(runner.calls)
+        await service.ensure_container(project_id, task)
+        assert any(c[0] == "rm" for c in runner.calls[calls_update:])
+        info3 = runner.containers[cname]
+        labels3 = cast(dict[str, str], cast(dict[str, object], info3["Config"])["Labels"])
+        assert labels3[f"{APP_NAME}.mounts"] == mounts_fingerprint(mounts_updated)
+
+        # 4. Add second connection data-b
+        data_b = tmp_path / "data_b"
+        data_b.mkdir()
+        con_b = await conns_service.create(
+            project_id, LOCAL_FOLDER_KIND, "data-b", {"path": str(data_b)}
+        )
+        mounts_two = await conns_service.mounts(project_id)
+        assert len(mounts_two) == 2
+
+        calls_add_b = len(runner.calls)
+        await service.ensure_container(project_id, task)
+        assert any(c[0] == "rm" for c in runner.calls[calls_add_b:])
+        info4 = runner.containers[cname]
+        labels4 = cast(dict[str, str], cast(dict[str, object], info4["Config"])["Labels"])
+        assert labels4[f"{APP_NAME}.mounts"] == mounts_fingerprint(mounts_two)
+
+        # 5. Delete connection data-b
+        await conns_service.delete(project_id, con_b.id)
+        mounts_after_del = await conns_service.mounts(project_id)
+        assert len(mounts_after_del) == 1
+
+        calls_del_b = len(runner.calls)
+        await service.ensure_container(project_id, task)
+        assert any(c[0] == "rm" for c in runner.calls[calls_del_b:])
+        info5 = runner.containers[cname]
+        labels5 = cast(dict[str, str], cast(dict[str, object], info5["Config"])["Labels"])
+        assert labels5[f"{APP_NAME}.mounts"] == mounts_fingerprint(mounts_after_del)
+    finally:
+        await databases.dispose()

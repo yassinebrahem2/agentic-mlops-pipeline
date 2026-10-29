@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api, errorText, unwrap } from "@/lib/api";
-import { hostedModelWarning } from "@/lib/models";
+import { hostedModelWarning, usableModels } from "@/lib/models";
 import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { useModels } from "@/lib/useModels";
 import { projectAgentsKey, useProjectAgents } from "@/lib/useProjectAgents";
@@ -70,7 +70,7 @@ function AgentRow({
   const queryClient = useQueryClient();
   const params = { path: { project_id: projectId, agent: agent.name } };
   const settings = agent.settings;
-  const usable = models.filter((model) => model.problem === null);
+  const usable = usableModels(models, "chat");
   const unusableOverride =
     settings.project_model !== null &&
     !usable.some((model) => model.address === settings.project_model);

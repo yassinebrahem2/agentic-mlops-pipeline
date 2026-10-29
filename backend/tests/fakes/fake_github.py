@@ -33,6 +33,7 @@ class FakeGitHubState:
         default_factory=dict[tuple[str, int], dict[str, Any]]
     )
     issue_counters: dict[str, int] = field(default_factory=dict[str, int])
+    deleted_issues: set[tuple[str, int]] = field(default_factory=set[tuple[str, int]])
     comments: dict[tuple[str, int], list[dict[str, Any]]] = field(
         default_factory=dict[tuple[str, int], list[dict[str, Any]]]
     )
@@ -58,6 +59,11 @@ class FakeGitHubState:
         self.prs[key]["state"] = "closed"
         return self.prs[key]
 
+    def delete_issue(self, repo: str, number: int) -> None:
+        """Delete an issue as GitHub does: reading it then answers 410 Gone."""
+        self.issues.pop((repo, number), None)
+        self.deleted_issues.add((repo, number))
+
     def reset(self) -> None:
         self.required_token = None
         self.rate_limit_remaining = 0
@@ -66,6 +72,7 @@ class FakeGitHubState:
         self.pr_counters.clear()
         self.issues.clear()
         self.issue_counters.clear()
+        self.deleted_issues.clear()
         self.comments.clear()
         self.comment_counter = 0
         self.labels.clear()
@@ -259,6 +266,8 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
             return err
 
         key = (full_name, number)
+        if key in state.deleted_issues:
+            return JSONResponse({"message": "This issue was deleted"}, status_code=410)
         if key not in state.issues:
             return JSONResponse({"message": "Not Found"}, status_code=404)
         return JSONResponse(state.issues[key])

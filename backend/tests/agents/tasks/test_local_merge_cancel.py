@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from mlops_agents.agents.tasks import local_merge as local_merge_module
 from mlops_agents.agents.tasks.local_merge import local_merge
 from mlops_agents.integrations.github.git import GitResult, GitRunner
 from mlops_agents.paths import DataPaths
@@ -170,3 +174,50 @@ async def test_local_merge_logs_a_failed_temp_worktree_removal(
         )
 
     assert any("simulated remove failure" in r.getMessage() for r in caplog.records)
+
+
+async def test_local_merge_cancelled_during_mkdtemp_leaves_no_temp_folder(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id, branch, repo = await _task_branch_with_a_commit(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    temp_base = tmp_path / "temp_merges"
+    created = threading.Event()
+    release = threading.Event()
+
+    def held_mkdtemp(prefix: str, dir: Path) -> str:
+        # Like the real call in its worker thread, it goes on when its caller is cancelled.
+        path = tempfile.mkdtemp(prefix=prefix, dir=dir)
+        created.set()
+        release.wait(timeout=10)
+        return path
+
+    monkeypatch.setattr(local_merge_module, "tempfile", SimpleNamespace(mkdtemp=held_mkdtemp))
+
+    merge = asyncio.create_task(
+        local_merge(
+            databases=databases,
+            runner=GitRunner(paths.bin),
+            repo_root=repo,
+            empty_hooks=paths.empty_hooks,
+            temp_base_dir=temp_base,
+            default_branch="main",
+            task_branch=branch,
+            task_id=task_id,
+        )
+    )
+    await asyncio.to_thread(created.wait, 10)
+    assert len(list(temp_base.iterdir())) == 1
+    merge.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await merge
+
+    assert list(temp_base.iterdir()) == []

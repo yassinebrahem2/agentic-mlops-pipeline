@@ -11,7 +11,7 @@ export interface RecordedRequest {
   body: unknown;
 }
 
-/** Answers a stubbed route; the body is the parsed JSON of a PUT or POST, else null. */
+/** Answers a stubbed route; the body is the parsed JSON of a PUT, POST, or PATCH, else null. */
 export type RouteHandler = (body: unknown) => Response | Promise<Response>;
 
 export function json(value: unknown, status = 200): Response {
@@ -44,7 +44,8 @@ export function stubRoutes(routes: Record<string, RouteHandler>): RecordedReques
           ? input
           : new Request(new URL(String(input), "http://localhost"), init);
       const path = new URL(request.url).pathname;
-      const hasBody = request.method === "PUT" || request.method === "POST";
+      const hasBody =
+        request.method === "PUT" || request.method === "POST" || request.method === "PATCH";
       const text = hasBody ? await request.text() : "";
       const body: unknown = text === "" ? null : JSON.parse(text);
       requests.push({ path, method: request.method, body });
