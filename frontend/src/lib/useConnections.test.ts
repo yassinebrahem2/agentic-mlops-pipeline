@@ -6,7 +6,14 @@ import { api } from "@/lib/api";
 import * as streamModule from "@/lib/stream";
 import type { EventRecord } from "@/lib/useProjectEvents";
 import { FakeStream } from "@/pages/agents/session/testing";
-import { connectionsKey, tablesKey, useConnections, useTables } from "./useConnections";
+import {
+  connectionsKey,
+  tableDetailKey,
+  tablesKey,
+  useConnections,
+  useTableDetail,
+  useTables,
+} from "./useConnections";
 
 describe("useConnections", () => {
   let createdStreams: FakeStream[] = [];
@@ -41,6 +48,14 @@ describe("useConnections", () => {
       "connections",
       "con_1",
       "tables",
+    ]);
+    expect(tableDetailKey("prj_1", "con_1", "users")).toEqual([
+      "projects",
+      "prj_1",
+      "connections",
+      "con_1",
+      "tables",
+      "users",
     ]);
   });
 
@@ -105,6 +120,65 @@ describe("useConnections", () => {
       expect(result.current.isSuccess).toBe(true);
     });
     expect(result.current.data).toEqual(mockTables);
+  });
+
+  it("useTableDetail calls /connections/{connection_id}/tables/{table} route and returns detail", async () => {
+    const mockDetail = {
+      table: { name: "users", format: "parquet", files: ["users.parquet"] },
+      columns: [{ name: "id", type: "BIGINT" }],
+      row_count: 100,
+      timed_out: false,
+      incomplete: false,
+      data_version: "v1",
+      summary: "Table summary",
+    };
+
+    vi.spyOn(api, "GET").mockImplementation((path: string, init?: unknown) => {
+      if (path === "/api/projects/{project_id}/connections/{connection_id}/tables/{table}") {
+        const initObj = init as
+          | {
+              params?: {
+                path?: { project_id?: string; connection_id?: string; table?: string };
+              };
+            }
+          | undefined;
+        const pathParams = initObj?.params?.path;
+        expect(pathParams).toEqual({
+          project_id: "prj_1",
+          connection_id: "con_1",
+          table: "users",
+        });
+        return Promise.resolve({
+          data: mockDetail,
+          response: new Response(null, { status: 200 }),
+        } as never);
+      }
+      return Promise.reject(new Error(`Unexpected ${path}`));
+    });
+
+    const { result } = renderHook(() => useTableDetail("prj_1", "con_1", "users", true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    expect(result.current.data).toEqual(mockDetail);
+  });
+
+  it("useTableDetail does not fetch when enabled is false", () => {
+    let getCalled = false;
+    vi.spyOn(api, "GET").mockImplementation(() => {
+      getCalled = true;
+      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) } as never);
+    });
+
+    const { result } = renderHook(() => useTableDetail("prj_1", "con_1", "users", false), {
+      wrapper,
+    });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(getCalled).toBe(false);
   });
 
   it("connection events refetch connections", async () => {
