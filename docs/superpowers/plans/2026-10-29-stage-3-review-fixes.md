@@ -31,10 +31,10 @@
 
 ### Task 2: The data-summary escape and the hostile-name test (#434 items 2, 3)
 
-**Files:** `backend/src/mlops_agents/agents/hooks/registry.py` (`_DATA_TAG`, the #386 escape) and its tests; `backend/tests/data/test_duck_lockdown.py` (`test_hostile_file_and_column_names_change_nothing`).
+**Files:** `backend/src/mlops_agents/monitoring/untrusted.py` (`_DATA_TAG`, the #386 escape: the one source since contracts #529 moved it there; `agents/hooks/registry.py` only calls `untrusted()`) and its tests; `backend/tests/data/test_duck_lockdown.py` (`test_hostile_file_and_column_names_change_nothing`).
 
 **Notes:**
-- **The escape misses `< data`** (a space and no slash): `_DATA_TAG` is `<(?=(?:\s*/\s*)?data(?![\w-]))`. Use `<(?=\s*/?\s*data(?![\w-]))` (keep `re.IGNORECASE`), so text read from the team's files can never open or close the wrapper tag.
+- **The escape misses `< data`** (a space and no slash; the comment above it calls `a < data` ordinary text, which is the gap): `_DATA_TAG` is `<(?=(?:\s*/\s*)?data(?![\w-]))`. Use `<(?=\s*/?\s*data(?![\w-]))` (keep `re.IGNORECASE`), so text read from the team's files can never open or close the wrapper tag.
 - **The hostile file-name test proves nothing:** its payload writes to a path outside the folder, so the folder lock refuses it even when quoting is broken. `chdir` into the connected folder so a quoting failure would really write there, and add hostile VARCHAR column headers so the top-values query sees them.
 
 **Tests (stop condition):** `< data`, `</ data>` and `<  /data` in a cell are escaped; the hostile-name test fails when the one quoting function is replaced by plain string formatting (check it by reverting locally; state it in the PR); full backend suite, ruff, format, pyright; CI green.
