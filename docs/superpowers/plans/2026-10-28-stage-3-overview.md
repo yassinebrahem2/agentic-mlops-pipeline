@@ -102,7 +102,7 @@ class Embedders(Protocol):            # injected into the services that need it,
 ConnectionStatus = Literal["ok", "unreachable"]
 class TableRef(BaseModel): name: str; files: list[str]; format: Literal["csv", "parquet", "json", "jsonl"]
 class ColumnInfo(BaseModel): name: str; type: str
-class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int | None; timed_out: bool; data_version: str; summary: str   # row_count None: not computed (a timed-out profile); Decision #425: the data-summary owner edits contracts' connections/contract.py and regenerates openapi.json in task 5   # served by data-summary from its cache
+class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int | None; timed_out: bool; incomplete: bool; data_version: str; summary: str   # row_count None: not computed (a timed-out profile); Decision #425: the data-summary owner edits contracts' connections/contract.py and regenerates openapi.json in task 5   # served by data-summary from its cache
 class Mount(BaseModel): host_path: Path; container_path: str        # always read-only
 class DuckDbSource(BaseModel): sql_from: str; allowed_directories: list[Path]
 class Finding(BaseModel): path: str; reason: str
