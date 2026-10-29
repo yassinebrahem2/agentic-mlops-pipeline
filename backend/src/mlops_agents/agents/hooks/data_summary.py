@@ -20,7 +20,7 @@ from mlops_agents.data.constants import (
     PROFILE_TIMEOUT_S,
 )
 from mlops_agents.data.profile import TableUnreadable
-from mlops_agents.data.summaries import DataSummaries
+from mlops_agents.data.summaries import DataSummaries, SecretTable
 from mlops_agents.errors import DomainError
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,8 @@ class DataSummaryHook:
             data_version, profile = await self._summaries.versioned_profile(
                 project_id, view.id, ref, min(PROFILE_TIMEOUT_S, remaining)
             )
+        except SecretTable:
+            return render.left_out_line(ref, render.DENYLISTED_FILE)
         except TableUnreadable as exc:
             # The team's host folder is no business of the prompt: the agent reads /data.
             mount = f"{DATA_MOUNT_ROOT}/{view.name}"

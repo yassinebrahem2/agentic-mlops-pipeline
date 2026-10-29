@@ -21,6 +21,7 @@ from mlops_agents.data.profile import ColumnProfile, TableProfile
 SIZE_CAP: Final = "size cap"
 TIME_BUDGET: Final = "time budget"
 CACHE_UNAVAILABLE: Final = "profile cache unavailable"
+DENYLISTED_FILE: Final = "looks like a secret file"
 UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
 _REASON_CUT: Final = TEXT_CUT * 2
 

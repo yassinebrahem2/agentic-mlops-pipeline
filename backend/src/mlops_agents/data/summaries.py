@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Final
 
+from mlops_agents.agents.tools.files import is_secret
 from mlops_agents.connections.contract import ColumnInfo, Connections, TableDetail, TableRef
 from mlops_agents.data.cache import ProfileCache
 from mlops_agents.data.constants import PROFILE_TIMEOUT_S
-from mlops_agents.data.profile import TableProfile, profile_table
-from mlops_agents.data.render import render_table
+from mlops_agents.data.profile import TableProfile, TableUnreadable, profile_table
+from mlops_agents.data.render import DENYLISTED_FILE, render_table
 from mlops_agents.errors import DomainError
 
 # How long past its own `timeout_s` a caller waits. A profile stops itself at `timeout_s`
@@ -24,6 +25,15 @@ PROFILE_TIMEOUT_MESSAGE: Final = "The table's profile did not finish within the 
 
 def _profile_timeout() -> DomainError:
     return DomainError(PROFILE_TIMEOUT_CODE, PROFILE_TIMEOUT_MESSAGE, status=504)
+
+
+class SecretTable(TableUnreadable):
+    """A file of the table matches the secret denylist the connection's scan reports
+    (Decision #431): it is never profiled or sampled, so its contents never reach a prompt,
+    a checkpoint or the cache."""
+
+    def __init__(self) -> None:
+        super().__init__(f"This table {DENYLISTED_FILE}, so it is not profiled.", folders=[])
 
 
 class DataSummaries:
@@ -78,9 +88,11 @@ class DataSummaries:
     ) -> tuple[str, TableProfile]:
         """The table's data version, read now, and its profile at that version.
 
-        Raises `TimeoutError` when another caller's profile of the table, which this one
-        waits for, outlasts `timeout_s`.
+        Raises `SecretTable` before anything is read, and `TimeoutError` when another
+        caller's profile of the table, which this one waits for, outlasts `timeout_s`.
         """
+        if any(is_secret(file) for file in table.files):
+            raise SecretTable
         data_version = await self._connections.data_version(project_id, connection_id, table.name)
         source = await self._connections.duckdb_source(project_id, connection_id, table.name)
 

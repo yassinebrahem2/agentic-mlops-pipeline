@@ -187,6 +187,23 @@ async def test_a_corrupt_file_is_a_422(
     assert res.json()["code"] == "table_unreadable"
 
 
+async def test_a_secret_named_file_is_a_422_and_never_profiled(
+    client: httpx2.AsyncClient, project_id: str, tmp_path: Path, spy: ProfileSpy
+) -> None:
+    token = "ghp_" + "t0ken" * 8
+    con = await _connect(
+        client, project_id, tmp_path / "team data", {"credentials.json": f'{{"token": "{token}"}}'}
+    )
+
+    res = await client.get(_url(project_id, con, "credentials"))
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "table_unreadable"
+    assert "looks like a secret file" in res.json()["message"]
+    assert token not in res.text
+    assert spy.total == 0
+
+
 async def test_a_timed_out_profile_with_columns_answers_with_an_unknown_row_count(
     client: httpx2.AsyncClient,
     project_id: str,

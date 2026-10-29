@@ -286,6 +286,24 @@ async def test_a_corrupt_csv_gives_one_line_and_the_others_render(env: SummaryEn
     assert any(line.startswith('Table "good" (csv, ') for line in lines)
 
 
+@pytest.mark.parametrize("secret", ["credentials.json", "keys/client_secret.json"])
+async def test_a_secret_named_file_is_listed_and_never_profiled(
+    env: SummaryEnv, secret: str
+) -> None:
+    """The connection kind's secret denylist (Decision #431): its contents stay out of every
+    agent's context and checkpoint."""
+    token = "ghp_" + "t0ken" * 8
+    await env.connect("sales", {secret: json.dumps({"token": token}), "people.csv": csv_rows(2)})
+    name = secret.split("/")[0].removesuffix(".json")
+
+    lines = (await env.render()).split("\n")
+
+    assert f'Table "{name}" (json): detail left out: looks like a secret file' in lines
+    assert not any(token in line for line in lines)
+    assert env.spy.count(secret) == 0
+    assert any(line.startswith('Table "people" (csv, ') for line in lines)
+
+
 @pytest.mark.parametrize("broken", ["_read", "_write_atomically"])
 async def test_a_failing_cache_costs_one_line_and_never_shows_its_path(
     env: SummaryEnv,
