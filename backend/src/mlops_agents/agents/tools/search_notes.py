@@ -10,6 +10,7 @@ from mlops_agents.agents.tools.base import (
     AgentTool,
     RiskClass,
     ToolContext,
+    ToolFailure,
     ToolOutput,
 )
 from mlops_agents.knowledge.contract import NoteType
@@ -47,6 +48,9 @@ class SearchNotes(AgentTool[SearchNotesArgs]):
         self._knowledge = knowledge
 
     async def run(self, ctx: ToolContext, args: SearchNotesArgs) -> ToolOutput:
+        if args.limit > SEARCH_MAX_LIMIT:
+            raise ToolFailure(f"Limit cannot exceed {SEARCH_MAX_LIMIT}.")
+
         result = await self._knowledge.search(
             ctx.project_id,
             query=args.query,
