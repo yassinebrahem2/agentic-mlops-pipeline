@@ -74,7 +74,7 @@ async def test_a_stop_stored_before_the_resumed_worker_takes_the_turn_is_kept(
     # turn only while it still waits, so it leaves it (Decision #445). Not covered: a Stop whose
     # worker check comes before the resume's worker exists while its look comes after the
     # worker took the turn (window A, bug #446), and a Stop that finds the resume's worker
-    # already started and waits it out without stopping it.
+    # already started and waits it out without stopping it (window C, also bug #446).
     resuming = hold(monkeypatch, SessionStore, "turn_status")
     looked = signalled(monkeypatch, SessionStore, "waiting_turn")
 
