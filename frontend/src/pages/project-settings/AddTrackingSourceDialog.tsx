@@ -99,6 +99,8 @@ export function AddTrackingSourceDialog({
           } catch (credErr: unknown) {
             const msg = credErr instanceof Error ? credErr.message : errorText(credErr);
             onCredentialError?.(created.id, msg);
+          } finally {
+            setCredentialMutation.reset();
           }
         }
         handleOpenChange(false);

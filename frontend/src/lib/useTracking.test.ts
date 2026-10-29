@@ -529,9 +529,13 @@ describe("useTracking", () => {
     expect(calledBody).toEqual({ credential: secretValue });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: trackingKey("prj_1", "sources") });
 
-    // Assert secret is not in cache or query keys
+    // Assert secret is not in cache, query keys, or mutation cache variables
     const cacheEntries = JSON.stringify(testQueryClient.getQueryCache().getAll());
     expect(cacheEntries).not.toContain(secretValue);
+    for (const mutation of testQueryClient.getMutationCache().getAll()) {
+      const vars = mutation.state.variables as Record<string, unknown> | undefined;
+      expect(vars?.credential).toBeUndefined();
+    }
 
     // Test error case: error text must not contain secret
     vi.spyOn(api, "PUT").mockImplementation(() => {
@@ -550,6 +554,11 @@ describe("useTracking", () => {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       expect(msg).not.toContain(secretValue);
+    }
+
+    for (const mutation of testQueryClient.getMutationCache().getAll()) {
+      const vars = mutation.state.variables as Record<string, unknown> | undefined;
+      expect(vars?.credential).toBeUndefined();
     }
   });
 });

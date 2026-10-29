@@ -253,6 +253,7 @@ export function useSetSourceCredential(projectId: string | undefined) {
   const queryClient = useQueryClient();
 
   return useMutation({
+    gcTime: 0,
     mutationFn: async ({ sourceId, credential }: { sourceId: string; credential: string }) => {
       if (!projectId) throw new Error("No projectId");
       try {
@@ -274,6 +275,16 @@ export function useSetSourceCredential(projectId: string | undefined) {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: trackingKey(projectId, "sources") });
+    },
+    onSettled: (_data, _error, variables) => {
+      delete (variables as Partial<typeof variables>).credential;
+      for (const mut of queryClient.getMutationCache().getAll()) {
+        const vars = mut.state.variables as Record<string, unknown> | undefined;
+        if (vars && "credential" in vars) {
+          delete vars.credential;
+          queryClient.getMutationCache().remove(mut);
+        }
+      }
     },
   });
 }

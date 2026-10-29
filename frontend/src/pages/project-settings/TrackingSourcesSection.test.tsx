@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -317,13 +318,16 @@ describe("TrackingSourcesSection", () => {
 
   it("clears credential from input, leaves it absent from DOM and URLs", async () => {
     const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
     const requests = stubRoutes({
       [`GET ${BASE}/tracking/sources`]: () => json([missingCredSource]),
       [`PUT ${BASE}/tracking/sources/src_missing/credential`]: () =>
         json({ ...missingCredSource, credential_set: true }),
     });
 
-    renderSection(<TrackingSourcesSection projectId="prj_demo" />);
+    renderSection(<TrackingSourcesSection projectId="prj_demo" />, queryClient);
 
     expect(await screen.findByText("Credential missing")).toBeInTheDocument();
 
@@ -347,6 +351,12 @@ describe("TrackingSourcesSection", () => {
     // Absent from URLs
     for (const req of requests) {
       expect(req.path).not.toContain(secretValue);
+    }
+
+    // Absent from mutation cache
+    for (const m of queryClient.getMutationCache().getAll()) {
+      const vars = m.state.variables as Record<string, unknown> | undefined;
+      expect(vars?.credential).toBeUndefined();
     }
   });
 

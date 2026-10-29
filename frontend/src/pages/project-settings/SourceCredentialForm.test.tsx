@@ -95,4 +95,63 @@ describe("SourceCredentialForm", () => {
 
     expect(screen.getByText("Updated post-mount error")).toBeInTheDocument();
   });
+
+  it("after submit, no entry of queryClient.getMutationCache().getAll() has the credential in state.variables", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    stubRoutes({
+      [`PUT ${BASE}/tracking/sources/src_1/credential`]: () => json({}),
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCredentialForm projectId="prj_demo" sourceId="src_1" />
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByLabelText("Credential");
+    await user.type(input, "SECRET123");
+    await user.click(screen.getByRole("button", { name: "Set" }));
+
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+
+    const mutations = queryClient.getMutationCache().getAll();
+    for (const m of mutations) {
+      const vars = m.state.variables as Record<string, unknown> | undefined;
+      expect(vars?.credential).toBeUndefined();
+    }
+  });
+
+  it("after failing submit, credential is also absent from queryClient.getMutationCache()", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    stubRoutes({
+      [`PUT ${BASE}/tracking/sources/src_1/credential`]: () =>
+        failure("Invalid credential value", 400),
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCredentialForm projectId="prj_demo" sourceId="src_1" />
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByLabelText("Credential");
+    await user.type(input, "SECRET123");
+    await user.click(screen.getByRole("button", { name: "Set" }));
+
+    expect(await screen.findByText("Invalid credential value")).toBeInTheDocument();
+
+    const mutations = queryClient.getMutationCache().getAll();
+    for (const m of mutations) {
+      const vars = m.state.variables as Record<string, unknown> | undefined;
+      expect(vars?.credential).toBeUndefined();
+    }
+  });
 });

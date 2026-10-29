@@ -42,6 +42,8 @@ export function SourceCredentialForm({
       onSuccess?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : errorText(err));
+    } finally {
+      setCredentialMutation.reset();
     }
   };
 
