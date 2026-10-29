@@ -10,17 +10,19 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Final
 
 from mlops_agents.connections.contract import ConnectionView, TableRef
 from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
-from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES
+from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES, TEXT_CUT
 from mlops_agents.data.profile import ColumnProfile, TableProfile
 
 SIZE_CAP: Final = "size cap"
 TIME_BUDGET: Final = "time budget"
 CACHE_UNAVAILABLE: Final = "profile cache unavailable"
 UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
+_REASON_CUT: Final = TEXT_CUT * 2
 
 # What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them),
 # the Unicode line and paragraph separators, and lone surrogates (a file name whose bytes
@@ -74,7 +76,24 @@ def left_out_line(ref: TableRef, reason: str) -> str:
 
 
 def unreadable_line(ref: TableRef, reason: str) -> str:
-    return f"Table {quoted(ref.name)} ({ref.format}): unreadable: {one_line(reason)}"
+    """The reason cut to its first line and `TEXT_CUT * 2` characters: DuckDB's whole text
+    copies the file's lines and its settings (Decision #430)."""
+    first = reason.splitlines()[0] if reason else ""
+    return f"Table {quoted(ref.name)} ({ref.format}): unreadable: {one_line(first[:_REASON_CUT])}"
+
+
+def reason_without_folders(reason: str, folders: Sequence[Path], mount: str) -> str:
+    """`reason` with each host folder, as DuckDB or Python writes it, replaced by `mount`,
+    the connection's path in the sandbox."""
+    forms = {form for folder in folders for form in (folder.as_posix(), str(folder))}
+    for form in sorted(forms, key=len, reverse=True):
+        reason = reason.replace(form, mount)
+    return reason
+
+
+def left_out_entries_line(count: int) -> str:
+    """The one line counting the connections and tables past the cap."""
+    return f"and {count} more entries left out: {SIZE_CAP}"
 
 
 def more_tables_line(refs: Sequence[TableRef]) -> str:
@@ -100,7 +119,7 @@ def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> st
     about = f"{ref.format}, files {_files(ref.files)}"
     if data_version is not None:
         about += f", data version {one_line(data_version)}"
-    rows = UNKNOWN_ROW_COUNT if profile.row_count is None else f"{profile.row_count} rows"
+    rows = UNKNOWN_ROW_COUNT if profile.row_count is None else _rows(profile.row_count)
     title = f"Table {quoted(ref.name)} ({about}): {rows}"
     if profile.timed_out:
         # Only DESCRIBE's names and types are known; the counts are not facts.
@@ -118,6 +137,10 @@ def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> st
     else:
         lines.append("Sample rows: none")
     return "\n".join(lines)
+
+
+def _rows(count: int) -> str:
+    return "1 row" if count == 1 else f"{count} rows"
 
 
 def _files(files: Sequence[str]) -> str:

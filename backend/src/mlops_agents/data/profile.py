@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Final
 
 import duckdb
@@ -45,8 +47,9 @@ class ColumnProfile(BaseModel):
 
 class TableProfile(BaseModel):
     """When `timed_out` is true, only what was computed before the limit is filled in: the
-    other counts are 0 and the other lists empty, and `row_count` is None (not computed;
-    an unknown count is never reported as 0 rows)."""
+    other counts are 0 and the other lists empty. `row_count` is None only when the count
+    itself did not finish (Decision #430): an unknown count is never reported as 0 rows, and
+    a finished one is kept."""
 
     row_count: int | None
     columns: list[ColumnProfile]
@@ -57,10 +60,19 @@ class TableProfile(BaseModel):
     timeout_s: float  # the limit the profile ran under
 
 
+class TableUnreadable(DomainError):
+    """DuckDB could not read the table (422). `folders` are the host folders the profile was
+    allowed to read, which DuckDB's text may name."""
+
+    def __init__(self, message: str, folders: Sequence[Path]) -> None:
+        super().__init__("table_unreadable", message, status=422)
+        self.folders = list(folders)
+
+
 async def profile_table(source: DuckDbSource, timeout_s: float = PROFILE_TIMEOUT_S) -> TableProfile:
     """Profiles `source` in a worker thread; past `timeout_s` it returns what it has.
 
-    Raises `DomainError("table_unreadable")` (422) when DuckDB cannot read the table.
+    Raises `TableUnreadable` (`table_unreadable`, 422) when DuckDB cannot read the table.
     """
     return await asyncio.to_thread(_profile, source, timeout_s)
 
@@ -91,7 +103,7 @@ def _profile(source: DuckDbSource, timeout_s: float) -> TableProfile:
         except duckdb.Error as exc:
             # An interrupt can surface as any DuckDB error; past the deadline it is a timeout.
             if not deadline.expired:
-                raise DomainError("table_unreadable", error_text(exc), status=422) from exc
+                raise TableUnreadable(error_text(exc), source.allowed_directories) from exc
             timed_out = True
         finally:
             deadline.stop()
@@ -120,8 +132,8 @@ class _ProfileBuilder:
 
     def result(self, *, timed_out: bool, timeout_s: float) -> TableProfile:
         return TableProfile(
-            # The rest of a timed-out profile's counts are not shown as facts; neither is this.
-            row_count=None if timed_out else self._row_count,
+            # Set from the aggregate's one fetched row, so exact whenever it is set.
+            row_count=self._row_count,
             columns=self._columns,
             more_columns=self._more_columns,
             sample_columns=self._sample_columns,

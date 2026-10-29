@@ -16,7 +16,12 @@ from mlops_agents.data.render import render_table
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.data.summary_env import SummaryEnv, build_summary_env, csv_rows
+from tests.data.summary_env import (
+    SummaryEnv,
+    build_summary_env,
+    csv_rows,
+    time_out_after_the_count,
+)
 
 
 @pytest.fixture
@@ -84,6 +89,20 @@ async def test_a_timed_out_profile_with_columns_is_a_detail_with_an_unknown_row_
     assert detail.row_count is None
     assert detail.columns == [ColumnInfo(name="range", type="BIGINT")]
     assert "row count unknown (timed out)" in detail.summary
+
+
+async def test_a_timed_out_profile_keeps_a_count_that_finished(
+    env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    con, ref = await _people(env)
+    time_out_after_the_count(monkeypatch)
+
+    detail = await env.summaries.table_detail(env.project_id, con, ref)
+
+    assert detail.timed_out is True
+    assert detail.row_count == 3
+    assert "row count unknown" not in detail.summary
+    assert detail.summary.split("\n", 1)[0].endswith("): 3 rows")
 
 
 async def test_a_timed_out_profile_without_columns_is_a_profile_timeout(

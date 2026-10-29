@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mlops_agents.connections.contract import TableRef
-from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES
+from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES, TEXT_CUT
 from mlops_agents.data.profile import ColumnProfile, TableProfile
 from mlops_agents.data.render import (
     SIZE_CAP,
+    left_out_entries_line,
     left_out_line,
     more_tables_line,
+    reason_without_folders,
     render_table,
     render_versioned_table,
     unreadable_line,
@@ -97,6 +101,42 @@ def test_a_timed_out_profile_shows_only_names_and_types() -> None:
         '- "name" VARCHAR\n'
         "and 4 more columns"
     )
+
+
+def test_a_timed_out_profile_whose_count_finished_shows_it() -> None:
+    profile = _profile(
+        row_count=3, columns=[_column("id", "BIGINT")], sample=[], timed_out=True, timeout_s=30
+    )
+    assert render_table(PEOPLE, profile).split("\n")[:2] == [
+        'Table "people" (csv, files ["people.csv"]): 3 rows',
+        "Profile timed out after 30 s: the statistics and sample rows are unknown.",
+    ]
+
+
+def test_one_row_is_singular() -> None:
+    profile = _profile(row_count=1, sample=[["1", "ann", "true"]])
+    assert render_table(PEOPLE, profile).startswith(
+        'Table "people" (csv, files ["people.csv"]): 1 row\n'
+    )
+
+
+def test_an_unreadable_reason_is_cut_to_its_first_line_and_twice_the_text_cut() -> None:
+    reason = "x" * (TEXT_CUT * 3) + "\nOriginal Line: secret,row\nfile = elsewhere"
+    line = unreadable_line(PEOPLE, reason)
+    assert line == f'Table "people" (csv): unreadable: {"x" * (TEXT_CUT * 2)}'
+    assert unreadable_line(PEOPLE, "short\r\nsecond") == ('Table "people" (csv): unreadable: short')
+
+
+def test_the_connections_folder_becomes_its_mount_path_in_a_reason() -> None:
+    folder = Path("/srv/team exports")
+    reason = f'Error when sniffing file "{folder.as_posix()}/clients.csv".'
+    assert reason_without_folders(reason, [folder], "/data/exports") == (
+        'Error when sniffing file "/data/exports/clients.csv".'
+    )
+
+
+def test_the_counted_line_names_the_entries_left_out() -> None:
+    assert left_out_entries_line(7) == "and 7 more entries left out: size cap"
 
 
 def test_a_profile_that_timed_out_before_its_columns_shows_none() -> None:

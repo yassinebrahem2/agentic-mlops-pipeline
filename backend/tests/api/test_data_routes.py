@@ -15,7 +15,7 @@ from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, DuckDbSource
 from mlops_agents.data import cache as cache_module
 from mlops_agents.data import summaries as summaries_module
 from mlops_agents.data.profile import TableProfile
-from tests.data.summary_env import ProfileSpy, csv_rows, write
+from tests.data.summary_env import ProfileSpy, csv_rows, time_out_after_the_count, write
 
 
 @pytest.fixture
@@ -110,6 +110,7 @@ async def test_an_unknown_connection_is_a_404(
     res = await client.get(_url(project_id, "con_missing1", "people"))
     assert res.status_code == 404
     assert res.json()["code"] == "connection_not_found"
+    assert "con_missing1" not in res.text
     assert spy.total == 0
 
 
@@ -203,6 +204,23 @@ async def test_a_timed_out_profile_with_columns_answers_with_an_unknown_row_coun
     assert res.json()["timed_out"] is True
     assert res.json()["row_count"] is None
     assert res.json()["columns"] == [{"name": "range", "type": "BIGINT"}]
+
+
+async def test_a_timed_out_profile_keeps_a_row_count_that_finished(
+    client: httpx2.AsyncClient,
+    project_id: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision #430: `row_count` is null only when the count did not finish."""
+    con = await _connect(client, project_id, tmp_path / "team data", {"people.csv": csv_rows(3)})
+    time_out_after_the_count(monkeypatch)
+
+    res = await client.get(_url(project_id, con, "people"))
+
+    assert res.status_code == 200
+    assert res.json()["timed_out"] is True
+    assert res.json()["row_count"] == 3
 
 
 async def test_a_timed_out_profile_without_columns_is_a_504(

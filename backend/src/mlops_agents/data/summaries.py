@@ -34,7 +34,8 @@ class DataSummaries:
     async def table_detail(
         self, project_id: str, connection_id: str, table: TableRef
     ) -> TableDetail:
-        """A timed-out profile with columns is a detail (`timed_out`, `row_count` None).
+        """A timed-out profile with columns is a detail (`timed_out`; `row_count` None only
+        when the count did not finish).
 
         Raises `DomainError` as `Connections` and `profile_table` do, and
         `DomainError("profile_timeout")` (504) when nothing was computed or waiting on

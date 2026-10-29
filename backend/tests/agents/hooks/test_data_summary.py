@@ -116,15 +116,16 @@ async def test_tables_past_the_size_cap_are_listed_and_never_profiled(
     full = await env.render()
     shutil.rmtree(env.paths.cache_dir(env.project_id))
     env.spy.calls.clear()
-    # Room for the header, the connection and table a, not table b.
-    monkeypatch.setattr(hook_module, "DATA_SUMMARY_MAX_CHARS", full.index('\nTable "b"') + 5)
+    listed = (
+        '\nTable "b" (csv): detail left out: size cap\nTable "c" (csv): detail left out: size cap'
+    )
+    # Room for the header, the connection, table a and the two listed lines, not table b.
+    cap = full.index('\nTable "b"') + len(listed) + hook_module.COUNTED_LINE_RESERVE
+    monkeypatch.setattr(hook_module, "DATA_SUMMARY_MAX_CHARS", cap)
 
     text = await env.render()
 
-    assert text.startswith(full[: full.index('\nTable "b"')])
-    assert text.endswith(
-        '\nTable "b" (csv): detail left out: size cap\nTable "c" (csv): detail left out: size cap'
-    )
+    assert text == full[: full.index('\nTable "b"')] + listed
     assert env.spy.count("c.csv") == 0
 
 
@@ -132,17 +133,40 @@ async def test_a_table_larger_than_the_whole_cap_is_listed(
     env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await env.connect("sales", {"a.csv": csv_rows(5), "b.csv": csv_rows(5)})
-    monkeypatch.setattr(hook_module, "DATA_SUMMARY_MAX_CHARS", 200)
-
-    text = await env.render()
-
-    assert text == (
+    listed = (
         f"{HEADER}\n"
         'Connection "sales" (local_folder, ok) at /data/sales:\n'
         'Table "a" (csv): detail left out: size cap\n'
         'Table "b" (csv): detail left out: size cap'
     )
+    cap = len(listed) + hook_module.COUNTED_LINE_RESERVE
+    monkeypatch.setattr(hook_module, "DATA_SUMMARY_MAX_CHARS", cap)
+
+    text = await env.render()
+
+    assert text == listed
     assert (env.spy.count("a.csv"), env.spy.count("b.csv")) == (1, 0)
+
+
+async def test_lines_past_the_cap_are_counted_in_one_line(
+    env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await env.connect("sales", {f"{name}.csv": csv_rows(2) for name in ("a", "b", "c")})
+    await env.connect("more", {"d.csv": csv_rows(2)})
+    kept = (
+        f"{HEADER}\n"
+        'Connection "sales" (local_folder, ok) at /data/sales:\n'
+        'Table "a" (csv): detail left out: size cap'
+    )
+    cap = len(kept) + hook_module.COUNTED_LINE_RESERVE
+    monkeypatch.setattr(hook_module, "DATA_SUMMARY_MAX_CHARS", cap)
+
+    text = await env.render()
+
+    # b, c, the connection "more" and its table d.
+    assert text == f"{kept}\nand 4 more entries left out: size cap"
+    assert len(text) <= cap
+    assert env.spy.total == 1
 
 
 async def test_a_table_of_many_part_files_lists_a_few_and_later_tables_keep_detail(
@@ -165,7 +189,7 @@ async def test_a_table_of_many_part_files_lists_a_few_and_later_tables_keep_deta
     )
     assert events.endswith("): 300 rows")
     assert any(line.startswith('Table "z1" (csv, ') and line.endswith("2 rows") for line in lines)
-    assert any(line.startswith('Table "z2" (csv, ') and line.endswith("1 rows") for line in lines)
+    assert any(line.startswith('Table "z2" (csv, ') and line.endswith("1 row") for line in lines)
 
 
 async def test_a_thousand_tables_name_a_few_and_later_connections_keep_detail(

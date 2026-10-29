@@ -15,9 +15,10 @@ from mlops_agents.connections.contract import DuckDbSource
 from mlops_agents.data import profile as profile_module
 from mlops_agents.data.constants import MAX_COLUMNS, SAMPLE_ROWS, TEXT_CUT, TOP_VALUES
 from mlops_agents.data.duck import DEADLINE_THREAD_NAME, locked_connection
-from mlops_agents.data.profile import ColumnProfile, TableProfile, profile_table
+from mlops_agents.data.profile import ColumnProfile, TableProfile, TableUnreadable, profile_table
 from mlops_agents.errors import DomainError
 from tests.data.conftest import TeamFolder, write_parquet
+from tests.data.summary_env import time_out_after_the_count
 
 ENDLESS = "range(10000000000000)"
 
@@ -261,6 +262,27 @@ async def test_a_malformed_csv_is_unreadable(team: TeamFolder) -> None:
     with pytest.raises(DomainError) as err:
         await profile_table(team.source("t"))
     _assert_unreadable(err.value, team.home)
+
+
+async def test_an_unreadable_table_names_the_folders_it_was_read_from(team: TeamFolder) -> None:
+    """So a caller can take the team's host path out of the reason (Decision #430)."""
+    (team.folder / "t.csv").write_bytes(b"a,b\n1,\xff\xfe\n")
+    source = team.source("t")
+    with pytest.raises(TableUnreadable) as err:
+        await profile_table(source)
+    assert err.value.folders == source.allowed_directories
+
+
+async def test_a_count_that_finished_before_the_timeout_is_kept(
+    team: TeamFolder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision #430: `row_count` is None only when the count itself did not finish."""
+    (team.folder / "t.csv").write_text("a,b\n1,x\n2,y\n3,z\n", encoding="utf-8")
+    time_out_after_the_count(monkeypatch)
+    profile = await profile_table(team.source("t"))
+    assert profile.timed_out
+    assert profile.row_count == 3
+    assert [c.name for c in profile.columns] == ["a", "b"]
 
 
 async def test_an_unreadable_error_is_scrubbed(team: TeamFolder) -> None:

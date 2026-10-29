@@ -18,8 +18,10 @@ from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, DuckDbSource
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
 from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.connections.service import ConnectionsService
+from mlops_agents.data import profile as profile_module
 from mlops_agents.data import summaries as summaries_module
 from mlops_agents.data.cache import ProfileCache
+from mlops_agents.data.duck import Deadline, DeadlineExpired
 from mlops_agents.data.profile import TableProfile, profile_table
 from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.events.log import SqliteEventLog
@@ -110,6 +112,16 @@ def change(path: Path, content: str) -> None:
     write(path, content)
     moment = time.time() + 120
     os.utime(path, (moment, moment))
+
+
+def time_out_after_the_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every profile reaches its deadline right after the row count and the statistics, as
+    a large table does in its per-column top-value scans."""
+
+    def expires(self: object, deadline: Deadline) -> None:
+        raise DeadlineExpired
+
+    monkeypatch.setattr(f"{profile_module.__name__}._ProfileBuilder._top_values", expires)
 
 
 def csv_rows(count: int) -> str:
