@@ -10,6 +10,7 @@ from mlops_agents.credentials.project_secrets import (
     proposal_slot_ref,
 )
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.proposals.contract import ApplyResult
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.payloads import HandoffPayload
@@ -163,6 +164,7 @@ async def test_recover_lifecycle_and_idempotent_reapply(
     )
 
     # 5 check: re-applying approved handoff proposal leaves exactly ONE row and version 1 in handoff_versions
+    assert test_hnd_kind.apply_calls == [v_hnd.id]
     async with engine.connect() as conn:
         hnd_rows = (await conn.execute(select(handoff_versions))).all()
     assert len(hnd_rows) == 1
@@ -183,7 +185,8 @@ async def test_recover_lifecycle_and_idempotent_reapply(
             .one()
         )
     assert row6["result"] is not None
-    assert "kind" in str(row6["result"])
+    assert "Unknown proposal kind" in str(row6["result"])
+    assert "unregistered_kind" in str(row6["result"])
 
 
 @pytest.mark.asyncio
@@ -208,3 +211,77 @@ async def test_handoffs_store_idempotency_inserts_nothing_on_duplicate(
     async with engine.connect() as conn:
         rows_2 = (await conn.execute(select(handoff_versions))).all()
     assert len(rows_2) == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_scrubs_failure_reasons(
+    service: ProposalsService,
+    kinds: ProposalKinds,
+    databases: Databases,
+) -> None:
+    test_result_kind = ScriptedTestKind(name="failing_result_kind")
+    test_result_kind.apply_result = ApplyResult(
+        applied=[],
+        failed={"service": "Connection failed to http://user:secretpass@internal-service/api"},
+    )
+    kinds.register(test_result_kind)
+
+    test_raising_kind = ScriptedTestKind(name="raising_exc_kind")
+    test_raising_kind.apply_error = RuntimeError(
+        "Failed connecting to https://admin:supersecret@db.internal:5432"
+    )
+    kinds.register(test_raising_kind)
+
+    project_id = "prj_recoverscrub"
+    engine = await databases.project(project_id)
+
+    v1 = await service.create(
+        project_id,
+        "architect",
+        test_result_kind.name,
+        "k_scrub_result",
+        {"connections": [connection()]},
+        "trn_sc1",
+        "call_sc1",
+    )
+    async with engine.begin() as conn:
+        await conn.execute(
+            proposals_table.update()
+            .where(proposals_table.c.id == v1.id)
+            .values(status="approved", result=None)
+        )
+
+    v2 = await service.create(
+        project_id,
+        "architect",
+        test_raising_kind.name,
+        "k_scrub_exc",
+        {"connections": [connection()]},
+        "trn_sc2",
+        "call_sc2",
+    )
+    async with engine.begin() as conn:
+        await conn.execute(
+            proposals_table.update()
+            .where(proposals_table.c.id == v2.id)
+            .values(status="approved", result=None)
+        )
+
+    await service.recover(project_id)
+
+    async with engine.connect() as conn:
+        row1 = (
+            (await conn.execute(select(proposals_table).where(proposals_table.c.id == v1.id)))
+            .mappings()
+            .one()
+        )
+        row2 = (
+            (await conn.execute(select(proposals_table).where(proposals_table.c.id == v2.id)))
+            .mappings()
+            .one()
+        )
+
+    assert "user:secretpass@" not in str(row1["result"])
+    assert "***@" in str(row1["result"])
+    assert "admin:supersecret@" not in str(row2["result"])
+    assert "***@" in str(row2["result"])

@@ -42,8 +42,9 @@ class OrderedSessions(FakeSessionsForApproval):
         await super().resume_turn(project_id, session_id, turn_id)
         self.calls.append(("resumed", turn_id, ""))
 
-    async def stop(self, project_id: str, agent: str) -> None:
-        self.calls.append(("stopped", agent, ""))
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        await super().stop_turn(project_id, session_id, turn_id)
+        self.calls.append(("stopped", turn_id, ""))
 
 
 async def _tool_approval(
@@ -105,7 +106,7 @@ async def test_decided_fires_once_with_the_final_view_on_every_move_out_of_pendi
     await service.decide(PROJECT, to_approve.id, approve=True)
     await service.decide(PROJECT, to_reject.id, approve=False, note="no")
     await service.cancel(PROJECT, to_cancel.id)
-    await store.cancel_for_turn(PROJECT, "trn_s")
+    await store.cancel_for_turn(PROJECT, "trn_s", decided_by="user")
     await store.expire_non_waiting(PROJECT)
 
     decided = [c for c in calls if c[0] == "decided"]
@@ -198,7 +199,7 @@ async def test_every_decided_completes_before_a_rejected_stall_stops_the_turn(
 
     await service.decide(PROJECT, stall.id, approve=False)
 
-    assert calls == [("decided", stall.id, "rejected"), ("stopped", "orchestrator", "")]
+    assert calls == [("decided", stall.id, "rejected"), ("stopped", "trn_1", "")]
 
 
 @pytest.mark.asyncio
@@ -283,7 +284,7 @@ async def test_a_sweep_reports_only_the_approvals_it_changed(
         engine, databases.paths.project_db(PROJECT), approval.id, sweep_status
     ):
         if sweep == "cancel_for_turn":
-            swept = await store.cancel_for_turn(PROJECT, "trn_1")
+            swept = await store.cancel_for_turn(PROJECT, "trn_1", decided_by="user")
         else:
             swept = await store.expire_non_waiting(PROJECT)
 

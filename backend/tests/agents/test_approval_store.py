@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import insert, select
 
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.clock import now_iso
 from mlops_agents.paths import DataPaths
@@ -230,6 +231,8 @@ async def test_approval_store_update_status_and_decide(
         preview=preview,
     )
 
+    # A user decides only while the turn waits for the approval.
+    await SessionStore(databases).set_turn(project_id, "trn_1", "waiting")
     decided = await store.decide(project_id, rec2.id, approve=False, note="rejected by user")
     assert decided.status == "rejected"
     assert decided.note == "rejected by user"

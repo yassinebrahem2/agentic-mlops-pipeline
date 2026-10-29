@@ -128,9 +128,7 @@ Agreed:
 - Knowledge: what agents have recorded; the user can view, correct and delete entries.
 - Usage (app level): LLM tokens and cost across projects, per agent, per week.
 
-The spec must answer:
-- Minimum verdict counts before a number is shown.
-- How cost in $ is computed per provider (price data source).
+No separate spec (2026-10-29): stage 6 is built with stages 4 and 5 under `docs/superpowers/plans/2026-10-29-stage-4-6-overview.md`. A Stats number shows from 5 verdicts; cost in $ comes from the provider when it publishes prices (OpenRouter), else from a price the user enters on the model.
 
 ### Stage 7: Developer benchmarks (outside the product)
 
@@ -284,7 +282,9 @@ Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec 
 | rollback, rerun, fall back | allow at `ask` and above; deny at `suggest` | the `deploy` column |
 | hold | allow at every level except `suggest`, where the person applies it in one click | same |
 
-A PR that touches a protection surface (the promotion gate, the evaluation step's decision logic, the workflows behind required checks, `CODEOWNERS`) is never merged by an agent, at any level.
+Cells this table leaves open (decided 2026-10-29, stages 4-6 overview open point 2): at `suggest`, train, evaluate and a deploying run are denied, and hold asks (the person's one click); without a rule or policy, train, evaluate and a deploying run ask even at `bypass`; a promotion in `person` mode needs no click at `bypass`.
+
+A PR that touches a protection surface is never merged by an agent, at any level. The surfaces (2026-10-29): every file under `.github/workflows/`, `CODEOWNERS`, and the entry files of each model's evaluate and deploy hooks.
 
 ### Hard limits
 

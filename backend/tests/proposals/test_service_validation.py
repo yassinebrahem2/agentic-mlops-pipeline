@@ -113,5 +113,11 @@ async def test_create_duplicate_in_same_turn_raises_and_stores_nothing(
             .mappings()
             .all()
         )
+        call_2_rows = (
+            await conn.execute(
+                select(proposals_table).where(proposals_table.c.tool_call_id == "call_2")
+            )
+        ).all()
     assert len(rows) == 1
     assert rows[0]["tool_call_id"] == "call_1"
+    assert len(call_2_rows) == 0

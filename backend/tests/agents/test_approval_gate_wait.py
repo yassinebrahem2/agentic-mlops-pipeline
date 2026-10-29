@@ -11,6 +11,7 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.hooks import GateDecision
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.gate_helpers import (
@@ -89,7 +90,8 @@ async def test_gate_wait_decided_returns_mapped_decisions(
     assert apr_w_id is not None
     assert apr_r_id is not None
 
-    # Decide both: approve first, reject second with note
+    # The turn waits for them; decide both: approve first, reject second with note
+    await SessionStore(databases).set_turn(project_id, "trn_1", "waiting")
     await store.decide(project_id, apr_w_id, approve=True)
     await store.decide(project_id, apr_r_id, approve=False, note="dangerous command")
 

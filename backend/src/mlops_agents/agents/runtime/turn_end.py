@@ -6,17 +6,28 @@ import logging
 from collections.abc import Sequence
 from dataclasses import replace
 
-from mlops_agents.agents.runtime.contract import TextPart, TurnEnd
+from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.runtime.contract import MessageStatus, TextPart, TurnEnd
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.runtime.waiting import _Ending, _observed
+from mlops_agents.agents.runtime.waiting import (
+    _Ending,
+    _observed,
+    cancel_turn_approvals,
+    finish_waiting_message,
+)
+from mlops_agents.events.contract import AuditLog, EventLog
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["TurnEnds"]
+
+# The final status of an agent message still `waiting` when its turn ends this way. A done turn
+# completed its message as it ended; an interrupted one is recovery's.
+_WAITING_MESSAGE_ENDS: dict[TurnEnd, MessageStatus] = {"stopped": "stopped", "failed": "complete"}
 
 
 class TurnEnds:
@@ -28,10 +39,16 @@ class TurnEnds:
         store: SessionStore,
         executor: TurnExecutor,
         observers: Sequence[TurnObserver],
+        approval_store: ApprovalStore,
+        audit_log: AuditLog | None,
+        event_log: EventLog | None,
     ) -> None:
         self._store = store
         self._executor = executor
         self._observers = tuple(observers)
+        self._approval_store = approval_store
+        self._audit_log = audit_log
+        self._event_log = event_log
 
     @shielded
     async def end(
@@ -52,7 +69,9 @@ class TurnEnds:
         It runs in its own task and takes the session lock, which the worker never holds when
         it gets here, and the turn task has finished by then.
 
-        A turn waiting for approval has not ended: there is nothing to store or report.
+        A turn waiting for approval has not ended: there is nothing to store or report. Every
+        other end but interrupted (recovery expires those) cancels the approvals its turn left
+        pending, once the end is stored: the turn task has finished, so none comes after it.
         """
         status = ending.status
         if status == "waiting":
@@ -70,7 +89,46 @@ class TurnEnds:
                 # and reported. It keeps its own status.
                 logger.exception("Could not store how turn %s ended; it ends %s", turn_id, status)
                 await self._record_end(project_id, session_id, turn_id, hub, lock, status, ending)
+            await self._close_out(project_id, session_id, turn_id, hub, lock, status)
         await self._turn_ended(project_id, session_id, agent, turn_id, status)
+
+    async def _close_out(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        status: TurnEnd,
+    ) -> None:
+        """Cancel the ended turn's pending approvals (by the user for a Stop, else by the system),
+        then give a still-waiting agent message its final status. Neither raises: a sweep that
+        fails leaves its approvals decided and unsettled (the next start's repair settles them)
+        or pending (the next recovery expires them)."""
+        try:
+            await cancel_turn_approvals(
+                project_id,
+                session_id,
+                turn_id,
+                decided_by="user" if status == "stopped" else "system",
+                store=self._store,
+                hub=hub,
+                lock=lock,
+                approval_store=self._approval_store,
+                audit_log=self._audit_log,
+                event_log=self._event_log,
+            )
+        except Exception:
+            logger.exception("Could not cancel the pending approvals of turn %s", turn_id)
+        final = _WAITING_MESSAGE_ENDS.get(status)
+        if final is None:
+            return
+        try:
+            await finish_waiting_message(
+                project_id, session_id, turn_id, final, store=self._store, hub=hub, lock=lock
+            )
+        except Exception:
+            logger.exception("Could not give turn %s's waiting message its end", turn_id)
 
     async def settle_trigger(
         self,
