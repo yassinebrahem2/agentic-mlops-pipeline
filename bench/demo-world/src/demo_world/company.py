@@ -125,7 +125,8 @@ class Production(Enum):
     UNKNOWN = "unknown"
 
 
-def _tail(text: str) -> str:
+def tail(text: str) -> str:
+    """The last lines of a command's output, for a log line."""
     return "\n".join(text.strip().splitlines()[-_TAIL_LINES:])
 
 
@@ -167,8 +168,8 @@ class Company:
                 "`%s` failed with exit code %d:\n%s\n%s",
                 shown,
                 result.code,
-                _tail(result.stderr),
-                _tail(result.stdout),
+                tail(result.stderr),
+                tail(result.stdout),
             )
         elif result.ok:
             log.info("`%s` done", shown)
@@ -205,7 +206,7 @@ class Company:
         log.error(
             "cannot tell whether the company has a production model (exit code %d):\n%s",
             result.code,
-            _tail(result.stderr),
+            tail(result.stderr),
         )
         return Production.UNKNOWN
 

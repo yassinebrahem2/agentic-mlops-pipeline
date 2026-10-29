@@ -1,18 +1,38 @@
 import hashlib
+import os
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+from demo_world import github
+from demo_world.company import Finished
 from tests.fixture import FIXTURE_CSV, Served
 
 
 @pytest.fixture(autouse=True)
-def isolated_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def no_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any `gh` call a test did not fake fail the test, so no test can reach GitHub."""
+
+    def refuse(args: Sequence[str]) -> Finished:
+        pytest.fail(f"a test called the real gh: gh {' '.join(args)}")
+
+    monkeypatch.setattr(github, "RUNNER", refuse)
+
+
+@pytest.fixture(autouse=True)
+def isolated_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point every folder, and the home folder itself, at the test's temporary folder."""
+    # `--run` and `up` write settings into the environment; none may reach the next test.
+    with mock.patch.dict(os.environ):
+        yield _isolate(tmp_path, monkeypatch)
+
+
+def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -22,7 +42,12 @@ def isolated_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOTEL_DEMO_MLFLOW", str(tmp_path / "mlflow"))
     # A developer's own company checkout, tracking server or repository never reaches a test;
     # the tests against the real company read HOTEL_DEMO_COMPANY at import, before this runs.
-    for variable in ("HOTEL_DEMO_COMPANY", "MLFLOW_TRACKING_URI", "HOTEL_DEMO_REPO"):
+    for variable in (
+        "HOTEL_DEMO_COMPANY",
+        "MLFLOW_TRACKING_URI",
+        "HOTEL_DEMO_REPO",
+        "HOTEL_DEMO_MLFLOW_PORT",
+    ):
         monkeypatch.delenv(variable, raising=False)
     return tmp_path
 
