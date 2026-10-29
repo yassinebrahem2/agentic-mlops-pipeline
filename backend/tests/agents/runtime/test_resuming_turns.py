@@ -36,6 +36,7 @@ from mlops_agents.config import RunMode, load_settings
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
@@ -43,6 +44,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
+from tests.providers.fake_clock import FakeClock
 
 
 class DummyArgs(BaseModel):
@@ -216,6 +218,7 @@ async def test_resuming_turn_approve(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "print(1)"}}
@@ -308,6 +311,7 @@ async def test_resuming_turn_reject_with_note(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py", "content": "bad code"}}
@@ -392,6 +396,7 @@ async def test_resuming_turn_two_asks_in_one_step(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "a.py"}},
@@ -495,7 +500,8 @@ async def test_resuming_turn_after_rebuilding_manager(
     from tests.integrations.test_github_auth import FakeGh
 
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -517,6 +523,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate,
         approval_store=store,
         inbound=NoInbound(),
@@ -530,6 +537,7 @@ async def test_resuming_turn_after_rebuilding_manager(
         audit_log=audit_log,
         event_log=event_log,
     )
+    new_manager.bind_approvals(new_approvals_service)
 
     # Approve using the rebuilt manager directly, calling decide first without subscribing
     await new_approvals_service.decide(
@@ -598,6 +606,7 @@ async def test_resuming_turn_no_duplicates(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "nodup.py"}}
@@ -671,7 +680,8 @@ async def test_resuming_turn_task_mismatch(
     from tests.integrations.test_github_auth import FakeGh
 
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hello"}, git_env)
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     from mlops_agents.agents.settings import AgentSettingsService
 
@@ -698,6 +708,7 @@ async def test_resuming_turn_task_mismatch(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate,
         approval_store=store,
         inbound=NoInbound(),
@@ -721,6 +732,7 @@ async def test_resuming_turn_task_mismatch(
         audit_log=audit_log,
         event_log=event_log,
     )
+    manager.bind_approvals(approvals_service)
 
     fake_openai.state.scripted_tool_calls = [
         {"name": "write_code_tool", "arguments": {"file_path": "task_check.py"}}

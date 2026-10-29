@@ -53,6 +53,7 @@ from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
@@ -147,8 +148,15 @@ async def build_services(
     # The one instance: every consumer of project secrets gets it through its constructor.
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
-    providers = ProvidersService(databases, keystore, http)
-    failover = KeyFailover()
+
+    # The one key failover: every model and embedder call shares its key states. It is built
+    # before the providers service that holds it, so its success hook looks the service up
+    # when it runs.
+    async def clear_attention(provider: Provider) -> None:
+        await providers.clear_attention(provider.id)
+
+    failover = KeyFailover(on_success=clear_attention)
+    providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
 
     async def secret_source() -> list[str]:
@@ -224,6 +232,7 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
+        failover=failover,
         gate=gate,
         inbound=inbound,
         turn_end=PrReminder(tasks),
@@ -247,6 +256,7 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+    sessions.bind_approvals(approvals)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
     handoffs = SqliteHandoffs(databases)

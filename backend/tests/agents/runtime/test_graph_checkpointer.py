@@ -32,6 +32,7 @@ class MockModelCaller(ModelCaller):
         messages: list[Any],
         tools: list[dict[str, Any]],
         on_text: Any,
+        on_restart: Any = None,
     ) -> ModelReply:
         return self._reply
 
@@ -158,6 +159,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_cancellation(
             messages: list[Any],
             tools: list[dict[str, Any]],
             on_text: Any,
+            on_restart: Any = None,
         ) -> ModelReply:
             started.set()
             await asyncio.Event().wait()
@@ -251,6 +253,7 @@ async def test_graph_checkpointer_thread_lifecycle_on_failure(
             messages: list[Any],
             tools: list[dict[str, Any]],
             on_text: Any,
+            on_restart: Any = None,
         ) -> ModelReply:
             raise RuntimeError("API failure")
 

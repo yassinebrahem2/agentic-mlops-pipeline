@@ -18,6 +18,7 @@ from mlops_agents.config import RunMode, load_settings
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -69,7 +70,8 @@ async def test_live_turn_orchestrator_readme(
         )
         tools = default_registry()
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-        providers_svc = ProvidersService(databases, keystore, http)
+        failover = KeyFailover()  # a real provider: its rate limits clear in real time
+        providers_svc = ProvidersService(databases, keystore, http, failover)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
         approval_store = ApprovalStore(databases)
@@ -81,6 +83,7 @@ async def test_live_turn_orchestrator_readme(
             settings=settings_svc,
             providers=providers_svc,
             http=http,
+            failover=failover,
             gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),

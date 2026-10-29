@@ -1,5 +1,6 @@
 import httpx2
 import openai
+import pytest
 
 from mlops_agents.providers.errors import ProviderErrorKind, classify
 
@@ -75,6 +76,23 @@ def test_retry_after_as_an_http_date_is_none() -> None:
     result = classify(err)
     assert result.kind is ProviderErrorKind.RATE_LIMIT
     assert result.retry_after is None
+
+
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e20", "0", "-5", "86401"])
+def test_a_malformed_or_non_positive_retry_after_is_none(value: str) -> None:
+    err = openai.RateLimitError(
+        "slow down", response=_response(429, {"retry-after": value}), body=None
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.RATE_LIMIT
+    assert result.retry_after is None
+
+
+def test_a_normal_retry_after_is_kept() -> None:
+    err = openai.RateLimitError(
+        "slow down", response=_response(429, {"retry-after": "86400"}), body=None
+    )
+    assert classify(err).retry_after == 86400.0
 
 
 def test_rate_limit_without_retry_after_is_none() -> None:
