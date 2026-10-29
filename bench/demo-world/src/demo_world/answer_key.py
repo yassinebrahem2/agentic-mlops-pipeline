@@ -45,7 +45,28 @@ class CiFailureEvent:
     set_at: str
 
 
-type KeyLine = Record | CiFailureEvent
+type Refusal = Literal["conflict", "checks_failed", "merge_failed"]
+
+
+@dataclass(frozen=True)
+class PullDecision:
+    """The world's merge, or refusal to merge, of an agent's PR in an evaluation run.
+
+    `opened` is the business date the world first saw the PR open, `date` the decision's, and
+    `delay_days` the simulated days between them; `merge_after_days` is the run's setting.
+    """
+
+    kind: Literal["pr_merged", "pr_not_merged"]
+    pr: int
+    branch: str
+    opened: str
+    date: str
+    delay_days: int
+    merge_after_days: int
+    reason: Refusal | None
+
+
+type KeyLine = Record | CiFailureEvent | PullDecision
 
 
 @dataclass(frozen=True)

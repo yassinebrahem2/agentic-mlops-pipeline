@@ -17,6 +17,7 @@ from demo_world import (
     company,
     fetch,
     github,
+    merger,
     newrun,
     paths,
     scenarios,
@@ -76,11 +77,15 @@ def _steps(args: argparse.Namespace, scenario: scenarios.Scenario) -> tuple[simu
     """The world's work on the company's repository; none without HOTEL_DEMO_REPO."""
     name = paths.repository()
     if name is None:
-        if args.ci_every is not None:
-            raise github.GitHubError(
-                f"--ci-every dispatches the company's CI; it needs {paths.REPO_VARIABLE} "
-                "(see `demo-world new-run`)"
-            )
+        for option, given in [
+            ("--ci-every", args.ci_every),
+            ("--merge-after-days", args.merge_after_days),
+        ]:
+            if given is not None:
+                raise github.GitHubError(
+                    f"{option} acts on the company's GitHub repository; it needs "
+                    f"{paths.REPO_VARIABLE} (see `demo-world new-run`)"
+                )
         if any(p.kind == "ci_failure" for p in scenario.problems):
             log.warning(
                 "without %s the ci_failure windows are recorded in the answer key only; "
@@ -90,12 +95,15 @@ def _steps(args: argparse.Namespace, scenario: scenarios.Scenario) -> tuple[simu
         return ()
     repository = github.Repository(name, github.RUNNER)
     every: int = ci.DEFAULT_EVERY if args.ci_every is None else args.ci_every
-    # The CI failure step comes first even without a window: it repairs a variable a killed
-    # run left pointing at a missing file, and it switches before the day's dispatch.
-    return (
+    # The CI failure step runs even without a window: it repairs a variable a killed run left
+    # pointing at a missing file. It switches at the start of a day, before that day's dispatch.
+    steps: list[simulate.Step] = [
         ci_failure.CiFailure(repository, paths.world_dir(), scenario.problems),
         ci.Dispatcher(repository, paths.world_dir(), every),
-    )
+    ]
+    if args.merge_after_days is not None:
+        steps.append(merger.Merger(repository, paths.world_dir(), args.merge_after_days))
+    return tuple(steps)
 
 
 def _simulate(args: argparse.Namespace) -> None:
@@ -192,6 +200,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"dispatch the company's scheduled CI every N simulated days (default "
         f"{ci.DEFAULT_EVERY}; needs {paths.REPO_VARIABLE})",
+    )
+    simulate_command.add_argument(
+        "--merge-after-days",
+        type=_at_least(0),
+        metavar="N",
+        help="evaluation runs only: merge an agent's PR N simulated days after it opened, once "
+        f"its checks are green (needs {paths.REPO_VARIABLE}); without it the world never merges",
     )
     simulate_command.set_defaults(run_command=_simulate)
     return parser
