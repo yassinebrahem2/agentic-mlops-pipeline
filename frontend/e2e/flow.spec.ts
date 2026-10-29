@@ -57,10 +57,12 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     const modelRow = page.getByRole("row").filter({ hasText: modelAddress });
     await expect(modelRow.getByRole("cell")).toHaveText([
       modelAddress,
+      "Chat",
       "Yes",
       "Yes",
       // The fake reports its own context window; any positive size it reports will do.
       /^[1-9]\d*$/,
+      "Not applicable",
       "Verified",
       /.+/,
       /Verify/,
@@ -141,9 +143,11 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     const writeModelRow = page.getByRole("row").filter({ hasText: writeModelAddress });
     await expect(writeModelRow.getByRole("cell")).toHaveText([
       writeModelAddress,
+      "Chat",
       "Yes",
       "Yes",
       /^[1-9]\d*$/,
+      "Not applicable",
       "Verified",
       /.+/,
       /Verify/,
