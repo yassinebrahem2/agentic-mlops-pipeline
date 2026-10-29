@@ -1,44 +1,9 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { ApprovalCardComponent, ApprovalStatus } from "./ApprovalCard";
+import type { ApprovalCardComponent } from "./ApprovalCard";
+import { APPROVAL_STATUS_CONFIG } from "./approvalStatus";
 import { ApprovalControls } from "./ApprovalControls";
-
-const APPROVAL_STATUS_CONFIG: Record<
-  ApprovalStatus,
-  {
-    label: string;
-    variant: "default" | "secondary" | "destructive" | "outline";
-    className?: string;
-  }
-> = {
-  pending: {
-    label: "pending",
-    variant: "outline",
-    className: "text-[10px] px-1.5 py-0",
-  },
-  approved: {
-    label: "approved",
-    variant: "outline",
-    className:
-      "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 text-[10px] px-1.5 py-0",
-  },
-  rejected: {
-    label: "rejected",
-    variant: "destructive",
-    className: "text-[10px] px-1.5 py-0",
-  },
-  cancelled: {
-    label: "cancelled",
-    variant: "outline",
-    className: "text-[10px] px-1.5 py-0",
-  },
-  expired: {
-    label: "expired",
-    variant: "outline",
-    className: "text-[10px] px-1.5 py-0",
-  },
-};
 
 function DiffView({ diff }: { diff: string }) {
   const lines = diff.split("\n");
