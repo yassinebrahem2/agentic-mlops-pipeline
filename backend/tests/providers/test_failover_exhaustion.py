@@ -1,7 +1,7 @@
 """Key failover: exhausted keys, cooldown probes, Try again, the wording and the one instance."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -10,11 +10,14 @@ from mlops_agents.api import services as services_module
 from mlops_agents.api.services import Services
 from mlops_agents.providers.failover import (
     AllKeysExhausted,
+    Clock,
     KeyFailover,
     KeyState,
     KeyStatus,
     RateLimited,
+    no_usable_key,
 )
+from mlops_agents.providers.models import Provider
 from tests.api.conftest import started_app
 from tests.providers.fake_clock import (
     KEY_VALUES,
@@ -242,6 +245,10 @@ def test_describe_keys_names_keys_by_position_never_by_value(failover: KeyFailov
     assert not any(value in text for value in KEY_VALUES)
 
 
+def test_no_usable_key_names_the_provider_and_the_model() -> None:
+    assert no_usable_key("groq", "llama-3.3-70b") == "groq: no usable key for llama-3.3-70b"
+
+
 async def test_all_keys_exhausted_names_no_key_value(failover: KeyFailover) -> None:
     with pytest.raises(AllKeysExhausted) as raised:
         await failover.call(provider(1), MODEL, Script(unauthorized()), cooldown_minutes=15)
@@ -256,8 +263,12 @@ async def test_build_services_builds_exactly_one_key_failover(
     built: list[KeyFailover] = []
 
     class RecordedKeyFailover(KeyFailover):
-        def __init__(self) -> None:
-            super().__init__()
+        def __init__(
+            self,
+            clock: Clock | None = None,
+            on_success: Callable[[Provider], Awaitable[None]] | None = None,
+        ) -> None:
+            super().__init__(clock, on_success)
             built.append(self)
 
     monkeypatch.setattr(services_module, "KeyFailover", RecordedKeyFailover)

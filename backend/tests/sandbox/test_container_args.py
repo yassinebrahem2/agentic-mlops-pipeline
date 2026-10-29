@@ -4,12 +4,12 @@ from pathlib import Path
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.connections.contract import Mount
 from mlops_agents.sandbox.containers import (
     build_run_args,
     container_name,
     mounts_fingerprint,
 )
-from mlops_agents.sandbox.projects import SandboxMount as Mount
 
 
 def test_container_name() -> None:

@@ -4,14 +4,18 @@ from collections.abc import AsyncIterator, Callable
 import httpx2
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.failover import AllKeysExhausted, KeyFailover
+from mlops_agents.providers.models import DEFAULT_COOLDOWN_MINUTES, ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import providers
 from tests.conftest import MemoryKeyStore
+from tests.providers.fake_clock import FakeClock, Script, statuses, unauthorized
 
 GOOD = "gsk_good_key_123456"
 Handler = Callable[[httpx2.Request], httpx2.Response]
@@ -40,7 +44,7 @@ async def make_service(
     def make(handler: Handler = _handler) -> ProvidersService:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
         clients.append(client)
-        return ProvidersService(databases, keystore, client)
+        return ProvidersService(databases, keystore, client, KeyFailover(FakeClock()))
 
     yield make
     for client in clients:
@@ -296,3 +300,72 @@ async def test_secret_values_caching_and_invalidation(
     await svc.delete_provider("groq")
     assert getattr(owner, cache_attr) is None
     assert await svc.secret_values() == []
+
+
+async def test_a_key_change_clears_the_providers_failover_state(
+    databases: Databases, keystore: MemoryKeyStore
+) -> None:
+    def any_key(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"object": "list", "data": []})
+
+    failover = KeyFailover(FakeClock())
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(any_key)) as client:
+        svc = ProvidersService(databases, keystore, client, failover)
+        await svc.create_provider(HOSTED)
+        await svc.add_key("groq", GOOD)
+
+        async def exhaust() -> list[str]:
+            provider = await svc.get_provider("groq")
+            with pytest.raises(AllKeysExhausted):
+                attempt = Script(*(unauthorized() for _ in provider.keys))
+                await failover.call(provider, "m1", attempt, cooldown_minutes=15)
+            return [state.status for state in failover.states(provider, "m1")]
+
+        assert await exhaust() == ["rejected"]
+        provider = await svc.add_key("groq", "gsk_second_key_654321")
+        assert statuses(failover.states(provider, "m1")) == ["ok", "ok"]
+
+        assert await exhaust() == ["rejected", "rejected"]
+        provider = await svc.remove_key("groq", 1)
+        assert statuses(failover.states(provider, "m1")) == ["ok"]
+
+        assert await exhaust() == ["rejected"]
+        await svc.delete_provider("groq")
+        await svc.create_provider(HOSTED)
+        await svc.add_key("groq", GOOD)
+        assert statuses(failover.states(provider, "m1")) == ["ok"]
+
+
+async def test_clear_attention_only_clears_a_provider_needing_attention(
+    make_service: MakeService, databases: Databases
+) -> None:
+    svc = make_service()
+    created = await svc.create_provider(HOSTED)
+    await svc.mark_needs_attention(created.id, "HTTP 401")
+
+    await svc.clear_attention(created.id)
+
+    cleared = await svc.get_provider_by_id(created.id)
+    assert (cleared.status, cleared.status_detail) == ("ok", None)
+    # A detail kept on an `ok` row shows the update touched only a needs-attention row.
+    engine = await databases.app()
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(providers).where(providers.c.id == created.id).values(status_detail="kept")
+        )
+    await svc.clear_attention(created.id)
+    assert (await svc.get_provider_by_id(created.id)).status_detail == "kept"
+
+
+async def test_cooldown_is_stored_and_read_back(make_service: MakeService) -> None:
+    svc = make_service()
+    created = await svc.create_provider(HOSTED)
+    assert created.cooldown_minutes == DEFAULT_COOLDOWN_MINUTES
+
+    updated = await svc.set_cooldown("groq", 90)
+
+    assert updated.cooldown_minutes == 90
+    assert (await svc.get_provider_by_id(created.id)).cooldown_minutes == 90
+    with pytest.raises(DomainError) as err:
+        await svc.set_cooldown("missing", 30)
+    assert err.value.status == 404

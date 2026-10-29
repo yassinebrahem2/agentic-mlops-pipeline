@@ -292,6 +292,30 @@
         "title": "AppInfo",
         "type": "object"
       },
+      "ApplyResult": {
+        "properties": {
+          "applied": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Applied",
+            "type": "array"
+          },
+          "failed": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Failed",
+            "type": "object"
+          }
+        },
+        "required": [
+          "applied",
+          "failed"
+        ],
+        "title": "ApplyResult",
+        "type": "object"
+      },
       "ApprovalPart": {
         "properties": {
           "approval_id": {
@@ -558,6 +582,314 @@
         "title": "BackupResult",
         "type": "object"
       },
+      "Cadence": {
+        "additionalProperties": false,
+        "properties": {
+          "cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cron"
+          },
+          "every_minutes": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Every Minutes"
+          }
+        },
+        "required": [
+          "cron",
+          "every_minutes"
+        ],
+        "title": "Cadence",
+        "type": "object"
+      },
+      "CheckSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "results": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileResults"
+              },
+              {
+                "$ref": "#/components/schemas/CiResults"
+              },
+              {
+                "$ref": "#/components/schemas/MlflowResults"
+              }
+            ],
+            "title": "Results"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check_id",
+          "name",
+          "category",
+          "cadence",
+          "timezone",
+          "results"
+        ],
+        "title": "CheckSpec",
+        "type": "object"
+      },
+      "CiResults": {
+        "additionalProperties": false,
+        "properties": {
+          "workflow": {
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow"
+        ],
+        "title": "CiResults",
+        "type": "object"
+      },
+      "CiRunRow": {
+        "properties": {
+          "commit": {
+            "title": "Commit",
+            "type": "string"
+          },
+          "duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration S"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "other"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "workflow": {
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "key",
+          "workflow",
+          "status",
+          "start",
+          "duration_s",
+          "commit",
+          "url"
+        ],
+        "title": "CiRunRow",
+        "type": "object"
+      },
+      "ColumnInfo": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ColumnInfo",
+        "type": "object"
+      },
+      "CommandSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "deploys": {
+            "title": "Deploys",
+            "type": "boolean"
+          },
+          "entry_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entry Files",
+            "type": "array"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "train",
+              "evaluate",
+              "deploy",
+              "rollback",
+              "rerun",
+              "hold",
+              "fall_back"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "placeholders": {
+            "items": {
+              "enum": [
+                "request_id",
+                "model",
+                "candidate_version",
+                "champion_version",
+                "window_start",
+                "window_end",
+                "mode",
+                "threshold"
+              ],
+              "type": "string"
+            },
+            "title": "Placeholders",
+            "type": "array"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
+          "type": {
+            "enum": [
+              "command",
+              "ci_dispatch"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "workflow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow"
+          }
+        },
+        "required": [
+          "kind",
+          "type",
+          "template",
+          "workflow",
+          "inputs",
+          "placeholders",
+          "deploys",
+          "entry_files"
+        ],
+        "title": "CommandSpec",
+        "type": "object"
+      },
+      "ConnectionSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "local_folder",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/LocalFolderSettings"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "settings",
+          "why"
+        ],
+        "title": "ConnectionSpec",
+        "type": "object"
+      },
       "ConnectionView": {
         "properties": {
           "data_version": {
@@ -624,6 +956,47 @@
         "title": "ConnectionView",
         "type": "object"
       },
+      "ConnectionsPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionSpec"
+            },
+            "minItems": 1,
+            "title": "Connections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "connections"
+        ],
+        "title": "ConnectionsPayload",
+        "type": "object"
+      },
+      "Contact": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "channel": {
+            "enum": [
+              "discord",
+              "email"
+            ],
+            "title": "Channel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "address"
+        ],
+        "title": "Contact",
+        "type": "object"
+      },
       "CreateConnection": {
         "properties": {
           "kind": {
@@ -646,6 +1019,130 @@
           "settings"
         ],
         "title": "CreateConnection",
+        "type": "object"
+      },
+      "CreateSourceBody": {
+        "properties": {
+          "auth": {
+            "default": "none",
+            "enum": [
+              "none",
+              "credential"
+            ],
+            "title": "Auth",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "mlflow",
+              "github_actions"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "settings"
+        ],
+        "title": "CreateSourceBody",
+        "type": "object"
+      },
+      "CredentialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "format": "password",
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "CredentialBody",
+        "type": "object"
+      },
+      "DataFeedRef": {
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection",
+          "table"
+        ],
+        "title": "DataFeedRef",
+        "type": "object"
+      },
+      "DataRole": {
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "id_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id Column"
+          },
+          "role": {
+            "enum": [
+              "training",
+              "serving_inputs",
+              "predictions",
+              "labels",
+              "other"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "time_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Column"
+          }
+        },
+        "required": [
+          "connection",
+          "table",
+          "role",
+          "id_column",
+          "time_column"
+        ],
+        "title": "DataRole",
         "type": "object"
       },
       "DecisionRequest": {
@@ -671,6 +1168,59 @@
           "approve"
         ],
         "title": "DecisionRequest",
+        "type": "object"
+      },
+      "DeploymentRow": {
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "seen_at": {
+            "format": "date-time",
+            "title": "Seen At",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "to_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Version"
+          }
+        },
+        "required": [
+          "source_id",
+          "model",
+          "alias",
+          "from_version",
+          "to_version",
+          "seen_at"
+        ],
+        "title": "DeploymentRow",
         "type": "object"
       },
       "DetectedKey": {
@@ -881,6 +1431,52 @@
         "title": "EnvironmentStatus",
         "type": "object"
       },
+      "EvaluationRecord": {
+        "description": "A model version run's mlops_agents/evaluation.json (stage 5).",
+        "properties": {
+          "fetched_at": {
+            "format": "date-time",
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "run_key": {
+            "title": "Run Key",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "model",
+          "version",
+          "run_key",
+          "schema_version",
+          "payload",
+          "fetched_at"
+        ],
+        "title": "EvaluationRecord",
+        "type": "object"
+      },
       "EventRecord": {
         "properties": {
           "id": {
@@ -960,6 +1556,74 @@
           "payload"
         ],
         "title": "EventRecord",
+        "type": "object"
+      },
+      "Feed": {
+        "additionalProperties": false,
+        "properties": {
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "grace_minutes": {
+            "title": "Grace Minutes",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "data",
+              "job"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DataFeedRef"
+              },
+              {
+                "$ref": "#/components/schemas/JobFeedRef"
+              }
+            ],
+            "title": "Ref"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "ref",
+          "cadence",
+          "grace_minutes",
+          "timezone"
+        ],
+        "title": "Feed",
+        "type": "object"
+      },
+      "FileResults": {
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "path_pattern": {
+            "title": "Path Pattern",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection",
+          "path_pattern"
+        ],
+        "title": "FileResults",
         "type": "object"
       },
       "Finding": {
@@ -1073,6 +1737,25 @@
         "title": "FolderListing",
         "type": "object"
       },
+      "Gap": {
+        "additionalProperties": false,
+        "properties": {
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "what": {
+            "title": "What",
+            "type": "string"
+          }
+        },
+        "required": [
+          "what",
+          "next_step"
+        ],
+        "title": "Gap",
+        "type": "object"
+      },
       "GitHubItem": {
         "properties": {
           "agent": {
@@ -1155,6 +1838,81 @@
         "title": "GitHubStatus",
         "type": "object"
       },
+      "GithubActionsSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "workflows": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Workflows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "title": "GithubActionsSettings",
+        "type": "object"
+      },
+      "Grants": {
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "title": "Network",
+            "type": "boolean"
+          },
+          "permission_level": {
+            "enum": [
+              "suggest",
+              "ask",
+              "autonomous"
+            ],
+            "title": "Permission Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network",
+          "permission_level"
+        ],
+        "title": "Grants",
+        "type": "object"
+      },
+      "GroupSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "required": [
+          "column",
+          "values"
+        ],
+        "title": "GroupSpec",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1166,6 +1924,107 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HandoffPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/CommandSpec"
+            },
+            "title": "Commands",
+            "type": "array"
+          },
+          "data_roles": {
+            "items": {
+              "$ref": "#/components/schemas/DataRole"
+            },
+            "title": "Data Roles",
+            "type": "array"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/Grants"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSpec"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "operations": {
+            "$ref": "#/components/schemas/Operations"
+          },
+          "pipeline": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineStage"
+            },
+            "title": "Pipeline",
+            "type": "array"
+          },
+          "tracking": {
+            "items": {
+              "$ref": "#/components/schemas/TrackingSourceSpec"
+            },
+            "title": "Tracking",
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "commands",
+          "data_roles",
+          "tracking",
+          "pipeline",
+          "edges",
+          "operations",
+          "gaps",
+          "grants"
+        ],
+        "title": "HandoffPayload",
+        "type": "object"
+      },
+      "HandoffView": {
+        "properties": {
+          "approved": {
+            "format": "date-time",
+            "title": "Approved",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/HandoffPayload"
+          },
+          "proposal_id": {
+            "title": "Proposal Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "proposal_id",
+          "version",
+          "approved",
+          "payload"
+        ],
+        "title": "HandoffView",
         "type": "object"
       },
       "InspectConnection": {
@@ -1206,6 +2065,38 @@
         "title": "IssuesSettings",
         "type": "object"
       },
+      "JobFeedRef": {
+        "additionalProperties": false,
+        "properties": {
+          "ci_workflow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Workflow"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileResults"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ci_workflow",
+          "file"
+        ],
+        "title": "JobFeedRef",
+        "type": "object"
+      },
       "KeyHint": {
         "properties": {
           "hint": {
@@ -1222,6 +2113,20 @@
           "hint"
         ],
         "title": "KeyHint",
+        "type": "object"
+      },
+      "LocalFolderSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "LocalFolderSettings",
         "type": "object"
       },
       "LocalReview": {
@@ -1333,18 +2238,6 @@
             "title": "Created At",
             "type": "string"
           },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
-          },
           "from_agent": {
             "anyOf": [
               {
@@ -1445,6 +2338,101 @@
           "max_tokens"
         ],
         "title": "MessagingLimits",
+        "type": "object"
+      },
+      "MetricPoint": {
+        "properties": {
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "run_key": {
+            "title": "Run Key",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "time": {
+            "format": "date-time",
+            "title": "Time",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "source_id",
+          "run_key",
+          "metric",
+          "step",
+          "value",
+          "time"
+        ],
+        "title": "MetricPoint",
+        "type": "object"
+      },
+      "MlflowResults": {
+        "additionalProperties": false,
+        "properties": {
+          "fires_when": {
+            "anyOf": [
+              {
+                "enum": [
+                  "above",
+                  "below"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fires When"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          }
+        },
+        "required": [
+          "metric",
+          "threshold",
+          "fires_when"
+        ],
+        "title": "MlflowResults",
+        "type": "object"
+      },
+      "MlflowSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "MlflowSettings",
         "type": "object"
       },
       "ModelCreate": {
@@ -1602,6 +2590,188 @@
           "problem"
         ],
         "title": "ModelEntry",
+        "type": "object"
+      },
+      "ModelSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/CommandSpec"
+            },
+            "title": "Commands",
+            "type": "array"
+          },
+          "environments": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Environments",
+            "type": "object"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableUse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "predictions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableUse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "production_signal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductionSignal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "$ref": "#/components/schemas/Profile"
+          },
+          "promotion": {
+            "enum": [
+              "team_gate",
+              "person"
+            ],
+            "title": "Promotion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "profile",
+          "predictions",
+          "labels",
+          "commands",
+          "promotion",
+          "environments",
+          "production_signal"
+        ],
+        "title": "ModelSpec",
+        "type": "object"
+      },
+      "ModelSummary": {
+        "properties": {
+          "latest_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "production_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Version"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "versions": {
+            "title": "Versions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_id",
+          "name",
+          "production_version",
+          "latest_version",
+          "versions"
+        ],
+        "title": "ModelSummary",
+        "type": "object"
+      },
+      "ModelVersionRow": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "evaluation": {
+            "enum": [
+              "present",
+              "absent",
+              "fetch_failed"
+            ],
+            "title": "Evaluation",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "run_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Key"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "model",
+          "version",
+          "run_key",
+          "aliases",
+          "created",
+          "evaluation"
+        ],
+        "title": "ModelVersionRow",
         "type": "object"
       },
       "NoteDraft": {
@@ -1767,6 +2937,320 @@
         "title": "NoteView",
         "type": "object"
       },
+      "OnCall": {
+        "additionalProperties": false,
+        "properties": {
+          "contacts": {
+            "items": {
+              "$ref": "#/components/schemas/Contact"
+            },
+            "minItems": 1,
+            "title": "Contacts",
+            "type": "array"
+          },
+          "escalation_order": {
+            "title": "Escalation Order",
+            "type": "integer"
+          },
+          "hours": {
+            "$ref": "#/components/schemas/OnCallHours"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "contacts",
+          "hours",
+          "timezone",
+          "escalation_order"
+        ],
+        "title": "OnCall",
+        "type": "object"
+      },
+      "OnCallHours": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "items": {
+              "enum": [
+                "mon",
+                "tue",
+                "wed",
+                "thu",
+                "fri",
+                "sat",
+                "sun"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Days",
+            "type": "array"
+          },
+          "end": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "days",
+          "start",
+          "end"
+        ],
+        "title": "OnCallHours",
+        "type": "object"
+      },
+      "Operations": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckSpec"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "feeds": {
+            "items": {
+              "$ref": "#/components/schemas/Feed"
+            },
+            "title": "Feeds",
+            "type": "array"
+          },
+          "on_call": {
+            "items": {
+              "$ref": "#/components/schemas/OnCall"
+            },
+            "title": "On Call",
+            "type": "array"
+          },
+          "results_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileResults"
+              },
+              {
+                "$ref": "#/components/schemas/MlflowResults"
+              }
+            ],
+            "title": "Results Location"
+          },
+          "scheduler": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Scheduler"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "scheduler",
+          "feeds",
+          "on_call",
+          "checks",
+          "results_location"
+        ],
+        "title": "Operations",
+        "type": "object"
+      },
+      "Page_CiRunRow_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/CiRunRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[CiRunRow]",
+        "type": "object"
+      },
+      "Page_DeploymentRow_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[DeploymentRow]",
+        "type": "object"
+      },
+      "Page_EvaluationRecord_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/EvaluationRecord"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[EvaluationRecord]",
+        "type": "object"
+      },
+      "Page_MetricPoint_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[MetricPoint]",
+        "type": "object"
+      },
+      "Page_ModelSummary_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[ModelSummary]",
+        "type": "object"
+      },
+      "Page_ModelVersionRow_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ModelVersionRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[ModelVersionRow]",
+        "type": "object"
+      },
+      "Page_RunRow_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RunRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[RunRow]",
+        "type": "object"
+      },
       "PasswordSignIn": {
         "properties": {
           "password": {
@@ -1798,6 +3282,60 @@
           "level"
         ],
         "title": "PermissionsSettings",
+        "type": "object"
+      },
+      "PipelineEdge": {
+        "additionalProperties": false,
+        "properties": {
+          "from_stage": {
+            "title": "From Stage",
+            "type": "string"
+          },
+          "to_stage": {
+            "title": "To Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_stage",
+          "to_stage"
+        ],
+        "title": "PipelineEdge",
+        "type": "object"
+      },
+      "PipelineStage": {
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "title": "Entry",
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "entry",
+          "inputs",
+          "outputs"
+        ],
+        "title": "PipelineStage",
         "type": "object"
       },
       "PrRef": {
@@ -1849,6 +3387,133 @@
           "body"
         ],
         "title": "Preview",
+        "type": "object"
+      },
+      "ProductionSignal": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "tracker_alias",
+              "ci_job",
+              "file"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "title": "ProductionSignal",
+        "type": "object"
+      },
+      "Profile": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Ratio"
+          },
+          "error_costs": {
+            "title": "Error Costs",
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSpec"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "label_delay_days": {
+            "title": "Label Delay Days",
+            "type": "integer"
+          },
+          "label_maturity_days": {
+            "title": "Label Maturity Days",
+            "type": "integer"
+          },
+          "metric_rationale": {
+            "title": "Metric Rationale",
+            "type": "string"
+          },
+          "objective": {
+            "title": "Objective",
+            "type": "string"
+          },
+          "operating_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operating Threshold"
+          },
+          "positive_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positive Class"
+          },
+          "primary_metric": {
+            "title": "Primary Metric",
+            "type": "string"
+          },
+          "problem_type": {
+            "title": "Problem Type",
+            "type": "string"
+          },
+          "serving_mode": {
+            "enum": [
+              "batch",
+              "online",
+              "streaming"
+            ],
+            "title": "Serving Mode",
+            "type": "string"
+          },
+          "target_column": {
+            "title": "Target Column",
+            "type": "string"
+          }
+        },
+        "required": [
+          "objective",
+          "problem_type",
+          "target_column",
+          "positive_class",
+          "primary_metric",
+          "metric_rationale",
+          "operating_threshold",
+          "label_delay_days",
+          "label_maturity_days",
+          "serving_mode",
+          "error_costs",
+          "cost_ratio",
+          "groups"
+        ],
+        "title": "Profile",
         "type": "object"
       },
       "Project": {
@@ -1954,6 +3619,112 @@
         "title": "Project",
         "type": "object"
       },
+      "ProposalView": {
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionsPayload"
+              },
+              {
+                "$ref": "#/components/schemas/HandoffPayload"
+              }
+            ],
+            "title": "Payload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "key",
+          "payload",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created"
+        ],
+        "title": "ProposalView",
+        "type": "object"
+      },
       "Provider": {
         "properties": {
           "base_url": {
@@ -2047,6 +3818,23 @@
           "base_url"
         ],
         "title": "ProviderCreate",
+        "type": "object"
+      },
+      "ProviderSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "cooldown_minutes": {
+            "description": "Minutes an exhausted key rests before it is tried again.",
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Cooldown Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cooldown_minutes"
+        ],
+        "title": "ProviderSettings",
         "type": "object"
       },
       "RelinkProject": {
@@ -2192,6 +3980,103 @@
         "title": "RiskClass",
         "type": "string"
       },
+      "RunRow": {
+        "properties": {
+          "datasets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Datasets",
+            "type": "array"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "git_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Commit"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Params",
+            "type": "object"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "other"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "object"
+          }
+        },
+        "required": [
+          "source_id",
+          "key",
+          "experiment",
+          "status",
+          "start",
+          "end",
+          "params",
+          "tags",
+          "git_commit",
+          "datasets"
+        ],
+        "title": "RunRow",
+        "type": "object"
+      },
       "SandboxSettings": {
         "properties": {
           "network": {
@@ -2224,6 +4109,25 @@
           "network"
         ],
         "title": "SandboxView",
+        "type": "object"
+      },
+      "Scheduler": {
+        "additionalProperties": false,
+        "properties": {
+          "config_location": {
+            "title": "Config Location",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "config_location"
+        ],
+        "title": "Scheduler",
         "type": "object"
       },
       "SearchResult": {
@@ -2361,6 +4265,20 @@
         "title": "SetContextWindow",
         "type": "object"
       },
+      "SetCredentialBody": {
+        "properties": {
+          "credential": {
+            "minLength": 1,
+            "title": "Credential",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "title": "SetCredentialBody",
+        "type": "object"
+      },
       "SetGitHubToken": {
         "additionalProperties": false,
         "properties": {
@@ -2373,6 +4291,99 @@
           "token"
         ],
         "title": "SetGitHubToken",
+        "type": "object"
+      },
+      "SlotState": {
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "set": {
+            "title": "Set",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index",
+          "label",
+          "set"
+        ],
+        "title": "SlotState",
+        "type": "object"
+      },
+      "SyncBody": {
+        "properties": {
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          }
+        },
+        "title": "SyncBody",
+        "type": "object"
+      },
+      "TableDetail": {
+        "description": "Served by data-summary from its cache.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnInfo"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "data_version": {
+            "title": "Data Version",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TableRef"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "row_count",
+          "timed_out",
+          "incomplete",
+          "data_version",
+          "summary"
+        ],
+        "title": "TableDetail",
         "type": "object"
       },
       "TableRef": {
@@ -2405,6 +4416,26 @@
           "format"
         ],
         "title": "TableRef",
+        "type": "object"
+      },
+      "TableUse": {
+        "additionalProperties": false,
+        "description": "A reference to a DataRole.",
+        "properties": {
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection",
+          "table"
+        ],
+        "title": "TableUse",
         "type": "object"
       },
       "TaskView": {
@@ -2722,6 +4753,112 @@
         "title": "ToolStartedData",
         "type": "object"
       },
+      "TrackingSourceSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "auth": {
+            "enum": [
+              "none",
+              "credential"
+            ],
+            "title": "Auth",
+            "type": "string"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MlflowSettings"
+              },
+              {
+                "$ref": "#/components/schemas/GithubActionsSettings"
+              }
+            ],
+            "title": "Settings"
+          },
+          "type": {
+            "enum": [
+              "mlflow",
+              "github_actions"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "settings",
+          "auth"
+        ],
+        "title": "TrackingSourceSpec",
+        "type": "object"
+      },
+      "TrackingSourceView": {
+        "properties": {
+          "auth": {
+            "enum": [
+              "none",
+              "credential"
+            ],
+            "title": "Auth",
+            "type": "string"
+          },
+          "credential_set": {
+            "title": "Credential Set",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_sync": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "mlflow",
+              "github_actions"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "settings",
+          "auth",
+          "credential_set",
+          "last_sync",
+          "last_error"
+        ],
+        "title": "TrackingSourceView",
+        "type": "object"
+      },
       "TurnEnded": {
         "properties": {
           "data": {
@@ -2757,18 +4894,6 @@
               }
             ],
             "title": "Error"
-          },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
           },
           "status": {
             "enum": [
@@ -4625,6 +6750,66 @@
         ]
       }
     },
+    "/api/projects/{project_id}/connections/{connection_id}/tables/{table}": {
+      "get": {
+        "operationId": "get_table_detail_api_projects__project_id__connections__connection_id__tables__table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Table Detail",
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/api/projects/{project_id}/events/stream": {
       "get": {
         "operationId": "stream_events_api_projects__project_id__events_stream_get",
@@ -4751,6 +6936,56 @@
         "summary": "Get Github Activity Route",
         "tags": [
           "github-work"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/handoff": {
+      "get": {
+        "operationId": "get_current_handoff_api_projects__project_id__handoff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandoffView"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Current Handoff Api Projects  Project Id  Handoff Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Current Handoff",
+        "tags": [
+          "proposals"
         ]
       }
     },
@@ -5031,6 +7266,127 @@
         "summary": "Open Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/proposals/by-approval/{approval_id}": {
+      "get": {
+        "operationId": "get_proposal_by_approval_api_projects__project_id__proposals_by_approval__approval_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Proposal By Approval",
+        "tags": [
+          "proposals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/proposals/{proposal_id}/credentials/{slot}": {
+      "put": {
+        "operationId": "put_credential_slot_api_projects__project_id__proposals__proposal_id__credentials__slot__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slot",
+            "required": true,
+            "schema": {
+              "title": "Slot",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlotState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Credential Slot",
+        "tags": [
+          "proposals"
         ]
       }
     },
@@ -5783,6 +8139,803 @@
         ]
       }
     },
+    "/api/projects/{project_id}/tracking/ci-runs": {
+      "get": {
+        "operationId": "get_ci_runs_api_projects__project_id__tracking_ci_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CiRunRow_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ci Runs",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/deployments": {
+      "get": {
+        "operationId": "get_deployments_api_projects__project_id__tracking_deployments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DeploymentRow_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deployments",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/evaluations": {
+      "get": {
+        "operationId": "get_evaluations_api_projects__project_id__tracking_evaluations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_EvaluationRecord_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Evaluations",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/metrics": {
+      "get": {
+        "operationId": "get_metrics_api_projects__project_id__tracking_metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Metric"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latest",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Latest",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_MetricPoint_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Metrics",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/models": {
+      "get": {
+        "operationId": "get_models_api_projects__project_id__tracking_models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ModelSummary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Models",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/runs": {
+      "get": {
+        "operationId": "get_runs_api_projects__project_id__tracking_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_RunRow_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Runs",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/sources": {
+      "get": {
+        "operationId": "list_sources_api_projects__project_id__tracking_sources_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackingSourceView"
+                  },
+                  "title": "Response List Sources Api Projects  Project Id  Tracking Sources Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sources",
+        "tags": [
+          "tracking"
+        ]
+      },
+      "post": {
+        "operationId": "create_source_api_projects__project_id__tracking_sources_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSourceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingSourceView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Source",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/sources/{source_id}/credential": {
+      "put": {
+        "operationId": "set_credential_api_projects__project_id__tracking_sources__source_id__credential_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCredentialBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingSourceView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Credential",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/sync": {
+      "post": {
+        "operationId": "sync_sources_api_projects__project_id__tracking_sync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SyncBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sync Sources",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/tracking/versions": {
+      "get": {
+        "operationId": "get_versions_api_projects__project_id__tracking_versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ModelVersionRow_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Versions",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
     "/api/providers": {
       "get": {
         "operationId": "list_providers_api_providers_get",
@@ -6026,6 +9179,58 @@
           }
         },
         "summary": "List Remote Models",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/settings": {
+      "put": {
+        "operationId": "update_provider_settings_api_providers__name__settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Provider Settings",
         "tags": [
           "providers"
         ]

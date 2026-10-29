@@ -4,7 +4,7 @@
 
 **Goal:** Fix bug #409, the Minor findings of the reviews of #383 and #405.
 
-**Branch:** `plan/stage-3-connections-fixes`. **Consumes:** merged code. **Produces:** nothing other plans use; every public interface keeps its signature (I15 unchanged).
+**Branch:** `plan/stage-3-connections-fixes`. **Consumes:** merged code. **Produces:** nothing other plans use; every public interface keeps its signature except one I15 change: `ConnectionKind.latest_data_version` becomes `read(settings) -> tuple[Findings, str | None]` (one folder check, one scan), which `list` calls through the protocol.
 
 **Read first:** bug #409; the connections plan (`2026-10-28-stage-3-connections.md`); `AGENTS.md` Code quality.
 
@@ -27,7 +27,7 @@
 - **No dead type.** `SandboxMount` is used only by tests: remove it, or use it where mounts are built.
 - **One path helper** in `ConnectionDialog.tsx`: the `settings.path` extraction is written twice; one function.
 - **The mounts test asserts the exact binds.** In `test_duckdb_image_docker.py`, filter Docker's own entries (`/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, pseudo filesystems) from `/proc/mounts` and assert the host binds are exactly `/workspace` and the connection's `/data/<name>`.
-- **One scan per connection in `list`.** `list` calls `findings`, then `latest_data_version`, and `validate` resolves again. Resolve once and scan once per connection per call (the plan says one `tables()` scan), passing the resolved path and the scan to what needs them; `ConnectionKind`'s methods keep their signatures.
+- **One scan per connection in `list`.** `list` calls `findings`, then `latest_data_version`, and `validate` resolves again. `list` calls `ConnectionKind.read(settings)` (replacing `latest_data_version` on the protocol, in contracts' `connections/contract.py` and the member-count test): one folder check and one scan, giving the findings and the data version. No other kind method changes. `read` raises what the folder check raises, so `list` still shows an unreachable folder as `unreachable` (tested).
 - **`mounts` resolves once per call** and fails loudly on an unreachable connection, as today.
 - **The name error does not echo input.** `invalid_connection_name` puts the submitted name in its message; say what the rule is instead (the pattern in words), never the value.
 

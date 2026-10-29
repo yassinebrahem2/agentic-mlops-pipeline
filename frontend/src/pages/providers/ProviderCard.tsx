@@ -67,6 +67,7 @@ export function ProviderCard({ provider }: { provider: Provider }) {
             </Alert>
           )}
           <KeyList provider={provider} />
+          <CooldownField provider={provider} />
         </CardContent>
       </Card>
     </section>
@@ -197,6 +198,77 @@ function AddKeyForm({ provider }: { provider: Provider }) {
           Cancel
         </Button>
       </div>
+    </form>
+  );
+}
+
+const COOLDOWN_MIN = 1;
+const COOLDOWN_MAX = 1440;
+
+/** The minutes typed, when they are a whole number in the allowed range; else null. */
+function cooldownMinutes(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const minutes = Number(value);
+  return minutes >= COOLDOWN_MIN && minutes <= COOLDOWN_MAX ? minutes : null;
+}
+
+function CooldownField({ provider }: { provider: Provider }) {
+  const queryClient = useQueryClient();
+  const inputId = useId();
+  const hintId = useId();
+  const [value, setValue] = useState(String(provider.cooldown_minutes));
+  const save = useMutation({
+    mutationFn: async (minutes: number) =>
+      unwrap(
+        await api.PUT("/api/providers/{name}/settings", {
+          params: { path: { name: provider.name } },
+          body: { cooldown_minutes: minutes },
+        }),
+      ),
+    onSuccess: (updated) => {
+      storeProvider(queryClient, updated);
+    },
+  });
+  const minutes = cooldownMinutes(value);
+
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (minutes !== null) save.mutate(minutes);
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 flex flex-col gap-2 border-t pt-4">
+      <Label htmlFor={inputId}>Exhausted key cooldown (minutes)</Label>
+      <p id={hintId} className="text-muted-foreground">
+        How long an exhausted key is skipped before one retry.
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          min={COOLDOWN_MIN}
+          max={COOLDOWN_MAX}
+          step={1}
+          aria-describedby={hintId}
+          aria-invalid={minutes === null}
+          className="w-28"
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value);
+            save.reset();
+          }}
+        />
+        <Button type="submit" variant="outline" disabled={minutes === null || save.isPending}>
+          Save cooldown
+        </Button>
+      </div>
+      {minutes === null && (
+        <p className="text-destructive">
+          Enter a whole number from {COOLDOWN_MIN} to {COOLDOWN_MAX}.
+        </p>
+      )}
+      {save.isError && <p className="text-destructive">{errorText(save.error)}</p>}
     </form>
   );
 }
