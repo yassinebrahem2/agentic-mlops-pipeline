@@ -218,6 +218,8 @@ class HookRegistry:
 
 ### I19: proposals (`proposals/contract.py`)
 
+> Changed by stages 4-6 (Decision #447): contracts task 4 widens `ProposalView.payload` to a union discriminated by `kind`.
+
 ```python
 ProposalStatus = Literal["pending", "approved", "rejected", "superseded"]
 class CredentialSlot(BaseModel): index: int; label: str; source_type: str
@@ -288,6 +290,8 @@ class Proposals(Protocol):          # proposals
 - Routes: `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}` (keystore only; refused unless pending); `GET .../proposals/by-approval/{apr}`. Events `proposal.created`, `proposal.decided`, `handoff.approved`.
 
 ### I20: the current handoff (types in `proposals/contract.py` by contracts; `SqliteHandoffs` in `proposals/handoffs.py` by proposals)
+
+> Changed by stages 4-6 (Decision #448): contracts task 1 adds `HandoffObserver` and `Handoffs.add_observer`, called after `store` commits.
 
 ```python
 class HandoffView(BaseModel): proposal_id: str; version: int; approved: datetime; payload: HandoffPayload
