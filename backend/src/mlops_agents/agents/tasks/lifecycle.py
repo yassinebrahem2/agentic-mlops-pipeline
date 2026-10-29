@@ -127,6 +127,8 @@ async def prepare_worktree(
 async def resume_task(
     *,
     engine: AsyncEngine,
+    events: EventLog,
+    project_id: str,
     session_id: str,
     agent: str,
     task_id: str,
@@ -169,6 +171,15 @@ async def resume_task(
         worktree=worktree_path,
         status=row["status"],
     )
+
+    await events.record(
+        project_id,
+        source=agent,
+        type="task.started",
+        payload={"task_id": task_id, "title": ref.title, "branch": ref.branch},
+        subject_id=task_id,
+    )
+
     return ref, old_session_id
 
 

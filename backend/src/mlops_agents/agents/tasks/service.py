@@ -112,6 +112,8 @@ class TasksService(Tasks):
     ) -> TaskRef:
         ref, old_sid = await resume_task(
             engine=await self._databases.project(project_id),
+            events=self._events,
+            project_id=project_id,
             session_id=session_id,
             agent=agent,
             task_id=task_id,
