@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final
 
 from mlops_agents.agents.hooks.contract import HookContext
@@ -56,12 +58,13 @@ class DataSummaryHook:
 
     async def _connection(self, project_id: str, view: ConnectionView, text: _Text) -> None:
         if view.status == "unreachable":
-            text.add(render.unreachable_line(view, view.status_detail))
+            detail = _without_host_folders(view, view.status_detail or "")
+            text.add(render.unreachable_line(view, detail))
             return
         try:
             tables = await self._connections.tables(project_id, view.id)
         except DomainError as exc:  # the folder went away since `list` read it
-            text.add(render.unreachable_line(view, exc.message))
+            text.add(render.unreachable_line(view, _without_host_folders(view, exc.message)))
             return
         if not text.add(render.connection_line(view)):
             text.left_out(len(tables))
@@ -92,13 +95,11 @@ class DataSummaryHook:
         except SecretTable:
             return render.left_out_line(ref, render.DENYLISTED_FILE)
         except TableUnreadable as exc:
-            # The team's host folder is no business of the prompt: the agent reads /data.
-            mount = f"{DATA_MOUNT_ROOT}/{view.name}"
             return render.unreadable_line(
-                ref, render.reason_without_folders(exc.message, exc.folders, mount)
+                ref, _without_host_folders(view, exc.message, exc.folders)
             )
         except DomainError as exc:  # a file gone since the listing
-            return render.unreadable_line(ref, exc.message)
+            return render.unreadable_line(ref, _without_host_folders(view, exc.message))
         except TimeoutError:  # waited on another render's profile of this table
             return render.left_out_line(ref, render.TIME_BUDGET)
         except OSError:  # after TimeoutError, its subclass
@@ -112,6 +113,16 @@ class DataSummaryHook:
         detail = render.render_versioned_table(ref, data_version, profile)
         # A table that misses the cap is listed; the next ones are still tried (Decision #431).
         return detail if text.fits(detail) else listed
+
+
+def _without_host_folders(view: ConnectionView, message: str, resolved: Sequence[Path] = ()) -> str:
+    """`message` with the connection's host folder replaced by its sandbox path: the team's
+    host folder is no business of the prompt, the agent reads /data (Decisions #430, #431).
+    The folder appears resolved in DuckDB's text and as typed in the kind's own messages,
+    which a folder that no longer exists cannot be resolved to."""
+    typed = view.settings.get("path")
+    folders: list[Path | str] = [*resolved, *([typed.strip()] if isinstance(typed, str) else [])]
+    return render.reason_without_folders(message, folders, f"{DATA_MOUNT_ROOT}/{view.name}")
 
 
 @dataclass

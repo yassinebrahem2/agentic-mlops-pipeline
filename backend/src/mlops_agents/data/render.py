@@ -24,6 +24,10 @@ CACHE_UNAVAILABLE: Final = "profile cache unavailable"
 DENYLISTED_FILE: Final = "looks like a secret file"
 UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
 _REASON_CUT: Final = TEXT_CUT * 2
+# DuckDB's CSV errors give only the place on their first line; the cause follows, after a
+# copy of the team's row when there is one (Decision #431).
+_PLACE_ONLY: Final = re.compile(r"CSV Error on Line: \d+$")
+_ROW_COPY: Final = "Original Line:"
 
 # What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them),
 # the Unicode line and paragraph separators, and lone surrogates (a file name whose bytes
@@ -61,10 +65,23 @@ def connection_line(view: ConnectionView) -> str:
     )
 
 
+def _cause(reason: str) -> str:
+    """The line of `reason` naming its cause, cut to `TEXT_CUT * 2` characters: DuckDB's
+    whole text copies the file's lines and its settings (Decisions #430, #431)."""
+    lines = reason.splitlines()
+    first = lines[0] if lines else ""
+    if _PLACE_ONLY.search(first):
+        later = (line.strip() for line in lines[1:] if not line.startswith(_ROW_COPY))
+        if cause := next((line for line in later if line), ""):
+            first = f"{first}: {cause}"
+    return first[:_REASON_CUT]
+
+
 def unreachable_line(view: ConnectionView, detail: str | None) -> str:
+    """The detail cut as an unreadable table's reason is."""
     return (
         f"Connection {quoted(view.name)} ({one_line(view.kind)}, unreachable): "
-        f"{one_line(detail or '')}"
+        f"{one_line(_cause(detail or ''))}"
     )
 
 
@@ -77,16 +94,20 @@ def left_out_line(ref: TableRef, reason: str) -> str:
 
 
 def unreadable_line(ref: TableRef, reason: str) -> str:
-    """The reason cut to its first line and `TEXT_CUT * 2` characters: DuckDB's whole text
-    copies the file's lines and its settings (Decision #430)."""
-    first = reason.splitlines()[0] if reason else ""
-    return f"Table {quoted(ref.name)} ({ref.format}): unreadable: {one_line(first[:_REASON_CUT])}"
+    return f"Table {quoted(ref.name)} ({ref.format}): unreadable: {one_line(_cause(reason))}"
 
 
-def reason_without_folders(reason: str, folders: Sequence[Path], mount: str) -> str:
-    """`reason` with each host folder, as DuckDB or Python writes it, replaced by `mount`,
-    the connection's path in the sandbox."""
-    forms = {form for folder in folders for form in (folder.as_posix(), str(folder))}
+def reason_without_folders(reason: str, folders: Sequence[Path | str], mount: str) -> str:
+    """`reason` with each host folder replaced by `mount`, the connection's path in the
+    sandbox: a `Path` as DuckDB or Python writes it, a `str` also as the user typed it."""
+    forms: set[str] = set()
+    for folder in folders:
+        if isinstance(folder, str) and not folder.strip():
+            continue  # Path("") is ".", which would rewrite every dot
+        path = Path(folder)
+        forms |= {path.as_posix(), str(path)}
+        if isinstance(folder, str):
+            forms.add(folder)
     for form in sorted(forms, key=len, reverse=True):
         reason = reason.replace(form, mount)
     return reason

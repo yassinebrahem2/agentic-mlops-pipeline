@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mlops_agents.connections.contract import TableRef
+from mlops_agents.connections.contract import ConnectionView, Findings, TableRef
 from mlops_agents.data.constants import LISTED_FILES, LISTED_TABLE_NAMES, TEXT_CUT
 from mlops_agents.data.profile import ColumnProfile, TableProfile
 from mlops_agents.data.render import (
@@ -15,6 +15,7 @@ from mlops_agents.data.render import (
     reason_without_folders,
     render_table,
     render_versioned_table,
+    unreachable_line,
     unreadable_line,
 )
 
@@ -127,11 +128,75 @@ def test_an_unreadable_reason_is_cut_to_its_first_line_and_twice_the_text_cut() 
     assert unreadable_line(PEOPLE, "short\r\nsecond") == ('Table "people" (csv): unreadable: short')
 
 
+# DuckDB 2.0.0's text for a Latin-1 export and for a UTF-16 one, without the settings block.
+LATIN1_REASON = (
+    "Invalid Input Error: CSV Error on Line: 2\n"
+    "Original Line: id;nom;ville\n"
+    "Invalid unicode (byte sequence mismatch) detected. This file is not utf-8 encoded.\n"
+    "\n"
+    "Possible Solution: Set the correct encoding, if available, to read this CSV File\n"
+    "  file = /srv/team exports/clients.csv"
+)
+UTF16_REASON = (
+    "Invalid Input Error: CSV Error on Line: 1\n"
+    "Invalid unicode (byte sequence mismatch) detected. This file is not utf-8 encoded.\n"
+)
+CSV_CAUSE = (
+    "Invalid Input Error: CSV Error on Line: 2: "
+    "Invalid unicode (byte sequence mismatch) detected. This file is not utf-8 encoded."
+)
+
+
+def test_a_csv_error_keeps_the_sentence_naming_its_cause() -> None:
+    """DuckDB's first line gives only the place; the cause follows the copy of the team's row,
+    which is never shown (Decision #431)."""
+    assert unreadable_line(PEOPLE, LATIN1_REASON) == (
+        f'Table "people" (csv): unreadable: {CSV_CAUSE}'
+    )
+    assert unreadable_line(PEOPLE, UTF16_REASON) == (
+        f'Table "people" (csv): unreadable: {CSV_CAUSE.replace("Line: 2", "Line: 1")}'
+    )
+
+
+def test_a_csv_error_without_a_cause_keeps_its_first_line() -> None:
+    reason = "Invalid Input Error: CSV Error on Line: 7\nOriginal Line: a,b,c\n\n"
+    assert unreadable_line(PEOPLE, reason) == (
+        'Table "people" (csv): unreadable: Invalid Input Error: CSV Error on Line: 7'
+    )
+
+
+def test_an_unreachable_detail_is_cut_like_a_reason() -> None:
+    view = ConnectionView(
+        id="con_x",
+        name="gone",
+        kind="local_folder",
+        settings={},
+        status="unreachable",
+        status_detail=None,
+        findings=Findings(unsupported_files=[], secret_files=[], truncated=False),
+        data_version=None,
+    )
+    detail = "y" * (TEXT_CUT * 3) + "\nsecond line"
+    assert unreachable_line(view, detail) == (
+        f'Connection "gone" (local_folder, unreachable): {"y" * (TEXT_CUT * 2)}'
+    )
+    assert unreachable_line(view, None) == 'Connection "gone" (local_folder, unreachable): '
+
+
 def test_the_connections_folder_becomes_its_mount_path_in_a_reason() -> None:
     folder = Path("/srv/team exports")
     reason = f'Error when sniffing file "{folder.as_posix()}/clients.csv".'
     assert reason_without_folders(reason, [folder], "/data/exports") == (
         'Error when sniffing file "/data/exports/clients.csv".'
+    )
+
+
+def test_a_typed_folder_is_replaced_as_it_was_typed() -> None:
+    """A folder quoted as the user typed it, mixed slashes included."""
+    typed = "C:\\Users\\ann/team exports"
+    reason = f"Folder does not exist: {typed}"
+    assert reason_without_folders(reason, [typed], "/data/exports") == (
+        "Folder does not exist: /data/exports"
     )
 
 

@@ -55,6 +55,9 @@ async def test_two_connections_of_latin1_exports(env: SummaryEnv, tmp_path: Path
     assert tables
     assert all(UNREADABLE.match(line) for line in tables)
     assert all(len(line) <= UNREADABLE_LINE_MAX for line in tables)
+    # The cause stays (Decision #431); DuckDB's copy of the team's row does not.
+    assert all(line.endswith("This file is not utf-8 encoded.") for line in tables)
+    assert "id;nom;ville" not in text
     assert _accounted(text) == 2 + 2 * 25
     _assert_no_host_path(text, tmp_path)
 
