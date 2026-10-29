@@ -66,13 +66,15 @@ def hold(
 
 
 def signalled(monkeypatch: pytest.MonkeyPatch, owner: object, name: str) -> asyncio.Event:
-    """An event set once `owner.name` is called; the call runs on unchanged."""
-    called = asyncio.Event()
+    """An event set once a call of `owner.name` has returned; the call runs unchanged, and its
+    caller goes on without yielding until its next await."""
+    returned = asyncio.Event()
     original = getattr(owner, name)
 
     async def signalling(*args: Any, **kwargs: Any) -> Any:
-        called.set()
-        return await original(*args, **kwargs)
+        result = await original(*args, **kwargs)
+        returned.set()
+        return result
 
     monkeypatch.setattr(owner, name, signalling)
-    return called
+    return returned

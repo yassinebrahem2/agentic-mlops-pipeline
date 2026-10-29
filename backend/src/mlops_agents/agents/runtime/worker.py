@@ -172,7 +172,12 @@ class TurnWorkers:
                 async with lock:
                     if resuming is not None:
                         trigger_id = await self._store.turn_trigger_id(project_id, resuming)
-                        next_turn: tuple[str, str] | None = (resuming, trigger_id or "")
+                        # The one check that the turn still waits: a Stop that stored it
+                        # stopped first wins, and this worker takes nothing (#445).
+                        taken = await self._store.take_waiting_turn(project_id, resuming)
+                        next_turn: tuple[str, str] | None = (
+                            (resuming, trigger_id or "") if taken else None
+                        )
                     else:
                         next_turn = await self._store.next_queued_turn(project_id, session_id)
                     # Taking the turn and claiming an early Stop happen with no await between

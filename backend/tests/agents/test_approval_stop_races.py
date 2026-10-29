@@ -1,5 +1,5 @@
 """A decision commits only while its turn waits (#381): Stop against a decision in both orders,
-an approve followed at once by Stop, a decision while the turn runs, the Inbox list, a stall,
+an approve followed by Stop in the interleavings a test can drive (Decision #445), a decision while the turn runs, the Inbox list, a stall,
 and a Stop cut between storing `stopped` and its sweep. Each race holds one side on purpose and
 runs under a timeout, so a lost guard fails as a timeout of its own test."""
 
@@ -25,7 +25,7 @@ Interleaving = Literal["one after the other", "stop before the resumed worker ru
 @pytest.mark.parametrize(
     "interleaving", ["one after the other", "stop before the resumed worker runs"]
 )
-async def test_an_approve_and_a_stop_at_once_end_the_turn_stopped(
+async def test_an_approve_then_a_stop_end_the_turn_stopped(
     repair: RepairEnv, monkeypatch: pytest.MonkeyPatch, interleaving: Interleaving
 ) -> None:
     app = repair.restart()
@@ -61,6 +61,42 @@ async def test_an_approve_and_a_stop_at_once_end_the_turn_stopped(
     assert await app.store.pending(repair.project_id) == []
     assert len(await repair.audit_of(approval.id)) == 1
     assert len(await repair.events_of(approval.id)) == 1
+
+
+async def test_a_stop_stored_before_the_resumed_worker_takes_the_turn_is_kept(
+    repair: RepairEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = repair.restart()
+    turn_id, [approval] = await repair.ask(app=app)
+    # The approve's resume holds the session lock before it starts its worker; Stop looks (the
+    # turn waits, no worker yet) and queues on that lock. The resume then starts the worker,
+    # but Stop takes the lock first and stores the turn stopped: the worker takes a resumed
+    # turn only while it still waits, so it leaves it (Decision #445). A Stop that looks after
+    # the worker took the turn is bug #446, not driven here.
+    resuming = hold(monkeypatch, SessionStore, "turn_status")
+    looked = signalled(monkeypatch, SessionStore, "waiting_turn")
+
+    async with asyncio.timeout(15):
+        deciding = asyncio.create_task(
+            app.service.decide(repair.project_id, approval.id, approve=True, note=None)
+        )
+        await resuming.wait_entered()
+        stopping = asyncio.create_task(app.manager.stop(repair.project_id, WRITER))
+        await looked.wait()
+        resuming.release.set()
+        await deciding
+        await stopping
+        await repair.turns.wait_ended(turn_id)
+        while True:  # until the resumed worker is gone, whatever it did
+            if not await repair.running(app):
+                break
+            await asyncio.sleep(0.01)
+
+    assert repair.ends(turn_id) == ["stopped"]
+    assert await repair.turn_status(turn_id) == "stopped"
+    assert repair.write_tool.invoked == []
+    assert (await repair.message_of(approval)).status == "stopped"
+    assert (await repair.stored(approval.id)).status == "approved"
 
 
 async def test_a_stop_while_an_approve_is_in_its_observers_leaves_it_approved_and_unresumed(
