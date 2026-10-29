@@ -20,7 +20,11 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    until_idle,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta
@@ -215,13 +219,8 @@ async def test_three_messages_sent_at_once_queue_order(
     assert m2.id in updated_ids
     assert m3.id in updated_ids
 
-    # Eventually view is not busy: the worker finishes the last end (its approvals sweep, its
-    # observers) after the stream's turn.ended, then leaves.
-    async with asyncio.timeout(5):
-        while True:
-            if not (await manager.get(project_id, "orchestrator")).busy:
-                break
-            await asyncio.sleep(0.01)
+    # Eventually view is not busy
+    await until_idle(manager, project_id, "orchestrator")
 
     await manager.close()
 
