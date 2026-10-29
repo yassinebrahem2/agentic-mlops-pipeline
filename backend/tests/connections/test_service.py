@@ -43,6 +43,8 @@ async def test_service_lifecycle(service_env: ServiceEnv, tmp_path: Path) -> Non
             project_id, LOCAL_FOLDER_KIND, "Invalid_Name!", {"path": str(data_dir)}
         )
     assert err_name.value.code == "invalid_connection_name"
+    assert "Invalid_Name!" not in err_name.value.message
+    assert "must be 1 to 40 lowercase letters" in err_name.value.message
 
     # Unknown kind
     with pytest.raises(DomainError) as err_kind:
@@ -220,6 +222,7 @@ async def test_a_name_with_a_trailing_newline_is_refused(
     with pytest.raises(DomainError) as err:
         await service.create("prj_name", LOCAL_FOLDER_KIND, "abc\n", {"path": str(data_dir)})
     assert err.value.code == "invalid_connection_name"
+    assert "abc" not in err.value.message
 
 
 async def test_settings_errors_never_echo_the_submitted_values(
@@ -258,10 +261,10 @@ async def test_list_stores_and_returns_the_kind_error_scrubbed(
     data_dir.mkdir()
     view = await service.create("prj_scrub", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
 
-    def leaky_findings(self: LocalFolderKind, settings: BaseModel) -> Findings:
+    def leaky_read(self: LocalFolderKind, settings: BaseModel) -> tuple[Findings, str | None]:
         raise OSError("fetch https://user:hunter2@host/x?token=abc failed")
 
-    monkeypatch.setattr(LocalFolderKind, "findings", leaky_findings)
+    monkeypatch.setattr(LocalFolderKind, "read", leaky_read)
 
     (listed,) = await service.list("prj_scrub")
 
@@ -285,10 +288,10 @@ async def test_list_lets_an_unexpected_error_through(
     data_dir.mkdir()
     await service.create("prj_bug", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
 
-    def broken_findings(self: LocalFolderKind, settings: BaseModel) -> Findings:
+    def broken_read(self: LocalFolderKind, settings: BaseModel) -> tuple[Findings, str | None]:
         raise RuntimeError("a bug")
 
-    monkeypatch.setattr(LocalFolderKind, "findings", broken_findings)
+    monkeypatch.setattr(LocalFolderKind, "read", broken_read)
 
     with pytest.raises(RuntimeError):
         await service.list("prj_bug")
@@ -302,10 +305,10 @@ async def test_a_failure_while_reading_the_folder_creates_no_connection(
     data_dir = tmp_path / "d"
     data_dir.mkdir()
 
-    def vanished(self: LocalFolderKind, settings: BaseModel) -> Findings:
+    def vanished(self: LocalFolderKind, settings: BaseModel) -> tuple[Findings, str | None]:
         raise DomainError("connection_invalid", "Folder does not exist: x")
 
-    monkeypatch.setattr(LocalFolderKind, "findings", vanished)
+    monkeypatch.setattr(LocalFolderKind, "read", vanished)
 
     with pytest.raises(DomainError) as err:
         await service.create("prj_late", LOCAL_FOLDER_KIND, "c", {"path": str(data_dir)})
@@ -313,3 +316,67 @@ async def test_a_failure_while_reading_the_folder_creates_no_connection(
     monkeypatch.undo()
     assert await service.list("prj_late") == []
     assert await events.history("prj_late", types=["connection.created"]) == []
+
+
+async def test_list_scans_each_folder_exactly_once(
+    service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, databases, _, _ = service_env
+    project_id = "prj_scanonce"
+    await databases.project(project_id)
+
+    dir1 = tmp_path / "d1"
+    dir1.mkdir()
+    (dir1 / "a.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    dir2 = tmp_path / "d2"
+    dir2.mkdir()
+    (dir2 / "b.csv").write_text("x,y\n3,4\n", encoding="utf-8")
+
+    await service.create(project_id, LOCAL_FOLDER_KIND, "c1", {"path": str(dir1)})
+    await service.create(project_id, LOCAL_FOLDER_KIND, "c2", {"path": str(dir2)})
+
+    scan_calls: list[Path] = []
+    from mlops_agents.connections.contract import Finding, TableRef
+    from mlops_agents.connections.kinds import local_folder
+
+    real_scan = local_folder.scan_tables_and_unsupported
+
+    def spy_scan(path: Path) -> tuple[list[TableRef], list[Finding]]:
+        scan_calls.append(path)
+        return real_scan(path)
+
+    monkeypatch.setattr(local_folder, "scan_tables_and_unsupported", spy_scan)
+
+    views = await service.list(project_id)
+    assert len(views) == 2
+    assert len(scan_calls) == 2
+    assert {p.resolve() for p in scan_calls} == {dir1.resolve(), dir2.resolve()}
+
+
+async def test_list_shows_missing_folder_as_unreachable(
+    service_env: ServiceEnv, tmp_path: Path
+) -> None:
+    import shutil
+
+    service, databases, _, _ = service_env
+    project_id = "prj_missing"
+    await databases.project(project_id)
+
+    folder = tmp_path / "transient"
+    folder.mkdir()
+    (folder / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+
+    created = await service.create(
+        project_id, LOCAL_FOLDER_KIND, "transient-data", {"path": str(folder)}
+    )
+    assert created.status == "ok"
+
+    shutil.rmtree(folder)
+
+    views = await service.list(project_id)
+    assert len(views) == 1
+    assert views[0].status == "unreachable"
+    assert views[0].status_detail is not None
+    assert "Folder does not exist" in views[0].status_detail
+    assert views[0].findings.unsupported_files == []
+    assert views[0].data_version is None

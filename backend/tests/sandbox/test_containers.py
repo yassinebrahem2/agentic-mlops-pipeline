@@ -7,10 +7,10 @@ import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.connections.contract import Mount
 from mlops_agents.sandbox.containers import ContainerManager, mounts_fingerprint
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerResult
-from mlops_agents.sandbox.projects import SandboxMount as Mount
 from tests.sandbox.fakes import FakeDockerRunner
 
 

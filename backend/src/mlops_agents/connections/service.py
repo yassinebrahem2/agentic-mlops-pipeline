@@ -98,9 +98,7 @@ class ConnectionsService:
         return kind_obj, self._parse(kind_obj, self._stored(row["settings_json"]))
 
     async def _read(self, kind: ConnectionKind, parsed: BaseModel) -> tuple[Findings, str | None]:
-        findings = await asyncio.to_thread(kind.findings, parsed)
-        data_ver = await asyncio.to_thread(kind.latest_data_version, parsed)
-        return findings, data_ver
+        return await asyncio.to_thread(kind.read, parsed)
 
     async def inspect(self, project_id: str, kind: str, settings: dict[str, Any]) -> Findings:
         del project_id
@@ -117,7 +115,7 @@ class ConnectionsService:
         if re.fullmatch(CONNECTION_NAME_PATTERN, name) is None:
             raise DomainError(
                 "invalid_connection_name",
-                f"Connection name '{name}' is invalid.",
+                "Connection name is invalid: must be 1 to 40 lowercase letters, numbers, or hyphens, starting with a letter or number.",
                 status=400,
             )
 
@@ -268,7 +266,6 @@ class ConnectionsService:
             try:
                 kind_obj = self._registry.get(row.kind)
                 parsed = self._parse(kind_obj, self._stored(row.settings_json))
-                await asyncio.to_thread(kind_obj.validate, parsed, None)
                 m = await asyncio.to_thread(kind_obj.sandbox_mount, row.name, parsed)
                 if m is not None:
                     mounts_list.append(m)
@@ -301,7 +298,6 @@ class ConnectionsService:
                 parsed = self._parse(kind_obj, raw_settings)
                 # Only parsed settings are shown: a stored value the model refuses stays hidden.
                 settings = parsed.model_dump(mode="json")
-                await asyncio.to_thread(kind_obj.validate, parsed, None)
                 findings, data_ver = await self._read(kind_obj, parsed)
             except (DomainError, OSError) as exc:
                 # The kind's own failures; anything else is a bug and reaches the 500 handler.
