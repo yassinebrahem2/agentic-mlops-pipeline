@@ -92,7 +92,17 @@ class TrackingSummaryHook:
         else:
             sections.append("Production model: none tracked")
 
-        # 2. Latest metric values for that production run (up to 10 metrics)
+        # 2. Source errors or notes (placed high so tail truncation preserves them)
+        source_notes: list[str] = []
+        for s in sources:
+            if s.last_error:
+                source_notes.append(f"Source {s.id} ({s.type}) error: {s.last_error}")
+            elif s.last_sync is None:
+                source_notes.append(f"Source {s.id} ({s.type}): no sync yet")
+        if source_notes:
+            sections.append("\n".join(source_notes))
+
+        # 3. Latest metric values for that production run (up to 10 metrics)
         if prod_model_name and prod_version:
             v_page = await self._tracking.query(
                 ctx.project_id,
@@ -108,7 +118,7 @@ class TrackingSummaryHook:
                     metrics_str = ", ".join(f"{m.metric}={m.value}" for m in m_page.rows)
                     sections.append(f"Production metrics ({prod_run_key}): {metrics_str}")
 
-        # 3. Last 5 runs (key, status, headline metric if any)
+        # 4. Last 5 runs (key, status, headline metric if any)
         runs_page = await self._tracking.query(ctx.project_id, TrackingQuery(what="runs", limit=5))
         if runs_page.rows:
             run_lines: list[str] = ["Recent runs:"]
@@ -131,7 +141,7 @@ class TrackingSummaryHook:
                 run_lines.append(line)
             sections.append("\n".join(run_lines))
 
-        # 4. Last 5 CI runs (workflow, status, age)
+        # 5. Last 5 CI runs (workflow, status, age)
         ci_page = await self._tracking.query(ctx.project_id, TrackingQuery(what="ci_runs", limit=5))
         if ci_page.rows:
             ci_lines: list[str] = ["Recent CI runs:"]
@@ -139,16 +149,6 @@ class TrackingSummaryHook:
                 age_str = _format_age(c.start, now)
                 ci_lines.append(f"  - {c.workflow} ({c.status}, {age_str})")
             sections.append("\n".join(ci_lines))
-
-        # 5. One line per source with last_error or with no sync yet
-        source_notes: list[str] = []
-        for s in sources:
-            if s.last_error:
-                source_notes.append(f"Source {s.id} ({s.type}) error: {s.last_error}")
-            elif s.last_sync is None:
-                source_notes.append(f"Source {s.id} ({s.type}): no sync yet")
-        if source_notes:
-            sections.append("\n".join(source_notes))
 
         full_text = "\n\n".join(sections)
         if len(full_text) > TRACKING_SUMMARY_MAX_CHARS:

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import httpx2
 
-from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.tracking.adapters.github_actions import GithubActionsAdapter
 from mlops_agents.tracking.adapters.mlflow import MlflowAdapter
 from mlops_agents.tracking.contract import SourceType, TrackingAdapter
 
 
 def default_adapters(
-    http: httpx2.AsyncClient, github: GitHubAuth
+    http: httpx2.AsyncClient,
 ) -> dict[SourceType, TrackingAdapter]:
     """Default tracking adapters."""
     return {

@@ -12,6 +12,7 @@ from fastapi.responses import PlainTextResponse
 from mlops_agents.tracking.adapters.mlflow import (
     EVALUATION_MAX_BYTES,
     MlflowAdapter,
+    SyncAbortError,
 )
 from mlops_agents.tracking.contract import (
     TrackingQuery,
@@ -256,7 +257,36 @@ async def test_adapter_errors() -> None:
         res_bad_json = await adapter_bad.sync(source, credential=None, since=None)
         assert res_bad_json.error == "MLflow answered with data this app cannot read"
 
-    # Redirect is not followed (302)
+    # Top-level JSON array from MLflow API endpoint raises data cannot read instead of AttributeError
+    array_json_app = FastAPI()
+
+    @array_json_app.post("/api/2.0/mlflow/experiments/search")
+    async def array_exp_search() -> Response:
+        return Response(content=b'[{"experiment_id": "1"}]', media_type="application/json")
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=array_json_app), base_url="http://testserver"
+    ) as client:
+        adapter_array = MlflowAdapter(http=client)
+        res_array_json = await adapter_array.sync(source, credential=None, since=None)
+        assert res_array_json.error == "MLflow answered with data this app cannot read"
+
+    # Redirect is not followed (302 on the fake app's own /redirect-test route)
+    fake_state = FakeMlflowState()
+    fake_app = create_fake_mlflow_app(fake_state)
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=fake_app), base_url="http://testserver"
+    ) as client:
+        adapter_redir = MlflowAdapter(http=client)
+        with pytest.raises(SyncAbortError) as exc_info:
+            await adapter_redir._request(  # pyright: ignore[reportPrivateUsage]
+                "GET", "http://testserver/redirect-test", headers={}
+            )
+        assert "302" in str(exc_info.value)
+        assert len(fake_state.requests) == 1
+        assert fake_state.requests[0]["path"] == "/redirect-test"
+
+    # Also test redirect on search route during sync
     redirect_app = FastAPI()
 
     @redirect_app.post("/api/2.0/mlflow/experiments/search")
@@ -266,9 +296,9 @@ async def test_adapter_errors() -> None:
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=redirect_app), base_url="http://testserver"
     ) as client:
-        adapter_redir = MlflowAdapter(http=client)
-        res_redir = await adapter_redir.sync(source, credential=None, since=None)
-        assert res_redir.error == "MLflow answered with HTTP 302"
+        adapter_redir2 = MlflowAdapter(http=client)
+        res_redir2 = await adapter_redir2.sync(source, credential=None, since=None)
+        assert res_redir2.error == "MLflow answered with HTTP 302"
 
 
 @pytest.mark.asyncio
@@ -645,3 +675,24 @@ async def test_adapter_older_version_retains_evaluation_and_updates_alias(
         )
         assert eval_v1.total == 1
         assert eval_v1.rows[0].payload["score"] == 0.85
+
+
+@pytest.mark.asyncio
+async def test_adapter_model_name_with_single_quotes() -> None:
+    state = FakeMlflowState()
+    app = create_fake_mlflow_app(state)
+
+    state.add_experiment("Default")
+    model_name = "team's-model"
+    state.register_version(model_name, "1")
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        adapter = MlflowAdapter(http=client)
+        source = _make_source_view()
+        result = await adapter.sync(source, credential=None, since=None)
+
+    assert result.error is None
+    assert len(result.versions) == 1
+    assert result.versions[0].model == model_name

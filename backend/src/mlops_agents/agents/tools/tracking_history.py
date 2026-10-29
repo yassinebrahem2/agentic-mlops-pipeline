@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,9 +31,11 @@ from mlops_agents.tracking.contract import (
 if TYPE_CHECKING:
     from mlops_agents.tracking.contract import Tracking
 
+TRACKING_HISTORY_MAX_CHARS: Final[int] = 8000
+
 
 def _cut(value: Any, max_chars: int = 80) -> str:
-    text = str(value) if value is not None else "-"
+    text = str(value).replace("\r", "").replace("\n", " ") if value is not None else "-"
     if len(text) > max_chars:
         return text[: max_chars - 3] + "..."
     return text
@@ -153,9 +155,6 @@ class TrackingHistory(AgentTool[TrackingHistoryInput]):
         if self._tracking is None:
             raise ToolFailure("Tracking is not configured for this project.")
 
-        if args.what == "metrics" and not args.run_key:
-            raise ToolFailure("Querying metrics requires run_key.")
-
         clamped_limit = min(args.limit, QUERY_LIMIT_MAX)
         query = TrackingQuery(
             what=args.what,
@@ -194,4 +193,8 @@ class TrackingHistory(AgentTool[TrackingHistoryInput]):
                 "Results are truncated. Narrow the query using filters such as 'since', "
                 "'model', 'limit', or 'offset'."
             )
-        return ToolOutput("\n".join(lines))
+        output = "\n".join(lines)
+        if len(output) > TRACKING_HISTORY_MAX_CHARS:
+            trunc_notice = "\n[... truncated ...]"
+            output = output[: TRACKING_HISTORY_MAX_CHARS - len(trunc_notice)] + trunc_notice
+        return ToolOutput(output)

@@ -338,9 +338,9 @@ def create_fake_mlflow_app(state: FakeMlflowState) -> FastAPI:
 
         target_model: str | None = None
         if filter:
-            match = re.search(r"name\s*=\s*'([^']+)'", filter)
+            match = re.search(r"name\s*=\s*'((?:\\.|[^'])*)'", filter)
             if match:
-                target_model = match.group(1)
+                target_model = match.group(1).replace(r"\'", "'")
 
         all_versions: list[dict[str, Any]] = []
         if target_model is not None:

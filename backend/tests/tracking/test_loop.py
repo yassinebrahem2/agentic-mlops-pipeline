@@ -10,6 +10,7 @@ import httpx2
 import pytest
 
 from mlops_agents.errors import DomainError
+from mlops_agents.integrations.github import api
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters.mlflow import MlflowAdapter
 from mlops_agents.tracking.constants import (
@@ -19,6 +20,7 @@ from mlops_agents.tracking.contract import TrackingQuery, TrackingSourceView
 from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
+from tests.fakes.fake_github import FakeGitHubState, start_fake_github
 from tests.fakes.fake_mlflow import FakeMlflowState, create_fake_mlflow_app
 from tests.tracking.conftest import FakeHandoffs
 
@@ -279,41 +281,143 @@ async def test_loop_with_real_service_fills_record_and_records_event(
     mlflow_app = create_fake_mlflow_app(fake_mlflow_state)
     mlflow_transport = httpx2.ASGITransport(app=mlflow_app)
 
-    async with started_app(tmp_path / "data") as app:
-        project_id = await add_local_project(app, tmp_path, git_env)
-        services = app.state.services
+    fake_gh_state = FakeGitHubState()
+    fake_gh_state.workflow_runs["org/demo"] = [
+        {
+            "id": 101,
+            "name": "CI",
+            "path": ".github/workflows/ci.yml",
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": "2026-10-28T12:00:00Z",
+            "run_started_at": "2026-10-28T12:00:00Z",
+            "updated_at": "2026-10-28T12:05:00Z",
+            "head_sha": "abc1234",
+            "html_url": "https://github.com/org/demo/actions/runs/101",
+        }
+    ]
+    running_gh = start_fake_github(fake_gh_state)
+    original_api = api.GITHUB_API
+    api.GITHUB_API = running_gh.base_url
 
-        # Point the mlflow adapter at our ASGI fake server
-        fake_client = httpx2.AsyncClient(transport=mlflow_transport, base_url="http://fake-mlflow")
-        services.tracking._adapters["mlflow"] = MlflowAdapter(fake_client)
+    try:
+        async with started_app(tmp_path / "data") as app:
+            project_id = await add_local_project(app, tmp_path, git_env)
+            services = app.state.services
 
-        # Create mlflow source
-        source = await services.tracking.create_source(
-            project_id=project_id,
-            type="mlflow",
-            settings={"url": "http://fake-mlflow"},
-            auth="none",
-        )
+            # Register fake MLflow adapter using public register_adapter
+            fake_client = httpx2.AsyncClient(
+                transport=mlflow_transport, base_url="http://fake-mlflow"
+            )
+            services.tracking.register_adapter(MlflowAdapter(fake_client))
 
-        loop = TrackingLoop(
-            tracking=services.tracking,
-            projects=lambda: _async_projects([project_id]),
-        )
-        await loop.run_pass()
+            async def _fake_token() -> str | None:
+                return "fake-gh-token"
 
-        # Check runs are synced
-        q_runs = await services.tracking.query(
-            project_id,
-            TrackingQuery(what="runs"),
-        )
-        assert len(q_runs.rows) >= 1
-        assert q_runs.rows[0].key == "run_1"
+            services.tracking._github_token = _fake_token
 
-        # Check tracking.synced event was recorded
-        events = await services.events.history(project_id, types=["tracking.synced"])
-        assert len(events) >= 1
-        assert events[-1].payload["source_id"] == source.id
-        assert events[-1].payload["ok"] is True
+            # Create both sources
+            source_mlflow = await services.tracking.create_source(
+                project_id=project_id,
+                type="mlflow",
+                settings={"url": "http://fake-mlflow"},
+                auth="none",
+            )
+            source_gh = await services.tracking.create_source(
+                project_id=project_id,
+                type="github_actions",
+                settings={"repository": "org/demo"},
+                auth="none",
+            )
+
+            # Trigger a pass on the app's real tracking loop
+            await services.tracking_loop.run_pass()
+
+            # Check MLflow runs are synced
+            q_runs = await services.tracking.query(
+                project_id,
+                TrackingQuery(what="runs"),
+            )
+            assert len(q_runs.rows) >= 1
+            assert q_runs.rows[0].key == "run_1"
+
+            # Check GitHub CI runs are synced
+            q_ci = await services.tracking.query(
+                project_id,
+                TrackingQuery(what="ci_runs"),
+            )
+            assert len(q_ci.rows) >= 1
+            assert q_ci.rows[0].workflow == "ci.yml"
+
+            # Check tracking.synced event was recorded for both sources
+            events = await services.events.history(project_id, types=["tracking.synced"])
+            synced_source_ids = {e.payload["source_id"] for e in events if e.payload.get("ok")}
+            assert source_mlflow.id in synced_source_ids
+            assert source_gh.id in synced_source_ids
+    finally:
+        api.GITHUB_API = original_api
+        running_gh.stop()
+
+
+async def test_loop_start_returns_at_once_with_blackholed_source() -> None:
+    double = RecordingTrackingDouble()
+    double.projects_sources["prj_1"] = [_make_source("trk_blackhole", last_sync=None)]
+    unblock = asyncio.Event()
+
+    async def hanging_sleep(_: float) -> None:
+        pass
+
+    double.sync_block_event = unblock
+
+    loop = TrackingLoop(
+        tracking=double,
+        projects=lambda: _async_projects(["prj_1"]),
+        clock=FakeClock(),
+        sleep=hanging_sleep,
+    )
+    # start() must return immediately without waiting for the blackholed run_sync
+    task = await asyncio.wait_for(loop.start(), timeout=0.5)
+    assert not task.done()
+    # Cleanup
+    unblock.set()
+    await loop.close()
+
+
+async def test_loop_survives_failing_projects() -> None:
+    double = RecordingTrackingDouble()
+
+    async def bad_projects() -> list[str]:
+        raise RuntimeError("database unreachable")
+
+    loop = TrackingLoop(
+        tracking=double,
+        projects=bad_projects,
+        clock=FakeClock(),
+        sleep=_no_sleep,
+    )
+    # Must not raise
+    await loop.run_pass()
+    assert len(double.sync_calls) == 0
+
+
+async def test_loop_failing_source_next_to_healthy_source_in_same_project() -> None:
+    double = RecordingTrackingDouble()
+    double.projects_sources["prj_1"] = [
+        _make_source("trk_fail", last_sync=None),
+        _make_source("trk_healthy", last_sync=None),
+    ]
+    double.fail_sync_sources.add("trk_fail")
+
+    loop = TrackingLoop(
+        tracking=double,
+        projects=lambda: _async_projects(["prj_1"]),
+        clock=FakeClock(),
+        sleep=_no_sleep,
+    )
+    await loop.run_pass()
+
+    assert ("prj_1", "trk_fail") in double.sync_calls
+    assert ("prj_1", "trk_healthy") in double.sync_calls
 
 
 # 9. The settings route round-trips and refuses an interval below the minimum

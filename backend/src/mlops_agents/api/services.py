@@ -205,7 +205,7 @@ async def build_services(
         keystore=keystore,
         secrets=project_secrets,
         events=events,
-        adapters=default_adapters(http, github),
+        adapters=default_adapters(http),
         github_token=github.token,
         handoffs=handoffs,
     )

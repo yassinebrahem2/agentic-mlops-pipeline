@@ -87,11 +87,14 @@ class TrackingService(Tracking):
         self._github_token = github_token
         self._clock = clock
         self._handoffs = handoffs
-        self._handoff_error_logged: bool = False
-
+        self._handoff_error_logged: set[str] = set()
         self._source_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
         self._bg_tasks: set[asyncio.Task[None]] = set()
+
+    def register_adapter(self, adapter: TrackingAdapter) -> None:
+        """Register or replace an adapter for a source type."""
+        self._adapters[adapter.type] = adapter
 
     async def _check_project(self, project_id: str) -> None:
         try:
@@ -382,9 +385,9 @@ class TrackingService(Tracking):
         try:
             handoff = await self._handoffs.current(project_id)
         except Exception as exc:
-            if not self._handoff_error_logged:
+            if project_id not in self._handoff_error_logged:
                 _log.warning("Failed to read handoff for project %s: %s", project_id, exc)
-                self._handoff_error_logged = True
+                self._handoff_error_logged.add(project_id)
             return lambda _model: [PRODUCTION_ALIAS]
 
         if handoff is None or not handoff.payload.models:
@@ -396,10 +399,9 @@ class TrackingService(Tracking):
             spec = specs_by_name.get(model_name)
             if spec is None:
                 return [PRODUCTION_ALIAS]
-            candidates = sorted(
+            return sorted(
                 alias for alias, env in spec.environments.items() if env == PRODUCTION_ENVIRONMENT
             )
-            return candidates if candidates else [PRODUCTION_ALIAS]
 
         return _get_candidates
 

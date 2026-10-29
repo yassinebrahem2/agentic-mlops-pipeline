@@ -323,8 +323,9 @@ async def test_query_production_alias_rules_with_handoffs(tracking_env: Tracking
     t0 = datetime(2026, 10, 28, 10, 0, 0, tzinfo=UTC)
     t1 = datetime(2026, 10, 28, 11, 0, 0, tzinfo=UTC)
 
-    # Sync model_x with v1 (alias 'production') and v2 (alias 'live')
-    # model_y with v1 (alias 'staging') - no production alias
+    # Sync model_x with v1 ('production') and v2 ('live')
+    # model_y with v1 ('production') and v2 ('staging')
+    # model_z with v1 ('prod') and v2 ('champion')
     env.adapters["mlflow"].result = SyncResult(
         versions=[
             ModelVersionRow(
@@ -354,12 +355,40 @@ async def test_query_production_alias_rules_with_handoffs(tracking_env: Tracking
                 created=t0,
                 evaluation="absent",
             ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_y",
+                version="2",
+                run_key=None,
+                aliases=[],
+                created=t1,
+                evaluation="absent",
+            ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_z",
+                version="1",
+                run_key=None,
+                aliases=[],
+                created=t0,
+                evaluation="absent",
+            ),
+            ModelVersionRow(
+                source_id=source.id,
+                model="model_z",
+                version="2",
+                run_key=None,
+                aliases=[],
+                created=t1,
+                evaluation="absent",
+            ),
         ],
         runs=[],
         metrics=[],
         aliases={
             "model_x": {"production": "1", "live": "2"},
-            "model_y": {"staging": "1"},
+            "model_y": {"production": "1", "staging": "2"},
+            "model_z": {"prod": "1", "champion": "2"},
         },
         ci_runs=[],
         evaluations=[],
@@ -369,14 +398,22 @@ async def test_query_production_alias_rules_with_handoffs(tracking_env: Tracking
 
     # 1. No handoff yet: fallback to PRODUCTION_ALIAS ("production")
     # model_x holding 'production' -> v1
-    # model_y no 'production' -> None
+    # model_y holding 'production' -> v1
+    # model_z no 'production' -> None
     page = await env.service.query(env.project_id, TrackingQuery(what="models"))
     by_name = {m.name: m for m in page.rows}
     assert by_name["model_x"].production_version == "1"
-    assert by_name["model_y"].production_version is None
+    assert by_name["model_y"].production_version == "1"
+    assert by_name["model_z"].production_version is None
 
-    # 2. Handoff mapping alias 'live' to 'production' environment for model_x
-    # model_y has no spec in this handoff -> fallback to PRODUCTION_ALIAS -> None
+    # 2. Handoff mapping alias 'live' to 'production' for model_x,
+    # and model_y mapping only 'staging' to 'staging' (no environment mapped to production).
+    # model_z has NO ModelSpec in this handoff.
+    # Results:
+    # - model_x uses handoff mapping 'live' -> v2
+    # - model_y has a ModelSpec that maps no env to production -> production_version MUST BE None
+    #   (does NOT fall back to literal 'production' alias even though v1 holds it!)
+    # - model_z has NO ModelSpec -> falls back to literal 'production' alias -> None
     p1 = HandoffPayload.model_validate(
         handoff(
             models=[
@@ -384,28 +421,33 @@ async def test_query_production_alias_rules_with_handoffs(tracking_env: Tracking
                     "model_x",
                     environments={"live": "production", "preview": "staging"},
                     production_signal=None,
-                )
+                ),
+                model(
+                    "model_y",
+                    environments={"staging": "staging"},
+                    production_signal=None,
+                ),
             ]
         )
     )
     await env.handoffs.store(env.project_id, "prp_1", p1)
 
-    # Without a sync, querying models immediately uses the new handoff!
     page = await env.service.query(env.project_id, TrackingQuery(what="models"))
     by_name = {m.name: m for m in page.rows}
     assert by_name["model_x"].production_version == "2"
     assert by_name["model_y"].production_version is None
+    assert by_name["model_z"].production_version is None
 
-    # 3. New handoff mapping both 'canary' and 'live' to 'production'
-    # Candidate aliases sorted: ['canary', 'live'].
-    # If no version has 'canary', first existing is 'live' -> v2.
-    # If a new handoff maps only 'champion' to 'production', but no version holds 'champion' -> None
+    # 3. Model with multiple aliases mapped to 'production':
+    # environments={"prod": "production", "champion": "production"}
+    # Candidate aliases sorted: ['champion', 'prod'].
+    # First sorted alias matching any version wins: 'champion' matches v2 -> v2
     p2 = HandoffPayload.model_validate(
         handoff(
             models=[
                 model(
-                    "model_x",
-                    environments={"champion": "production"},
+                    "model_z",
+                    environments={"prod": "production", "champion": "production"},
                     production_signal=None,
                 )
             ]
@@ -414,13 +456,16 @@ async def test_query_production_alias_rules_with_handoffs(tracking_env: Tracking
     await env.handoffs.store(env.project_id, "prp_2", p2)
     page = await env.service.query(env.project_id, TrackingQuery(what="models"))
     by_name = {m.name: m for m in page.rows}
-    assert by_name["model_x"].production_version is None
+    assert by_name["model_z"].production_version == "2"
+    # model_y now has no ModelSpec in p2 -> falls back to 'production' alias -> v1
+    assert by_name["model_y"].production_version == "1"
 
     # 4. Handoff raises an exception: falls back to PRODUCTION_ALIAS ("production")
     env.handoffs.error = RuntimeError("storage unavailable")
     page = await env.service.query(env.project_id, TrackingQuery(what="models"))
     by_name = {m.name: m for m in page.rows}
     assert by_name["model_x"].production_version == "1"
+    assert by_name["model_y"].production_version == "1"
 
 
 async def test_query_since_filter_with_timezone_normalization(
