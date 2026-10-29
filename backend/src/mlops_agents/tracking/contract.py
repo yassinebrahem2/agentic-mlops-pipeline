@@ -46,6 +46,9 @@ class TrackingSourceView(BaseModel):
     last_error: str | None
 
 
+EvaluationStatus = Literal["present", "absent", "fetch_failed"]
+
+
 class ModelVersionRow(BaseModel):
     source_id: str
     model: str
@@ -55,7 +58,7 @@ class ModelVersionRow(BaseModel):
     created: datetime
     # absent: the run has no evaluation.json; fetch_failed: it could not be read (stage 4 then
     # reads the results-location copy).
-    evaluation: Literal["present", "absent", "fetch_failed"]
+    evaluation: EvaluationStatus
 
 
 class ModelSummary(BaseModel):
