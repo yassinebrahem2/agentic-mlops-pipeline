@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx2
+import pytest
 from fastapi import FastAPI
 
 from mlops_agents.knowledge.limits import TEXT_MAX_CHARS, TITLE_MAX_CHARS
@@ -461,3 +462,36 @@ async def test_secret_scrubbing_through_route(
         first_note = get_resp.json()["notes"][0]
         assert secret_token not in first_note["text"]
         assert "secret123" not in first_note["text"]
+
+
+async def test_search_notes_with_embedder(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.knowledge.fakes import ConceptEmbedder, FakeEmbedders
+
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+
+    concept_emb = ConceptEmbedder("fake:16", 16, {"db": {"postgres", "database"}})
+    fake_embs = FakeEmbedders(concept_emb)
+    monkeypatch.setattr(services.knowledge, "_embedders", fake_embs)
+
+    resp = await client.post(
+        f"/api/projects/{project_id}/notes",
+        json={"type": "fact", "title": "Postgres Database", "text": "PostgreSQL details."},
+    )
+    assert resp.status_code == 201
+
+    await services.knowledge.wait_idle(project_id)
+
+    search_resp = await client.get(f"/api/projects/{project_id}/notes?q=database")
+    assert search_resp.status_code == 200
+    res = search_resp.json()
+    assert res["used_vectors"] is True
+    assert res["detail"] is None
+    assert len(res["notes"]) == 1
+    assert res["notes"][0]["title"] == "Postgres Database"

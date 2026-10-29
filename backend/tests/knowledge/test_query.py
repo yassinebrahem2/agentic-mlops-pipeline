@@ -72,3 +72,28 @@ def test_non_ascii_unicode_words() -> None:
     assert '"naïve"' in res
     assert '"übergröße"' in res
     assert '"москва"' in res
+
+
+async def test_hostile_input_through_real_sqlite_match(databases: object) -> None:
+    from mlops_agents.knowledge.notes import query_fts_candidates
+    from mlops_agents.storage.databases import Databases
+
+    assert isinstance(databases, Databases)
+    project_id = "prj_hostile1"
+    engine = await databases.project(project_id)
+    hostile_queries = [
+        '"""',
+        "NEAR(a, b, 10)",
+        "* OR *",
+        'title: "hack" AND text: "inject"',
+        "-x +y",
+        '"unbalanced quote',
+        'MATCH "syntax error"',
+        "SELECT * FROM notes",
+        "'; DROP TABLE notes; --",
+    ]
+    for hq in hostile_queries:
+        fts = build_fts_query(hq)
+        if fts is not None:
+            # Must execute safely against real FTS5 virtual table without raising OperationalError
+            await query_fts_candidates(engine, fts, limit=5, note_type=None)

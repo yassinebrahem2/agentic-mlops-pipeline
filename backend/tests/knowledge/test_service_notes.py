@@ -371,3 +371,63 @@ async def test_service_with_sqlite_vector_store(
     # Delete note removes vector without error
     await service.delete(project_id, note.id)
     assert await service.get(project_id, note.id) is None
+
+
+async def test_edit_note_removes_stale_note_embeddings_when_vectors_unavailable(
+    databases: Databases, fake_embedders: FakeEmbedders, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_stale1"
+    event_log = SqliteEventLog(databases)
+    real_vectors = SqliteVectorStore(databases)
+    service = KnowledgeService(databases, fake_embedders, real_vectors, event_log, no_secrets)
+
+    # 1. Save note
+    note = await service.save(
+        project_id,
+        "alice",
+        NoteDraft(type="fact", title="Original Title", text="Original text"),
+    )
+
+    # 2. Add a note_embeddings entry simulating prior embedding
+    from sqlalchemy import insert, select
+
+    from mlops_agents.knowledge.vectors import VectorStoreError
+    from mlops_agents.storage.tables import note_embeddings
+
+    engine = await databases.project(project_id)
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(note_embeddings).values(
+                note_id=note.id,
+                embedder="fake:128@128",
+                dimensions=128,
+                embedded_at="2026-10-28T12:00:00Z",
+            )
+        )
+        res = await conn.execute(
+            select(note_embeddings).where(note_embeddings.c.note_id == note.id)
+        )
+        assert res.first() is not None
+
+    # 3. Simulate vectors being unavailable during the edit
+    async def fake_ensure(eng: object) -> None:
+        raise VectorStoreError("Vector search is not available on this installation.")
+
+    monkeypatch.setattr(real_vectors, "_ensure_vec_available", fake_ensure)
+
+    # 4. Edit the note while vectors are unavailable
+    updated = await service.save(
+        project_id,
+        "alice",
+        NoteDraft(type="fact", title="Updated Title", text="Updated text"),
+        note_id=note.id,
+    )
+    assert updated.title == "Updated Title"
+
+    # 5. Verify the stale note_embeddings row was removed!
+    async with engine.connect() as conn:
+        res = await conn.execute(
+            select(note_embeddings).where(note_embeddings.c.note_id == note.id)
+        )
+        assert res.first() is None, "Stale note_embeddings row must be deleted on edit"

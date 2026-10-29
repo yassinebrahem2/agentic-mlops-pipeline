@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 
-from sqlalchemy import delete, insert, select, text, update
+from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.clock import now_iso
-from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
+from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import EventLog
 from mlops_agents.ids import new_id
@@ -23,10 +23,9 @@ from mlops_agents.knowledge.contract import (
     SearchResult,
     VectorStore,
 )
-from mlops_agents.knowledge.embedding import ReembedPass, embedder_key, embedding_input
+from mlops_agents.knowledge.embedding import ReembedPass, embedder_key, run_reembed_pass
 from mlops_agents.knowledge.fusion import fuse
 from mlops_agents.knowledge.limits import (
-    EMBED_BATCH,
     MAX_QUERY_CHARS,
     SEARCH_CANDIDATES,
     SEARCH_MAX_LIMIT,
@@ -39,14 +38,15 @@ from mlops_agents.knowledge.notes import (
     get_notes_by_ids,
     list_newest_notes,
     query_fts_candidates,
-    row_to_note_view,
 )
 from mlops_agents.knowledge.query import build_fts_query
-from mlops_agents.knowledge.state import get_vectors_ready_for, set_vectors_ready_for
+from mlops_agents.knowledge.state import get_vectors_ready_for
 from mlops_agents.knowledge.vectors import VectorStoreError
 from mlops_agents.providers.embedder import Embedders, EmbedderUnavailable
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import note_embeddings, notes
+from mlops_agents.storage.tables import notes
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeService(Knowledge):
@@ -121,9 +121,15 @@ class KnowledgeService(Knowledge):
             engine = await self._databases.project(project_id)
 
             if note_id is not None:
-                # Update existing note: remove old vector first
-                with contextlib.suppress(VectorStoreError):
+                # Update existing note: remove old vector first (narrow, logged vectors unavailable)
+                try:
                     await self._vectors.remove(project_id, note_id)
+                except VectorStoreError as exc:
+                    logger.info(
+                        "Vector removal skipped while vectors unavailable for note %s: %s",
+                        note_id,
+                        exc,
+                    )
 
                 async with engine.begin() as conn:
                     existing_res = await conn.execute(
@@ -213,11 +219,17 @@ class KnowledgeService(Knowledge):
             self.kick(project_id)
             return view
 
-    async def delete(self, project_id: str, note_id: str) -> None:
+    async def delete(self, project_id: str, note_id: str, author: str = "user") -> None:
         lock = self._get_project_lock(project_id)
         async with lock:
-            with contextlib.suppress(VectorStoreError):
+            try:
                 await self._vectors.remove(project_id, note_id)
+            except VectorStoreError as exc:
+                logger.info(
+                    "Vector removal skipped while vectors unavailable for note %s: %s",
+                    note_id,
+                    exc,
+                )
 
             engine = await self._databases.project(project_id)
             async with engine.begin() as conn:
@@ -234,7 +246,7 @@ class KnowledgeService(Knowledge):
 
             await self._events.record(
                 project_id,
-                source="user",
+                source=author,
                 type="note.deleted",
                 subject_id=note_id,
                 payload={"note_id": note_id, "type": existing_type},
@@ -287,28 +299,10 @@ class KnowledgeService(Knowledge):
             )
             return SearchResult(notes=ranked_views, used_vectors=False, detail=detail)
 
-        # 3. Check ready setting. If not ready for current embedder key: kick and return full text with detail.
+        # 3. Check ready setting and cooldown.
         key = embedder_key(embedder.address, embedder.dimensions)
         ready_key = await get_vectors_ready_for(self._databases, project_id)
-        if ready_key != key:
-            self.kick(project_id)
-            ranked_views = await get_notes_by_ids(
-                engine,
-                candidate_ids[:clamped_limit],
-                note_type=type,
-            )
-            pass_state = self._passes.get(project_id)
-            if (
-                pass_state is not None
-                and not pass_state.should_retry(self._monotonic())
-                and pass_state.last_failure_msg is not None
-            ):
-                detail = pass_state.last_failure_msg
-            else:
-                detail = f"Notes are being re-embedded with {embedder.address}; until that finishes, search matches words only."
-            return SearchResult(notes=ranked_views, used_vectors=False, detail=detail)
 
-        # 4. Embedder ready and matches current key.
         pass_state = self._passes.get(project_id)
         if pass_state is not None and not pass_state.should_retry(self._monotonic()):
             ranked_views = await get_notes_by_ids(
@@ -322,6 +316,19 @@ class KnowledgeService(Knowledge):
                 detail=pass_state.last_failure_msg,
             )
 
+        # Search kicks re-embedding once cooldown has passed so pending notes get embedded
+        self.kick(project_id)
+
+        if ready_key != key:
+            ranked_views = await get_notes_by_ids(
+                engine,
+                candidate_ids[:clamped_limit],
+                note_type=type,
+            )
+            detail = f"Notes are being re-embedded with {embedder.address}; until that finishes, search matches words only."
+            return SearchResult(notes=ranked_views, used_vectors=False, detail=detail)
+
+        # 4. Embedder ready and matches current key.
         try:
             vecs = await embedder.embed([query[:MAX_QUERY_CHARS]])
             query_vec = vecs[0]
@@ -329,15 +336,17 @@ class KnowledgeService(Knowledge):
                 project_id, query_vec, key, k=VECTOR_CANDIDATES
             )
         except (EmbedderUnavailable, VectorStoreError) as exc:
+            logger.warning("Vector search query failed: %s", exc)
             if pass_state is None:
                 pass_state = self._passes.setdefault(project_id, ReembedPass())
-            pass_state.record_failure(str(exc), self._monotonic())
+            clean_msg = error_text(exc)
+            pass_state.record_failure(clean_msg, self._monotonic())
             ranked_views = await get_notes_by_ids(
                 engine,
                 candidate_ids[:clamped_limit],
                 note_type=type,
             )
-            return SearchResult(notes=ranked_views, used_vectors=False, detail=str(exc))
+            return SearchResult(notes=ranked_views, used_vectors=False, detail=clean_msg)
 
         # Filter vector candidates by type if specified
         if type is not None and vector_ids:
@@ -364,107 +373,17 @@ class KnowledgeService(Knowledge):
         if pass_state.running:
             pass_state.rerun = True
             return
-        pass_state.task = asyncio.create_task(self._run_pass(project_id, pass_state))
-
-    async def _run_pass(self, project_id: str, pass_state: ReembedPass) -> None:
-        try:
-            while True:
-                embedder = await self._embedders.for_project(project_id)
-                if embedder is None:
-                    return
-
-                key = embedder_key(embedder.address, embedder.dimensions)
-                engine = await self._databases.project(project_id)
-
-                while True:
-                    stmt = (
-                        select(notes)
-                        .outerjoin(
-                            note_embeddings,
-                            (note_embeddings.c.note_id == notes.c.id)
-                            & (note_embeddings.c.embedder == key),
-                        )
-                        .where(note_embeddings.c.note_id.is_(None))
-                        .order_by(notes.c.created_at.asc(), notes.c.id.asc())
-                        .limit(EMBED_BATCH)
-                    )
-                    async with engine.connect() as conn:
-                        res = await conn.execute(stmt)
-                        rows = res.mappings().all()
-
-                    if not rows:
-                        break
-
-                    batch = [row_to_note_view(row) for row in rows]
-                    inputs = [embedding_input(n) for n in batch]
-
-                    vecs = await embedder.embed(inputs)
-
-                    for note, vec, inp in zip(batch, vecs, inputs, strict=True):
-                        async with self._get_project_lock(project_id):
-                            current_note = await get_note(engine, note.id)
-                            if current_note is None or embedding_input(current_note) != inp:
-                                continue
-                            await self._vectors.upsert(project_id, note.id, vec, key)
-
-                if pass_state.rerun:
-                    pass_state.rerun = False
-                    continue
-
-                # Clean up old embedder tables and rows
-                old_keys: set[str] = set()
-                ready_key = await get_vectors_ready_for(self._databases, project_id)
-                if ready_key and ready_key != key:
-                    old_keys.add(ready_key)
-
-                async with engine.connect() as conn:
-                    emb_res = await conn.execute(
-                        select(note_embeddings.c.embedder)
-                        .where(note_embeddings.c.embedder != key)
-                        .distinct()
-                    )
-                    for r in emb_res.fetchall():
-                        old_keys.add(str(r[0]))
-
-                    tbl_res = await conn.execute(
-                        text(
-                            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'note_vec_%'"
-                        )
-                    )
-                    for row in tbl_res.fetchall():
-                        tbl_name = str(row[0])
-                        if (
-                            tbl_name.startswith("note_vec_")
-                            and tbl_name[len("note_vec_") :].isdigit()
-                        ):
-                            vec_res = await conn.execute(
-                                text(
-                                    f"SELECT DISTINCT embedder FROM {tbl_name} WHERE embedder != :key"  # noqa: S608
-                                ),
-                                {"key": key},
-                            )
-                            for vr in vec_res.fetchall():
-                                if vr[0]:
-                                    old_keys.add(str(vr[0]))
-
-                for old_key in old_keys:
-                    await self._vectors.drop_embedder(project_id, old_key)
-
-                await set_vectors_ready_for(self._databases, project_id, key)
-                pass_state.clear_failure()
-                if pass_state.rerun:
-                    pass_state.rerun = False
-                    continue
-                break
-
-        except asyncio.CancelledError:
-            raise
-        except (EmbedderUnavailable, VectorStoreError) as exc:
-            pass_state.record_failure(str(exc), self._monotonic())
-        except Exception as exc:
-            pass_state.record_failure(str(exc), self._monotonic())
-        finally:
-            pass_state.task = None
+        pass_state.task = asyncio.create_task(
+            run_reembed_pass(
+                project_id,
+                pass_state,
+                databases=self._databases,
+                embedders=self._embedders,
+                vectors=self._vectors,
+                get_project_lock=self._get_project_lock,
+                monotonic=self._monotonic,
+            )
+        )
 
     async def wait_idle(self, project_id: str) -> None:
         """Await running re-embedding pass for project."""
@@ -475,7 +394,7 @@ class KnowledgeService(Knowledge):
             try:
                 await pass_state.task
             except asyncio.CancelledError:
-                break
+                raise
             except Exception:
                 break
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import struct
 from collections.abc import Sequence
+from weakref import WeakSet
 
 from sqlalchemy import delete, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -13,6 +15,10 @@ from mlops_agents.clock import now_iso
 from mlops_agents.knowledge.limits import MAX_DIMENSIONS
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import note_embeddings, notes
+
+logger = logging.getLogger(__name__)
+
+FLOAT32_MAX = 3.4028234663852886e38
 
 
 class VectorStoreError(Exception):
@@ -28,6 +34,8 @@ def _validate_vector(vector: Sequence[float]) -> int:
     for v in vector:
         if not math.isfinite(v):
             raise VectorStoreError("Vector contains non-finite values (NaN or Inf)")
+        if abs(v) > FLOAT32_MAX:
+            raise VectorStoreError("Vector component exceeds 32-bit float range")
     return dim
 
 
@@ -36,25 +44,21 @@ class SqliteVectorStore:
 
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
-        self._verified_engines: set[int] = set()
+        self._verified_engines: WeakSet[AsyncEngine] = WeakSet()
 
     async def _ensure_vec_available(self, engine: AsyncEngine) -> None:
-        engine_id = id(engine)
-        if engine_id in self._verified_engines:
+        if engine in self._verified_engines:
             return
         try:
             async with engine.connect() as conn:
                 res = await conn.execute(text("SELECT vec_version()"))
                 version = res.scalar()
                 if not version:
-                    raise VectorStoreError(
-                        "Vector search is not available on this installation: vec_version() returned empty"
-                    )
+                    raise VectorStoreError("Vector search is not available on this installation.")
         except Exception as exc:
-            raise VectorStoreError(
-                f"Vector search is not available on this installation: {exc}"
-            ) from exc
-        self._verified_engines.add(engine_id)
+            logger.warning("Vector extension check failed: %s", exc)
+            raise VectorStoreError("Vector search is not available on this installation.") from exc
+        self._verified_engines.add(engine)
 
     async def upsert(
         self, project_id: str, note_id: str, vector: list[float], embedder: str
@@ -137,64 +141,76 @@ class SqliteVectorStore:
         table_name = f"note_vec_{dim}"
         blob = struct.pack(f"{dim}f", *vector)
 
-        async with engine.connect() as conn:
-            tbl_check = await conn.execute(
-                text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
-                {"name": table_name},
-            )
-            if tbl_check.scalar() is None:
-                return []
+        try:
+            async with engine.connect() as conn:
+                tbl_check = await conn.execute(
+                    text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
+                    {"name": table_name},
+                )
+                if tbl_check.scalar() is None:
+                    return []
 
-            stmt = text(
-                f"SELECT rowid FROM {table_name} "  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
-                "WHERE embedding MATCH :q AND k = :k AND embedder = :e "
-                "ORDER BY distance"
-            )
-            res = await conn.execute(stmt, {"q": blob, "k": k, "e": embedder})
-            rowids = [row[0] for row in res.fetchall()]
-            if not rowids:
-                return []
+                stmt = text(
+                    f"SELECT rowid FROM {table_name} "  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
+                    "WHERE embedding MATCH :q AND k = :k AND embedder = :e "
+                    "ORDER BY distance"
+                )
+                res = await conn.execute(stmt, {"q": blob, "k": k, "e": embedder})
+                rowids = [row[0] for row in res.fetchall()]
+                if not rowids:
+                    return []
 
-            notes_res = await conn.execute(
-                select(notes.c.seq, notes.c.id).where(notes.c.seq.in_(rowids))
-            )
-            seq_to_id = {seq: nid for seq, nid in notes_res.fetchall()}
-            return [seq_to_id[seq] for seq in rowids if seq in seq_to_id]
+                notes_res = await conn.execute(
+                    select(notes.c.seq, notes.c.id).where(notes.c.seq.in_(rowids))
+                )
+                seq_to_id = {seq: nid for seq, nid in notes_res.fetchall()}
+                return [seq_to_id[seq] for seq in rowids if seq in seq_to_id]
+        except VectorStoreError:
+            raise
+        except Exception as exc:
+            logger.warning("Vector search query execution failed: %s", exc)
+            raise VectorStoreError("Vector search query failed.") from exc
 
     async def remove(self, project_id: str, note_id: str) -> None:
         engine = await self._databases.project(project_id)
-        await self._ensure_vec_available(engine)
 
         async with engine.begin() as conn:
             seq_res = await conn.execute(select(notes.c.seq).where(notes.c.id == note_id))
             seq = seq_res.scalar()
-            if seq is None:
-                return
 
             emb_res = await conn.execute(
                 select(note_embeddings.c.dimensions).where(note_embeddings.c.note_id == note_id)
             )
             dim = emb_res.scalar()
-            if dim is None:
-                return
 
-            table_name = f"note_vec_{dim}"
-            tbl_check = await conn.execute(
-                text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
-                {"name": table_name},
-            )
-            if tbl_check.scalar() is not None:
-                await conn.execute(
-                    text(f"DELETE FROM {table_name} WHERE rowid = :seq"),  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
-                    {"seq": seq},
-                )
-                count_res = await conn.execute(
-                    text(f"SELECT count(*) FROM {table_name}")  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
-                )
-                if count_res.scalar() == 0:
-                    await conn.execute(text(f"DROP TABLE {table_name}"))
-
+            # Always remove the note_embeddings row (no extension needed)
             await conn.execute(delete(note_embeddings).where(note_embeddings.c.note_id == note_id))
+
+            if seq is not None and dim is not None:
+                table_name = f"note_vec_{dim}"
+                tbl_check = await conn.execute(
+                    text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
+                    {"name": table_name},
+                )
+                if tbl_check.scalar() is not None:
+                    try:
+                        await self._ensure_vec_available(engine)
+                        await conn.execute(
+                            text(f"DELETE FROM {table_name} WHERE rowid = :seq"),  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
+                            {"seq": seq},
+                        )
+                        count_res = await conn.execute(
+                            text(f"SELECT count(*) FROM {table_name}")  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
+                        )
+                        if count_res.scalar() == 0:
+                            await conn.execute(text(f"DROP TABLE {table_name}"))
+                    except VectorStoreError as exc:
+                        logger.warning(
+                            "Vector extension unavailable while removing vec0 row for note %s: %s",
+                            note_id,
+                            exc,
+                        )
+                        raise
 
     async def drop_embedder(self, project_id: str, embedder: str) -> None:
         engine = await self._databases.project(project_id)

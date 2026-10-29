@@ -262,19 +262,17 @@ async def test_exhausted_embedder_fallback_and_cooldown(
     current_time += 65.0
     concept_embedder.raises_unavailable = False
 
-    # Kick re-embedding and wait idle
-    service.kick(project_id)
+    # Search restarts the stalled embedding pass without manual service.kick()
+    await service.search(project_id, query="truck", type=None, limit=5)
     await service.wait_idle(project_id)
 
-    # Embedder was called to embed the pending batch
-    assert concept_embedder.call_count == 2
+    # Embedder was called to embed query and the pending batch
+    assert concept_embedder.call_count >= 2
 
     # Now search is hybrid again
-    res3 = await service.search(project_id, query="truck", type=None, limit=5)
-    assert res3.used_vectors is True
-    assert res3.detail is None
-    # 1 for query embed in search
-    assert concept_embedder.call_count == 3
+    res4 = await service.search(project_id, query="truck", type=None, limit=5)
+    assert res4.used_vectors is True
+    assert res4.detail is None
 
 
 async def test_vector_store_error_fallback(

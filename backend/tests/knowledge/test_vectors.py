@@ -260,6 +260,19 @@ async def test_vector_exceeding_max_dimensions_refused_before_sql(databases: Dat
     assert "dimensions" in str(exc_info.value).lower()
 
 
+async def test_vector_max_dimensions_works(databases: Databases) -> None:
+    project_id = "prj_dim8192"
+    store = SqliteVectorStore(databases)
+    await _create_note(databases, project_id, "kno_max8192", "Max Dimensions Note")
+
+    max_vec = [0.01] * MAX_DIMENSIONS
+    key = f"embed@{MAX_DIMENSIONS}"
+    await store.upsert(project_id, "kno_max8192", max_vec, key)
+
+    nearest = await store.nearest(project_id, max_vec, key, k=5)
+    assert nearest == ["kno_max8192"]
+
+
 async def test_missing_extension_raises_vector_store_error_naming_unavailable(
     databases: Databases, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

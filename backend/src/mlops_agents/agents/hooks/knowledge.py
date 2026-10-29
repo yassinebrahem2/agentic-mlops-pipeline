@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from mlops_agents.agents.hooks.contract import HookContext
+from mlops_agents.credentials.scrub import error_text
 from mlops_agents.errors import DomainError
 
 if TYPE_CHECKING:
     from mlops_agents.knowledge.contract import Knowledge
+
+logger = logging.getLogger(__name__)
 
 MAX_HOOK_CHARS = 2500
 MAX_HOOK_NOTES = 5
@@ -35,7 +39,10 @@ class KnowledgeHook:
                 limit=MAX_HOOK_NOTES,
             )
         except (DomainError, SQLAlchemyError) as exc:
-            return f"Knowledge notes are unavailable: {exc}"
+            logger.warning("Knowledge notes query failed in hook: %s", exc)
+            orig = getattr(exc, "orig", None)
+            err_msg = error_text(orig if orig is not None else exc)
+            return f"Knowledge notes are unavailable: {err_msg}"
 
         if not result.notes:
             return ""
