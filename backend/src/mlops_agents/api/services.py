@@ -51,6 +51,8 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
+from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
@@ -103,6 +105,7 @@ class Services:
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
+    query_providers: QueryProviders
 
 
 async def _app_secrets(
@@ -208,6 +211,10 @@ async def build_services(
     handoffs = SqliteHandoffs(databases)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+
+    query_providers = QueryProviders()
+    maintenance = NeverSuspended()
+    _ = maintenance
 
     tracking = TrackingService(
         databases=databases,
@@ -349,4 +356,5 @@ async def build_services(
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
+        query_providers=query_providers,
     )

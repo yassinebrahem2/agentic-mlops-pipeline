@@ -28,6 +28,9 @@ class FakeGitHubState:
     prs: dict[tuple[str, int], dict[str, Any]] = field(
         default_factory=dict[tuple[str, int], dict[str, Any]]
     )
+    pr_files: dict[tuple[str, int], list[dict[str, Any]]] = field(
+        default_factory=dict[tuple[str, int], list[dict[str, Any]]]
+    )
     pr_counters: dict[str, int] = field(default_factory=dict[str, int])
     issues: dict[tuple[str, int], dict[str, Any]] = field(
         default_factory=dict[tuple[str, int], dict[str, Any]]
@@ -50,6 +53,7 @@ class FakeGitHubState:
             raise KeyError(f"PR #{number} not found in {repo}")
         self.prs[key]["merged"] = True
         self.prs[key]["state"] = "closed"
+        self.prs[key]["merged_at"] = datetime.now(UTC).isoformat()
         return self.prs[key]
 
     def close_pull(self, repo: str, number: int) -> dict[str, Any]:
@@ -69,6 +73,7 @@ class FakeGitHubState:
         self.rate_limit_remaining = 0
         self.simulate_permission_error.clear()
         self.prs.clear()
+        self.pr_files.clear()
         self.pr_counters.clear()
         self.issues.clear()
         self.issue_counters.clear()
@@ -120,6 +125,7 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
 
         number = state.pr_counters.get(full_name, 0) + 1
         state.pr_counters[full_name] = number
+        key = (full_name, number)
         pr = {
             "number": number,
             "title": body.get("title", ""),
@@ -129,8 +135,10 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
             "html_url": f"https://github.com/{full_name}/pull/{number}",
             "state": "open",
             "merged": False,
+            "merged_at": None,
+            "changed_files": len(state.pr_files.get(key, [])),
         }
-        state.prs[(full_name, number)] = pr
+        state.prs[key] = pr
         return JSONResponse(pr, status_code=201)
 
     @app.get("/repos/{owner}/{repo}/pulls/{number}")
@@ -144,7 +152,35 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         key = (full_name, number)
         if key not in state.prs:
             return JSONResponse({"message": "Not Found"}, status_code=404)
-        return JSONResponse(state.prs[key])
+        pr = state.prs[key]
+        if key in state.pr_files:
+            pr["changed_files"] = len(state.pr_files[key])
+        return JSONResponse(pr)
+
+    @app.get("/repos/{owner}/{repo}/pulls/{number}/files")
+    async def list_pull_files_route(
+        owner: str, repo: str, number: int, request: Request, per_page: int = 30, page: int = 1
+    ) -> Response:
+        full_name = f"{owner}/{repo}"
+        state.requests.append(
+            {
+                "method": "GET",
+                "path": f"/repos/{full_name}/pulls/{number}/files",
+                "params": {"per_page": per_page, "page": page},
+            }
+        )
+        err = _check_common(request, "pull requests: write")
+        if err is not None:
+            return err
+
+        key = (full_name, number)
+        if key not in state.prs:
+            return JSONResponse({"message": "Not Found"}, status_code=404)
+
+        files = state.pr_files.get(key, [])
+        start = (page - 1) * per_page
+        end = start + per_page
+        return JSONResponse(files[start:end])
 
     @app.patch("/repos/{owner}/{repo}/pulls/{number}")
     async def update_pull(owner: str, repo: str, number: int, request: Request) -> Response:
@@ -182,6 +218,7 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
             return JSONResponse({"message": "Not Found"}, status_code=404)
         state.prs[key]["merged"] = True
         state.prs[key]["state"] = "closed"
+        state.prs[key]["merged_at"] = datetime.now(UTC).isoformat()
         return JSONResponse(
             {
                 "sha": "fake_sha_merged",

@@ -5,6 +5,7 @@ PREFIXES = frozenset(
     {
         "prj", "prv", "ses", "msg", "trn", "llm", "tsk", "apr", "evt", "aud", "xch", "wak",
         "con", "trk", "prp", "kno",
+        "res", "sig", "inc", "rul", "hok", "win", "chk", "fix", "trq", "pol", "rep", "prm",
     }
 )  # fmt: skip
 
