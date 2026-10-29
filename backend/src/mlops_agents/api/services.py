@@ -13,6 +13,7 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.data_summary import DataSummaryHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
@@ -35,6 +36,8 @@ from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.data.cache import ProfileCache
+from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import StatusBoard
@@ -195,6 +198,8 @@ async def build_services(
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    summaries = DataSummaries(connections, ProfileCache(paths))
+    hooks.register(DataSummaryHook(connections, summaries))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
