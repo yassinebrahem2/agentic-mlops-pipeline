@@ -359,7 +359,7 @@ async def test_migrate_applies_later_migration_over_database_with_vec_tables(
 
     # Add next migration that creates, drops, and renames a table (the stage 2 pattern)
     next_version = max_version + 1
-    m_next = f"""-- migration {next_version:04d}: test rebuild table
+    m_next = """-- migration: test rebuild table
 CREATE TABLE dummy_new (id TEXT PRIMARY KEY, val TEXT);
 INSERT INTO dummy_new VALUES ('1', 'hello');
 DROP TABLE IF EXISTS dummy;
