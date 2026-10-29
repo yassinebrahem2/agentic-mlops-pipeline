@@ -1,8 +1,10 @@
 """Key failover: exhausted keys, cooldown probes, Try again, the wording and the one instance."""
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any, get_args
 
 import pytest
 
@@ -278,3 +280,27 @@ async def test_build_services_builds_exactly_one_key_failover(
         assert len(built) == 1
         assert services.failover is built[0]
         assert services.failover is services.failover
+
+
+def _describe_keys_cases() -> list[dict[str, Any]]:
+    path = Path(__file__).parents[3] / "shared" / "fixtures" / "describe-keys.json"
+    doc: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    cases: list[dict[str, Any]] = doc["cases"]
+    return cases
+
+
+@pytest.mark.parametrize("case", _describe_keys_cases(), ids=lambda case: case["name"])
+def test_describe_keys_matches_the_shared_fixture(
+    failover: KeyFailover, case: dict[str, Any]
+) -> None:
+    states = [KeyState.model_validate(state) for state in case["states"]]
+
+    assert failover.describe_keys(states) == case["text"]
+
+
+def test_the_describe_keys_fixture_covers_every_status_and_one_to_three_keys() -> None:
+    cases = _describe_keys_cases()
+    seen = {state["status"] for case in cases for state in case["states"]}
+
+    assert seen == set(get_args(KeyStatus))
+    assert {len(case["states"]) for case in cases} == {1, 2, 3}

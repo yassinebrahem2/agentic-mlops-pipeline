@@ -8,7 +8,6 @@ from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
@@ -30,6 +29,7 @@ from tests.agents.runtime.builder_env import (
     status_board_hooks,
     workspace_service,
 )
+from tests.agents.runtime.graph_env import prompt_messages
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
@@ -402,8 +402,8 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     # No additional call to summary
     assert fake_board.calls == [project.id]
 
-    # 3. System messages generated with build_messages
-    orch_msgs = build_messages(
+    # 3. System messages generated with prompt_messages
+    orch_msgs = prompt_messages(
         orch_agent.definition,
         orch_agent.project,
         orch_agent.layout,
@@ -411,7 +411,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         [],
         hook_context=orch_agent.hook_context,
     )
-    other_msgs = build_messages(
+    other_msgs = prompt_messages(
         other_agent.definition,
         other_agent.project,
         other_agent.layout,
