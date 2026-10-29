@@ -86,6 +86,9 @@ class FakeState:
     # Embeddings
     embedding_wrong_dimensions: int | None = None
     embedding_truncate_count: int | None = None
+    embedding_error_status: int | None = None
+    embedding_error_message: str | None = None
+    embedding_error_code: str = "bad_request"
     _slow_gate: threading.Event = field(default_factory=_open_gate)
 
     def hold_slow(self) -> None:
@@ -111,6 +114,9 @@ class FakeState:
         self.sse_error_message = "Tool call validation failed in stream"
         self.embedding_wrong_dimensions = None
         self.embedding_truncate_count = None
+        self.embedding_error_status = None
+        self.embedding_error_message = None
+        self.embedding_error_code = "bad_request"
         self.requests.clear()
         self.request_headers.clear()
 
@@ -291,6 +297,12 @@ def embeddings_failure(state: FakeState, request: Request) -> Response | None:
         auth_hdr = request.headers.get("authorization") or ""
         msg = f"Invalid API key: {auth_hdr}" if auth_hdr else "Invalid API key"
         return _error(401, msg, "invalid_api_key")
+    if state.embedding_error_status is not None:
+        status = state.embedding_error_status
+        msg = state.embedding_error_message or "Embeddings error"
+        code = state.embedding_error_code
+        state.embedding_error_status = None
+        return _error(status, msg, code)
     if state.rate_limit_remaining > 0:
         state.rate_limit_remaining -= 1
         return _error(429, "Rate limit reached", "rate_limit_exceeded", {"retry-after": "0"})
