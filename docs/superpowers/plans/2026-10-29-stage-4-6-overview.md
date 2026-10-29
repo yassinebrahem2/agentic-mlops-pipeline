@@ -91,7 +91,7 @@ class ResultQuery(BaseModel): ids: list[str] | None = None; check_id: str | None
 class SourceState(BaseModel): source_id: str; kind: SourceKind; cursor: dict[str, Any]; last_read: datetime | None; last_error: str | None; consecutive_failures: int
 class CollectionReport(BaseModel): stored: int; by_source: dict[str, int]; failures: dict[str, str]
 
-def source_id(kind: SourceKind, ref: str) -> str: ...   # "file:<connection>:<pattern>", "ci:<workflow>", "mlflow:<metric>"; the only builder
+def source_id(kind: SourceKind, ref: str, connection: str | None = None) -> str: ...   # "file:<connection>:<pattern>", "ci:<workflow>", "mlflow:<metric>"; the only builder; `connection` is required for "file" (ValueError without it) and refused for the other kinds (2026-10-29, #529)
 def parse_source_id(source_id: str) -> tuple[SourceKind, str, str | None]: ...   # (kind, ref, the connection name of a file source); its inverse
 
 class ResultsObserver(Protocol):        # incidents, expectations, verdicts
