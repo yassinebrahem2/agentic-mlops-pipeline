@@ -23,7 +23,13 @@ from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.caller_env import ScriptedClient, script_builds
 from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
-from tests.agents.runtime.stall_env import KEY, StallEnv, build_stall_env, send_until_waiting
+from tests.agents.runtime.stall_env import (
+    KEY,
+    StallEnv,
+    build_stall_env,
+    send_until_waiting,
+    stall_parts,
+)
 from tests.agents.runtime.test_resuming_turns import (
     DummyWriteTool,
     collect_until_turn_waiting,
@@ -48,11 +54,15 @@ def _texts(parts: list[object]) -> list[str]:
 
 
 def take_back_update(events: list[StreamEvent]) -> MessageUpdated:
-    """The first update of the agent message after its partial text streamed."""
+    """The take-back's update: the event right after the partial text streamed. Without a
+    take-back the next event is the next attempt's text or tool call, or the waiting update with
+    the stall card, so the stall tests also check that it holds no stall card."""
     streamed = next(
         i for i, e in enumerate(events) if isinstance(e, TextDelta) and e.data.text == "Partial "
     )
-    return next(e for e in events[streamed:] if isinstance(e, MessageUpdated))
+    following = events[streamed + 1]
+    assert isinstance(following, MessageUpdated), following
+    return following
 
 
 async def mid_turn_env(
@@ -118,8 +128,8 @@ async def test_a_429_after_text_is_taken_back_and_the_next_key_completes_the_ste
     assert ended.data.status == "done"
     assert built[:2] == [0, 1]
     assert clock.sleeps == []
-    # The live copy is reset at once: the update after the partial text no longer holds it.
-    assert PARTIAL not in take_back_update(events).data.message.parts
+    # The live copy is reset at once: back to the step's finished parts, none before step 0.
+    assert take_back_update(events).data.message.parts == []
     message = await env.agent_message(ended.data.turn_id)
     assert PARTIAL not in message.parts
     assert await env.stalls(ended.data.turn_id) == []
@@ -159,7 +169,10 @@ async def test_keys_running_out_after_text_stall_and_try_again_resumes_that_step
 
     [stall] = await env.stalls(turn_id)
     assert (stall.status, stall.step) == ("pending", 1)
-    assert PARTIAL not in take_back_update(events).data.message.parts
+    # The stall branch takes the text back before it records the stall.
+    taken_back = take_back_update(events).data.message
+    assert PARTIAL not in taken_back.parts
+    assert stall_parts(taken_back) == []
     message = await env.agent_message(turn_id, agent="writer")
     assert (message.status, _texts(list(message.parts))) == ("waiting", [])
     values = await env.checkpoint(turn_id)
@@ -226,6 +239,7 @@ async def test_a_take_back_keeps_the_text_of_the_steps_before_it(
     [stall] = await env.stalls(turn_id)
     taken_back = take_back_update(events).data.message
     assert _texts(list(taken_back.parts)) == [STEP_0_TEXT]
+    assert stall_parts(taken_back) == []
     message = await env.agent_message(turn_id, agent="writer")
     assert _texts(list(message.parts)) == [STEP_0_TEXT]
 

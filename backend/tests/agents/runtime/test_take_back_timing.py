@@ -78,7 +78,8 @@ async def test_a_wait_round_shows_the_text_until_the_next_attempt_takes_it_back(
 
     assert ended_event(events).data.status == "done"
     assert clock.sleeps == [5.0]
-    assert PARTIAL not in take_back_update(events).data.message.parts
+    # Gone when the next attempt starts: the update right after the text is the take-back.
+    assert take_back_update(events).data.message.parts == []
     assert PARTIAL not in (await env.agent_message(ended_event(events).data.turn_id)).parts
     await env.session.manager.close()
 
