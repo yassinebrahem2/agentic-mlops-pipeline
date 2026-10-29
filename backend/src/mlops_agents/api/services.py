@@ -59,6 +59,8 @@ from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -88,6 +90,7 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    tracking: TrackingService
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
@@ -261,6 +264,16 @@ async def build_services(
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
     handoffs = SqliteHandoffs(databases)
 
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http, github),
+        github_token=github.token,
+    )
+    stack.push_async_callback(tracking.close)
+
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -294,6 +307,7 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        tracking=tracking,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
