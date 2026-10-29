@@ -4,13 +4,24 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-from demo_world import backfill, company, fetch, github, newrun, paths, scenarios, simulate, source
+from demo_world import (
+    backfill,
+    ci,
+    company,
+    fetch,
+    github,
+    newrun,
+    paths,
+    scenarios,
+    simulate,
+    source,
+)
 
 
 class SourceMissingError(Exception):
@@ -58,13 +69,29 @@ def _company() -> company.Company | None:
     return company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir())
 
 
+def _steps(args: argparse.Namespace) -> tuple[simulate.Step, ...]:
+    """The world's work on the company's repository; none without HOTEL_DEMO_REPO."""
+    name = paths.repository()
+    if name is None:
+        if args.ci_every is not None:
+            raise github.GitHubError(
+                f"--ci-every dispatches the company's CI; it needs {paths.REPO_VARIABLE} "
+                "(see `demo-world new-run`)"
+            )
+        return ()
+    repository = github.Repository(name, github.RUNNER)
+    every: int = ci.DEFAULT_EVERY if args.ci_every is None else args.ci_every
+    return (ci.Dispatcher(repository, paths.world_dir(), every),)
+
+
 def _simulate(args: argparse.Namespace) -> None:
     scenario_path: Path | None = args.scenario
-    # Read the scenario and the company setting first, so they fail before the source loads.
+    # Read the scenario and the settings first, so they fail before the source loads.
     scenario = scenarios.NO_SCENARIO if scenario_path is None else scenarios.load(scenario_path)
     the_company = _company()
+    steps = _steps(args)
     world = simulate.World(
-        _loaded_source(), paths.data_dir(), paths.world_dir(), scenario, the_company
+        _loaded_source(), paths.data_dir(), paths.world_dir(), scenario, the_company, steps
     )
     end: date = args.end
     summary = simulate.simulate(world, args.start, end, simulate.Pace(args.seconds_per_day))
@@ -82,6 +109,16 @@ def _seconds(text: str) -> float:
     if seconds < 0:
         raise argparse.ArgumentTypeError(f"must be 0 or more, not {text}")
     return seconds
+
+
+def _at_least(minimum: int) -> Callable[[str], int]:
+    def parse(text: str) -> int:
+        number = int(text)
+        if number < minimum:
+            raise argparse.ArgumentTypeError(f"must be {minimum} or more, not {text}")
+        return number
+
+    return parse
 
 
 def _run_option() -> argparse.ArgumentParser:
@@ -134,6 +171,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     simulate_command.add_argument(
         "--scenario", type=Path, help="TOML file of injected problems; none are injected without it"
+    )
+    simulate_command.add_argument(
+        "--ci-every",
+        type=_at_least(1),
+        metavar="N",
+        help=f"dispatch the company's scheduled CI every N simulated days (default "
+        f"{ci.DEFAULT_EVERY}; needs {paths.REPO_VARIABLE})",
     )
     simulate_command.set_defaults(run_command=_simulate)
     return parser

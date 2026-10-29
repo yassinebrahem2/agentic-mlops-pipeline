@@ -3,7 +3,9 @@
 Every calendar day is a business date (the overview states no weekend rule, and the company
 counts its schedule in simulated days). A day without bookings or releases gets no file, as in
 the backfill, but it is still a day done. With a company, each day also updates its checkout
-and runs the jobs its schedule makes due, after the day's files.
+and runs the jobs its schedule makes due, after the day's files. Steps (the world's work on
+the company's GitHub repository) run at the start and the end of each day, and are closed on
+every exit, Ctrl+C and errors included.
 """
 
 import json
@@ -12,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 
@@ -26,9 +29,23 @@ class SimulateError(Exception):
     """The loop cannot run with these dates or folders."""
 
 
+class Step(Protocol):
+    """Work the world does around each day; a step logs its own failures and never raises."""
+
+    def start_of_day(self, day: date, origin: date) -> None:
+        """Before the checkout is updated, so what a step merges takes effect that day."""
+
+    def end_of_day(self, day: date, origin: date) -> None:
+        """After the day's files and the company's jobs."""
+
+    def close(self) -> None:
+        """Undo what must not outlive the loop."""
+
+
 @dataclass(frozen=True)
 class World:
-    """What the loop plays: the loaded source, the two folders, the scenario and the company.
+    """What the loop plays: the loaded source, the two folders, the scenario, the company and
+    the steps around each day.
 
     Without a company the loop writes the day's files only.
     """
@@ -38,6 +55,7 @@ class World:
     folder: Path
     scenario: Scenario = NO_SCENARIO
     company: Company | None = None
+    steps: tuple[Step, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +160,28 @@ def _first_day(state: _State | None, start: date, end: date) -> date:
     return resume
 
 
+def _play_days(world: World, first: date, days: int, origin: date, pace: Pace) -> None:
+    next_day_at: float | None = None
+    for offset in range(days):
+        day = first + timedelta(days=offset)
+        if next_day_at is not None and (wait := next_day_at - pace.clock()) > 0:
+            pace.sleep(wait)
+        began = pace.clock()
+        answer_key.append_new(world.folder, world.scenario.key_records(day))
+        for step in world.steps:
+            step.start_of_day(day, origin)
+        if world.company is not None:
+            world.company.update()
+            if offset == 0:
+                # Before the first day's files: `train` keeps the labels released on its cutoff.
+                world.company.bootstrap(cutoff=day)
+        play_day(world, day, origin)
+        for step in world.steps:
+            step.end_of_day(day, origin)
+        _write_state(world.folder, _State(origin, day))
+        next_day_at = began + pace.seconds_per_day
+
+
 def simulate(world: World, start: date, end: date, pace: Pace) -> Summary:
     """Play every business date from `start` (or after the last day done) to `end` included."""
     if world.folder.resolve().is_relative_to(world.data.resolve()):
@@ -156,21 +196,11 @@ def simulate(world: World, start: date, end: date, pace: Pace) -> Summary:
     answer_key.write_planted_flaws(world.folder)
 
     days = (end - first).days + 1
-    next_day_at: float | None = None
-    for offset in range(days):
-        day = first + timedelta(days=offset)
-        if next_day_at is not None and (wait := next_day_at - pace.clock()) > 0:
-            pace.sleep(wait)
-        began = pace.clock()
-        answer_key.append_new(world.folder, world.scenario.key_records(day))
-        if world.company is not None:
-            world.company.update()
-            if offset == 0:
-                # Before the first day's files: `train` keeps the labels released on its cutoff.
-                world.company.bootstrap(cutoff=day)
-        play_day(world, day, origin)
-        _write_state(world.folder, _State(origin, day))
-        next_day_at = began + pace.seconds_per_day
+    try:
+        _play_days(world, first, days, origin, pace)
+    finally:
+        for step in world.steps:
+            step.close()
     if days <= 0:
         return Summary(first=None, last=None, days=0)
     return Summary(first=first, last=end, days=days)
