@@ -2,6 +2,8 @@ import type { ComponentType } from "react";
 import { useParams } from "react-router";
 import type { components } from "@/api/schema";
 import { GenericApprovalCard } from "./GenericApprovalCard";
+import { ConnectionsProposalCard } from "./proposals/ConnectionsProposalCard";
+import { HandoffProposalCard } from "./proposals/HandoffProposalCard";
 import { StallCard } from "./StallCard";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
@@ -24,7 +26,10 @@ export type ApprovalCardComponent = ComponentType<
 export const CARD_FOR_KIND: Partial<Record<ApprovalPart["kind"], ApprovalCardComponent>> = {
   stall: StallCard,
 };
-export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {};
+export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {
+  connections: ConnectionsProposalCard,
+  handoff: HandoffProposalCard,
+};
 
 /** The card an approval gets, chosen from the part alone: its kind's card, else its proposal
  * kind's card, else the generic card. */

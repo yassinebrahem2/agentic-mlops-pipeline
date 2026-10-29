@@ -17,6 +17,7 @@ from mlops_agents.agents.hooks.data_summary import DataSummaryHook
 from mlops_agents.agents.hooks.knowledge import KnowledgeHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
+from mlops_agents.agents.hooks.tracking_summary import TrackingSummaryHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
@@ -54,6 +55,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.observer import ProposalApprovalObserver
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
@@ -64,6 +66,7 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -96,6 +99,7 @@ class Services:
     embedders: EmbeddersService
     knowledge: Knowledge
     tracking: TrackingService
+    tracking_loop: TrackingLoop
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
@@ -201,6 +205,21 @@ async def build_services(
         sandbox=sandbox,
     )
 
+    handoffs = SqliteHandoffs(databases)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http),
+        github_token=github.token,
+        handoffs=handoffs,
+    )
+    stack.push_async_callback(tracking.close)
+
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
         tasks=tasks,
@@ -213,6 +232,9 @@ async def build_services(
         http=http,
         databases=databases,
         knowledge=knowledge,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
+        tracking=tracking,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -223,6 +245,7 @@ async def build_services(
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     hooks.register(DataSummaryHook(connections, data_summaries))
+    hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -270,19 +293,22 @@ async def build_services(
         event_log=events,
     )
     sessions.bind_approvals(approvals)
-    proposal_kinds = ProposalKinds()
-    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
-    handoffs = SqliteHandoffs(databases)
 
-    tracking = TrackingService(
-        databases=databases,
-        keystore=keystore,
-        secrets=project_secrets,
-        events=events,
-        adapters=default_adapters(http, github),
-        github_token=github.token,
+    proposal_observer = ProposalApprovalObserver(proposals, approvals, workspace)
+    approvals.add_observer(proposal_observer)
+
+    for project in await workspace.list_projects():
+        await proposals.recover(project.id)
+
+    async def _list_project_ids() -> list[str]:
+        return [p.id for p in await workspace.list_projects()]
+
+    tracking_loop = TrackingLoop(
+        tracking=tracking,
+        projects=_list_project_ids,
     )
-    stack.push_async_callback(tracking.close)
+    stack.push_async_callback(tracking_loop.close)
+    await tracking_loop.start()
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -319,6 +345,7 @@ async def build_services(
         embedders=embedders,
         knowledge=knowledge,
         tracking=tracking,
+        tracking_loop=tracking_loop,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,

@@ -11,3 +11,4 @@ QUERY_LIMIT_MAX: Final[int] = 500
 QUERY_LIMIT_DEFAULT: Final[int] = 50
 ERROR_MAX_CHARS: Final[int] = 500
 PRODUCTION_ALIAS: Final[str] = "production"
+PRODUCTION_ENVIRONMENT: Final[str] = "production"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -71,6 +71,7 @@ async def _save_deployments(
                 deployments.c.model,
                 deployments.c.alias,
                 deployments.c.to_version,
+                deployments.c.seen_at,
             )
             .where(deployments.c.source_id == source_id)
             .order_by(deployments.c.seen_at.asc())
@@ -78,19 +79,33 @@ async def _save_deployments(
     ).all()
 
     current_state: dict[tuple[str, str], str | None] = {}
+    last_seen_at: dict[tuple[str, str], str] = {}
     for r in dep_rows:
         current_state[(r.model, r.alias)] = r.to_version
+        last_seen_at[(r.model, r.alias)] = r.seen_at
+
+    def _next_seen_at(model: str, alias: str, base_iso: str) -> str:
+        prev = last_seen_at.get((model, alias))
+        if prev is not None and prev >= base_iso:
+            prev_dt = datetime.fromisoformat(prev)
+            new_dt = prev_dt + timedelta(milliseconds=1)
+            next_iso = to_iso(new_dt)
+            last_seen_at[(model, alias)] = next_iso
+            return next_iso
+        last_seen_at[(model, alias)] = base_iso
+        return base_iso
 
     # For each model -> alias -> version in result.aliases
     for model, alias_map in result.aliases.items():
         for alias, target_version in alias_map.items():
             current_ver = current_state.get((model, alias))
             if current_ver != target_version:
+                seen_at_str = _next_seen_at(model, alias, now_iso)
                 stmt_dep = sqlite_insert(deployments).values(
                     source_id=source_id,
                     model=model,
                     alias=alias,
-                    seen_at=now_iso,
+                    seen_at=seen_at_str,
                     from_version=current_ver,
                     to_version=target_version,
                 )
@@ -102,11 +117,12 @@ async def _save_deployments(
         if current_ver is not None and (
             model not in result.aliases or alias not in result.aliases[model]
         ):
+            seen_at_str = _next_seen_at(model, alias, now_iso)
             stmt_dep = sqlite_insert(deployments).values(
                 source_id=source_id,
                 model=model,
                 alias=alias,
-                seen_at=now_iso,
+                seen_at=seen_at_str,
                 from_version=current_ver,
                 to_version=None,
             )
