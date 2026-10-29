@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from mlops_agents.connections.contract import TableRef
 from mlops_agents.data.profile import ColumnProfile, TableProfile
-from mlops_agents.data.render import render_table, render_versioned_table
+from mlops_agents.data.render import (
+    SIZE_CAP,
+    left_out_line,
+    more_tables_line,
+    render_table,
+    render_versioned_table,
+    unreadable_line,
+)
 
 PEOPLE = TableRef(name="people", files=["people.csv"], format="csv")
 
@@ -116,6 +123,26 @@ def test_hostile_names_and_cells_stay_on_their_own_lines() -> None:
     assert lines[0].startswith(f"Table {escaped} (csv, files [")
     assert lines[2] == f"- {escaped} VARCHAR, nulls 0, ~distinct 0, top [{escaped}]"
     assert lines[4:] == [f"[{escaped}]", '["plain"]']
+
+
+def test_lone_surrogates_are_escaped_so_the_text_encodes_as_utf8() -> None:
+    """A name whose bytes are not UTF-8 (Linux) or with an unpaired surrogate (Windows)."""
+    odd = "a" + chr(0xD800) + "b" + chr(0xDCFF)
+    ref = TableRef(name=odd, files=[f"{odd}.csv"], format="csv")
+    profile = _profile(
+        columns=[_column(odd, "VARCHAR", top_values=[odd])], sample_columns=[odd], sample=[[odd]]
+    )
+    texts = [
+        render_table(ref, profile),
+        render_versioned_table(ref, odd, profile),
+        left_out_line(ref, SIZE_CAP),
+        unreadable_line(ref, odd),
+        more_tables_line([PEOPLE, ref]),
+    ]
+    escaped = "a" + "\\" + "ud800b" + "\\" + "udcff"
+    for text in texts:
+        text.encode("utf-8")
+        assert escaped in text
 
 
 def test_range_values_are_one_line_each() -> None:

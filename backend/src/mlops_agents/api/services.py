@@ -77,6 +77,7 @@ class Services:
     sessions: AgentSessions
     messaging_settings: MessagingSettings
     connections: Connections
+    data_summaries: DataSummaries
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -198,8 +199,9 @@ async def build_services(
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
-    summaries = DataSummaries(connections, ProfileCache(paths))
-    hooks.register(DataSummaryHook(connections, summaries))
+    # One instance for the hook and the table-detail route: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
+    hooks.register(DataSummaryHook(connections, data_summaries))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -271,6 +273,7 @@ async def build_services(
         sessions=sessions,
         messaging_settings=messaging_settings,
         connections=connections,
+        data_summaries=data_summaries,
         sandbox=sandbox,
         events=events,
         audit=audit,

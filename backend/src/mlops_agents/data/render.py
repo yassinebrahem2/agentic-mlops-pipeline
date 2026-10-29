@@ -18,10 +18,12 @@ from mlops_agents.data.profile import ColumnProfile, TableProfile
 
 SIZE_CAP: Final = "size cap"
 TIME_BUDGET: Final = "time budget"
+CACHE_UNAVAILABLE: Final = "profile cache unavailable"
 
-# What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them)
-# and the Unicode line and paragraph separators.
-_UNESCAPED_BREAKS: Final = re.compile("[\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]")
+# What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them),
+# the Unicode line and paragraph separators, and lone surrogates (a file name whose bytes
+# are not UTF-8), which would make the text fail to encode as UTF-8.
+_UNESCAPED: Final = re.compile("[\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\ud800-\udfff]")
 
 
 def _escape(match: re.Match[str]) -> str:
@@ -30,7 +32,7 @@ def _escape(match: re.Match[str]) -> str:
 
 def _json(value: str | Sequence[str]) -> str:
     text = json.dumps(value if isinstance(value, str) else list(value), ensure_ascii=False)
-    return _UNESCAPED_BREAKS.sub(_escape, text)
+    return _UNESCAPED.sub(_escape, text)
 
 
 def quoted(text: str) -> str:

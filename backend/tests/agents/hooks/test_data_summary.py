@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
@@ -14,6 +16,7 @@ import pytest
 from mlops_agents.agents.hooks import data_summary as hook_module
 from mlops_agents.agents.hooks.names import DATA_SUMMARY_HOOK
 from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.data import cache as cache_module
 from mlops_agents.data.constants import MAX_TABLES, SAMPLE_ROWS
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -183,6 +186,38 @@ async def test_a_corrupt_csv_gives_one_line_and_the_others_render(env: SummaryEn
     (bad,) = [line for line in lines if '"bad"' in line]
     assert bad.startswith('Table "bad" (csv): unreadable: ')
     assert any(line.startswith('Table "good" (csv, ') for line in lines)
+
+
+@pytest.mark.parametrize("broken", ["_read", "_write_atomically"])
+async def test_a_failing_cache_costs_one_line_and_never_shows_its_path(
+    env: SummaryEnv,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    broken: str,
+) -> None:
+    """A cache file held open (Windows) or a full disk: the table's line names no app path."""
+    await env.connect("sales", {"a.csv": csv_rows(2), "b.csv": csv_rows(2)})
+    real = getattr(cache_module, broken)
+    calls = 0
+
+    def first_call_fails(entry: Path, *args: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PermissionError(13, "Permission denied", str(entry))
+        return real(entry, *args)
+
+    monkeypatch.setattr(cache_module, broken, first_call_fails)
+    with caplog.at_level(logging.WARNING):
+        text = await env.render()
+
+    lines = text.split("\n")
+    assert 'Table "a" (csv): detail left out: profile cache unavailable' in lines
+    assert any(line.startswith('Table "b" (csv, ') and line.endswith("2 rows") for line in lines)
+    root = env.paths.root
+    for shown in (str(root), root.as_posix(), str(root.resolve()), root.resolve().as_posix()):
+        assert shown not in text
+    assert any(record.exc_info is not None for record in caplog.records)
 
 
 async def test_no_connection_renders_nothing(env: SummaryEnv) -> None:

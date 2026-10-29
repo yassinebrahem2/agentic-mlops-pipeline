@@ -3,6 +3,7 @@ cache, within one size cap and one time budget."""
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -18,6 +19,8 @@ from mlops_agents.data.constants import (
 )
 from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.errors import DomainError
+
+logger = logging.getLogger(__name__)
 
 
 class DataSummaryHook:
@@ -70,6 +73,11 @@ class DataSummaryHook:
             return render.unreadable_line(ref, exc.message)
         except TimeoutError:  # waited on another render's profile of this table
             return render.left_out_line(ref, render.TIME_BUDGET)
+        except OSError:  # after TimeoutError, its subclass
+            # The cache file could not be read or written (held open, disk full). Its text
+            # names the app data folder, so the line gives a fixed reason and the log the rest.
+            logger.warning("profile cache unavailable for a table", exc_info=True)
+            return render.left_out_line(ref, render.CACHE_UNAVAILABLE)
         if profile.timed_out and profile.timeout_s < PROFILE_TIMEOUT_S:
             # Cut by the budget, not the full timeout: the next turn profiles it again.
             return render.left_out_line(ref, render.TIME_BUDGET)
