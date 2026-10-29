@@ -621,7 +621,7 @@ async def test_sync_all_resilient_to_gather_exception_and_sources_failure(
         auth="none",
     )
 
-    orig_sync_source: Any = getattr(env.service, "_sync_source")
+    orig_sync_source = env.service._sync_source  # pyright: ignore[reportPrivateUsage]
 
     async def fail_one_source(project_id: str, source_id: str) -> None:
         if source_id == s1.id:
