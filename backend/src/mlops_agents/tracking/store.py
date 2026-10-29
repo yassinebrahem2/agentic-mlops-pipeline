@@ -89,7 +89,7 @@ async def _save_deployments(
         if prev is not None and prev >= base_iso:
             prev_dt = datetime.fromisoformat(prev)
             new_dt = prev_dt + timedelta(milliseconds=1)
-            next_iso = _format_utc_iso(new_dt)
+            next_iso = to_iso(new_dt)
             last_seen_at[(model, alias)] = next_iso
             return next_iso
         last_seen_at[(model, alias)] = base_iso
