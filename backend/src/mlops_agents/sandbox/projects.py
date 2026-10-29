@@ -1,7 +1,6 @@
 """Project repository locations and persistent sandbox network settings."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -22,14 +21,6 @@ class Mount(Protocol):
 
     @property
     def container_path(self) -> str: ...
-
-
-@dataclass(frozen=True)
-class SandboxMount:
-    """Concrete read-only container bind mount."""
-
-    host_path: Path
-    container_path: str
 
 
 class _Connections(Protocol):

@@ -166,6 +166,13 @@ class LocalFolderKind:
         del credential
         self._resolve(settings)
 
+    def read(self, settings: BaseModel) -> tuple[Findings, str | None]:
+        resolved = self._resolve(settings)
+        tables, unsupported = scan_tables_and_unsupported(resolved)
+        findings = walk_findings(resolved, unsupported)
+        data_ver = latest_data_version(resolved, tables)
+        return findings, data_ver
+
     def findings(self, settings: BaseModel) -> Findings:
         resolved = self._resolve(settings)
         _, unsupported = scan_tables_and_unsupported(resolved)
@@ -179,11 +186,6 @@ class LocalFolderKind:
     def data_version(self, settings: BaseModel, table: TableRef) -> str:
         resolved = self._resolve(settings)
         return compute_data_version(resolved, table)
-
-    def latest_data_version(self, settings: BaseModel) -> str | None:
-        resolved = self._resolve(settings)
-        tables, _ = scan_tables_and_unsupported(resolved)
-        return latest_data_version(resolved, tables)
 
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource:
         resolved = self._resolve(settings)
