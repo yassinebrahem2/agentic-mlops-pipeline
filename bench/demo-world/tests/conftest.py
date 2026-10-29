@@ -19,6 +19,11 @@ def isolated_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOTEL_DEMO_SOURCE", str(tmp_path / "source"))
     monkeypatch.setenv("HOTEL_DEMO_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("HOTEL_DEMO_WORLD", str(tmp_path / "world"))
+    monkeypatch.setenv("HOTEL_DEMO_MLFLOW", str(tmp_path / "mlflow"))
+    # A developer's own company checkout, tracking server or repository never reaches a test;
+    # the tests against the real company read HOTEL_DEMO_COMPANY at import, before this runs.
+    for variable in ("HOTEL_DEMO_COMPANY", "MLFLOW_TRACKING_URI", "HOTEL_DEMO_REPO"):
+        monkeypatch.delenv(variable, raising=False)
     return tmp_path
 
 

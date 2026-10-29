@@ -11,6 +11,7 @@ def test_folders_come_from_the_environment(isolated_folders: Path) -> None:
     assert paths.source_dir() == isolated_folders / "source"
     assert paths.data_dir() == isolated_folders / "data"
     assert paths.world_dir() == isolated_folders / "world"
+    assert paths.mlflow_dir() == isolated_folders / "mlflow"
 
 
 @pytest.mark.parametrize(
@@ -19,6 +20,7 @@ def test_folders_come_from_the_environment(isolated_folders: Path) -> None:
         ("HOTEL_DEMO_SOURCE", paths.source_dir, "source"),
         ("HOTEL_DEMO_DATA", paths.data_dir, "data"),
         ("HOTEL_DEMO_WORLD", paths.world_dir, "world"),
+        ("HOTEL_DEMO_MLFLOW", paths.mlflow_dir, "mlflow"),
     ],
 )
 def test_folders_default_under_the_home_folder(
@@ -26,6 +28,12 @@ def test_folders_default_under_the_home_folder(
 ) -> None:
     monkeypatch.delenv(variable)
     assert folder() == Path.home() / "hotel-demo" / name
+
+
+def test_the_company_checkout_is_opt_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    assert paths.company_dir() is None
+    monkeypatch.setenv("HOTEL_DEMO_COMPANY", str(tmp_path / "company"))
+    assert paths.company_dir() == tmp_path / "company"
 
 
 def test_day_files_are_named_by_business_date() -> None:
