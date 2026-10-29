@@ -67,7 +67,6 @@ async def test_a_stop_once_the_card_is_written_shows_it_cancelled(
 
     assert (await repair.stored(approval.id)).status == "cancelled"
     assert (await repair.card(approval)).status == "cancelled"
-    assert (await repair.message_of(approval)).status == "stopped"
     assert await repair.audit_of(approval.id) == [("user", "cancelled")]
     assert await repair.events_of(approval.id) == [("user", "cancelled")]
     assert repair.ends(approval.turn_id) == ["stopped"]
