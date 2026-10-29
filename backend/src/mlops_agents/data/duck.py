@@ -20,6 +20,7 @@ import duckdb
 _EXTENDED_LENGTH_PREFIX: Final = "\\\\?\\"
 # An interrupt on an idle connection is lost, so an expired deadline repeats it this often.
 _INTERRUPT_EVERY_S: Final = 0.01
+DEADLINE_THREAD_NAME: Final = "duckdb-deadline"
 
 
 def posix_directory(path: Path) -> str:
@@ -75,7 +76,9 @@ class Deadline:
         self._timeout_s = timeout_s
         self._done = threading.Event()
         self._expired = threading.Event()
-        self._watchdog = threading.Thread(target=self._watch, name="duckdb-deadline", daemon=True)
+        self._watchdog = threading.Thread(
+            target=self._watch, name=DEADLINE_THREAD_NAME, daemon=True
+        )
         self._watchdog.start()
 
     @property

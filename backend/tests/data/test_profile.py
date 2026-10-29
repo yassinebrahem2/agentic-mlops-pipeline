@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 import pytest
@@ -12,7 +14,7 @@ import pytest
 from mlops_agents.connections.contract import DuckDbSource
 from mlops_agents.data import profile as profile_module
 from mlops_agents.data.constants import MAX_COLUMNS, SAMPLE_ROWS, TEXT_CUT, TOP_VALUES
-from mlops_agents.data.duck import locked_connection
+from mlops_agents.data.duck import DEADLINE_THREAD_NAME, locked_connection
 from mlops_agents.data.profile import ColumnProfile, TableProfile, profile_table
 from mlops_agents.errors import DomainError
 from tests.data.conftest import TeamFolder, write_parquet
@@ -144,6 +146,42 @@ async def test_a_slow_table_times_out_with_its_columns(
         opened[0].execute("SELECT 1")
 
 
+class _CloseSpy:
+    """A connection that records which deadline watchdogs are alive when it is closed."""
+
+    def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
+        self._connection = connection
+        self.watchdogs_at_close: list[threading.Thread] | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def close(self) -> None:
+        self.watchdogs_at_close = [
+            t for t in threading.enumerate() if t.name == DEADLINE_THREAD_NAME
+        ]
+        self._connection.close()
+
+
+@pytest.mark.parametrize(("sql_from", "timed_out"), [("range(3)", False), (ENDLESS, True)])
+async def test_the_watchdog_stops_before_the_connection_closes(
+    team: TeamFolder, monkeypatch: pytest.MonkeyPatch, sql_from: str, timed_out: bool
+) -> None:
+    """DuckDB raises on an interrupt after close, so the watchdog must be gone by then."""
+    spies: list[_CloseSpy] = []
+
+    def spy(allowed: list[Path]) -> duckdb.DuckDBPyConnection:
+        spies.append(_CloseSpy(locked_connection(allowed)))
+        return cast(duckdb.DuckDBPyConnection, spies[-1])
+
+    monkeypatch.setattr(profile_module, "locked_connection", spy)
+    profile = await profile_table(
+        DuckDbSource(sql_from=sql_from, allowed_directories=[team.folder]), timeout_s=0.2
+    )
+    assert profile.timed_out is timed_out
+    assert [s.watchdogs_at_close for s in spies] == [[]]
+
+
 async def test_the_default_timeout_is_the_constant(team: TeamFolder) -> None:
     (team.folder / "t.csv").write_text("a\n1\n", encoding="utf-8")
     profile = await profile_table(team.source("t"))
@@ -184,6 +222,20 @@ async def test_a_malformed_csv_is_unreadable(team: TeamFolder) -> None:
     with pytest.raises(DomainError) as err:
         await profile_table(team.source("t"))
     _assert_unreadable(err.value, team.home)
+
+
+async def test_an_unreadable_error_is_scrubbed(team: TeamFolder) -> None:
+    """DuckDB quotes the path it refused, so a credential in it must be masked."""
+    source = DuckDbSource(
+        sql_from="read_csv(['https://user:PASSWORD-1@example.com/t.csv?token=TOKEN-2'])",
+        allowed_directories=[team.folder],
+    )
+    with pytest.raises(DomainError) as err:
+        await profile_table(source)
+    _assert_unreadable(err.value, team.home)
+    assert "example.com" in err.value.message
+    assert "PASSWORD-1" not in err.value.message
+    assert "TOKEN-2" not in err.value.message
 
 
 def _assert_unreadable(error: DomainError, home: Path) -> None:
