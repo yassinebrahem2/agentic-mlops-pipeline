@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # Hook output is untrusted data: a data tag inside it, opening or closing, in any letter case or
 # spacing around its "/", must not end its block early or forge another, so its "<" becomes "<\".
-# Only the tag name "data" counts: "<database>" or "a < data" are ordinary text.
-_DATA_TAG = re.compile(r"<(?=(?:\s*/\s*)?data(?![\w-]))", re.IGNORECASE)
+# Only the tag name "data" counts: "<database>" or "<dataset>" are ordinary text.
+_DATA_TAG = re.compile(r"<(?=\s*/?\s*data(?![\w-]))", re.IGNORECASE)
 
 
 def _block(name: str, text: str) -> str:
