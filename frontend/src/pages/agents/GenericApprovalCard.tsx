@@ -4,8 +4,10 @@ import { cn } from "@/lib/utils";
 import type { ApprovalCardComponent, ApprovalStatus } from "./ApprovalCard";
 import { ApprovalControls } from "./ApprovalControls";
 
-const APPROVAL_STATUS_CONFIG: Record<
-  ApprovalStatus,
+export type ApprovalBadgeStatus = ApprovalStatus | "superseded";
+
+export const APPROVAL_STATUS_CONFIG: Record<
+  ApprovalBadgeStatus,
   {
     label: string;
     variant: "default" | "secondary" | "destructive" | "outline";
@@ -35,6 +37,11 @@ const APPROVAL_STATUS_CONFIG: Record<
   },
   expired: {
     label: "expired",
+    variant: "outline",
+    className: "text-[10px] px-1.5 py-0",
+  },
+  superseded: {
+    label: "superseded",
     variant: "outline",
     className: "text-[10px] px-1.5 py-0",
   },
