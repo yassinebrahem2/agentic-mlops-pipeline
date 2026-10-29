@@ -1,77 +1,56 @@
-# Stages 4 and 5: Monitoring, Training, Evaluation and Promotion — Plans Overview
+# Stages 4 to 6: Monitoring, Action Agents and Stats — Plans Overview
 
-> **Draft.** Missing: the lead's review; the plans it lists.
+> **Draft.** Missing: the lead's answers to the open points (last section); then the plan files, each written short (AGENTS.md "How plans are written", bar of 2026-10-29).
 
-Stages 4 and 5 are built through the plans below, with one contracts plan for both (the stage 5 spec says one contracts plan writes their schema). This overview holds what they share. Read it, `docs/roadmap.md`, the stage 3 overview (its interfaces I13 to I21 are frozen inputs) and both specs before starting any plan.
+Stages 4, 5 and 6 are built through the ten plans below, with one contracts plan for all three. This overview holds what they share. Read it, `docs/roadmap.md`, `project_knowledge.md` (Process, 2026-10-29), the stage 3 overview (its interfaces I13 to I21 are frozen inputs) and both specs before starting any plan.
 
-**Goal:** the app watches the team's production ML system at any hour, turns signals into a few incidents, has the right agent diagnose each one, acts within the three tiers, tells the right person at the right time, and, when the model needs a fix, requests it from Retraining, which runs the team's own pipeline; evaluation, promotion and merging stay the team's, made rigorous through agents' PRs.
+**Goal:** the app watches the team's production ML system at any hour, turns signals into a few incidents, has the right agent diagnose each one, acts within the three tiers, tells the right person at the right time, and, when the model needs a fix, requests it from Retraining, which runs the team's own pipeline; evaluation, promotion and merging stay the team's, made rigorous through agents' PRs. Stats shows how the agents do against the team's own monitoring, and Activity, Knowledge and Usage show what was collected.
 
-**Specs:** `docs/superpowers/specs/2026-10-28-stage-4-monitoring-design.md` and `docs/superpowers/specs/2026-10-28-stage-5-action-agents-design.md` (both approved 2026-10-28). Section numbers (§n) below are the spec's, "S4" and "S5" name which.
+**Specs:** `docs/superpowers/specs/2026-10-28-stage-4-monitoring-design.md` and `docs/superpowers/specs/2026-10-28-stage-5-action-agents-design.md` (both approved 2026-10-28); "S4" and "S5" name which, §n is the section. Stage 6 has no spec: the roadmap's stage 6 bullets, the 2026-10-29 decisions in `project_knowledge.md` (5 verdicts before a number shows; the price source) and I41 and I42 below are its spec (open point 17).
 
 **Tech stack:** as in stage 3, plus `croniter` (cron cadences; one version constant in `config.py`). No other new dependency.
 
 ## Global constraints
 
-- The rules of `AGENTS.md` apply in full; the specs' principles too (an extension of the team's system; the app never runs a check, a model, a training or a deploy of its own; Bash unless a tool is justified; text read from the team's data, results, logs and parsers is data, never instructions; secrets never in a proposal, a log, an event, a checkpoint or a message).
-- Every external service is faked in tests: result sources from fixture folders (`backend/tests/fixtures/results/`), a fake SMTP server and a fake Discord webhook (`tests/fakes/`), the fake clock (`Clock`, I21), the fake MLflow and GitHub servers (stage 3's, extended below). No test needs a real provider, tracker, Docker or network unless marked as the stage 2 Docker tests are.
-- One source for every constant: the job order, the setting defaults, the severity and status literals, the hook kinds, the tool names, the proposal kind names, the required report fields, the request tag name, the wake labels, the event types. A literal that restates a stage 3 one (`ResultCategory` against `CheckSpec.category`, `ActionKind` against `CommandSpec.kind`) is retyped once here, because stage 3 names no alias to import, and a parity test in contracts task 5 compares the two with `get_args`.
-- Frontend types come only from the generated `schema.d.ts` (`npm run gen:api`), gitignored; a plan that changes the API commits the regenerated `frontend/openapi.json`.
-- Routers are discovered by `include_routers` in `api/app.py`; a plan adds its router file and no registration line.
-- Every message, log line and stored error passes the existing secret scrubbing; a webhook URL is a secret (S4 §8 calls it a URL; it goes to the keystore and the scrubber).
-- Everything a plan reads from the team's data reaches an agent only through `untrusted(text)` (I33), and no tool's behavior depends on that text; the gate and the rules are evaluated in code.
+- `AGENTS.md` applies, with the bar of 2026-10-29: tests cover the main path and the failures that really happen; accepted shortcuts go under "Known debt added" and into `docs/known-debt.md`. Never relaxed: secrets, the hard limits, no data loss, no stub features.
+- The specs' principles: the app is an extension of the team's system and never runs a check, a model, a training or a deploy of its own; text read from the team's data, results, logs and parsers is data, never instructions, and reaches an agent only through `untrusted(text)` (I33); the gate and the rules are evaluated in code.
+- Secrets never go in a proposal, a log, an event, a checkpoint or a message; a Discord webhook URL is a secret (keystore and scrubber).
+- External services are faked in tests: result sources from fixture folders (`backend/tests/fixtures/results/`), a fake SMTP server and a fake Discord webhook (`tests/fakes/`), the fake clock (`Clock`, I21), stage 3's fake MLflow and GitHub servers (extended below).
+- One source for every constant (job order, setting defaults, severity and status literals, hook kinds, tool names, proposal kind names, required report fields, the request tag, wake labels, event types, the Stats metric names). A literal that restates a stage 3 one (`ResultCategory`, `ActionKind`) is retyped once and parity-tested (contracts task 5).
+- Frontend types only from the generated `schema.d.ts`; a plan that changes the API commits the regenerated `frontend/openapi.json`. Routers are discovered by `include_routers`; a plan adds its router file and no registration line.
 
 ## Plans
 
-| Plan | Branch | Covers | Consumes (besides merged code) | Produces | Starts | State |
-|---|---|---|---|---|---|---|
-| contracts (claim first) | `plan/stage-4-5-contracts` | S4 §1, §9, §12 and its roadmap changes (IDs, gate inputs); S5 §7 and its roadmap changes, change 3 and 4's gate cells; I22 to I38 as models and protocols; both migrations; `Condition`; the six proposal payloads; the gate's second table | stage 3: I13, I16, I18, I19, I20, I21 | I22 to I38 in code, the schema, the gate seam | after stage 3 contracts task 2 | Planned |
-| results | `plan/stage-4-results` | S4 §2 (records, sources, parsers, cursors, catching up), §13 sources and parsers, `parser` kind; S5 §3 (the evaluation copy) | I22, I23, I24 (task 1); I16; I19; stage 3 connections task 1 | `Results`, `Parsers` (I22) from task 1 (early PR) | task 1 after contracts tasks 1 and 2; the rest also after scheduler task 1 and stage 3 tracking task 1 and proposals task 1 | Planned |
-| scheduler | `plan/stage-4-scheduler` | S4 §3 (the loop, the job table, catching up, the timer jobs), §3b the heartbeat route, the run-mode exception, times (DST) | I24; stage 3 I21's `Clock` | `Scheduler` and `JOB_ORDER` from task 1, times from task 2 (both early PRs), `SyncObserver` from task 3 | task 1 after contracts tasks 1 and 2 and stage 3 rate-limits task 1 (`Clock`); task 3 after stage 3 tracking task 1 | Planned |
-| expectations | `plan/stage-4-expectations` | S4 §3a (expectations, silence), §4 `RegisterCheck` and check activation, S5 §2's request expectation | I22, I24, I25, I26 | `Expectations` (I25) from task 1 (early PR) | task 1 after contracts tasks 1 and 2 and scheduler task 2; tasks 2 to 4 after incidents task 1 and stage 3 proposals task 1 (`handoff.approved`) | Planned |
-| incidents | `plan/stage-4-incidents` | S4 §5 (signals, grouping, lifecycle, quiet period, windows, snooze, tools), §6 recent-change suspects, `maintenance` kind, `MonitoringQuery`, §10's "closes after the verdict" hook | I22, I24, I26, I27 | `Incidents` (I26), `Maintenance` from task 1 and 3 (early PRs) | task 1 after contracts tasks 1 and 2; task 3 also after stage 3 proposals task 1 | Planned |
-| severity | `plan/stage-4-severity` | S4 §7 (severity, routing, escalation), §6's wake of the diagnosing agent, Alert Prioritization's run, the issue threshold | I26, I27, I28; stage 2 messaging and GitHub issue tools | `AgentWaker` (I27) from task 1 (early PR), `SeverityPolicy`, `Router` | task 1 after contracts task 1 (no table); the rest after contracts task 2, incidents task 1 and notifications task 1 | Planned |
-| notifications | `plan/stage-4-notifications` | S4 §8 (channels, links, on-call, retry, failure, the morning report) | I24 (times), I26, I28 | `Notifier`, `OnCallPeople` (I28) from tasks 1 and 3 (early PRs) | task 1 after contracts tasks 1 and 2; task 3 after stage 3 proposals task 1; task 5 after incidents task 1 and verdicts task 1 | Planned |
-| hooks | `plan/stage-4-hooks` | S4 §6 (action hooks, hook credentials, hold, failures recorded), `hooks` kind, `RunHook`, `Hold` | I29, I30, I26; stage 3 proposals task 1 (`handoff.approved`, `Handoffs`) | `Hooks` (I29) and its seams from task 1 (early PR) | task 1 after contracts tasks 2, 3 and 4; tasks 2 and 3 after incidents task 1 | Planned |
-| rules | `plan/stage-4-rules` | S4 §6 (pre-approved rules, evaluated in code), `rule` kind | I22, I23, I29, I30 | the rule `ActionAuthority` | after contracts tasks 2, 3 and 4, results task 1 and hooks task 1 | Planned |
-| verdicts | `plan/stage-4-verdicts` | S4 §10 (verdicts, misses, labels, the baseline record), §14's verdict tests | I22, I26, I31 | `Verdicts`, `Baseline` (I31) from task 1 (early PR) | task 1 after contracts task 2 and incidents task 1; tasks 2 and 3 also after results task 1 and scheduler task 3 (`SyncObserver`) | Planned |
-| fixes | `plan/stage-5-fixes` | S5 §1 (`RequestFix`, the fix menu's record, the guards), the circuit breaker (§2), change 5 | I26, I27, I34; I20 (profile, label maturity) | `Fixes` and its guards (I34) from task 1 and 2 (early PRs) | task 1 after contracts task 2 and severity task 1; task 2 after incidents task 1 | Planned |
-| pipeline-runs | `plan/stage-5-pipeline-runs` | S5 §2 hooks part: placeholders, `ci_dispatch`, pins, the alias-history check, the production-signal rule, the gate's verified facts; changes 4 | I29, I30, I36; I16; the GitHub client | `PlaceholderResolver`, `CiDispatcher`, `HookVerifier` (I36) from task 1 (early PR) | task 1 after hooks task 1 and contracts task 3; the rest also after stage 3 tracking task 1 and scheduler task 3 (`SyncObserver`) | Planned |
-| training | `plan/stage-5-training` | S5 §2 training part: training policies, training requests, linking back; `training_policy` kind | I34, I35, I36, I25; I16 (`ci_runs`) | the policy `ActionAuthority`, `Training` (I35) | task 1 after contracts tasks 2 and 4; the rest after fixes task 2, pipeline-runs task 1, expectations task 1 and scheduler task 3 | Planned |
-| promotion | `plan/stage-5-promotion` | S5 §3 (the evaluation record read, comparability), §4 (reports, `promotion` kind, both modes), the post-deploy comparison's trigger; changes 1 and 2's code side | I16 (`EvaluationRecord`), I29, I36, I37 | `Reports`, `Promotions`, `EvaluationReader` (I37) from task 1 and 2 (early PRs) | task 1 after contracts tasks 1 and 2 and stage 3 tracking task 1; tasks 3 and 4 after hooks task 3, pipeline-runs task 1 and scheduler task 3 | Planned |
-| merging | `plan/stage-5-merging` | S5 "Hard limits and merging" (`MergePullRequest`, protection surfaces), the PR discipline's code parts | I30, I38; stage 2 pull request tools; the GitHub client | `MergePullRequest`, `ProtectionSurfaces` (I38) | after contracts task 3 and hooks task 1 | Planned |
-| dashboard | `plan/stage-4-dashboard` | S4 §11: Dashboard (S5 change 6: a list of models), Inbox incidents, the incident page, verdict buttons and the miss report | I26, I25, I31, I39; stage 3 tracking routes | the Dashboard route and pages | route after incidents task 1 and expectations task 1; pages after the route and verdicts task 1 | Planned |
-| settings | `plan/stage-4-settings` | S4 §8 and §11: the Integrations sections for Discord and email, the project settings sections (on-call, windows, rules, hooks, policies, intervals, thresholds, time zone, `public_url`) | the routes of notifications, incidents, rules, hooks, training | the sections | after contracts task 2 and each section's routes are on `main` | Planned |
-| deployments | `plan/stage-5-deployments` | S5 §6 (the Deployments page, the promotion card) | I37, I40; I16; stage 3 tracking routes | the page, the card | route after promotion task 2; page and card after the route | Planned |
-| definitions | `plan/stage-4-5-definitions` | S4 §4, §6 and S5 §5 as instructions: all seven definitions; the stage 4 and 5 end-to-end tests ("simulated night" included) | every plan above | the working monitoring loop and fix flow | tasks 1 and 2 after every plan above that registers a tool (the catalog validates `tools:`) and after stage 3 onboarding merges; tasks 3 and 4 after every plan above has merged | Planned |
+Ten plans, one area each. Every plan builds its part of the core path first and its extras last, so the deadline can only cut tails: **core path** = results read → incident → silence → notify → diagnose → fix → promote → verdicts → Stats. **Extras** (each plan's last tasks): rules, training policies and the pin and alias checks they need, agents merging their own PRs, maintenance windows and snooze, escalation, the morning report, parsers in code, the full settings sections. The request was nine plans; notifications is its own plan (ten) because it sits on the core path between incidents and severity routing, and one owner holding incidents, severity and notifications in sequence would be the bottleneck of the whole stage.
 
-**contracts' tasks:**
-- Task 1 (early PR): "Shared by contracts" below, and the models and protocols of I22 to I38 (types only; behavior stays with the plans). Every plan starts on it.
-- Task 2 (early PR): the two migrations and `tables.py`.
-- Task 3 (early PR): the gate seam (I30): `ActionCall`, `ActionAuthority` and its registry with the "not within a rule or policy" defaults, the second policy table, the per-kind `propose` override for `promotion`, `GateCall.action`, `AgentTool.action_call`. Behavior of the existing policy is unchanged until a plan registers an authority.
-- Task 4 (early PR): `monitoring/expr.py` (`Condition`, `evaluate`) and the six proposal payloads (I32) with their validators.
-- Task 5: the consistency tests (every table has the columns its model names; the backend and frontend event lists agree; the literals that restate stage 3's, `ResultCategory` and `ActionKind`, equal them by `get_args`) and the regenerated `openapi.json` if a route landed.
+The interfaces below keep the areas of the earlier draft in their comments (`# severity`, `# pipeline-runs`, ...); this table says which plan owns each area.
 
-**Task outlines** (each plan's plan file writes them out in full; at most 5 each):
-- results: 1 the record, `Results` store, idempotent ingest, query (early PR); 2 the `file` source and cursors; 3 the `ci` and `mlflow` sources, `collect` in cursor order, the `collect_results` job, the evaluation copy (`EvaluationCopies`); 4 the declarative parser, the versioned `Parsers` store, the `parser` kind's apply, disabling after N failures with a signal; 5 the code parser in the sandbox, the parser card.
-- scheduler: 1 the job table, the loop, keyed idempotent jobs, catching up in `JOB_ORDER`, start and stop (early PR); 2 times: `next_occurrences`, `in_hours`, DST (early PR); 3 the `sync_tracking`, `sync_prs` and `after_sync` jobs and `SyncObserver`; 4 `GET /api/health/heartbeat`, the run-mode exception, the `public_url` Host rule, the local-mode flag.
-- expectations: 1 the store and `Expectations` (early PR); 2 the seeding from the handoff on `handoff.approved`, deadlines, grace, the second deadline, silence signals, the `check_expectations` job, suspension by maintenance; 3 `RegisterCheck`, the `checks` store, activation on PR merge, the never-ran silence; 4 `note_seen` from results, retire, the request expectation API for training.
-- incidents: 1 signals, incidents, `Incidents.raise_signal`, lifecycle, observers, timeline events (early PR); 2 grouping (cause key, window, downstream), quiet period, reopen; 3 maintenance windows, snooze, the `maintenance` kind and card, `Maintenance` (early PR); 4 `IncidentUpdate`, `IncidentMerge`, `IncidentSplit`, `IncidentFollowUp`, the follow-ups job, `MonitoringQuery` and its provider registry; 5 "resolved while the app was offline", recent-change suspects (agents' merges by `PrObserver`, the team's merges and deploys by a `SyncObserver`).
-- severity: 1 `AgentWaker` (early PR); 2 `SeverityPolicy` (deterministic); 3 `Router`, on-call selection and the reactor that pages at once; 4 escalation, the severity-rise re-notification; 5 the diagnosing-agent dispatch, Alert Prioritization's run, `AdjustSeverity`, the issue threshold.
-- notifications: 1 the channels, `Notifier`, retry, `notification_log`, the fake SMTP and Discord servers (early PR); 2 the Integrations settings routes, the keystore refs, Test, links and the local-mode sentence; 3 `OnCallPeople`, routes, seeding from the handoff (early PR); 4 repeated failure into a `notification_failure` signal; 5 the morning report and its job.
-- hooks: 1 the `Hooks` store, the registration from the handoff and the `hooks` kind, the runner and lifecycle seams (early PR); 2 hook credentials (route, `hook_ref`, injection into one container run) and the `command` runner; 3 `RunHook`, `Hold`, the missing-hold-command gap, results recorded on the incident; 4 the hooks routes and card.
-- rules: 1 the `Rules` store, the `rule` kind, routes, card; 2 the evaluator and limits; 3 the rule `ActionAuthority` and the timeline record.
-- verdicts: 1 verdicts and miss reports, routes (early PR); 2 confirmation by labels; 3 the baseline record and the silent-alerts list; 4 the read side for stage 6 and the events.
-- fixes: 1 `RequestFix`, `RecordFixChoice`, the store, the wake of Retraining (early PR); 2 the guards (early PR); 3 the circuit breaker, escalation, decline back to observe; 4 the outcome of each fix against its incident.
-- pipeline-runs: 1 `PlaceholderResolver` (early PR); 2 `CiDispatcher` and the `ci_dispatch` runner (adds the fake GitHub's dispatch); 3 pins, hashes, suspension, the person's approve route; 4 the alias-history check, the incident, the suspension; 5 the gate's verified facts (`deploys`, production signal, authority) registered with the gate.
-- training: 1 the `training_policy` kind, store, routes, card; 2 the policy `ActionAuthority` (interval, runs per week from CI history, rollback-rule requirement); 3 `TrainingLifecycle` (the request `trq`, guards, window, `request_id`); 4 linking back by the tag, the request expectation, the silence.
-- promotion: 1 `EvaluationReader`, `comparable`, "not computed" (early PR); 2 `Reports`, required fields, `SaveReport` (early PR); 3 the `promotion` kind, `person` mode, re-validation, the deploy hook as apply; 4 `team_gate` mode and the post-deploy comparison trigger; 5 `Promotions` history and rollbacks for the page.
-- merging: 1 `MergePullRequest` and its code checks; 2 `ProtectionSurfaces`; 3 the closed-unmerged observer and the merge events.
-- dashboard: 1 `GET .../dashboard`; 2 the Dashboard page; 3 Inbox incidents (rank, acknowledge, snooze); 4 the incident page, verdict buttons, the miss report.
-- settings: 1 Integrations: Discord and email with Test; 2 project settings: on-call, intervals, thresholds, time zone, `public_url`; 3 windows, rules, hooks (credential, enable, approve changed content) and policies.
-- deployments: 1 `GET .../deployments`; 2 the page; 3 the promotion card.
-- definitions: 1 Data Quality, Model Performance, Alert Prioritization; 2 Retraining, Deployment & Rollback, Orchestrator, Onboarding; 3 the stage 4 end-to-end test (the simulated night); 4 the stage 5 end-to-end test.
+| Plan | Branch | Areas (interfaces) | Consumes (besides merged code) | Starts | Milestone |
+|---|---|---|---|---|---|
+| contracts | `plan/stage-4-6-contracts` | the types of I22 to I42, both migrations, the gate seam (I30), `expr` and the six payloads (I32), consistency tests | stage 3 I13 to I21 (on `main`); task 4 also the stage 3 proposals plan merged (open point 16) | tasks 1 to 3 now; task 4 after stage 3 proposals merges | Stage 4 |
+| results | `plan/stage-4-results` | results, scheduler, expectations (I22, I24, I25), parsers, `RegisterCheck` | contracts tasks 1, 2 (task 4 for the `parser` kind); I16 (merged) | after contracts tasks 1 and 2 | Stage 4 |
+| incidents | `plan/stage-4-incidents` | incidents, severity (I26, I27), the incident tools and `MonitoringQuery`, Alert Prioritization's run, maintenance | contracts tasks 1, 2 (task 4 for the `maintenance` kind); results task 2 (`ResultsObserver`); notifications tasks 1, 3 (for task 4) | after contracts tasks 1 and 2 | Stage 4 |
+| notifications | `plan/stage-4-notifications` | notifications (I28): channels, Integrations routes, on-call, escalation, morning report | contracts tasks 1, 2; incidents task 1 (task 4 on) | after contracts tasks 1 and 2 | Stage 4 |
+| hooks | `plan/stage-4-hooks` | hooks (I29), `RunHook`, `Hold`; rules (I23's rules) last | contracts tasks 1 to 3 (task 4 for its kinds); incidents task 1; I20 `Handoffs` (merged) | after contracts tasks 1 to 3 | Stage 4 |
+| training | `plan/stage-5-training` | fixes (I34), pipeline-runs (I36), training (I35): `RequestFix` → Retraining runs the team's pipeline first; policies, pins and the alias check last | contracts tasks 1 to 3 (task 4 for the policy kind); incidents tasks 1, 2; hooks task 1; results task 4 (`SyncObserver`) | after incidents task 2 and hooks task 1 | Stage 5 |
+| promotion | `plan/stage-5-promotion` | promotion (I37) in `person` mode first, then `team_gate`; the Deployments data (I40); merging (I38) last | contracts tasks 1 to 4; hooks task 3; training task 3; results task 4; stage 3 tracking (merged) | task 1 after contracts tasks 1 and 2; task 3 after hooks task 3 and contracts task 4 (so stage 5's person-mode promotion waits on the stage 3 proposals plan; the stage 5 end-to-end test already waits on it through onboarding) | Stage 5 |
+| stats | `plan/stage-6-stats` | verdicts and the baseline (I31), Stats (I41) and its page | contracts tasks 1, 2; incidents task 1; results task 2 | after incidents task 1 | Stage 6 |
+| ui | `plan/stage-4-6-ui` | the Dashboard (I39), Inbox incidents, the incident page and verdict buttons, the settings sections, the Deployments page, Activity, Knowledge, Usage (I42) | the routes of the plans above; stage 3 knowledge (#406) for the Knowledge page | task 1 after incidents task 1 and results task 5; each later task when its routes are on `main` | Stage 4 |
+| definitions | `plan/stage-4-6-definitions` | the seven definitions for stages 4 and 5; the end-to-end tests (the simulated night; fix to promotion) | every plan above; stage 3 onboarding (it edits the definitions first) | after stage 3 onboarding, and per test when its plans are on `main` | Stage 4 |
 
-Owners claim plans as `AGENTS.md` says; contracts first, since every other plan starts on its early PRs. There are 19 plans for six people: an owner whose next task waits on another plan may claim a second plan (`AGENTS.md`). Suggested waves: contracts; then results, scheduler, incidents, notifications, hooks; then expectations, severity, rules, verdicts, fixes, pipeline-runs, promotion, merging; then training, dashboard, settings, deployments; then definitions. Stage 5 plans need only the stage 4 interfaces named in their Starts.
+**Task outlines** (each plan file writes them out, short; core path first; "early PR" = another plan consumes it before this plan ends):
+- **contracts:** 1 the shared module of I22 to I42 (types only) (early PR); 2 the migrations and `tables.py` (early PR); 3 the gate seam I30 with its defaults (early PR); 4 `monitoring/expr.py`, the six payloads, and I19's `ProposalView.payload` widened to a union discriminated by kind (early PR; starts after the stage 3 proposals plan has merged, open point 16); 5 consistency tests and the regenerated `openapi.json` if a type reaches the API.
+- **results:** 1 the scheduler loop, job table, `JOB_ORDER`, catching up, times and DST (early PR); 2 the record, `Results` store, idempotent ingest, query, the `file` source and cursors (early PR); 3 the `ci` and `mlflow` sources, `collect_results`, the evaluation copy; 4 `sync_tracking`, `sync_prs`, `after_sync`, `SyncObserver`, the heartbeat route (early PR); 5 expectations: seeded from the current handoff at startup and through `HandoffObserver` (open point 21; tests call `Handoffs.store` directly, so this does not wait for stage 3 onboarding), deadlines, grace, silence signals, `check_expectations` (early PR); 6 parsers (mapping and code) and the `parser` kind and card; 7 `RegisterCheck`, the `checks` store, activation on the PR's merge.
+- **incidents:** 1 signals, incidents, `raise_signal`, lifecycle, observers, timeline events (early PR); 2 `AgentWaker` and the diagnosing-agent dispatch (early PR); 3 grouping (cause key, window, downstream), quiet period, reopen, recent-change suspects, "resolved while offline"; 4 `SeverityPolicy`, `Router`, the reactor that pages at once, the issue threshold; 5 the incident tools, `MonitoringQuery` and the `follow_ups` job; 6 Alert Prioritization's run and `AdjustSeverity`; 7 maintenance windows, snooze, the `maintenance` kind and card, `Maintenance` (until then the contracts default: never suspended).
+- **notifications:** 1 channels, `Notifier`, retry, `notification_log`, the fake SMTP and Discord servers (early PR); 2 the Integrations routes: Discord and email with Test, keystore refs, `public_url`, links, the local-mode note; 3 `OnCallPeople`, routes, seeded from the current handoff at startup and through `HandoffObserver` (open point 21; tests call `Handoffs.store` directly, so this does not wait for stage 3 onboarding) (early PR); 4 escalation and the severity-rise re-notification; 5 the morning report.
+- **hooks:** 1 the `Hooks` store, registration of the handoff's commands seeded from the current handoff at startup and through `HandoffObserver` (open point 21; tests call `Handoffs.store` directly, so this does not wait for stage 3 onboarding), the runner and lifecycle seams (early PR); 2 hook credentials (route, `hook_ref`, injection into one container run) and the `command` runner; 3 `RunHook`, `Hold`, failures recorded on the incident (early PR); 4 the `hooks` kind and card (after contracts task 4); 5 the `Rules` store, the `rule` kind, routes and card; 6 the evaluator and limits, the rule `ActionAuthority`, the timeline record.
+- **training:** 1 `RequestFix`, `RecordFixChoice`, the store, the wake of Retraining (early PR); 2 the guards (early PR); 3 `PlaceholderResolver` and the training `HookLifecycle` (the `trq`, `{request_id}`, the window) (early PR); 4 `CiDispatcher` and the `ci_dispatch` runner (the fake GitHub's dispatch); 5 linking back by the request tag and the `training_request` expectation; 6 the circuit breaker, decline back to observe, the outcome of each fix; 7 pins, hashes, suspension, the person's approve route, the alias-history check, `GateFacts`; 8 the `training_policy` kind, store, routes, card and the policy `ActionAuthority`.
+- **promotion:** 1 `EvaluationReader`, `comparable`, "not computed" (early PR); 2 `Reports`, required fields, `SaveReport` (early PR); 3 the `promotion` kind and card, `person` mode, re-validation, the deploy hook as apply; 4 the post-deploy trigger (wake Deployment & Rollback); 5 `team_gate` mode; 6 `GET .../deployments` (I40); 7 `MergePullRequest`, its code checks and `ProtectionSurfaces`, the closed-unmerged observer and merge events.
+- **stats:** 1 verdicts and miss reports, routes (early PR); 2 confirmation by labels; 3 the baseline record and the silent-alerts list; 4 the Stats computation and route (I41); 5 the Stats page.
+- **ui:** 1 `GET .../dashboard` (I39) and the Dashboard page; 2 Inbox incidents (rank, acknowledge, snooze), the incident page with its timeline, verdict buttons and the miss report; 3 Integrations (Discord, email, `public_url`) and the project settings for on-call, intervals, the issue threshold, the escalation timeout, the time zone; 4 the Activity page; 5 the Knowledge page; 6 Usage (I42): the route, the price on the model, the page; 7 the Deployments page; 8 the settings sections for hooks (credential, enable, approve changed content), checks and schedules, rules, policies and maintenance windows.
+- **definitions:** 1 Data Quality, Model Performance, Alert Prioritization; 2 Retraining, Deployment & Rollback, Orchestrator, Onboarding; 3 the stage 4 end-to-end test (the simulated night); 4 the stage 5 end-to-end test (incident to fix to promotion).
+
+Owners claim plans as `AGENTS.md` says; contracts first, since every other plan starts on its early PRs. Ten plans for six people: an owner whose next task waits on another plan claims a second one meanwhile. Suggested waves: contracts; then results, incidents, notifications, hooks; then training, promotion, stats; then ui; then definitions.
 
 ## Interfaces between plans
 
@@ -81,16 +60,17 @@ contracts writes these into code exactly as here (except where a line names anot
 
 - ID prefixes `res`, `sig`, `inc`, `rul`, `hok`, `win`, `chk`, `fix`, `trq`, `pol`, `rep`, `prm` in `ids.py` (`inc` is in the roadmap but not yet in `ids.py`).
 - Event types, in the backend `EventType` (`events/contract.py`) and the frontend `PROJECT_EVENT_TYPES`:
-  - stage 4: `results.collected`, `signal.raised`, `incident.opened`, `incident.updated` (payload: the changed fields), `incident.acknowledged`, `incident.snoozed`, `incident.severity_changed`, `incident.reopened`, `incident.merged`, `incident.split`, `incident.suspect_linked`, `incident.hold_recorded`, `incident.closed`, `check.registered`, `parser.disabled`, `notification.sent`, `notification.failed`, `escalation.sent`, `report.sent`, `hook.ran`, `hook.failed`, `hook.suspended`, `rule.satisfied`, `verdict.recorded`, `miss.reported`;
+  - stage 4: `results.collected`, `signal.raised`, `incident.opened`, `incident.updated` (payload: the changed fields), `incident.acknowledged`, `incident.snoozed`, `incident.severity_changed`, `incident.reopened`, `incident.merged`, `incident.split`, `incident.suspect_linked`, `incident.hold_recorded`, `incident.wake_skipped`, `incident.closed`, `check.registered`, `parser.disabled`, `notification.sent`, `notification.failed`, `escalation.sent`, `report.sent`, `hook.ran`, `hook.failed`, `hook.suspended`, `rule.satisfied`, `verdict.recorded`, `miss.reported`;
   - stage 5: `fix.requested`, `fix.chosen`, `fix.declined`, `fix.escalated`, `training.requested`, `training.linked`, `policy.suspended`, `report.saved`, `promotion.applied`, `promotion.refused`, `pr.merged_by_agent`, `evaluation.stored`.
   - A timeline entry of an incident is an event whose `subject_id` is the incident ID; actions on hooks, rules and notifications carry the incident as `subject_id` when there is one, so every entry is recorded once.
 - Constants in one module per concern, each with a single definition: `monitoring/settings.py` (`MonitoringSettings`, below), `monitoring/jobs.py` (`JOB_ORDER`, I24), `agents/tools/names.py` (every tool name of I33), `monitoring/untrusted.py` (`untrusted(text: str) -> str`, which wraps text in the marker block the agents' prompts name), `training/constants.py` (`REQUEST_TAG = "mlops_agents.request_id"`, the tag the team's pipeline writes on its MLflow run; `EVALUATION_ARTIFACT = "mlops_agents/evaluation.json"` is stage 3's), `promotion/constants.py` (`REQUIRED_REPORT_FIELDS`, I37).
 - `MonitoringSettings` (project settings, defaults in one place, stored in `monitoring_settings`): `collection_interval_s=60`, `grouping_window_minutes`, `reopen_window_hours`, `recent_change_window_hours`, `escalation_timeout_minutes`, `parser_disable_after`, `evaluation_max_age_hours`, `circuit_breaker_fixes`, `circuit_breaker_window_days`, `timezone: str | None` (None = the server's). App settings (`app.db`): `public_url: str | None`, `DiscordSettings`, `EmailSettings` (I28).
 - `credentials/project_secrets.py` gains the one builder `hook_ref(project_id, hook_id)` (ref `project/<id>/hook/<hok>`, under `project_prefix`, so project removal deletes it) and `hook_prefix`; the app-level refs `DISCORD_WEBHOOK_REF` and `EMAIL_PASSWORD_REF` are constants beside the GitHub token's. No other code writes a ref string.
 - `PrObserver` (Protocol, `agents/pr_sync.py`): `async changed(project_id, pr: PrChange)`, with `PrChange(number: int, state: Literal["open","merged","closed"], merged_at: datetime | None, head_branch: str, agent: str, files: list[str])` (stage 2's sync sees only agents' task PRs, so `agent` is always set; the team's own merges and deploys reach incidents through the `SyncObserver` below); `PrSyncObserver` gains `add_observer` and a public `sync_now(project_id)` (contracts' only edit to the file); expectations, incidents and merging subscribe.
+- `HandoffObserver` (Protocol, `proposals/contract.py`, an I20 change, open point 21): `async stored(project_id: str, handoff: HandoffView) -> None`, called by `Handoffs.store` after commit; `Handoffs` gains `add_observer(observer)` (contracts' only edit to `proposals/handoffs.py`). Every observer also reconciles `Handoffs.current()` once per project at startup, since projects onboarded before stage 4 never fired it. Results (expectations), notifications (on-call) and hooks (registration) subscribe; nothing else reacts to a stored handoff.
 - `CAUSE_KEY` builder: `cause_key(subject: str, model: str | None) -> str` in `monitoring/incidents/contract.py`, the only place a cause key is built.
-- Package `__init__.py` files: `monitoring/`, `monitoring/{results,expectations,scheduler,incidents,rules,hooks}/`, `notifications/`, `training/`, `promotion/` by contracts task 1 (S5 gives no module layout: `training/` holds fixes, requests and policies; `promotion/` holds evaluation reading, reports and promotions; the pipeline-run parts of S5 §2 extend `monitoring/hooks/` as S5 says).
-- Schema (task 2), `storage/migrations/project/0007_stage4_5.sql` and `storage/migrations/app/0003_stage4_5.sql`, with `tables.py`. In `project.db`: `results` (unique source and source key), `result_sources` (id, kind, cursor JSON, last_read, last_error, consecutive_failures), `parsers` (versioned, unique source and version), `expectations` (unique kind, ref, model), `scheduler_jobs` (unique kind, due, subject), `checks`, `signals`, `incidents`, `incident_follow_ups`, `verdicts`, `misses`, `baseline_links`, `rules`, `hooks`, `hook_pins`, `hook_runs`, `agent_wakes` (agent, label, subject, key, posted_at; `AgentWaker`'s idempotency), `maintenance_windows`, `on_call_people`, `notification_log`, `monitoring_settings`, `fix_requests`, `training_requests` (unique request ID), `training_policies`, `reports`, `promotions`. Every table and column named in I22 to I38. Stage 3's `evaluations` table is not recreated. In `app.db`: the Discord and email settings and `public_url` (the integrations settings table that exists).
+- Package `__init__.py` files: `monitoring/`, `monitoring/{results,expectations,scheduler,incidents,rules,hooks,verdicts}/`, `notifications/`, `training/`, `promotion/`, `stats/` by contracts task 1 (S5 gives no module layout: `training/` holds fixes, requests and policies; `promotion/` holds evaluation reading, reports and promotions; the pipeline-run parts of S5 §2 extend `monitoring/hooks/` as S5 says).
+- Schema (task 2), `storage/migrations/project/0007_stage4_5.sql` and `storage/migrations/app/0003_stage4_5.sql`, with `tables.py`. In `project.db`: `results` (unique source and source key), `result_sources` (id, kind, cursor JSON, last_read, last_error, consecutive_failures), `parsers` (versioned, unique source and version), `expectations` (unique kind, ref, model), `scheduler_jobs` (unique kind, due, subject), `checks`, `signals`, `incidents`, `incident_follow_ups`, `verdicts`, `misses`, `baseline_links`, `rules`, `hooks`, `hook_pins`, `hook_runs`, `agent_wakes` (agent, label, subject, key, posted_at; `AgentWaker`'s idempotency), `maintenance_windows`, `on_call_people`, `notification_log`, `monitoring_settings`, `fix_requests`, `training_requests` (unique request ID), `training_policies`, `reports`, `promotions`. Every table and column named in I22 to I38. Stage 3's `evaluations` table is not recreated. In `app.db`: the Discord and email settings and `public_url` (the integrations settings table that exists), and the price columns on `models` (I42).
 - Dependency `croniter`.
 
 ### I22: results (`monitoring/results/contract.py`)
@@ -169,7 +149,7 @@ class JobKind(StrEnum):
 JOB_ORDER: Final[tuple[JobKind, ...]] = tuple(JobKind)         # the order a missed batch is run in (S4 §3); declaration order is the order
 class JobDue(BaseModel): kind: JobKind; due: datetime; subject: str = ""          # subject: for example a person for the morning report; unique with kind and due
 
-class SyncObserver(Protocol):           # the one seam for work that follows a tracking sync and a collection (I16 has no observer): scheduler task 3 runs every registered observer in the AFTER_SYNC job
+class SyncObserver(Protocol):           # the one seam for work that follows a tracking sync and a collection (I16 has no observer): results task 4 runs every registered observer in the AFTER_SYNC job
     async def synced(self, project_id: str, now: datetime) -> None: ...   # idempotent; each observer keeps its own cursor (for example the last deployment it saw)
 
 class ScheduledJob(Protocol):           # each plan that owns a job implements one
@@ -185,13 +165,13 @@ class Scheduler(Protocol):              # scheduler; one loop in the app process
     async def stop(self) -> None: ...
     # a job that raises is recorded, not retried inside the loop, and the others still run; the scheduler never runs a check or a model
 
-# times (scheduler task 2)
+# times (results task 1)
 def next_occurrences(cadence: Cadence, tz: str, after: datetime, until: datetime) -> list[datetime]: ...   # UTC instants; DST: a local time that does not exist is skipped, one that occurs twice fires once
 def in_hours(hours: OnCallHours, tz: str, at: datetime) -> bool: ...                # an end before the start crosses midnight
 def local_day_start(tz: str, at: datetime) -> datetime: ...
 ```
 
-- Every other plan registers its job in `build_services` with `Scheduler.register`; the scheduler plan adds only `SYNC_TRACKING`, `SYNC_PRS` and `AFTER_SYNC`. Sync observers: verdicts (confirmation by labels), training (linking by the tag), pipeline-runs (the alias-history check, the pin check on the default branch), promotion (the post-deploy trigger on a moved production alias), incidents (the team's merges and deploys as suspects, from `ci_runs` and `deployments`).
+- Every other plan registers its job in `build_services` with `Scheduler.register`; the results plan's scheduler adds only `SYNC_TRACKING`, `SYNC_PRS` and `AFTER_SYNC`. Sync observers: verdicts (confirmation by labels), training (linking by the tag), pipeline-runs (the alias-history check, the pin check on the default branch), promotion (the post-deploy trigger on a moved production alias), incidents (the team's merges and deploys as suspects, from `ci_runs` and `deployments`).
 - The heartbeat: `GET /api/health/heartbeat` returns `{"ok": true}` and nothing else; `HeartbeatView` also feeds the Dashboard's `heartbeat_reachable: bool` (false in local mode).
 
 ### I25: expectations and checks (`monitoring/expectations/contract.py`)
@@ -204,7 +184,7 @@ class ExpectationSpec(BaseModel):       # exactly one of cadence and due_at
 class ExpectationState(BaseModel): key: ExpectationKey; category: ResultCategory; active: bool; next_deadline: datetime | None; last_seen: datetime | None; status: Literal["ok", "due", "late", "silent", "suspended", "pending_pr"]; since: datetime | None
 class CheckView(BaseModel): id: str; check_id: str; category: ResultCategory; cadence: Cadence; timezone: str; results_location: FileResults | MlflowResults; pr_number: int; agent: str; version: str | None; status: Literal["pending_pr", "active", "retired"]; registered: datetime   # chk_...
 
-class Maintenance(Protocol):            # incidents task 3; read by expectations and incidents
+class Maintenance(Protocol):            # incidents task 7; until then contracts' default never suspends (open point 19); read by expectations and incidents
     async def suspended(self, project_id: str, scope: ExpectationKey | str, at: datetime) -> bool: ...   # a feed or job key, or a connection name
 class Expectations(Protocol):           # expectations
     async def register(self, project_id: str, spec: ExpectationSpec) -> None: ...   # idempotent by key; replaces the spec
@@ -266,15 +246,15 @@ class Incidents(Protocol):              # incidents
 
 ```python
 class SeverityDecision(BaseModel): severity: Severity; reasons: list[str]
-class SeverityPolicy(Protocol):         # severity task 2; contracts' default returns medium
+class SeverityPolicy(Protocol):         # incidents task 4; contracts' default returns medium
     async def decide(self, project_id: str, incident: IncidentView) -> SeverityDecision: ...   # deterministic code, never a model: harm now, silence of a feed or job production depends on (second deadline: critical), cost of error, scope, confidence
 class Delivery(BaseModel): person: str; channel: Literal["discord", "email"]; when: Literal["now", "morning_report"]; escalation_step: int
 class RoutePlan(BaseModel): deliveries: list[Delivery]; inbox: bool; open_issue: bool
-class Router(Protocol):                 # severity task 3
+class Router(Protocol):                 # incidents task 4
     async def plan(self, project_id: str, incident: IncidentView, now: datetime) -> RoutePlan: ...   # critical: on-call at once at any hour, escalation after `escalation_timeout_minutes`; high: now inside the person's hours, else the morning report; medium, low: Inbox and the morning report; above the issue threshold: open_issue
 
 WakeLabel = Literal["incident", "fix_request", "post_deploy", "follow_up"]
-class AgentWaker(Protocol):             # severity task 1 (early PR); no other code posts a system message to a session
+class AgentWaker(Protocol):             # incidents task 2 (early PR); no other code posts a system message to a session
     async def wake(self, project_id: str, agent: str, label: WakeLabel, subject_id: str, text: str, key: str) -> None: ...   # a system message in the agent's session, labeled; idempotent by (agent, label, subject_id, key); outside stage 2's hop and budget limits
 def diagnoser(category: ResultCategory, subtype: str | None) -> str: ...   # data_quality and drift: data-quality; model_performance: model-performance; operational: retraining for subtype failed_training, deployment for bad_deploy and failed_scoring, else orchestrator
 ```
@@ -346,7 +326,7 @@ class ActionCall(BaseModel):            # built by a tool's `action_call(args, c
 class Authority(BaseModel): basis: Literal["rule", "policy", "approval", "none"]; ref: str | None; reason: str; evidence: list[str]   # evidence: result IDs
 class ActionAuthority(Protocol):        # rules and training implement one each; the contracts default says basis "none"
     async def authorize(self, call: ActionCall) -> Authority: ...      # evaluates in code against stored records and limits; never trusts the agent's claim
-class GateFacts(Protocol): async def facts(self, project_id: str, hook_id: str | None) -> tuple[bool | None, bool | None, bool | None]: ...   # (deploys verified, has production signal, team gate is authority); pipeline-runs task 5; contracts default: all None
+class GateFacts(Protocol): async def facts(self, project_id: str, hook_id: str | None) -> tuple[bool | None, bool | None, bool | None]: ...   # (deploys verified, has production signal, team gate is authority); training task 7; contracts default: all None
 class AuthorityRegistry: def register(self, citation: Literal["rule", "policy"], authority: ActionAuthority) -> None: ...
 def decide_action(level: PermissionLevel, call: ActionCall, authority: Authority) -> PolicyDecision: ...   # agents/policy/actions.py; a second data table, the roadmap's `deploy` table in code
 PROPOSE_BYPASS_OVERRIDES: Final[Mapping[str, PolicyDecision]] = {"promotion": "allow"}   # the one `propose` kind that skips its approval at bypass, after the code checks of S5 §4; every other kind asks at every level
@@ -381,7 +361,7 @@ class Verdicts(Protocol):               # verdicts
     async def confirm_by_labels(self, project_id: str) -> list[VerdictView]: ...                        # model performance incidents, past the minimum sample, from Model Performance's label-based results
     async def report_miss(self, project_id: str, miss: MissReport) -> None: ...
     async def list(self, project_id: str, since: datetime | None = None) -> list[VerdictView]: ...
-class Baseline(Protocol):               # verdicts task 3; never notifies and never opens an incident
+class Baseline(Protocol):               # stats task 3; never notifies and never opens an incident
     async def links(self, project_id: str, incident_id: str) -> list[BaselineLink]: ...
     async def silent_alerts(self, project_id: str) -> list[SilentTeamAlert]: ...
 ```
@@ -407,18 +387,18 @@ class PromotionPayload(BaseModel): ...                                          
 
 | Tool | Class | Plan | Notes |
 |---|---|---|---|
-| `RegisterCheck(check_id, category, cadence, timezone, results_location, pr_number)` | read | expectations | S4 §4 |
+| `RegisterCheck(check_id, category, cadence, timezone, results_location, pr_number)` | read | results | S4 §4 |
 | `IncidentUpdate(incident_id, cause?, category?, subtype?, status?, note?)` | read | incidents | S4 §5; status only `mitigated` or `resolved` |
 | `IncidentMerge(ids)`, `IncidentSplit(id, signal_ids)` | read | incidents | S4 §5 |
 | `IncidentFollowUp(incident_id, after_days?, after_labels?, note)` | read | incidents | not in the spec: S4 §3 and §6 need a way to register "re-check after N labels or days" (open point 3) |
-| `AdjustSeverity(incident_id, direction, reason)` | read | severity | Alert Prioritization only; not in the spec (open point 3) |
+| `AdjustSeverity(incident_id, direction, reason)` | read | incidents | Alert Prioritization only; not in the spec (open point 3) |
 | `MonitoringQuery(what, ...)` | read | incidents | below |
 | `RunHook(hook_id, reason, incident_id?, fix_id?, params?, rule_id?, policy_id?)` | deploy | hooks | `action_call` gives the hook's kind and the cited rule or policy |
 | `Hold(incident_id, scope, reason)` | deploy | hooks | not in the spec (open point 3); gated as kind `hold` |
-| `RequestFix(incident_id, evidence)` | read | fixes | S5 §1 |
-| `RecordFixChoice(fix_id, choice, why, why_not)` | read | fixes | Retraining only; not in the spec |
+| `RequestFix(incident_id, evidence)` | read | training | S5 §1 |
+| `RecordFixChoice(fix_id, choice, why, why_not)` | read | training | Retraining only; not in the spec |
 | `SaveReport(draft)` | read | promotion | not in the spec: the report is stored before the `promotion` proposal cites it |
-| `MergePullRequest(pr_number)` | deploy | merging | S5 |
+| `MergePullRequest(pr_number)` | deploy | promotion | S5 |
 
 ```python
 QueryWhat = Literal["results", "signals", "incidents", "expectations", "checks", "rules", "hooks", "windows", "verdicts", "fixes", "training_requests", "policies", "reports", "promotions"]
@@ -468,7 +448,7 @@ class Training(Protocol):               # training
 ```python
 class RunContext(BaseModel): request_id: str; model: str; champion_version: str | None; window: TrainingWindow | None; mode: Literal["train", "evaluate"] | None; candidate_version: str | None; threshold: float | None
 class MissingPlaceholder(HookRefused): placeholder: str
-class PlaceholderResolver(Protocol):    # pipeline-runs task 1 (early PR)
+class PlaceholderResolver(Protocol):    # training task 3 (early PR)
     async def resolve(self, hook: HookView, ctx: RunContext) -> dict[str, str]: ...   # resolved at the moment of the run; `champion_version` read from the tracker then; a placeholder the hook declares and the context lacks raises MissingPlaceholder before running
 class DispatchRef(BaseModel): workflow: str; run_url: str | None
 class CiDispatcher(Protocol): async def dispatch(self, project_id: str, workflow: str, inputs: dict[str, str]) -> DispatchRef: ...   # always the default branch, through the app's GitHub client
@@ -523,15 +503,15 @@ class Promotions(Protocol):             # promotion
 ### I38: merging (`integrations/github/merge.py`, `agents/tools/merge.py`)
 
 ```python
-class ProtectionSurfaces(Protocol):     # merging task 2
-    async def paths(self, project_id: str) -> list[str]: ...                    # entry files of the model's evaluate and deploy hooks, the workflow files behind the branch protection's required checks (branch protection API), CODEOWNERS; open point 5
+class ProtectionSurfaces(Protocol):     # promotion task 7
+    async def paths(self, project_id: str) -> list[str]: ...                    # entry files of the model's evaluate and deploy hooks, every file under .github/workflows/, CODEOWNERS; open point 5
     async def touches(self, project_id: str, pr_number: int) -> list[str]: ...   # the surface paths the PR changes; the agent's labels are never read
 class MergeCheck(BaseModel): ok: bool; refusals: list[str]       # own PR, mergeable and clean, no admin override, at least one passing check, no protection surface
 ```
 
 - `MergePullRequest` is in code: an agent merges only its own PR; the platform reports it mergeable and clean; at least one check passed (a repository without CI never self-merges, nor does a local review); never an admin override; never a PR that touches a protection surface, at any level. Merges write `pr.merged_by_agent`.
 
-### I39: the Dashboard's data (`GET /api/projects/{id}/dashboard`, dashboard task 1)
+### I39: the Dashboard's data (`GET /api/projects/{id}/dashboard`, ui task 1)
 
 ```python
 class StageStatus(BaseModel): name: str; status: Literal["ok", "late", "incident", "unknown"]; incident_ids: list[str]
@@ -540,7 +520,7 @@ class AgentActivity(BaseModel): agent: str; state: AgentState; doing: str | None
 class DashboardView(BaseModel): stages: list[StageStatus]; edges: list[PipelineEdge]; models: list[ModelCard]; incidents_by_severity: dict[Severity, int]; at_risk: list[ExpectationState]; agents: list[AgentActivity]; heartbeat_reachable: bool; baseline_available: bool
 ```
 
-### I40: the Deployments page's data (`GET /api/projects/{id}/deployments`, deployments task 1)
+### I40: the Deployments page's data (`GET /api/projects/{id}/deployments`, promotion task 6)
 
 ```python
 class EnvironmentRow(BaseModel): model: str; environment: str; alias: str; version: str | None
@@ -551,88 +531,108 @@ class DeploymentsView(BaseModel): environments: list[EnvironmentRow]; decisions:
 
 - Environments come from tracker aliases and the handoff's `ModelSpec.environments`; decisions from `Promotions.history`, `hook_runs` of kind rollback and fall_back (with their rule), and tracking's deployments.
 
+### I41: Stats (`stats/contract.py`, stats task 4)
+
+```python
+STATS_MIN_VERDICTS: Final = 5                                   # a number shows only from this many verdicts (2026-10-29)
+StatsWindow = Literal["7d", "30d", "all"]
+StatGroup = Literal["detection", "speed", "noise", "diagnosis", "effort", "model_impact", "cost", "reliability"]   # the roadmap's stage 6 groups
+STAT_METRICS: Final[Mapping[StatGroup, tuple[str, ...]]]        # the one list of metric names: detection (precision, caught_baseline_missed, false_alarms_avoided, misses), speed (detection_delay_s, time_to_resolution_s), noise (alerts_per_week, signals_per_incident), diagnosis (bad_data_vs_drift_correct), effort (autonomous_share, approvals_requested, acceptance_rate, prs_opened, prs_merged, prs_closed), model_impact (metric_before, metric_after), cost (tokens_per_agent, cost_per_incident), reliability (failed_runs, tool_errors, sandbox_failures)
+class StatValue(BaseModel): value: float | None; n: int; collecting: bool          # n: the verdicts (or incidents, for counts) it rests on; collecting: n < STATS_MIN_VERDICTS for a verdict-based number
+class StatsView(BaseModel): window: StatsWindow; category: ResultCategory | None; baseline_available: bool; groups: dict[StatGroup, dict[str, StatValue]]
+class Stats(Protocol):                  # stats
+    async def compute(self, project_id: str, window: StatsWindow, category: ResultCategory | None, now: datetime) -> StatsView: ...   # computed on read from incidents, verdicts, baseline links, approvals, PRs, llm_calls, hook runs; nothing stored twice
+```
+
+- `GET /api/projects/{id}/stats?window=&category=` returns `StatsView`. Without readable team monitoring `baseline_available` is false and the page says so (S4 §10); the detection numbers that need the baseline are then `None`, never 0.
+
+### I42: Usage (`providers/usage.py`, ui task 6)
+
+```python
+class ModelPrice(BaseModel): prompt_per_mtok: float; completion_per_mtok: float; source: Literal["provider", "user"]   # USD per million tokens
+class UsageRow(BaseModel): project_id: str; agent: str; model_address: str; week_start: date; prompt_tokens: int; completion_tokens: int; cost_usd: float | None   # None: no price for that model
+class UsageView(BaseModel): rows: list[UsageRow]; unpriced_models: list[str]
+```
+
+- `GET /api/usage?since=` (app level) sums `llm_calls` of every project by agent, model and week.
+- `ModelEntry` gains `price: ModelPrice | None` (columns in `app/0003_stage4_5.sql`, contracts task 2); `PUT /api/models/{address}/price` sets a user price. When a provider's model list publishes prices (OpenRouter's `/models`: `pricing.prompt` and `pricing.completion`), the price is stored with `source="provider"` when such a model is added or verified, and when `list_remote_models` reads the list; a user price is never overwritten.
+
 ## Spec coverage
 
-Every section of both specs, the numbered changes and the roadmap bullets, with the plan that builds it (c = contracts, "all" = each plan for its own module).
+Every section of both specs, the roadmap's stage 6 and the numbered changes, with the plan that builds it.
 
 | Spec | Plan |
 |---|---|
-| S4 §1 layout | c (packages); each plan its module |
-| S4 §2 record, sources, parsers, cursors, times, untrusted text | results; times: scheduler; untrusted: c (`untrusted`), incidents (`MonitoringQuery`), definitions (prompts) |
-| S4 §2 catching up (reading, "resolved while offline") | results (oldest first), scheduler (job order), incidents task 5 |
-| S4 §3 the app's scheduler and jobs | scheduler; each job by its owner (collect: results; deadlines: expectations; follow-ups: incidents; escalate: severity; report: notifications) |
-| S4 §3b heartbeat route, the job in the team's scheduler | scheduler (route); definitions (Deployment & Rollback delivers the job by PR; Onboarding proposes it); dashboard (local-mode notice) |
-| S4 §3a expectations and silence | expectations; maintenance: incidents |
-| S4 §4 checks by agents, `RegisterCheck`, minimum sample | expectations (`RegisterCheck`); results (records); definitions (check content: Data Quality, Model Performance) |
-| S4 §5 signals, grouping, incident, lifecycle, quiet period, windows, snooze, tools | incidents |
-| S4 §6 diagnosis: waking, the menu | severity (waking), fixes (menu 6), hooks (menu 3 to 5), definitions (menu, revert own PR, fix causes through PRs) |
-| S4 §6 hooks, credentials, hold | hooks |
-| S4 §6 rules | rules |
-| S4 §6 post-deploy comparison, humans decide deploys | promotion (trigger), definitions (comparison), c and hooks (gate) |
-| S4 §6 recent changes are suspects | incidents task 5; revert: definitions; merging (PR observer) |
-| S4 §7 severity, routing, escalation, Alert Prioritization | severity |
-| S4 §8 channels, links, on-call, report, failures | notifications; Integrations UI: settings |
-| S4 §9 proposal kinds | c (payloads, names); apply: results (`parser`), rules (`rule`), hooks (`hooks`), incidents (`maintenance`) |
-| S4 §10 verdicts, labels, baseline | verdicts; buttons and the miss report: dashboard |
-| S4 §10 Knowledge note per resolved incident (`project_knowledge.md`) | definitions (agents `SaveNote` on resolution); open point 8 |
-| S4 §11 UI | dashboard, settings |
-| S4 §12 storage, changes to the roadmap | c (schema, IDs, gate); heartbeat exception: scheduler |
-| S4 §13 errors | results (sources, parsers), hooks (hook failure), notifications (retry), all (scrubbing) |
-| S4 §14 testing, Done when | each plan its tests; the night and the end-to-end: definitions task 3 |
-| S5 hard limits | existing limits stay stage 1 and 2's; new in code: merging, pipeline-runs (default branch only, pins), c (gate) |
-| S5 `MergePullRequest` | merging; class and cells: c |
-| S5 the principle (PRs, continuously; PR discipline) | definitions (prompts); merging (closed-unmerged note, merge events); open point 9 |
-| S5 stage responsibilities, change 5 | fixes, definitions |
-| S5 change 1 shadow evaluation, change 2 canary | definitions (agents add them through PRs); promotion (the record carries the result) |
-| S5 change 3 bypass | c (gate cells, override) |
-| S5 change 4 running the pipeline by what it does | c (cells), pipeline-runs (`GateFacts`), training (policy authority) |
-| S5 change 6 several models | c (every record keyed by `model`), dashboard (a list), expectations, severity; tests use one |
-| S5 §1 fix requests and menu, guards | fixes; breaker: fixes task 3 |
-| S5 §2 hooks: placeholders, `ci_dispatch`, `deploys` verified | pipeline-runs |
-| S5 §2 policy, circuit breaker, linking back, reproducibility | training (policy, linking), fixes (breaker), definitions (reproducibility PRs) |
-| S5 §3 the evaluation record, comparability, authoritative number | promotion; the step itself in the team's pipeline: definitions |
-| S5 §4 promotion modes, the app's report | promotion; the card: deployments |
+| S4 §1 layout | contracts (packages); each plan its module |
+| S4 §2 record, sources, parsers, cursors, catching up | results; untrusted: contracts, incidents (`MonitoringQuery`), definitions; "resolved while offline": incidents task 3 |
+| S4 §3 scheduler and jobs, §3b heartbeat | results (loop, route); each job by its owner; definitions (the heartbeat job in the team's scheduler); ui (local-mode notice) |
+| S4 §3a expectations and silence | results task 5; maintenance: incidents task 7 |
+| S4 §4 checks by agents, `RegisterCheck` | results task 7; check content: definitions |
+| S4 §5 signals, grouping, lifecycle, quiet period, windows, snooze, tools | incidents |
+| S4 §6 waking, the menu, recent changes | incidents (waking, suspects), training (menu 6), hooks (menu 3 to 5), definitions (menu, reverts, fixing causes) |
+| S4 §6 hooks, credentials, hold; rules | hooks |
+| S4 §6 post-deploy comparison, humans decide deploys | promotion (trigger), definitions (comparison), contracts and hooks (gate) |
+| S4 §7 severity, routing, escalation, Alert Prioritization | incidents (severity, routing, AP); escalation: notifications task 4 |
+| S4 §8 channels, links, on-call, report, failures | notifications; UI: ui task 3 |
+| S4 §9 proposal kinds | contracts (payloads, names); each kind and card by its owner: results (`parser`), hooks (`hooks`, `rule`), incidents (`maintenance`), training (`training_policy`), promotion (`promotion`) |
+| S4 §10 verdicts, labels, baseline | stats; buttons and the miss report: ui task 2 |
+| S4 §10 Knowledge note per resolved incident | definitions (open point 8) |
+| S4 §11 UI | ui |
+| S4 §12 storage, roadmap changes | contracts; heartbeat exception: results |
+| S4 §13 errors | results, hooks, notifications; scrubbing: all |
+| S4 §14 testing, Done when | each plan its tests; the simulated night: definitions task 3 |
+| S5 hard limits, `MergePullRequest` | promotion task 7 (merging); default branch only and pins: training; cells: contracts |
+| S5 the principle, PR discipline | definitions (prompts); merge rules in code: promotion task 7 (open point 9) |
+| S5 changes 1 to 6 | definitions (shadow, canary by PR), contracts (cells, override, keyed by model), training (`GateFacts`, policy authority), ui (a list of models) |
+| S5 §1 fix requests, guards, breaker | training tasks 1, 2, 6 |
+| S5 §2 hooks: placeholders, `ci_dispatch`, `deploys` verified; policy; linking back | training |
+| S5 §3 evaluation record, comparability | promotion; the step in the team's pipeline: definitions |
+| S5 §4 promotion modes, report | promotion |
 | S5 §5 agents' instructions | definitions |
-| S5 §6 UI | deployments |
-| S5 §7 storage, roadmap changes | c; kinds `training_policy` and `promotion`: training, promotion |
-| S5 §8 testing, Done when | each plan its tests; the end to end: definitions task 4; fake MLflow and GitHub additions: pipeline-runs, promotion, merging |
+| S5 §6 UI (Deployments page) | data: promotion task 6; page: ui task 7 |
+| S5 §7 storage | contracts |
+| S5 §8 testing | each plan; end to end: definitions task 4 |
+| Roadmap stage 6: Stats | stats (I41) |
+| Roadmap stage 6: Activity, Knowledge, Usage | ui tasks 4, 5, 6 (I42) |
 
 ## Open points for the lead
 
-Resolved in this draft as stated; each needs the lead's confirmation or a Decision issue before the plan that depends on it starts.
+Each has a recommended default; answer "defaults" to take them all, or name the ones to change. The plan that depends on a point does not start before it is answered.
 
-1. Origin of ci and mlflow records. S4 §2 names `team` and `agent`; S4 §10 says `team` records never open incidents, yet S4 §5 raises signals for failed jobs and runs. This overview adds `tracker` for records the app derives from the tracking record, which raise signals; `team`-origin file records only feed the baseline; a team job's silence still raises through expectations.
-2. Gate cells with no roadmap value: `train`, `evaluate` and a deploying run at `suggest`, and their no-authority cells at `bypass`; `hold` at `suggest` ("applied by the person in one click" is modeled as `ask`). S5's "Changes to the roadmap" says promotion in `person` mode asks at `bypass`; S5 change 3, S5 §4 and the roadmap table say it needs no approval at `bypass`. This draft follows the roadmap (a per-kind `propose` override for `promotion`) and treats that bullet as stale.
-3. Tools the specs need but do not name: `IncidentFollowUp`, `AdjustSeverity`, `Hold`, `RecordFixChoice`, `SaveReport`, `MonitoringQuery`, and the name `RunHook`.
-4. Which feeds "production depends on" (severity, S4 §7): `Feed` has no flag. Severity derives it from the pipeline graph (a feed whose stage has a path to a model's stage); a flag in the handoff would be a stage 3 change.
-5. Protection surfaces (S5): the handoff has no field listing the promotion gate or the evaluation decision-logic files. This draft derives them from the `entry_files` of each model's evaluate and deploy hooks, the required-check workflows from the branch protection API, and `CODEOWNERS`.
-6. Mapping a signal's subject (a table, column, model version, job) onto a pipeline stage: `PipelineStage.inputs` and `outputs` are strings; incidents matches them to the subject by exact name, else groups by cause key only.
-7. Hook registration has two sources: the approved handoff's `commands`, and the `hooks` proposal kind. This draft registers the handoff's at `handoff.approved` and uses the proposal for later ones. Approving changed hook content after a suspension is a person-only route (`Hooks.approve`), not an agent tool.
-8. Who writes the Knowledge note per resolved incident: the diagnosing agent (instructed by its definition), not the app.
-9. Whether the PR discipline's open-PR cap and `decision-semantics` label are enforced in code or only in the prompts. The specs enforce only the merge rules in code; this draft enforces the closed-unmerged note trigger only.
-10. A system wake of an agent (`AgentWaker`) is outside stage 2's hop and budget limits, so a bad night is not capped; stage 2's caps stay for agent-to-agent messages.
-11. The report in `team_gate` mode is "written to the run" (S5 §4), but the app has no tracker write path; this draft stores it as a `rep` record and shows it, and the team's pipeline writes its own.
-12. Milestones: the contracts plan spans both stages. This draft proposes the stage 4 milestone for it and for the stage 4 plans, and the stage 5 milestone for the stage 5 plans.
-13. The shared working rules (stage 3 onboarding adds the hard limits and the continuous-PR principle to `context.py` from packaged files) and S5 §5's "all seven definitions state it": the definitions plan references the packaged text rather than repeating it.
-14. Template filling (pipeline-runs' `PlaceholderResolver`, hooks' runners) follows the stage 3 overview's template grammar: parse with `string.Formatter`, fill with `str.format_map`, never a plain text replace, for `command` templates and `ci_dispatch` `inputs` alike.
-15. The pipeline graph may have cycles (stage 3 allows them: predictions feed back into training); incidents' downstream search and severity's "production depends on" path keep a visited set.
-16. `ProposalView.payload` is the closed union `ConnectionsPayload | HandoffPayload` (I19). The stage 4/5 kinds (`hooks`, `maintenance`, `training_policy`, `promotion`, ...) need it widened, preferably to a union discriminated by kind; the contracts plan changes I19 through a Decision.
+1. **Origin of `ci` and `mlflow` records.** Default: add origin `tracker` for records the app derives from the tracking record; they raise signals. `team` file records only feed the baseline; a team job's silence still raises through expectations.
+2. **Gate cells the roadmap leaves open** (the "?" cells of I30). Default: as in the table: `train`/`evaluate` and a deploying run are denied at `suggest` and ask without authority even at `bypass`; `hold` asks at `suggest` (the one click). Promotion in `person` mode needs no click at `bypass` (roadmap and S5 change 3).
+3. **Tools the specs need but do not name** (`IncidentFollowUp`, `AdjustSeverity`, `Hold`, `RecordFixChoice`, `SaveReport`, `MonitoringQuery`, the name `RunHook`). Default: add them as in I33.
+4. **Which feeds production depends on** (severity). Default: derived from the pipeline graph (a feed whose stage has a path to a model's stage); no new handoff field.
+5. **Protection surfaces.** Default: the entry files of each model's evaluate and deploy hooks, every file under `.github/workflows/`, and `CODEOWNERS`. (Simpler than reading the branch protection API, and covers it.)
+6. **A signal's subject to a pipeline stage.** Default: exact name match against `PipelineStage.inputs` and `outputs`, else grouping by cause key only.
+7. **Two sources of hooks.** Default: the approved handoff's `commands` at `handoff.approved`, later ones through the `hooks` proposal; approving changed hook content is a person-only route.
+8. **Who writes the Knowledge note per resolved incident.** Default: the diagnosing agent, told by its definition.
+9. **PR discipline** (open-PR cap, `decision-semantics` label). Default: prompts only; code enforces only the merge rules and the closed-unmerged note.
+10. **System wakes are outside stage 2's hop and budget limits.** Default: keep them outside, but cap them at `MAX_WAKES_PER_HOUR = 30` per project (one constant, in `monitoring/settings.py`); a wake over the cap is recorded as an `incident.wake_skipped` event on its incident (shown on the incident page and in Activity), and the morning report lists it too when that task exists.
+11. **The `team_gate` report** has no tracker write path. Default: store it as a `rep` record and show it; the team's pipeline writes its own.
+12. **Milestones.** Default: as in the Plans table (Stage 4: contracts, results, incidents, notifications, hooks, ui, definitions; Stage 5: training, promotion; Stage 6: stats).
+13. **Shared working rules.** Default: the definitions reference the packaged working-rules text stage 3 onboarding adds; they do not repeat it.
+14. **Template filling.** Default: the stage 3 grammar: parse with `string.Formatter`, fill with `str.format_map`, for `command` templates and `ci_dispatch` inputs alike.
+15. **Cycles in the pipeline graph.** Default: downstream search and the "production depends on" path keep a visited set.
+16. **`ProposalView.payload` is the closed union of stage 3's two payloads (I19).** Default: contracts task 4, which adds the six payloads that need it, widens it to a union discriminated by kind, and starts only after the stage 3 proposals plan has merged, so the proposal cards in progress are not built against a moving type (a Decision issue records the I19 change).
+17. **Stage 6 without a spec.** Default: the roadmap's stage 6 bullets, the 2026-10-29 decisions and I41/I42 are its spec; no separate spec document.
+18. **Where a model's price lives.** Default: on the model entry in `app.db` (I42), filled from the provider's model list when it publishes prices (OpenRouter), else by the user; a user price wins.
+19. **Maintenance before incidents task 7.** Default: contracts ships a `Maintenance` default that never suspends, so expectations (results task 5) need not wait for the extras; incidents task 7 registers the real one.
+20. **Ten plans instead of nine.** Default: notifications stays its own plan (see Plans).
+21. **How stage 4 learns a handoff was stored.** Nothing on `main` lets backend code react to it (`handoff.approved` is an event for the UI stream, emitted by stage 3 onboarding). Default: the `HandoffObserver` seam on `Handoffs` (Shared by contracts), plus a reconcile of `Handoffs.current()` at startup; a Decision issue records the I20 change.
 
 ## Files shared by these plans
 
-Each file below is edited by one plan only, except where a line says otherwise:
-- `storage/migrations/project/0007_stage4_5.sql`, `storage/migrations/app/0003_stage4_5.sql`, `storage/tables.py`, `ids.py`, `config.py` (`croniter`), `credentials/project_secrets.py` (`hook_ref`), `events/contract.py` (`EventType`), the frontend `PROJECT_EVENT_TYPES`, `agents/policy/table.py` and the new `agents/policy/actions.py`, `agents/approvals/gate.py`, `agents/approvals/authority.py`, `agents/runtime/hooks.py` (`GateCall.action`), `agents/tools/base.py` (`action_call`), `agents/tools/names.py`, `agents/pr_sync.py` (`PrObserver`, `sync_now`), `monitoring/settings.py`, `monitoring/jobs.py`, `monitoring/untrusted.py`, `monitoring/expr.py`: contracts. A later plan that needs a change opens a Decision.
-- Every `contract.py` and types module named in I22 to I38 belongs to contracts (task 1; I23's `expr.py` in task 4); the owners implement in sibling modules and never edit them. Below, a plan's directory means those sibling modules.
-- `monitoring/results/*`: results. `monitoring/scheduler/*`: scheduler. `monitoring/expectations/*`: expectations. `monitoring/incidents/*`: incidents, except `monitoring/incidents/severity.py` and `monitoring/waker.py`: severity. `monitoring/rules/*`: rules. `monitoring/verdicts/*`: verdicts. `notifications/*`: notifications, except `notifications/routing.py`: severity.
-- `monitoring/hooks/*`: hooks, except `placeholders.py`, `ci_dispatch.py`, `pins.py`, `alias_check.py`, `facts.py`: pipeline-runs (pipeline-runs registers through `Hooks.add_runner`, `add_lifecycle` and the gate's `GateFacts`, and edits no hooks file).
-- `training/*`: fixes owns `training/fixes/`, `training/guards.py` and `training/circuit.py`; training owns `training/policies/` and `training/requests/`. `promotion/*`: promotion. `integrations/github/dispatch.py`: pipeline-runs; `integrations/github/merge.py`, `agents/tools/merge.py`: merging; neither edits `integrations/github/api.py`.
-- `sandbox/containers.py` (stage 3 connections' file): hooks adds only the hook credential's injection into one container run; results' code parser uses the sandbox's existing run API with the network off and a time limit and edits nothing there; a missing option opens a Decision.
-- `agents/tools/__init__.py` (`default_registry`) and `api/services.py`: each plan adds only its own lines; each plan that registers a proposal kind, a job, a runner, a lifecycle, an authority or a query provider does it in `build_services`, after the registries exist.
-- `api/security.py` and `api/hosts.py`: scheduler (the heartbeat exception and the `public_url` host rule, only its lines).
-- `tests/fakes/fake_smtp.py`, `tests/fakes/fake_discord.py`: notifications. `tests/fixtures/results/`: results. `tests/fakes/fake_github.py` (stage 3's): pipeline-runs (workflow dispatch, run status) and merging (PR checks, mergeable state, merge, branch protection, file contents), each in its own functions. `tests/fakes/fake_mlflow.py` (stage 3's): pipeline-runs (run tags, model versions, alias moves) and promotion (run artifacts), each in its own functions.
-- `agents/definitions/*.md`: definitions only, for stages 4 and 5 (stage 3 onboarding edited them first).
-- `frontend/src/pages/agents/ApprovalCard.tsx`: each proposal-kind owner adds its own card component file and one line in the dispatcher: results (`parser`), rules (`rule`), hooks (`hooks`), incidents (`maintenance`), training (`training_policy`), deployments (`promotion`).
-- `frontend/src/pages/project-settings/ProjectSettingsPage.tsx` and `frontend/src/pages/integrations/*`: settings, one line per section; the section components live in its own files and read the routes of the owning plans.
-- `frontend/src/pages/inbox/InboxPage.tsx`, `frontend/src/pages/project-home/*`: dashboard (the Dashboard replaces the project home). New pages carry their own `route.tsx` and nav entry, so the route table and `Sidebar.tsx` need no edit.
-- `backend/tests/e2e/test_monitoring_night.py`, `backend/tests/e2e/test_fix_and_promotion.py`, `frontend/e2e/monitoring.spec.ts`, `frontend/e2e/actions.spec.ts`, and the fixture project for them: definitions only.
-- `frontend/openapi.json`: the plan that changes the API regenerates it; contracts adds none (no routes), scheduler adds the heartbeat route.
+Each file is edited by one plan only, except where a line says otherwise:
+- contracts: `storage/migrations/project/0007_stage4_5.sql`, `storage/migrations/app/0003_stage4_5.sql`, `storage/tables.py`, `ids.py`, `config.py` (`croniter`), `credentials/project_secrets.py` (`hook_ref`), `events/contract.py` (`EventType`), the frontend `PROJECT_EVENT_TYPES`, `agents/policy/table.py`, `agents/policy/actions.py`, `agents/approvals/gate.py`, `agents/approvals/authority.py`, `agents/runtime/hooks.py` (`GateCall.action`), `agents/tools/base.py` (`action_call`), `agents/tools/names.py`, `agents/pr_sync.py` (`PrObserver`, `sync_now`), `proposals/contract.py` and `proposals/handoffs.py` (`HandoffObserver`, `add_observer` only), `monitoring/settings.py`, `monitoring/jobs.py`, `monitoring/untrusted.py`, `monitoring/expr.py`, every `contract.py` of I22 to I42. A later plan that needs a change opens a Decision. The migration numbers assume stage 3's approvals-fixes takes project `0006`; if another stage 3 plan adds a project migration first, contracts renumbers to the next free one.
+- results: `monitoring/results/`, `monitoring/scheduler/`, `monitoring/expectations/`; `api/security.py` and `api/hosts.py` (the heartbeat exception and the `public_url` host rule, only those lines); `tests/fixtures/results/`.
+- incidents: `monitoring/incidents/` (severity and routing included), `monitoring/waker.py`, the maintenance kind.
+- notifications: `notifications/`.
+- hooks: `monitoring/hooks/` except the files training owns; `monitoring/rules/`; `sandbox/containers.py` (only the hook credential's injection into one container run).
+- training: `training/`; `monitoring/hooks/placeholders.py`, `ci_dispatch.py`, `pins.py`, `alias_check.py`, `facts.py`; `integrations/github/dispatch.py`; in `tests/fakes/fake_github.py` and `fake_mlflow.py`, its own functions only.
+- promotion: `promotion/`; `integrations/github/merge.py`, `agents/tools/merge.py`; in the fakes, its own functions only. Neither training nor promotion edits `integrations/github/api.py`.
+- stats: `monitoring/verdicts/`, `stats/`, `frontend/src/pages/stats/`.
+- ui: `frontend/src/pages/{dashboard,incidents,activity,knowledge,usage,deployments}/`, `frontend/src/pages/project-settings/ProjectSettingsPage.tsx` and `frontend/src/pages/integrations/*` (one line per section), `frontend/src/pages/inbox/InboxPage.tsx`, `frontend/src/pages/project-home/*` (the Dashboard replaces the project home), `providers/usage.py` and the price route (the providers files it touches are named after stage 3's rate-limits-fixes plan merges: that plan splits `providers/service.py`).
+- definitions: `agents/definitions/*.md` (after stage 3 onboarding), `backend/tests/e2e/test_monitoring_night.py`, `backend/tests/e2e/test_fix_and_promotion.py`, `frontend/e2e/monitoring.spec.ts`, `frontend/e2e/actions.spec.ts`, their fixture project.
+- Shared, each plan only its own lines: `agents/tools/__init__.py` (`default_registry`), `api/services.py` (every kind, job, runner, lifecycle, authority, observer and query provider is registered in `build_services` after the registries exist), `frontend/src/pages/agents/ApprovalCard.tsx` (one dispatcher line per proposal kind; the card in its own file). New pages carry their own `route.tsx` and nav entry.
+- `frontend/openapi.json`: the plan that changes the API regenerates it.
