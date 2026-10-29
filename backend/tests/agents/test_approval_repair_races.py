@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 from mlops_agents.agents.runtime.repair import repair_unsettled_approvals
-from tests.agents.repair_env import WRITER, HeldObserver, RepairEnv
+from tests.agents.repair_doubles import HeldObserver
+from tests.agents.repair_env import WRITER, RepairEnv
 
 
 async def test_two_managers_one_after_the_other_repair_once(repair: RepairEnv) -> None:
@@ -88,8 +89,9 @@ async def test_a_repair_racing_a_live_decision_writes_and_resumes_once(
         resume_turn=app.manager.resume_turn,
     )
     release.set()
-    await deciding
+    await deciding  # its resume waited for the turn the repair resumed, then found it ended
 
+    assert not await repair.running(app)  # it did not resume that turn a second time
     assert await repair.ended(stream) == (turn_id, "done")
     assert await repair.audit_of(approval.id) == [("user", "approved")]
     assert await repair.events_of(approval.id) == [("user", "approved")]

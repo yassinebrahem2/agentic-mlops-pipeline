@@ -14,12 +14,8 @@ from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.runtime.contract import ToolResultPart
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.tables import approvals, messages
-from tests.agents.repair_env import (
-    CancelledOnceAuditLog,
-    Decision,
-    RepairEnv,
-    cancelled_once,
-)
+from tests.agents.repair_doubles import CancelledOnceAuditLog, cancelled_once
+from tests.agents.repair_env import Decision, RepairEnv
 from tests.agents.settle_env import CancelledOnceEventLog
 
 

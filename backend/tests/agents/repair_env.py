@@ -7,36 +7,30 @@ crashed app is dropped, never closed: a process death closes nothing."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import httpx2
 from sqlalchemy import func, select
 
-from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
     MessageView,
     StreamEvent,
-    TurnEnd,
     TurnEnded,
     TurnWaiting,
 )
-from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools.base import RiskClass
 from mlops_agents.config import RunMode, load_settings
-from mlops_agents.events.audit import SqliteAuditLog
-from mlops_agents.events.contract import AuditDecision, AuditRecord
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
@@ -46,6 +40,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import audit, events
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.approval_env import TOOL_PREVIEW, RecordingObserver, add_turn
+from tests.agents.repair_doubles import CrashOnDecided, TurnCounter
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import collect_until_turn_ended, opened_stream
 from tests.agents.runtime.stall_env import KEY, StallEnv, build_stall_env
@@ -82,123 +77,6 @@ def observed(store: ApprovalStore) -> RecordingObserver:
     observer = RecordingObserver()
     store.add_observer(observer)
     return observer
-
-
-class CrashOnDecided:
-    """The process dies while the observers are told of a decision: the first `decided` raises
-    CancelledError (a plain Exception would be caught and logged, and the decision go on)."""
-
-    async def asked(self, view: ApprovalView) -> None:
-        return None
-
-    async def decided(self, view: ApprovalView) -> None:
-        raise asyncio.CancelledError
-
-
-class TurnCounter(TurnObserver):
-    """Records each turn's waits and ends, as (turn ID, status)."""
-
-    def __init__(self) -> None:
-        self.waited: list[str] = []
-        self.ended: list[tuple[str, str]] = []
-        self._changed = asyncio.Event()
-
-    async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
-        return None
-
-    async def turn_waiting(self, project_id: str, agent: str, turn_id: str) -> None:
-        self.waited.append(turn_id)
-        self._changed.set()
-
-    async def turn_ended(
-        self, project_id: str, agent: str, turn_id: str, status: TurnEnd, final_text: str | None
-    ) -> None:
-        self.ended.append((turn_id, status))
-        self._changed.set()
-
-    async def wait_ended(self, turn_id: str) -> None:
-        """Until the turn's end is reported to the observers (after its stream event)."""
-        async with asyncio.timeout(10):
-            while all(t != turn_id for t, _ in self.ended):
-                self._changed.clear()
-                await self._changed.wait()
-
-
-class CancelledOnceAuditLog(SqliteAuditLog):
-    """Its first write is cancelled, as a process dying there would leave it."""
-
-    def __init__(self, databases: Databases) -> None:
-        super().__init__(databases, secrets=[])
-        self.calls = 0
-
-    async def record(
-        self,
-        project_id: str,
-        *,
-        actor: str,
-        action: str,
-        risk_class: RiskClass,
-        permission_level: PermissionLevel,
-        decision: AuditDecision,
-        target: str,
-        detail: dict[str, Any],
-    ) -> AuditRecord:
-        self.calls += 1
-        if self.calls == 1:
-            raise asyncio.CancelledError
-        return await super().record(
-            project_id,
-            actor=actor,
-            action=action,
-            risk_class=risk_class,
-            permission_level=permission_level,
-            decision=decision,
-            target=target,
-            detail=detail,
-        )
-
-
-def cancelled_once(call: Callable[..., Awaitable[object]]) -> Callable[..., Awaitable[object]]:
-    """`call`, whose first call is cancelled, as a process dying there would leave it."""
-    calls = 0
-
-    async def wrapped(*args: Any, **kwargs: Any) -> object:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise asyncio.CancelledError
-        return await call(*args, **kwargs)
-
-    return wrapped
-
-
-class HeldObserver:
-    """Holds `decided` for each listed approval until its release, as a slow proposal `apply`
-    would; records which calls finished and which were cancelled."""
-
-    def __init__(self, approval_ids: Iterable[str]) -> None:
-        ids = list(approval_ids)
-        self.entered = {i: asyncio.Event() for i in ids}
-        self.release = {i: asyncio.Event() for i in ids}
-        self.finished: list[str] = []
-        self.cancelled: list[str] = []
-
-    async def asked(self, view: ApprovalView) -> None:
-        return None
-
-    async def decided(self, view: ApprovalView) -> None:
-        if view.id not in self.entered:
-            return
-        self.entered[view.id].set()
-        try:
-            await self.release[view.id].wait()
-        except asyncio.CancelledError:
-            self.cancelled.append(view.id)
-            raise
-        self.finished.append(view.id)
-
-    async def wait_entered(self, approval_id: str) -> None:
-        await asyncio.wait_for(self.entered[approval_id].wait(), timeout=10)
 
 
 class RepairEnv:

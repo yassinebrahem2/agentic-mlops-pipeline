@@ -10,7 +10,8 @@ import pytest
 
 from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.runtime.sessions import SessionManager
-from tests.agents.repair_env import HeldObserver, RepairEnv
+from tests.agents.repair_doubles import HeldObserver
+from tests.agents.repair_env import RepairEnv
 
 
 async def test_a_cancelled_first_caller_leaves_the_repair_running(repair: RepairEnv) -> None:

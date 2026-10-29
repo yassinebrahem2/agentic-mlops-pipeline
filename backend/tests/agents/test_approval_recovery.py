@@ -19,7 +19,8 @@ from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.approval_env import STALL_PREVIEW, TOOL_PREVIEW, add_turn
-from tests.agents.repair_env import QUIET, HeldObserver, RepairEnv
+from tests.agents.repair_doubles import HeldObserver
+from tests.agents.repair_env import QUIET, RepairEnv
 from tests.agents.settle_env import PROJECT, SettleEnv
 
 
