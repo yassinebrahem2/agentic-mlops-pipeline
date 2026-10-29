@@ -1,12 +1,12 @@
 # Stage 3 — Review Fixes Implementation Plan
 
-> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. Three tasks, one PR for the branch, no early PR (`AGENTS.md` rule 5). Each task lists its files, tests (its stop condition) and checks.
+> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. Four tasks, one PR for the branch, no early PR (`AGENTS.md` rule 5). Each task lists its files, tests (its stop condition) and checks.
 
 **Goal:** Fix the review findings that are still real under the bar of 2026-10-29: a test that proves nothing, a gap in the prompt-safety escape, and a secret check that is missing. Every other item of these bugs is recorded in `docs/known-debt.md`.
 
 **Branch:** `plan/stage-3-review-fixes`. **Consumes:** merged code. **Produces:** nothing other plans use; every public interface keeps its signature.
 
-**Read first:** bugs #437, #434 and #435 (their "Update 2026-10-29" sections); `AGENTS.md` Code quality.
+**Read first:** bugs #437, #434, #435 and #528 (their "Update 2026-10-29" sections); `AGENTS.md` Code quality.
 
 ## Tasks
 
@@ -15,6 +15,7 @@
 | 1 | The stale-snapshot test proves the guard (#437 item 1) | merged code |
 | 2 | The data-summary escape and the hostile-name test (#434 items 2, 3) | merged code |
 | 3 | A tracker credential never comes back in a reply (#435 item 2) | merged code |
+| 4 | The fake MLflow paging test is deterministic (#528) | merged code |
 
 ---
 
@@ -47,3 +48,15 @@
 **Notes:** the test sends a source URL with `user:pass@` and checks only the 422. Also assert that neither the user nor the password appears anywhere in the response body.
 
 **Tests (stop condition):** the assertion fails if the route echoes the URL back (check it by making it echo locally; state it in the PR); backend suite, ruff, pyright; CI green.
+
+---
+
+### Task 4: The fake MLflow paging test is deterministic (#528)
+
+Added 2026-10-29: this flaky test can turn any PR's CI red.
+
+**Files:** `backend/tests/fakes/test_fake_mlflow.py` (`test_fake_mlflow_paging`).
+
+**Notes:** the fake sorts model versions by `creation_timestamp`, newest first, and the test registers five versions in a loop with the default millisecond timestamp, so the order changes when the clock ticks mid-loop. Pass explicit, increasing `creation_timestamp` values and assert the newest-first order the fake returns.
+
+**Tests (stop condition):** the test passes 20 times in a row (`pytest --count` is not installed; loop in the shell) and fails if two versions are given the same timestamp out of order; backend suite, ruff, pyright; CI green.
