@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from mlops_agents.agents.approvals.decisions import record_decisions
+from mlops_agents.agents.approvals.decisions import settle_decisions
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
@@ -214,31 +214,31 @@ async def stop_waiting_turn(
     event_log: EventLog | None = None,
     observers: Sequence[TurnObserver] = (),
 ) -> None:
-    """Stop a waiting turn: cancel approvals, mark message and turn stopped, delete checkpoint, notify."""
-    cancelled = await approval_store.cancel_for_turn(project_id, turn_id)
-    cancelled_ids = {a.id for a in cancelled}
+    """Stop a waiting turn: cancel approvals, mark message and turn stopped, delete checkpoint,
+    notify. The caller holds the session lock, so the cards are written straight to the store."""
+    cancelled = await approval_store.cancel_for_turn(project_id, turn_id, decided_by="user")
 
-    await record_decisions(
+    async def rewrite_part(
+        session_id: str, message_id: str, transform: Callable[[list[Part]], list[Part]]
+    ) -> object:
+        updated = await store.rewrite_parts(project_id, session_id, message_id, transform)
+        if updated is not None:
+            await hub.message(updated, created=False)
+        return updated
+
+    await settle_decisions(
         project_id,
         cancelled,
-        "cancelled",
-        actor="user",
+        store=approval_store,
         databases=store.databases,
         audit_log=audit_log,
         event_log=event_log,
+        rewrite_part=rewrite_part,
     )
 
     agent_msg = await store.turn_agent_message(project_id, session_id, turn_id)
     if agent_msg is not None:
-        new_parts: list[Part] = []
-        for part in agent_msg.parts:
-            if isinstance(part, ApprovalPart) and part.approval_id in cancelled_ids:
-                new_parts.append(part.model_copy(update={"status": "cancelled"}))
-            else:
-                new_parts.append(part)
-        updated_msg = await store.update_message(
-            project_id, agent_msg.id, parts=new_parts, status="stopped"
-        )
+        updated_msg = await store.update_message(project_id, agent_msg.id, status="stopped")
         await hub.message(updated_msg, created=False)
 
     await store.set_turn(project_id, turn_id, "stopped")

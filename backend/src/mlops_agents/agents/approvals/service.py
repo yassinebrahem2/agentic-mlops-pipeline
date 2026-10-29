@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from mlops_agents.agents.approvals.contract import ApprovalObserver, Approvals, ApprovalView
-from mlops_agents.agents.approvals.decisions import record_decisions
+from mlops_agents.agents.approvals.decisions import settle_decisions
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
-from mlops_agents.agents.runtime.contract import (
-    AgentSessions,
-    ApprovalPart,
-    DecidedApprovalStatus,
-    Part,
-)
+from mlops_agents.agents.runtime.contract import AgentSessions, Part
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
@@ -75,9 +72,8 @@ class ApprovalsService(Approvals):
         record = await self._pending_record(project_id, approval_id)
 
         # Atomic update in store; the approval keeps the task it was asked under.
-        status: DecidedApprovalStatus = "approved" if approve else "rejected"
         updated_rec = await self._store.decide(project_id, approval_id, approve=approve, note=note)
-        await self._record(project_id, updated_rec, status, actor="user", note=note)
+        await self._settle(project_id, updated_rec)
 
         if record.kind == "stall" and not approve:
             await self._sessions.stop(project_id, record.agent)
@@ -91,7 +87,7 @@ class ApprovalsService(Approvals):
         await self._sessions.ensure_recovered(project_id)
         record = await self._pending_record(project_id, approval_id)
         cancelled = await self._store.cancel(project_id, approval_id)
-        await self._record(project_id, cancelled, "cancelled", actor="system", note=None)
+        await self._settle(project_id, cancelled)
         await self._resume_when_none_pending(project_id, record)
 
     async def _pending_record(self, project_id: str, approval_id: str) -> ApprovalRecord:
@@ -110,37 +106,24 @@ class ApprovalsService(Approvals):
             )
         return record
 
-    async def _record(
-        self,
-        project_id: str,
-        record: ApprovalRecord,
-        status: DecidedApprovalStatus,
-        *,
-        actor: str,
-        note: str | None,
-    ) -> None:
-        """Update the approval's message part, then write its decision records."""
+    async def _settle(self, project_id: str, record: ApprovalRecord) -> None:
+        """Write the decision's records and its card, the card through the live session."""
 
-        def _update_part(parts: list[Part]) -> list[Part]:
-            return [
-                part.model_copy(update={"status": status, "note": note})
-                if isinstance(part, ApprovalPart) and part.approval_id == record.id
-                else part
-                for part in parts
-            ]
+        async def rewrite_part(
+            session_id: str, message_id: str, transform: Callable[[list[Part]], list[Part]]
+        ) -> object:
+            return await self._sessions.update_message(
+                project_id, session_id, message_id, transform
+            )
 
-        await self._sessions.update_message(
-            project_id, record.session_id, record.message_id, _update_part
-        )
-        await record_decisions(
+        await settle_decisions(
             project_id,
             [record],
-            status,
-            actor=actor,
+            store=self._store,
             databases=self._databases,
             audit_log=self._audit_log,
             event_log=self._event_log,
-            note=note,
+            rewrite_part=rewrite_part,
         )
 
     async def _resume_when_none_pending(self, project_id: str, record: ApprovalRecord) -> None:

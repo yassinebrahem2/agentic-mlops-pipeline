@@ -126,7 +126,7 @@ async def test_pending_expiry_and_cancel_for_turn_include_a_stall(databases: Dat
     expired = await store.expire_non_waiting(PROJECT)
     assert [(a.id, a.kind, a.status) for a in expired] == [(stale_stall.id, "stall", "expired")]
 
-    cancelled = await store.cancel_for_turn(PROJECT, "trn_1")
+    cancelled = await store.cancel_for_turn(PROJECT, "trn_1", decided_by="user")
     assert [(a.id, a.kind, a.status) for a in cancelled] == [
         (waiting_stall.id, "stall", "cancelled")
     ]

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 from sqlalchemy import and_, insert, or_, select, update
 
-from mlops_agents.agents.approvals.decisions import record_decisions
-from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
-from mlops_agents.agents.runtime.contract import ApprovalPart, Part
+from mlops_agents.agents.approvals.decisions import settle_decisions
+from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.runtime.contract import MessageView, Part
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store.inbound import InboundStore
 from mlops_agents.agents.runtime.store.messages import MessagesStore
@@ -149,36 +150,35 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
         for turn_id, session_id in running_turns:
             await self.redeliver_inbound(project_id, session_id, turn_id)
 
-        # Expire pending approvals whose turn is not waiting
-        actual_audit = audit_log or self._audit_log
-        actual_event = event_log or self._event_log
-        expired_records = await approval_store.expire_non_waiting(project_id)
-        if expired_records:
-            by_msg: dict[tuple[str, str], list[ApprovalRecord]] = {}
-            for rec in expired_records:
-                by_msg.setdefault((rec.session_id, rec.message_id), []).append(rec)
+        # Expire pending approvals whose turn is not waiting; nothing runs yet, so their cards
+        # are written without the session lock and without a publish.
+        await settle_decisions(
+            project_id,
+            await approval_store.expire_non_waiting(project_id),
+            store=approval_store,
+            databases=self._databases,
+            audit_log=audit_log or self._audit_log,
+            event_log=event_log or self._event_log,
+            rewrite_part=lambda session_id, message_id, transform: self.rewrite_parts(
+                project_id, session_id, message_id, transform
+            ),
+        )
 
-            for (session_id, message_id), recs in by_msg.items():
-                msg = await self.message(project_id, session_id, message_id)
-                if msg is not None:
-                    expired_apr_ids = {r.id for r in recs}
-                    new_parts: list[Part] = []
-                    for part in msg.parts:
-                        if isinstance(part, ApprovalPart) and part.approval_id in expired_apr_ids:
-                            new_parts.append(part.model_copy(update={"status": "expired"}))
-                        else:
-                            new_parts.append(part)
-                    await self.update_message(project_id, message_id, parts=new_parts)
-
-            await record_decisions(
-                project_id,
-                expired_records,
-                "expired",
-                actor="system",
-                databases=self._databases,
-                audit_log=actual_audit,
-                event_log=actual_event,
-            )
+    async def rewrite_parts(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView | None:
+        """Store `transform` of a message's parts; None when the message is gone. The caller
+        holds the session lock, or no turn of the session runs (recovery)."""
+        message = await self.message(project_id, session_id, message_id)
+        if message is None:
+            return None
+        return await self.update_message(
+            project_id, message_id, parts=transform(list(message.parts))
+        )
 
     @shielded
     async def set_summary(
