@@ -45,14 +45,22 @@ def test_the_default_scenario_has_one_of_each_kind_and_the_natural_shift() -> No
     assert spike.columns == ("country", "adr")
 
 
-def test_the_default_injections_avoid_january_the_natural_shift_and_each_other() -> None:
+def test_the_default_injections_sit_between_the_quiet_july_and_the_natural_shift() -> None:
     injected = [p for p in scenarios.load(DEFAULT_SCENARIO).problems if p.kind != "natural_shift"]
 
+    # The order and the window lengths (in days) kept from before the start moved to July.
+    assert [(p.kind, (p.end - p.start).days + 1) for p in injected] == [
+        ("null_spike", 7),
+        ("schema_break", 3),
+        ("out_of_range", 7),
+        ("score_failure", 3),
+        ("ci_failure", 7),
+    ]
     for problem in injected:
-        assert date(2016, 2, 1) <= problem.start <= problem.end < date(2016, 11, 1)
-    windows = sorted((p.start, p.end) for p in injected)
-    # Apart by more than the legacy checks' 30-day lookback, so each is scored on its own.
-    assert all((nxt - end).days > 30 for (_, end), (nxt, _) in pairwise(windows))
+        assert date(2016, 8, 1) <= problem.start <= problem.end < date(2016, 11, 1)
+    # Apart by more than the 7-day lookbacks of the cancellation-rate and drift checks.
+    windows = [(p.start, p.end) for p in injected]
+    assert all((nxt - end).days > 7 for (_, end), (nxt, _) in pairwise(windows))
 
 
 def test_a_scenario_lists_one_answer_key_record_per_column(tmp_path: Path) -> None:

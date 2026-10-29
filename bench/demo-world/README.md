@@ -10,8 +10,8 @@ Its own uv project; run from `bench/demo-world/`:
 uv sync
 uv run demo-world fetch                       # download the source CSV once, checked against its pinned SHA-256
 uv run demo-world new-run rehearsal           # a run: its own copy of the demo repository and its own folders
-uv run demo-world backfill --run rehearsal --until 2016-01-01   # the history, into the run's empty data folder
-uv run demo-world up --run rehearsal --start 2016-01-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
+uv run demo-world backfill --run rehearsal --until 2016-07-01   # the history, into the run's empty data folder
+uv run demo-world up --run rehearsal --start 2016-07-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
 uv run pytest
 uv run ruff check
 uv run ruff format --check
@@ -42,7 +42,7 @@ With `HOTEL_DEMO_COMPANY` set, the world runs the company as its ops host would,
 
 A failing command is logged (command, exit code, the end of its output) and the loop goes on; the log goes to stderr.
 
-`--scenario` names a TOML file of problems to inject; without it nothing is injected. `scenarios/default.toml` holds one problem of each kind spread over 2016, and the natural shift the evaluation scores. Each `[[injection]]` has a `kind`, a `start` and an `end` (business dates, both included), and changes the bookings files dated in that window:
+`--scenario` names a TOML file of problems to inject; without it nothing is injected. `scenarios/default.toml` holds one problem of each kind, spread over August to October 2016 (July, the first simulated month, is the quiet baseline), and the natural shift the evaluation scores. Each `[[injection]]` has a `kind`, a `start` and an `end` (business dates, both included), and changes the bookings files dated in that window:
 
 | `kind` | Keys | Effect |
 |---|---|---|
@@ -85,18 +85,18 @@ With `HOTEL_DEMO_REPO` set (by `--run`), the world also acts on the copy through
 `demo-world up` takes the options of `simulate`. It first runs `mlflow --version` from the company's environment, which in a fresh clone builds that environment (this can take minutes; a failure stops `up` with MLflow's output). Then it starts the company's MLflow server from that environment (`uv run --project <checkout> mlflow server`) on the company's store (`sqlite:///<HOTEL_DEMO_MLFLOW>/mlflow.db`, artifacts in `<HOTEL_DEMO_MLFLOW>/artifacts`), at `127.0.0.1:HOTEL_DEMO_MLFLOW_PORT`, its output in the world's `mlflow-server.log`. Once the server answers `/health` (within 2 minutes, or `up` stops it with an error), it sets `MLFLOW_TRACKING_URI` to it and runs `simulate`. Ctrl+C stops both, on Windows too: the server runs in a process group of its own, which the world stops, with every process it started, on every exit. On Windows that is a console process group asked to stop with `CTRL_BREAK_EVENT`, inside a job object that is then terminated; the system also terminates the job if the world is killed outright. Elsewhere it is a new session, sent `SIGTERM`, then `SIGKILL`. A run stopped this way resumes with the same command.
 
 ```
-uv run demo-world up --run rehearsal --start 2016-01-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
+uv run demo-world up --run rehearsal --start 2016-07-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
 ```
 
 ## A live demo
 
-A live demo uses its own run too, without `--merge-after-days` (the user merges). The full span at 120 seconds a day takes about 15 hours, so fast-forward to the day the demo starts, then play on at a slower pace; `state.json` resumes where the fast part stopped:
+A live demo uses its own run too, without `--merge-after-days` (the user merges). The full span (274 days) at 120 seconds a day takes about 9 hours, so fast-forward to the day the demo starts, then play on at a slower pace; `state.json` resumes where the fast part stopped:
 
 ```
 uv run demo-world new-run live
-uv run demo-world backfill --run live --until 2016-01-01
-uv run demo-world up --run live --start 2016-01-01 --end 2016-06-30 --seconds-per-day 0 --scenario scenarios/default.toml
-uv run demo-world up --run live --start 2016-01-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
+uv run demo-world backfill --run live --until 2016-07-01
+uv run demo-world up --run live --start 2016-07-01 --end 2016-10-31 --seconds-per-day 0 --scenario scenarios/default.toml
+uv run demo-world up --run live --start 2016-07-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml
 ```
 
 ## Data

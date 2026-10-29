@@ -264,24 +264,24 @@ def test_the_answer_key_lists_every_injection_and_natural_shift_once(
 def test_the_answer_key_holds_only_problems_the_run_has_reached(loaded: pd.DataFrame) -> None:
     world = _default_world(loaded)
 
-    _run(world, end=date(2016, 2, 15))
+    _run(world, end=date(2016, 8, 1))
 
     assert _key(world) == [
-        answer_key.Record("null_spike", "data_quality", "country", "2016-02-15", "2016-02-21"),
-        answer_key.Record("null_spike", "data_quality", "adr", "2016-02-15", "2016-02-21"),
+        answer_key.Record("null_spike", "data_quality", "country", "2016-08-01", "2016-08-07"),
+        answer_key.Record("null_spike", "data_quality", "adr", "2016-08-01", "2016-08-07"),
     ]
 
 
 def test_restarting_twice_leaves_the_answer_key_unchanged(loaded: pd.DataFrame) -> None:
     world = _default_world(loaded)
-    _run(world, end=date(2016, 2, 20))
+    _run(world, end=date(2016, 8, 6))
     key = world.folder / "answer_key.jsonl"
     before = key.read_bytes()
 
     (world.folder / "state.json").unlink()
-    _run(world, end=date(2016, 2, 20))
+    _run(world, end=date(2016, 8, 6))
     (world.folder / "state.json").unlink()
-    _run(world, end=date(2016, 2, 20))
+    _run(world, end=date(2016, 8, 6))
 
     assert key.read_bytes() == before
 
