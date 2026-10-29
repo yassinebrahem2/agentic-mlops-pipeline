@@ -309,7 +309,7 @@ describe("ApprovalCard dispatch", () => {
 
     rerender(
       <ApprovalCard
-        approval={{ ...toolApproval, approval_id: "apr_c", proposal_kind: "connections" }}
+        approval={{ ...toolApproval, approval_id: "apr_c", proposal_kind: "other" }}
         projectId="prj_1"
       />,
     );

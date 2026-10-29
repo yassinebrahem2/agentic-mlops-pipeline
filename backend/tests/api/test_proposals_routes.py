@@ -25,6 +25,7 @@ from mlops_agents.proposals.contract import (
     HandoffPayload,
 )
 from mlops_agents.proposals.payloads import ConnectionsPayload
+from mlops_agents.storage.tables import events as events_table
 from mlops_agents.storage.tables import proposals as proposals_table
 from tests.api.conftest import add_local_project
 from tests.proposals.samples import connection, handoff
@@ -131,17 +132,19 @@ async def test_slot_route_writes_keystore_and_masks_value(
     if row["result"] is not None:
         assert secret_val not in str(row["result"])
 
-    # Secret value is absent from event history
-    events = await services.events.history(
-        project_id, types=["proposal.created", "proposal.decided"]
-    )
-    for event in events:
-        assert secret_val not in str(event.payload)
+    # Secret value is absent from event history (scanning all event types in database)
+    engine = await services.databases.project(project_id)
+    async with engine.connect() as conn:
+        all_events = (await conn.execute(select(events_table))).mappings().all()
+    assert len(all_events) > 0
+    for ev in all_events:
+        assert secret_val not in str(ev["payload"])
+        assert secret_val not in str(ev)
 
     # Keystore received the secret
     ref_0 = proposal_slot_ref(project_id, view.id, 0)
     assert await services.project_secrets.is_set(ref_0)
-    assert services.project_secrets._keystore.get(ref_0) == secret_val
+    assert services.keystore.get(ref_0) == secret_val
 
 
 @pytest.mark.asyncio
@@ -234,7 +237,7 @@ async def test_slot_route_non_pending_is_409(
     # Assert keystore and is_set stay empty
     ref_0 = proposal_slot_ref(project_id, view.id, 0)
     assert not await services.project_secrets.is_set(ref_0)
-    assert services.project_secrets._keystore.get(ref_0) is None
+    assert services.keystore.get(ref_0) is None
 
 
 async def _race_setup(
@@ -302,8 +305,8 @@ async def test_slot_put_in_flight_before_apply_is_moved_or_swept(
 
     assert put_resp.status_code == 200
     assert secret_val not in put_resp.text
-    assert secrets._keystore.get(src) is None
-    assert secrets._keystore.get(dst) == (secret_val if moves_slot else None)
+    assert app.state.services.keystore.get(src) is None
+    assert app.state.services.keystore.get(dst) == (secret_val if moves_slot else None)
 
 
 @pytest.mark.asyncio
@@ -316,7 +319,6 @@ async def test_slot_put_during_apply_waits_and_gets_409(
     moves_slot: bool,
 ) -> None:
     project_id, kind, proposal_id = await _race_setup(app, tmp_path, git_env, moves_slot)
-    secrets = app.state.services.project_secrets
     src = proposal_slot_ref(project_id, proposal_id, 0)
     dst = f"project/{project_id}/moved_permanent"
     kind.gated = True
@@ -325,6 +327,9 @@ async def test_slot_put_during_apply_waits_and_gets_409(
         app.state.services.proposals.decide(project_id, proposal_id, approved=True)
     )
     await kind.entered.wait()
+    # The PUT-first test above proves that PUT locks out decide until write completes.
+    # Here, decide is in apply and holds the project proposals lock:
+    assert app.state.services.proposals._lock_for(project_id).locked()
     put = asyncio.create_task(
         client.put(
             f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
@@ -339,8 +344,8 @@ async def test_slot_put_during_apply_waits_and_gets_409(
 
     assert put_resp.status_code == 409
     assert put_resp.json()["code"] == "proposal_not_pending"
-    assert secrets._keystore.get(src) is None
-    assert secrets._keystore.get(dst) is None
+    assert app.state.services.keystore.get(src) is None
+    assert app.state.services.keystore.get(dst) is None
 
 
 @pytest.mark.asyncio
