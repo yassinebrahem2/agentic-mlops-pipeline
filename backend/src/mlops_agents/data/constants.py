@@ -14,3 +14,7 @@ DATA_SUMMARY_MAX_CHARS: Final = 20_000
 CACHE_CAP_BYTES: Final = 500 * 1024 * 1024
 PROFILE_TIMEOUT_S: Final = 30
 HOOK_BUDGET_S: Final = 60
+# Each locked DuckDB connection's share of the app's process. Nothing spills to disk
+# (Decision #431), so a profile needing more memory fails as unreadable.
+DUCKDB_MEMORY_LIMIT: Final = "1GiB"
+DUCKDB_THREADS: Final = 2

@@ -17,6 +17,8 @@ from typing import Any, Final
 
 import duckdb
 
+from mlops_agents.data.constants import DUCKDB_MEMORY_LIMIT, DUCKDB_THREADS
+
 _EXTENDED_LENGTH_PREFIX: Final = "\\\\?\\"
 # An interrupt on an idle connection is lost, so an expired deadline repeats it this often.
 _INTERRUPT_EVERY_S: Final = 0.01
@@ -39,8 +41,11 @@ def quote_identifier(name: str) -> str:
 def locked_connection(allowed: Sequence[Path]) -> duckdb.DuckDBPyConnection:
     """A new in-memory connection that reads only under `allowed` and loads no extension.
 
-    Security-critical: the four statements run in this order, the last one freezing the
-    others. Do not reorder them. The time zone is UTC so that no text the profile computes
+    Security-critical: the seven statements run in this order, the last one freezing the
+    others. Do not reorder them. Without `temp_directory=''` DuckDB adds its spill folder,
+    `<cwd>/.tmp/`, to the allowed list on its own, and the working folder is often the
+    user's repository; the memory and thread limits keep a profile from taking the app's
+    process (Decision #431). The time zone is UTC so that no text the profile computes
     depends on the host (Decision #419).
     """
     # The only settings given through the config dict; the lock itself must be SET statements.
@@ -49,6 +54,9 @@ def locked_connection(allowed: Sequence[Path]) -> duckdb.DuckDBPyConnection:
         config={"autoinstall_known_extensions": False, "autoload_known_extensions": False},
     )
     try:
+        connection.execute("SET temp_directory = ''")
+        connection.execute("SET memory_limit = ?", [DUCKDB_MEMORY_LIMIT])
+        connection.execute("SET threads = ?", [DUCKDB_THREADS])
         connection.execute(
             "SET allowed_directories = ?", [[posix_directory(path) for path in allowed]]
         )

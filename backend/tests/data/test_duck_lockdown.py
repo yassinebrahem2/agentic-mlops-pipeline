@@ -12,6 +12,7 @@ import duckdb
 import pytest
 
 from mlops_agents.config import DUCKDB_VERSION
+from mlops_agents.data.constants import DUCKDB_MEMORY_LIMIT, DUCKDB_THREADS
 from mlops_agents.data.duck import (
     Deadline,
     DeadlineExpired,
@@ -39,6 +40,48 @@ def test_the_configuration_is_locked_and_autoloading_off(team: TeamFolder) -> No
             " current_setting('TimeZone')"
         ).fetchone()
     assert row == (True, False, False, False, "UTC")
+
+
+def test_the_only_allowed_directory_is_the_connections_folder(team: TeamFolder) -> None:
+    """DuckDB would add its own spill folder, `<cwd>/.tmp/`, without `temp_directory=''`."""
+    with locked_connection([team.folder]) as connection:
+        row = connection.execute("SELECT current_setting('allowed_directories')").fetchone()
+    assert row is not None
+    assert [path.rstrip("/") for path in row[0]] == [posix_directory(team.folder)]
+
+
+def test_the_working_folders_spill_directory_is_refused(
+    team: TeamFolder, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working = tmp_path / "working"
+    (working / ".tmp").mkdir(parents=True)
+    monkeypatch.chdir(working)
+    error, message = _FILE_LOCK
+    with locked_connection([team.folder]) as connection, pytest.raises(error, match=message):
+        connection.execute("COPY (SELECT 42 AS x) TO '.tmp/escaped.csv'")
+    assert list((working / ".tmp").iterdir()) == []
+
+
+def _set_on_an_unlocked_connection(name: str, value: str | int) -> object:
+    """The setting as DuckDB reports it after `SET name = value`, in its own display form."""
+    with duckdb.connect(":memory:") as reference:
+        reference.execute(f"SET {name} = ?", [value])
+        row = reference.execute(f"SELECT current_setting('{name}')").fetchone()
+    assert row is not None
+    return row[0]
+
+
+def test_memory_and_threads_are_the_constants(team: TeamFolder) -> None:
+    with locked_connection([team.folder]) as connection:
+        row = connection.execute(
+            "SELECT current_setting('memory_limit'), current_setting('threads'),"
+            " current_setting('temp_directory')"
+        ).fetchone()
+    assert row == (
+        _set_on_an_unlocked_connection("memory_limit", DUCKDB_MEMORY_LIMIT),
+        DUCKDB_THREADS,
+        "",
+    )
 
 
 @pytest.mark.parametrize("table", sorted(FIXTURE_ROWS))
@@ -83,6 +126,9 @@ REFUSED: dict[str, tuple[str, tuple[type[duckdb.Error], str]]] = {
     "set_allowed_directories": ("SET allowed_directories = ['{outside}']", _CONFIG_LOCK),
     "set_lock_configuration": ("SET lock_configuration = false", _CONFIG_LOCK),
     "set_time_zone": ("SET TimeZone = 'America/New_York'", _CONFIG_LOCK),
+    "set_memory_limit": ("SET memory_limit = '64GiB'", _CONFIG_LOCK),
+    "set_threads": ("SET threads = 64", _CONFIG_LOCK),
+    "set_temp_directory": ("SET temp_directory = '{outside}'", _CONFIG_LOCK),
     "install": ("INSTALL httpfs", _FILE_LOCK),
     "load": ("LOAD httpfs", _FILE_LOCK),
     "attach_outside": ("ATTACH '{outside}/attached.db' AS outside_db", _FILE_LOCK),
