@@ -84,10 +84,48 @@ async def test_real_docker_duckdb_requirements_image(tmp_path: Path) -> None:
         res_mounts = await service.run(project_id, task, "cat /proc/mounts", timeout_s=30)
         assert res_mounts.exit_code == 0
         mount_lines = res_mounts.output.splitlines()
-        mount_targets = [line.split()[1] for line in mount_lines if len(line.split()) >= 2]
-        assert "/workspace" in mount_targets
-        data_mounts = [t for t in mount_targets if t.startswith("/data/")]
-        assert data_mounts == ["/data/hotels"]
+        docker_own = {
+            "/etc/hosts",
+            "/etc/hostname",
+            "/etc/resolv.conf",
+            "/usr/sbin/docker-init",
+            "/",
+        }
+        pseudo_fstypes = {
+            "proc",
+            "sysfs",
+            "tmpfs",
+            "devpts",
+            "mqueue",
+            "cgroup",
+            "cgroup2",
+            "devtmpfs",
+            "autofs",
+            "overlay",
+            "rootfs",
+            "bpf",
+            "tracefs",
+            "securityfs",
+            "pstore",
+            "hugetlbfs",
+            "ramfs",
+            "binfmt_misc",
+        }
+        host_binds: list[str] = []
+        for line in mount_lines:
+            parts = line.split()
+            if len(parts) >= 3:
+                target = parts[1]
+                fstype = parts[2]
+                if target in docker_own or target.endswith("/docker-init"):
+                    continue
+                if fstype in pseudo_fstypes:
+                    continue
+                if target.startswith(("/proc", "/sys", "/dev")):
+                    continue
+                host_binds.append(target)
+        assert sorted(host_binds) == ["/data/hotels", "/workspace"]
+
     finally:
         await conns_service.delete(project_id, con.id)
         await service.remove_task(project_id, task.id)
