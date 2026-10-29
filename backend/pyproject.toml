@@ -5,6 +5,7 @@ description = "Multi-agent system for autonomous MLOps pipelines"
 requires-python = ">=3.12"
 dependencies = [
   "aiosqlite>=0.22.1",
+  "croniter==6.0.0",
   "cryptography>=46.0.7",
   "duckdb==2.0.0",
   "fastapi>=0.143.2",

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.clock import now_iso
-from mlops_agents.proposals.contract import HandoffView
+from mlops_agents.proposals.contract import HandoffObserver, HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import handoff_versions
+
+logger = logging.getLogger(__name__)
 
 
 class SqliteHandoffs:
@@ -19,6 +22,10 @@ class SqliteHandoffs:
 
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
+        self._observers: list[HandoffObserver] = []
+
+    def add_observer(self, observer: HandoffObserver) -> None:
+        self._observers.append(observer)
 
     async def store(self, project_id: str, proposal_id: str, payload: HandoffPayload) -> int:
         """Idempotent by proposal_id: stores a handoff version and returns that version."""
@@ -40,7 +47,18 @@ class SqliteHandoffs:
                     )
                 )
             ).scalar_one()
-            return int(version)
+
+        curr = await self.current(project_id)
+        if curr is not None:
+            for obs in self._observers:
+                try:
+                    await obs.stored(project_id, curr)
+                except Exception as exc:
+                    logger.warning(
+                        "HandoffObserver %s failed for project %s: %s", obs, project_id, exc
+                    )
+
+        return int(version)
 
     async def current(self, project_id: str) -> HandoffView | None:
         """Returns the newest handoff version, or None if none has been stored."""
