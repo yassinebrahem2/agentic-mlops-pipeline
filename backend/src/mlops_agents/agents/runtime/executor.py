@@ -200,6 +200,8 @@ class TurnExecutor:
                         project_id, agent, session_id=session_id, turn_id=turn_id
                     )
                 except TurnRefused as refused:
+                    if refused.end == "done":
+                        raise
                     # The turn cannot go on (the agent's model or provider was deleted while it
                     # stalled): it fails with the builder's own reason, not as unexpected.
                     raise TurnFailed(refused.text) from refused

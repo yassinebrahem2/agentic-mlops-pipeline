@@ -256,6 +256,9 @@ async def test_try_again_after_the_provider_was_deleted_fails_the_turn(
     # with the lookup's own message, not the generic failure text.
     with pytest.raises(DomainError) as lookup:
         await env.session.settings.resolve(env.project_id, "orchestrator")
+    # Deleting the provider deleted its models, so the lookup that fails is the model's, not
+    # `provider_not_found` (reported on the task).
+    assert lookup.value.code == "model_missing"
     assert (ended.data.status, ended.data.error) == ("failed", lookup.value.message)
     assert ended.data.error != UNEXPECTED_FAILURE_TEXT
     assert not [r for r in caplog.records if "failed unexpectedly" in r.message]
