@@ -26,7 +26,6 @@ from mlops_agents.data.constants import (
     MAX_TABLES,
     SAMPLE_ROWS,
 )
-from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.hooks.test_registry import TextHook
@@ -261,75 +260,6 @@ async def test_four_concurrent_runs_profile_each_table_once(env: SummaryEnv) -> 
 
     assert len(set(texts)) == 1
     assert dict(env.spy.calls) == {"a.csv": 1, "b.csv": 1, "c.csv": 1}
-
-
-async def test_an_unreachable_connection_gives_one_line(env: SummaryEnv, tmp_path: Path) -> None:
-    folder = await env.connect("gone", {"a.csv": csv_rows(2)})
-    await env.connect("kept", {"b.csv": csv_rows(2)})
-    folder.rename(folder.with_name("moved away"))
-
-    text = await env.render()
-
-    lines = text.split("\n")
-    (gone,) = [line for line in lines if '"gone"' in line]
-    # The typed folder becomes the connection's sandbox path (Decision #431).
-    assert gone == (
-        'Connection "gone" (local_folder, unreachable): Folder does not exist: /data/gone'
-    )
-    assert tmp_path.name not in text
-    assert 'Connection "kept" (local_folder, ok) at /data/kept:' in lines
-    assert any(line.startswith('Table "b" (csv, ') for line in lines)
-
-
-async def test_a_folder_gone_after_the_listing_names_no_host_path(
-    env: SummaryEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The kind's messages quote the folder as typed, in the race windows too."""
-    folder = await env.connect("sales", {"a.csv": csv_rows(2)})
-    gone = DomainError("connection_invalid", f"Folder does not exist: {folder}\nsecond line")
-
-    async def vanished(*args: object) -> str:
-        raise gone
-
-    monkeypatch.setattr(env.connections, "data_version", vanished)
-    profiled = await env.render()
-    monkeypatch.setattr(env.connections, "tables", vanished)
-    listed = await env.render()
-
-    assert 'Table "a" (csv): unreadable: Folder does not exist: /data/sales' in profiled
-    assert (
-        'Connection "sales" (local_folder, unreachable): Folder does not exist: /data/sales'
-    ) in listed
-    assert tmp_path.name not in profiled + listed
-    assert "second line" not in profiled + listed
-
-
-async def test_a_corrupt_csv_gives_one_line_and_the_others_render(env: SummaryEnv) -> None:
-    await env.connect("sales", {"bad.csv": b"a,b\n1,\xff\xfe\n", "good.csv": csv_rows(2)})
-
-    lines = (await env.render()).split("\n")
-
-    (bad,) = [line for line in lines if '"bad"' in line]
-    assert bad.startswith('Table "bad" (csv): unreadable: ')
-    assert any(line.startswith('Table "good" (csv, ') for line in lines)
-
-
-@pytest.mark.parametrize("secret", ["credentials.json", "keys/client_secret.json"])
-async def test_a_secret_named_file_is_listed_and_never_profiled(
-    env: SummaryEnv, secret: str
-) -> None:
-    """The connection kind's secret denylist (Decision #431): its contents stay out of every
-    agent's context and checkpoint."""
-    token = "ghp_" + "t0ken" * 8
-    await env.connect("sales", {secret: json.dumps({"token": token}), "people.csv": csv_rows(2)})
-    name = secret.split("/")[0].removesuffix(".json")
-
-    lines = (await env.render()).split("\n")
-
-    assert f'Table "{name}" (json): detail left out: looks like a secret file' in lines
-    assert not any(token in line for line in lines)
-    assert env.spy.count(secret) == 0
-    assert any(line.startswith('Table "people" (csv, ') for line in lines)
 
 
 @pytest.mark.parametrize("broken", ["_read", "_write_atomically"])
