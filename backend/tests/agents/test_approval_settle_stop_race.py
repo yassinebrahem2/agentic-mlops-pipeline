@@ -5,12 +5,13 @@ never wait on each other (#381)."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx2
 
-from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import ApprovalPart, Part
@@ -50,19 +51,24 @@ class FirstEventWaits(SqliteEventLog):
         )
 
 
-class DecidedSignal:
-    """Set once the approval is decided: the caller that decided it is past that point."""
+class ContendedSettleStore(ApprovalStore):
+    """Sets `contended` when a caller asks for the settle lock while another is inside it."""
 
-    def __init__(self, approval_id: str) -> None:
-        self._approval_id = approval_id
-        self.seen = asyncio.Event()
+    def __init__(self, databases: Databases) -> None:
+        super().__init__(databases)
+        self.contended = asyncio.Event()
+        self._entered = 0
 
-    async def asked(self, view: ApprovalView) -> None:
-        pass
-
-    async def decided(self, view: ApprovalView) -> None:
-        if view.id == self._approval_id:
-            self.seen.set()
+    @asynccontextmanager
+    async def settling(self, project_id: str) -> AsyncGenerator[None]:
+        if self._entered:
+            self.contended.set()
+        self._entered += 1
+        try:
+            async with super().settling(project_id):
+                yield
+        finally:
+            self._entered -= 1
 
 
 async def test_a_stop_settling_while_a_decision_settles_does_not_deadlock(
@@ -74,7 +80,8 @@ async def test_a_stop_settling_while_a_decision_settles_does_not_deadlock(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> None:
-    store = ApprovalStore(databases)  # the one store of the manager, its gate and the service
+    # The one store of the manager, its gate and the service.
+    store = ContendedSettleStore(databases)
     log = FirstEventWaits(databases)
     env = await build_session_env(
         tmp_path,
@@ -117,20 +124,18 @@ async def test_a_stop_settling_while_a_decision_settles_does_not_deadlock(
             risk_class=RiskClass.WRITE_CODE,
             preview=TOOL_PREVIEW,
         )
-    stop_cancelled = DecidedSignal("apr_stopped")
-    store.add_observer(stop_cancelled)
     service = ApprovalsService(databases, env.manager, store=store, event_log=log)
 
     async def race() -> None:
         deciding = asyncio.create_task(service.decide(project_id, "apr_decided", approve=True))
         await log.entered.wait()
         stopping = asyncio.create_task(env.manager.stop(project_id, "orchestrator"))
-        await stop_cancelled.seen.wait()
-        await asyncio.sleep(0.05)  # Stop, holding the session lock, now waits for the settle lock
+        await store.contended.wait()  # Stop, holding the session lock, waits for the settle lock
         log.release.set()
         await asyncio.gather(deciding, stopping)
 
-    await asyncio.wait_for(race(), timeout=5)
+    # A deadlock never ends; correct code ends in well under a second, also on a slow runner.
+    await asyncio.wait_for(race(), timeout=20)
 
     decided, stopped = [await store.get(project_id, i) for i in ids]
     assert decided is not None and stopped is not None
