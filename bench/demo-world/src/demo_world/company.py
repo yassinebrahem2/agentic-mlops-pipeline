@@ -184,7 +184,8 @@ class Company:
 
     def production_model(self) -> Production:
         """Ask MLflow, from the company's environment, whether `production` names a model."""
-        tracking_uri = os.environ.get(paths.TRACKING_URI_VARIABLE)
+        # Empty counts as unset, as in the company's `paths.tracking_uri()`.
+        tracking_uri = os.environ.get(paths.TRACKING_URI_VARIABLE) or None
         if tracking_uri is None:
             store = (self.mlflow / "mlflow.db").resolve()
             if not store.exists():
