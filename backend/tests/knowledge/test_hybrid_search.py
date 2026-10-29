@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.knowledge.contract import NoteDraft
@@ -14,6 +15,7 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.state import get_vectors_ready_for
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import note_embeddings
 from tests.knowledge.fakes import ConceptEmbedder, FakeEmbedders, no_secrets
 
 
@@ -266,8 +268,23 @@ async def test_exhausted_embedder_fallback_and_cooldown(
     await service.search(project_id, query="truck", type=None, limit=5)
     await service.wait_idle(project_id)
 
-    # Embedder was called to embed query and the pending batch
+    # Embedder was called to embed query and the pending batch (call_count >= 3: 1 original + 1 query + 1 pending batch)
     assert concept_embedder.call_count >= 2
+
+    # Assert Beta Note now has an embedded vector in note_embeddings
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        res_emb = await conn.execute(
+            select(note_embeddings.c.note_id).where(note_embeddings.c.note_id == saved2.id)
+        )
+        assert res_emb.scalar() == saved2.id, (
+            "Beta Note must have an embedding row after search restarts pass"
+        )
+
+    # Search by meaning only: "car" does not match "Automobile repair" in text, only via vector search
+    res_meaning = await service.search(project_id, query="car", type=None, limit=5)
+    assert res_meaning.used_vectors is True
+    assert any(n.id == saved2.id for n in res_meaning.notes)
 
     # Now search is hybrid again
     res4 = await service.search(project_id, query="truck", type=None, limit=5)

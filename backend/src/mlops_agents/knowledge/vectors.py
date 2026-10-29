@@ -174,6 +174,8 @@ class SqliteVectorStore:
     async def remove(self, project_id: str, note_id: str) -> None:
         engine = await self._databases.project(project_id)
 
+        # Step 1: Always delete and commit note_embeddings in its own transaction first.
+        # This must be unconditional even if vec0 extension is unavailable or errors.
         async with engine.begin() as conn:
             seq_res = await conn.execute(select(notes.c.seq).where(notes.c.id == note_id))
             seq = seq_res.scalar()
@@ -183,18 +185,22 @@ class SqliteVectorStore:
             )
             dim = emb_res.scalar()
 
-            # Always remove the note_embeddings row (no extension needed)
             await conn.execute(delete(note_embeddings).where(note_embeddings.c.note_id == note_id))
 
-            if seq is not None and dim is not None:
-                table_name = f"note_vec_{dim}"
+        # Step 2: Remove the corresponding vec0 row if a vec table exists.
+        if seq is not None and dim is not None:
+            table_name = f"note_vec_{dim}"
+            async with engine.connect() as conn:
                 tbl_check = await conn.execute(
                     text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
                     {"name": table_name},
                 )
-                if tbl_check.scalar() is not None:
-                    try:
-                        await self._ensure_vec_available(engine)
+                tbl_exists = tbl_check.scalar() is not None
+
+            if tbl_exists:
+                try:
+                    await self._ensure_vec_available(engine)
+                    async with engine.begin() as conn:
                         await conn.execute(
                             text(f"DELETE FROM {table_name} WHERE rowid = :seq"),  # noqa: S608 -- table name is dynamic per-dimension int validated against 1..MAX_DIMENSIONS
                             {"seq": seq},
@@ -204,13 +210,13 @@ class SqliteVectorStore:
                         )
                         if count_res.scalar() == 0:
                             await conn.execute(text(f"DROP TABLE {table_name}"))
-                    except VectorStoreError as exc:
-                        logger.warning(
-                            "Vector extension unavailable while removing vec0 row for note %s: %s",
-                            note_id,
-                            exc,
-                        )
-                        raise
+                except VectorStoreError as exc:
+                    logger.warning(
+                        "Vector extension unavailable while removing vec0 row for note %s: %s",
+                        note_id,
+                        exc,
+                    )
+                    raise
 
     async def drop_embedder(self, project_id: str, embedder: str) -> None:
         engine = await self._databases.project(project_id)

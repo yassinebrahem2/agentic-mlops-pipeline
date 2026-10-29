@@ -97,14 +97,8 @@ class KnowledgeService(Knowledge):
                 f"Text exceeds maximum length of {TEXT_MAX_CHARS} characters",
                 status=422,
             )
-
-        # Validate non-empty
         if not note.title.strip() or not note.text.strip():
-            raise DomainError(
-                "invalid_note",
-                "Title and text cannot be empty",
-                status=422,
-            )
+            raise DomainError("invalid_note", "Title and text cannot be empty", status=422)
 
         # Scrub secrets
         secret_values = await self._secrets()
@@ -236,12 +230,7 @@ class KnowledgeService(Knowledge):
                 res = await conn.execute(select(notes.c.type).where(notes.c.id == note_id))
                 existing_type = res.scalar()
                 if existing_type is None:
-                    raise DomainError(
-                        "note_not_found",
-                        f"Note {note_id} not found",
-                        status=404,
-                    )
-
+                    raise DomainError("note_not_found", f"Note {note_id} not found", status=404)
                 await conn.execute(delete(notes).where(notes.c.id == note_id))
 
             await self._events.record(
@@ -253,8 +242,7 @@ class KnowledgeService(Knowledge):
             )
 
     async def get(self, project_id: str, note_id: str) -> NoteView | None:
-        engine = await self._databases.project(project_id)
-        return await get_note(engine, note_id)
+        return await get_note(await self._databases.project(project_id), note_id)
 
     async def search(
         self,
@@ -270,27 +258,18 @@ class KnowledgeService(Knowledge):
 
         # 1. Full text candidates computed first. If query has no tokens, return newest notes.
         if fts_query is None:
-            newest = await list_newest_notes(
-                engine,
-                limit=clamped_limit,
-                note_type=type,
-            )
+            newest = await list_newest_notes(engine, limit=clamped_limit, note_type=type)
             return SearchResult(notes=newest, used_vectors=False, detail=None)
 
         candidate_ids = await query_fts_candidates(
-            engine,
-            fts_query,
-            limit=SEARCH_CANDIDATES,
-            note_type=type,
+            engine, fts_query, limit=SEARCH_CANDIDATES, note_type=type
         )
 
         # 2. Check embedder for project. If None: full-text only.
         embedder = await self._embedders.for_project(project_id)
         if embedder is None:
             ranked_views = await get_notes_by_ids(
-                engine,
-                candidate_ids[:clamped_limit],
-                note_type=type,
+                engine, candidate_ids[:clamped_limit], note_type=type
             )
             st = await self._embedders.status(project_id)
             detail = (
@@ -307,14 +286,10 @@ class KnowledgeService(Knowledge):
         if pass_state is not None and pass_state.last_failure_time is not None:
             if not pass_state.should_retry(self._monotonic()):
                 ranked_views = await get_notes_by_ids(
-                    engine,
-                    candidate_ids[:clamped_limit],
-                    note_type=type,
+                    engine, candidate_ids[:clamped_limit], note_type=type
                 )
                 return SearchResult(
-                    notes=ranked_views,
-                    used_vectors=False,
-                    detail=pass_state.last_failure_msg,
+                    notes=ranked_views, used_vectors=False, detail=pass_state.last_failure_msg
                 )
             # Stalled pass retry: cooldown has elapsed, restart embedding pass
             self.kick(project_id)
@@ -322,9 +297,7 @@ class KnowledgeService(Knowledge):
         if ready_key != key:
             self.kick(project_id)
             ranked_views = await get_notes_by_ids(
-                engine,
-                candidate_ids[:clamped_limit],
-                note_type=type,
+                engine, candidate_ids[:clamped_limit], note_type=type
             )
             detail = f"Notes are being re-embedded with {embedder.address}; until that finishes, search matches words only."
             return SearchResult(notes=ranked_views, used_vectors=False, detail=detail)
@@ -343,9 +316,7 @@ class KnowledgeService(Knowledge):
             clean_msg = error_text(exc)
             pass_state.record_failure(clean_msg, self._monotonic())
             ranked_views = await get_notes_by_ids(
-                engine,
-                candidate_ids[:clamped_limit],
-                note_type=type,
+                engine, candidate_ids[:clamped_limit], note_type=type
             )
             return SearchResult(notes=ranked_views, used_vectors=False, detail=clean_msg)
 
@@ -358,11 +329,7 @@ class KnowledgeService(Knowledge):
 
         # Combine rankings using Reciprocal Rank Fusion
         fused_ids = fuse([candidate_ids, filtered_vector_ids])
-        ranked_views = await get_notes_by_ids(
-            engine,
-            fused_ids[:clamped_limit],
-            note_type=type,
-        )
+        ranked_views = await get_notes_by_ids(engine, fused_ids[:clamped_limit], note_type=type)
         return SearchResult(notes=ranked_views, used_vectors=True, detail=None)
 
     def kick(self, project_id: str) -> None:

@@ -388,23 +388,21 @@ async def test_edit_note_removes_stale_note_embeddings_when_vectors_unavailable(
         NoteDraft(type="fact", title="Original Title", text="Original text"),
     )
 
-    # 2. Add a note_embeddings entry simulating prior embedding
-    from sqlalchemy import insert, select
+    # 2. Add an embedded note with an actual vec0 table and note_embeddings row
+    from sqlalchemy import select
 
     from mlops_agents.knowledge.vectors import VectorStoreError
     from mlops_agents.storage.tables import note_embeddings
 
-    engine = await databases.project(project_id)
+    await real_vectors.upsert(
+        project_id,
+        note.id,
+        [0.1, 0.2, 0.3, 0.4],
+        embedder="fake:4@4",
+    )
 
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(note_embeddings).values(
-                note_id=note.id,
-                embedder="fake:128@128",
-                dimensions=128,
-                embedded_at="2026-10-28T12:00:00Z",
-            )
-        )
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
         res = await conn.execute(
             select(note_embeddings).where(note_embeddings.c.note_id == note.id)
         )

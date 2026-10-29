@@ -347,21 +347,25 @@ async def test_migrate_applies_later_migration_over_database_with_vec_tables(
     migrations_dir = tmp_path / "custom_migrations"
     migrations_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy existing 0001..0004 migrations
+    # Copy existing migrations
     from importlib.resources import files
 
     source_folder = files("mlops_agents.storage").joinpath("migrations", "project")
+    max_version = 0
     for entry in source_folder.iterdir():
         (migrations_dir / entry.name).write_text(entry.read_text("utf-8"), encoding="utf-8")
+        if entry.name[:4].isdigit():
+            max_version = max(max_version, int(entry.name[:4]))
 
-    # Add 0005_rebuild_dummy.sql that creates, drops, and renames a table (the stage 2 pattern)
-    m5 = """-- migration 0005: test rebuild table
+    # Add next migration that creates, drops, and renames a table (the stage 2 pattern)
+    next_version = max_version + 1
+    m_next = f"""-- migration {next_version:04d}: test rebuild table
 CREATE TABLE dummy_new (id TEXT PRIMARY KEY, val TEXT);
 INSERT INTO dummy_new VALUES ('1', 'hello');
 DROP TABLE IF EXISTS dummy;
 ALTER TABLE dummy_new RENAME TO dummy;
 """
-    (migrations_dir / "0005_rebuild_dummy.sql").write_text(m5, encoding="utf-8")
+    (migrations_dir / f"{next_version:04d}_rebuild_dummy.sql").write_text(m_next, encoding="utf-8")
 
     applied = migrate(
         db_path,
@@ -369,7 +373,7 @@ ALTER TABLE dummy_new RENAME TO dummy;
         tmp_path / "backups",
         source=migrations_dir,
     )
-    assert 5 in applied
+    assert next_version in applied
 
     # Reconnect directly with vectors=True and verify vec0 still works and dummy exists
     migrated_engine = create_engine_for(db_path, vectors=True)
