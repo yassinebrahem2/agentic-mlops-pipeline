@@ -21,7 +21,11 @@ PROJECT = "prj_1"
 
 
 def make_profile(
-    *, row_count: int = 3, timed_out: bool = False, timeout_s: float = PROFILE_TIMEOUT_S
+    *,
+    row_count: int = 3,
+    timed_out: bool = False,
+    incomplete: bool = False,
+    timeout_s: float = PROFILE_TIMEOUT_S,
 ) -> TableProfile:
     return TableProfile(
         row_count=row_count,
@@ -34,6 +38,7 @@ def make_profile(
         sample_columns=["id"],
         sample=[["1"], ["2"], ["3"]],
         timed_out=timed_out,
+        incomplete=incomplete,
         timeout_s=timeout_s,
     )
 
@@ -338,6 +343,18 @@ async def test_a_timed_out_profile_under_a_shorter_budget_is_not_stored(
     assert first.timed_out
     assert entries(paths) == []
     await fetch(cache, compute)
+    assert compute.calls == 2
+
+
+async def test_an_incomplete_profile_is_stored_whatever_its_budget(cache: ProfileCache) -> None:
+    """The memory limit, not the time limit, cut it (Decision #432): a rerun would stop at the
+    same step, so it is the marker "incomplete at this data version"."""
+    compute = Counting(make_profile(incomplete=True, timeout_s=PROFILE_TIMEOUT_S / 2))
+    await fetch(cache, compute)
+    second = await fetch(cache, compute)
+    assert compute.calls == 1
+    assert second.incomplete
+    await fetch(cache, compute, version="v2")
     assert compute.calls == 2
 
 

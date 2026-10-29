@@ -11,7 +11,7 @@ import pytest
 from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.data.summary_env import SummaryEnv, build_summary_env, csv_rows
+from tests.data.summary_env import SummaryEnv, build_summary_env, csv_rows, out_of_memory_at
 
 
 @pytest.fixture
@@ -70,6 +70,29 @@ async def test_a_corrupt_csv_gives_one_line_and_the_others_render(env: SummaryEn
     (bad,) = [line for line in lines if '"bad"' in line]
     assert bad.startswith('Table "bad" (csv): unreadable: ')
     assert any(line.startswith('Table "good" (csv, ') for line in lines)
+
+
+async def test_an_out_of_memory_table_shows_what_finished_and_is_not_profiled_again(
+    env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision #432: the statistics are kept, the marker says the rest is unknown, and the
+    next turn reads the cached profile instead of running out of memory again."""
+    await env.connect("sales", {"a.csv": csv_rows(3)})
+    out_of_memory_at(monkeypatch)
+
+    first = await env.render()
+    second = await env.render()
+
+    assert second == first
+    assert env.spy.count("a.csv") == 1
+    lines = first.split("\n")
+    marker = "Profile incomplete (memory limit): anything not shown below is unknown."
+    title = lines[lines.index(marker) - 1]
+    assert title.startswith('Table "a" (csv, files ["a.csv"], data version ')
+    assert title.endswith("): 3 rows")
+    assert '- "id" BIGINT, nulls 0, ~distinct 3, 1..3' in lines
+    assert "Sample rows: unknown" in lines
+    assert "Out of Memory" not in first
 
 
 @pytest.mark.parametrize("secret", ["credentials.json", "keys/client_secret.json"])

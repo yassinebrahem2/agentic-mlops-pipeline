@@ -15,7 +15,13 @@ from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, DuckDbSource
 from mlops_agents.data import cache as cache_module
 from mlops_agents.data import summaries as summaries_module
 from mlops_agents.data.profile import TableProfile
-from tests.data.summary_env import ProfileSpy, csv_rows, time_out_after_the_count, write
+from tests.data.summary_env import (
+    ProfileSpy,
+    csv_rows,
+    out_of_memory_at,
+    time_out_after_the_count,
+    write,
+)
 
 
 @pytest.fixture
@@ -86,6 +92,7 @@ async def test_a_table_detail_is_served_from_the_cache(
     ]
     assert body["row_count"] == 3
     assert body["timed_out"] is False
+    assert body["incomplete"] is False
     connections = app.state.services.connections
     assert body["data_version"] == await connections.data_version(project_id, con, "people")
     assert '["1", "n1"]' in body["summary"]
@@ -240,6 +247,29 @@ async def test_a_timed_out_profile_keeps_a_row_count_that_finished(
     assert res.json()["row_count"] == 3
 
 
+async def test_an_out_of_memory_profile_is_an_incomplete_detail_served_from_the_cache(
+    client: httpx2.AsyncClient,
+    project_id: str,
+    tmp_path: Path,
+    spy: ProfileSpy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision #432: what finished is the detail, marked, and the next request is a hit."""
+    con = await _connect(client, project_id, tmp_path / "team data", {"people.csv": csv_rows(3)})
+    out_of_memory_at(monkeypatch)
+
+    res = await client.get(_url(project_id, con, "people"))
+    again = await client.get(_url(project_id, con, "people"))
+
+    assert res.status_code == 200
+    body = res.json()
+    assert (body["incomplete"], body["timed_out"], body["row_count"]) == (True, False, 3)
+    assert "Profile incomplete (memory limit)" in body["summary"]
+    assert "Out of Memory" not in res.text
+    assert again.json() == body
+    assert spy.count("people.csv") == 1
+
+
 async def test_a_timed_out_profile_without_columns_is_a_504(
     client: httpx2.AsyncClient,
     project_id: str,
@@ -256,6 +286,7 @@ async def test_a_timed_out_profile_without_columns_is_a_504(
             sample_columns=[],
             sample=[],
             timed_out=True,
+            incomplete=False,
             timeout_s=timeout_s,
         )
 

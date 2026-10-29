@@ -46,6 +46,7 @@ def _profile(**changes: object) -> TableProfile:
         "sample_columns": ["id", "name", "flag"],
         "sample": [["1", "ann", "true"], ["2", "bob", "false"], ["3", "NULL", "true"]],
         "timed_out": False,
+        "incomplete": False,
         "timeout_s": 30,
     }
     values.update(changes)
@@ -112,6 +113,38 @@ def test_a_timed_out_profile_whose_count_finished_shows_it() -> None:
         'Table "people" (csv, files ["people.csv"]): 3 rows',
         "Profile timed out after 30 s: the statistics and sample rows are unknown.",
     ]
+
+
+def test_an_incomplete_profile_shows_what_finished_and_says_the_rest_is_unknown() -> None:
+    """Out of memory after the statistics (Decision #432): they are facts, the sample is not."""
+    profile = _profile(sample_columns=[], sample=[], incomplete=True)
+    assert render_versioned_table(PEOPLE, "v1", profile) == (
+        'Table "people" (csv, files ["people.csv"], data version v1): 3 rows\n'
+        "Profile incomplete (memory limit): anything not shown below is unknown.\n"
+        "Columns:\n"
+        '- "id" BIGINT, nulls 0, ~distinct 3, 1..3\n'
+        '- "name" VARCHAR, nulls 1, ~distinct 2, top ["ann", "bob"]\n'
+        '- "flag" BOOLEAN, nulls 0, ~distinct 2\n'
+        "Sample rows: unknown"
+    )
+
+
+def test_an_incomplete_profile_without_its_statistics_shows_only_names_and_types() -> None:
+    profile = _profile(
+        row_count=None,
+        columns=[_column("id", "BIGINT"), _column("name", "VARCHAR")],
+        sample_columns=[],
+        sample=[],
+        incomplete=True,
+    )
+    assert render_table(PEOPLE, profile) == (
+        'Table "people" (csv, files ["people.csv"]): row count unknown (memory limit)\n'
+        "Profile incomplete (memory limit): anything not shown below is unknown.\n"
+        "Columns:\n"
+        '- "id" BIGINT\n'
+        '- "name" VARCHAR\n'
+        "Sample rows: unknown"
+    )
 
 
 def test_one_row_is_singular() -> None:

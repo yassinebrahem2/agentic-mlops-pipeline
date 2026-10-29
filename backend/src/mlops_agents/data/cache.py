@@ -108,7 +108,8 @@ def _digest(*parts: str | int) -> str:
 
 
 def _storable(profile: TableProfile) -> bool:
-    # A timed-out profile marks the data version as too slow only after a full-length run.
+    # A timed-out profile marks the data version as too slow only after a full-length run. An
+    # incomplete one (out of memory, Decision #432) is stored: any run stops at the same step.
     return not profile.timed_out or profile.timeout_s >= PROFILE_TIMEOUT_S
 
 

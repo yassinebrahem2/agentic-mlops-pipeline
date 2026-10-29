@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from mlops_agents.agents.hooks.contract import HookContext
@@ -122,6 +123,21 @@ def time_out_after_the_count(monkeypatch: pytest.MonkeyPatch) -> None:
         raise DeadlineExpired
 
     monkeypatch.setattr(f"{profile_module.__name__}._ProfileBuilder._top_values", expires)
+
+
+OUT_OF_MEMORY = "Out of Memory Error: could not allocate block of size 256.0 KiB"
+
+
+def out_of_memory_at(
+    monkeypatch: pytest.MonkeyPatch, step: str = "_top_values", error: Exception | None = None
+) -> None:
+    """Every profile runs out of DuckDB's memory at `step` of `_ProfileBuilder`, as a large
+    id column's top-value grouping does at the memory limit (Decision #432)."""
+
+    def fails(self: object, deadline: Deadline) -> None:
+        raise error or duckdb.OutOfMemoryException(OUT_OF_MEMORY)
+
+    monkeypatch.setattr(f"{profile_module.__name__}._ProfileBuilder.{step}", fails)
 
 
 def csv_rows(count: int) -> str:

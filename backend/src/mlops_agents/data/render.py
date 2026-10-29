@@ -23,7 +23,8 @@ SIZE_CAP: Final = "size cap"
 TIME_BUDGET: Final = "time budget"
 CACHE_UNAVAILABLE: Final = "profile cache unavailable"
 DENYLISTED_FILE: Final = "looks like a secret file"
-UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
+_TIMED_OUT: Final = "timed out"
+_MEMORY_LIMIT: Final = "memory limit"
 _REASON_CUT: Final = TEXT_CUT * 2
 # DuckDB's CSV errors give only the place on their first line. The cause is the last line
 # before a blank line or DuckDB's advice ("Possible fixes:", "Possible Solution:"); a copy
@@ -146,7 +147,12 @@ def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> st
     about = f"{ref.format}, files {_files(ref.files)}"
     if data_version is not None:
         about += f", data version {one_line(data_version)}"
-    rows = UNKNOWN_ROW_COUNT if profile.row_count is None else _rows(profile.row_count)
+    stopped_by = _TIMED_OUT if profile.timed_out else _MEMORY_LIMIT
+    rows = (
+        f"row count unknown ({stopped_by})"
+        if profile.row_count is None
+        else _rows(profile.row_count)
+    )
     title = f"Table {quoted(ref.name)} ({about}): {rows}"
     if profile.timed_out:
         # Only DESCRIBE's names and types are known; the counts are not facts.
@@ -154,7 +160,16 @@ def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> st
             title,
             f"Profile timed out after {profile.timeout_s:g} s: the statistics and sample rows "
             "are unknown.",
-            *_columns(profile, lambda c: f"- {quoted(c.name)} {one_line(c.type)}"),
+            *_columns(profile, _name_line),
+        ]
+        return "\n".join(lines)
+    if profile.incomplete:
+        # Out of memory (Decision #432): the statistics are facts once the count finished.
+        lines = [
+            title,
+            f"Profile incomplete ({_MEMORY_LIMIT}): anything not shown below is unknown.",
+            *_columns(profile, _name_line if profile.row_count is None else _column_line),
+            "Sample rows: unknown",
         ]
         return "\n".join(lines)
     lines = [title, *_columns(profile, _column_line)]
@@ -187,9 +202,13 @@ def _columns(profile: TableProfile, line: Callable[[ColumnProfile], str]) -> lis
     return lines
 
 
+def _name_line(column: ColumnProfile) -> str:
+    return f"- {quoted(column.name)} {one_line(column.type)}"
+
+
 def _column_line(column: ColumnProfile) -> str:
     parts = [
-        f"- {quoted(column.name)} {one_line(column.type)}",
+        _name_line(column),
         f"nulls {column.nulls}",
         f"~distinct {column.distinct}",
     ]

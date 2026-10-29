@@ -61,7 +61,10 @@ async def test_the_summary_names_connections_tables_schemas_stats_and_sample(
         f"{i},n{i % 3},{'' if i % 5 == 0 else i * 1.5}\n" for i in range(1, 26)
     )
     await env.connect("sales", {"people.csv": rows})
-    await env.connect("logs", {"events.jsonl": '{"level": "info"}\n{"level": "warn"}\n'})
+    # Three rows of two levels: a column of only distinct values gets no top values (#432).
+    await env.connect(
+        "logs", {"events.jsonl": '{"level": "info"}\n{"level": "warn"}\n{"level": "info"}\n'}
+    )
 
     text = await env.render()
 

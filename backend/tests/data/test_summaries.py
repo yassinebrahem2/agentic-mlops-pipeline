@@ -20,6 +20,7 @@ from tests.data.summary_env import (
     SummaryEnv,
     build_summary_env,
     csv_rows,
+    out_of_memory_at,
     time_out_after_the_count,
 )
 
@@ -63,6 +64,7 @@ async def test_table_detail_comes_from_the_profile(env: SummaryEnv) -> None:
     ]
     assert detail.row_count == 3
     assert detail.timed_out is False
+    assert detail.incomplete is False
     assert detail.data_version == await env.connections.data_version(env.project_id, con, "people")
     assert detail.summary == render_table(ref, profile)
     assert env.spy.count("people.csv") == 1
@@ -105,6 +107,24 @@ async def test_a_timed_out_profile_keeps_a_count_that_finished(
     assert detail.summary.split("\n", 1)[0].endswith("): 3 rows")
 
 
+async def test_an_out_of_memory_profile_is_an_incomplete_detail_and_is_cached(
+    env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision #432: what finished is kept and not recomputed at every call."""
+    con, ref = await _people(env)
+    out_of_memory_at(monkeypatch)
+
+    detail = await env.summaries.table_detail(env.project_id, con, ref)
+    again = await env.summaries.table_detail(env.project_id, con, ref)
+
+    assert detail.incomplete is True
+    assert detail.timed_out is False
+    assert detail.row_count == 3
+    assert "Profile incomplete (memory limit)" in detail.summary
+    assert again == detail
+    assert env.spy.count("people.csv") == 1
+
+
 async def test_a_timed_out_profile_without_columns_is_a_profile_timeout(
     env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -119,6 +139,7 @@ async def test_a_timed_out_profile_without_columns_is_a_profile_timeout(
             sample_columns=[],
             sample=[],
             timed_out=True,
+            incomplete=False,
             timeout_s=timeout_s,
         )
 

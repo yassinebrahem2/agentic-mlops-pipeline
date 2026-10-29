@@ -14,6 +14,7 @@ from mlops_agents.connections.contract import DuckDbSource
 from mlops_agents.credentials.scrub import error_text
 from mlops_agents.data.constants import (
     MAX_COLUMNS,
+    NEARLY_UNIQUE_SHARE,
     PROFILE_TIMEOUT_S,
     SAMPLE_ROWS,
     TEXT_CUT,
@@ -33,6 +34,8 @@ _RANGE_TYPES: Final = frozenset(
 _RANGE_TYPE_PREFIXES: Final = ("DECIMAL", "TIMESTAMP")
 _TEXT_TYPE: Final = "VARCHAR"
 _NULL_CELL: Final = "NULL"
+# How DuckDB's memory error starts, whichever error class a reader wraps it in.
+_OUT_OF_MEMORY: Final = "Out of Memory Error"
 
 
 class ColumnProfile(BaseModel):
@@ -46,10 +49,11 @@ class ColumnProfile(BaseModel):
 
 
 class TableProfile(BaseModel):
-    """When `timed_out` is true, only what was computed before the limit is filled in: the
-    other counts are 0 and the other lists empty. `row_count` is None only when the count
-    itself did not finish (Decision #430): an unknown count is never reported as 0 rows, and
-    a finished one is kept."""
+    """When `timed_out` (the time limit) or `incomplete` (DuckDB's memory limit, Decision
+    #432) is true, only what was computed before the limit is filled in: the other counts are
+    0 and the other lists empty. `row_count` is None only when the count itself did not finish
+    (Decision #430): an unknown count is never reported as 0 rows, and a finished one is
+    kept."""
 
     row_count: int | None
     columns: list[ColumnProfile]
@@ -57,6 +61,7 @@ class TableProfile(BaseModel):
     sample_columns: list[str]
     sample: list[list[str]]
     timed_out: bool
+    incomplete: bool
     timeout_s: float  # the limit the profile ran under
 
 
@@ -70,7 +75,8 @@ class TableUnreadable(DomainError):
 
 
 async def profile_table(source: DuckDbSource, timeout_s: float = PROFILE_TIMEOUT_S) -> TableProfile:
-    """Profiles `source` in a worker thread; past `timeout_s` it returns what it has.
+    """Profiles `source` in a worker thread; past `timeout_s`, or out of memory once the
+    columns are known, it returns what it has.
 
     Raises `TableUnreadable` (`table_unreadable`, 422) when DuckDB cannot read the table.
     """
@@ -90,9 +96,13 @@ def _has_range(type_name: str) -> bool:
     return type_name in _RANGE_TYPES or type_name.startswith(_RANGE_TYPE_PREFIXES)
 
 
+def _out_of_memory(exc: duckdb.Error) -> bool:
+    return isinstance(exc, duckdb.OutOfMemoryException) or str(exc).startswith(_OUT_OF_MEMORY)
+
+
 def _profile(source: DuckDbSource, timeout_s: float) -> TableProfile:
     builder = _ProfileBuilder(source.sql_from)
-    timed_out = False
+    timed_out = incomplete = False
     connection = locked_connection(source.allowed_directories)
     try:
         deadline = Deadline(connection, timeout_s)
@@ -102,14 +112,18 @@ def _profile(source: DuckDbSource, timeout_s: float) -> TableProfile:
             timed_out = True
         except duckdb.Error as exc:
             # An interrupt can surface as any DuckDB error; past the deadline it is a timeout.
-            if not deadline.expired:
+            if deadline.expired:
+                timed_out = True
+            elif _out_of_memory(exc) and builder.described:
+                # The step that ran out stops here, at every run (Decision #432).
+                incomplete = True
+            else:
                 raise TableUnreadable(error_text(exc), source.allowed_directories) from exc
-            timed_out = True
         finally:
             deadline.stop()
     finally:
         connection.close()
-    return builder.result(timed_out=timed_out, timeout_s=timeout_s)
+    return builder.result(timed_out=timed_out, incomplete=incomplete, timeout_s=timeout_s)
 
 
 class _ProfileBuilder:
@@ -118,6 +132,7 @@ class _ProfileBuilder:
     def __init__(self, sql_from: str) -> None:
         # sql_from is the connection kind's, built from a validated folder and quoted file names.
         self._relation = f"(SELECT * FROM {sql_from})"  # noqa: S608 -- DuckDB boundary; the kind quotes it
+        self.described = False  # the columns' names and types are known
         self._row_count: int | None = None
         self._columns: list[ColumnProfile] = []
         self._more_columns = 0
@@ -130,7 +145,7 @@ class _ProfileBuilder:
         self._top_values(deadline)
         self._take_sample(deadline)
 
-    def result(self, *, timed_out: bool, timeout_s: float) -> TableProfile:
+    def result(self, *, timed_out: bool, incomplete: bool, timeout_s: float) -> TableProfile:
         return TableProfile(
             # Set from the aggregate's one fetched row, so exact whenever it is set.
             row_count=self._row_count,
@@ -139,6 +154,7 @@ class _ProfileBuilder:
             sample_columns=self._sample_columns,
             sample=self._sample,
             timed_out=timed_out,
+            incomplete=incomplete,
             timeout_s=timeout_s,
         )
 
@@ -162,6 +178,7 @@ class _ProfileBuilder:
             for row in described[:MAX_COLUMNS]
         ]
         self._more_columns = len(described) - len(self._columns)
+        self.described = True
 
     def _aggregate(self, deadline: Deadline) -> None:
         expressions = ["count(*)"]
@@ -183,7 +200,7 @@ class _ProfileBuilder:
 
     def _top_values(self, deadline: Deadline) -> None:
         for column in self._columns:
-            if column.type != _TEXT_TYPE:
+            if column.type != _TEXT_TYPE or self._nearly_unique(column):
                 continue
             name = quote_identifier(column.name)
             rows = deadline.fetchall(
@@ -193,6 +210,11 @@ class _ProfileBuilder:
                 )
             )
             column.top_values = [_cut(str(row[0])) for row in rows]
+
+    def _nearly_unique(self, column: ColumnProfile) -> bool:
+        """Its top values would be noise (Decision #432); the row count is set by now."""
+        rows = self._row_count or 0
+        return column.distinct >= NEARLY_UNIQUE_SHARE * rows
 
     def _take_sample(self, deadline: Deadline) -> None:
         if not self._columns:

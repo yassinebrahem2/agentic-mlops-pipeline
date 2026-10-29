@@ -3502,6 +3502,10 @@
             "title": "Data Version",
             "type": "string"
           },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
           "row_count": {
             "anyOf": [
               {
@@ -3530,6 +3534,7 @@
           "columns",
           "row_count",
           "timed_out",
+          "incomplete",
           "data_version",
           "summary"
         ],
