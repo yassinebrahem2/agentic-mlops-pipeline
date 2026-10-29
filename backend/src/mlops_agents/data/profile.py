@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Final
+from typing import Final
 
 import duckdb
 from pydantic import BaseModel
@@ -68,8 +68,9 @@ def _cut(text: str) -> str:
     return text[:TEXT_CUT]
 
 
-def _cell(value: Any) -> str:
-    return _NULL_CELL if value is None else _cut(str(value))
+def _cell(value: str | None) -> str:
+    """A sample cell, already DuckDB's own text, cut in SQL."""
+    return _NULL_CELL if value is None else value
 
 
 def _has_range(type_name: str) -> bool:
@@ -182,7 +183,12 @@ class _ProfileBuilder:
     def _take_sample(self, deadline: Deadline) -> None:
         if not self._columns:
             return
-        names = ", ".join(quote_identifier(column.name) for column in self._columns)
-        rows = deadline.fetchall(self._select(names, f"LIMIT {SAMPLE_ROWS}"))
+        # Cast and cut in SQL: no Python value is fetched (a TIMESTAMPTZ would need pytz,
+        # infinity and nanoseconds would be lost) and a huge cell never reaches Python whole.
+        cells = ", ".join(
+            f"left(CAST({quote_identifier(column.name)} AS VARCHAR), {TEXT_CUT})"
+            for column in self._columns
+        )
+        rows = deadline.fetchall(self._select(cells, f"LIMIT {SAMPLE_ROWS}"))
         self._sample_columns = [column.name for column in self._columns]
         self._sample = [[_cell(value) for value in row] for row in rows]

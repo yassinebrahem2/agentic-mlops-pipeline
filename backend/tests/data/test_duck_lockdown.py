@@ -35,9 +35,10 @@ def test_the_configuration_is_locked_and_autoloading_off(team: TeamFolder) -> No
             "SELECT current_setting('lock_configuration'),"
             " current_setting('enable_external_access'),"
             " current_setting('autoload_known_extensions'),"
-            " current_setting('autoinstall_known_extensions')"
+            " current_setting('autoinstall_known_extensions'),"
+            " current_setting('TimeZone')"
         ).fetchone()
-    assert row == (True, False, False, False)
+    assert row == (True, False, False, False, "UTC")
 
 
 @pytest.mark.parametrize("table", sorted(FIXTURE_ROWS))
@@ -81,6 +82,7 @@ REFUSED: dict[str, tuple[str, tuple[type[duckdb.Error], str]]] = {
     "set_external_access": ("SET enable_external_access = true", _CONFIG_LOCK),
     "set_allowed_directories": ("SET allowed_directories = ['{outside}']", _CONFIG_LOCK),
     "set_lock_configuration": ("SET lock_configuration = false", _CONFIG_LOCK),
+    "set_time_zone": ("SET TimeZone = 'America/New_York'", _CONFIG_LOCK),
     "install": ("INSTALL httpfs", _FILE_LOCK),
     "load": ("LOAD httpfs", _FILE_LOCK),
     "attach_outside": ("ATTACH '{outside}/attached.db' AS outside_db", _FILE_LOCK),
@@ -134,6 +136,7 @@ async def test_hostile_file_and_column_names_change_nothing(team: TeamFolder) ->
     assert outcome.row_count == 2
     assert [c.name for c in outcome.columns] == headers
     assert outcome.sample_columns == headers
+    assert outcome.sample == [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "10"]]
 
 
 def test_quote_identifier_doubles_double_quotes() -> None:

@@ -57,10 +57,13 @@ async def test_min_and_max_of_numbers_dates_and_timestamps(team: TeamFolder) -> 
     write_parquet(
         team.folder / "t.parquet",
         "SELECT * FROM (VALUES"
-        " (3, 2.5::DOUBLE, DATE '2024-03-01', TIMESTAMP '2024-03-01 10:00:00'),"
-        " (-7, -1.25::DOUBLE, DATE '2023-12-31', TIMESTAMP '2023-12-31 23:59:59'),"
-        " (12, 9.0::DOUBLE, DATE '2024-01-15', TIMESTAMP '2024-01-15 00:00:00')"
-        ") t(i, d, day, ts)",
+        " (3, 2.5::DOUBLE, DATE '2024-03-01', TIMESTAMP '2024-03-01 10:00:00',"
+        "  TIMESTAMPTZ '2024-03-01 10:00:00+02'),"
+        " (-7, -1.25::DOUBLE, DATE '2023-12-31', TIMESTAMP '2023-12-31 23:59:59',"
+        "  TIMESTAMPTZ '2023-12-31 23:30:00-05'),"
+        " (12, 9.0::DOUBLE, DATE '2024-01-15', TIMESTAMP '2024-01-15 00:00:00',"
+        "  TIMESTAMPTZ '2024-01-15 00:00:00+00')"
+        ") t(i, d, day, ts, tz)",
     )
     profile = await profile_table(team.source("t"))
     assert (_column(profile, "i").min, _column(profile, "i").max) == ("-7", "12")
@@ -73,6 +76,41 @@ async def test_min_and_max_of_numbers_dates_and_timestamps(team: TeamFolder) -> 
         "2023-12-31 23:59:59",
         "2024-03-01 10:00:00",
     )
+    # In UTC whatever the host's zone, so a summary does not depend on where it was computed.
+    assert (_column(profile, "tz").min, _column(profile, "tz").max) == (
+        "2024-01-01 04:30:00+00",
+        "2024-03-01 08:00:00+00",
+    )
+
+
+async def test_sample_cells_are_duckdbs_own_text(team: TeamFolder) -> None:
+    """A Python value is never fetched: no pytz, no clamped infinity, no lost nanoseconds."""
+    write_parquet(
+        team.folder / "t.parquet",
+        "SELECT * FROM (VALUES"
+        " (TIMESTAMPTZ '2024-03-01 10:00:00+02', DATE 'infinity', TIMESTAMP 'infinity',"
+        "  TIMESTAMP '-infinity', '2024-03-01 10:00:00.123456789'::TIMESTAMP_NS, 1.1::FLOAT,"
+        "  true, [1, 2, NULL], {'a': 1, 'b': 'x'}, '\\x00\\xFFab'::BLOB),"
+        " (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
+        ") t(tz, day, ts, ts_low, ns, f, flag, list, struct, blob)",
+    )
+    profile = await profile_table(team.source("t"))
+    assert not profile.timed_out
+    assert profile.sample == [
+        [
+            "2024-03-01 08:00:00+00",
+            "infinity",
+            "infinity",
+            "-infinity",
+            "2024-03-01 10:00:00.123456789",
+            "1.1",
+            "true",
+            "[1, 2, NULL]",
+            "{'a': 1, 'b': x}",
+            r"\x00\xFFab",
+        ],
+        ["NULL"] * 10,
+    ]
 
 
 async def test_top_values_of_text(team: TeamFolder) -> None:

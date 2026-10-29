@@ -39,8 +39,9 @@ def quote_identifier(name: str) -> str:
 def locked_connection(allowed: Sequence[Path]) -> duckdb.DuckDBPyConnection:
     """A new in-memory connection that reads only under `allowed` and loads no extension.
 
-    Security-critical: the three statements run in this order, the last one freezing the
-    first two. Do not reorder them.
+    Security-critical: the four statements run in this order, the last one freezing the
+    others. Do not reorder them. The time zone is UTC so that no text the profile computes
+    depends on the host (Decision #419).
     """
     # The only settings given through the config dict; the lock itself must be SET statements.
     connection = duckdb.connect(
@@ -52,6 +53,7 @@ def locked_connection(allowed: Sequence[Path]) -> duckdb.DuckDBPyConnection:
             "SET allowed_directories = ?", [[posix_directory(path) for path in allowed]]
         )
         connection.execute("SET enable_external_access = false")
+        connection.execute("SET TimeZone = 'UTC'")
         connection.execute("SET lock_configuration = true")
     except BaseException:
         connection.close()
