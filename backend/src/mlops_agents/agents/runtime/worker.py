@@ -180,13 +180,13 @@ class TurnWorkers:
                         )
                     else:
                         next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    if next_turn is None:
+                        # Under the lock, so a send from here on starts a new worker.
+                        self._leave(key)
+                        break
                     # Taking the turn and claiming an early Stop happen with no await between
                     # them, so a Stop lands either here or on the turn itself.
                     self._first_look.discard(key)
-                    if next_turn is None:
-                        self._stop_next.discard(key)
-                        self._workers.pop(key, None)
-                        break
                     turn_id, trigger_msg_id = next_turn
                     self._current_turns[key] = turn_id
                     self._turn_over.discard(key)
@@ -207,10 +207,18 @@ class TurnWorkers:
                     break
 
         finally:
-            self._first_look.discard(key)
-            self._stop_next.discard(key)
-            self._turn_over.discard(key)
-            self._workers.pop(key, None)
+            self._leave(key)
+
+    def _leave(self, key: SessionKey) -> None:
+        """Drop the session's worker state, only while the session's worker is this one: a
+        resume's worker whose take lost to a Stop may have been replaced by the worker that Stop
+        started for a queued turn, whose state is not this worker's to drop (#445)."""
+        if self._workers.get(key) is not asyncio.current_task():
+            return
+        self._first_look.discard(key)
+        self._stop_next.discard(key)
+        self._turn_over.discard(key)
+        self._workers.pop(key, None)
 
     async def _take_turn(
         self,

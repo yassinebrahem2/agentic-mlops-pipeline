@@ -101,6 +101,61 @@ async def test_a_stop_stored_before_the_resumed_worker_takes_the_turn_is_kept(
     assert (await repair.stored(approval.id)).status == "approved"
 
 
+async def test_a_stop_stored_before_the_resume_leaves_the_queued_turn_to_one_tracked_worker(
+    repair: RepairEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = repair.restart()
+    turn_id, [approval] = await repair.ask(app=app)
+    repair.fake.state.scripted_tool_calls = None
+    await app.manager.send(repair.project_id, WRITER, "Next, please")
+    queued = await repair.sessions.next_queued_turn(repair.project_id, approval.session_id)
+    assert queued is not None
+    queued_id = queued[0]
+    # As in the test above, Stop stores the turn stopped before the resume's worker takes it;
+    # a message is queued, so Stop starts a worker for it while the resume's worker still runs.
+    # The resume's worker loses its take and must leave the new worker alone. The new worker
+    # is held as it marks the queued turn running.
+    started = hold(
+        monkeypatch,
+        SessionStore,
+        "set_turn",
+        lambda *a, **_: a[2] == queued_id and a[3] == "running",
+    )
+    resuming = hold(monkeypatch, SessionStore, "turn_status")
+    looked = signalled(monkeypatch, SessionStore, "waiting_turn")
+
+    try:
+        async with asyncio.timeout(20):
+            deciding = asyncio.create_task(
+                app.service.decide(repair.project_id, approval.id, approve=True, note=None)
+            )
+            await resuming.wait_entered()
+            stopping = asyncio.create_task(app.manager.stop(repair.project_id, WRITER))
+            await looked.wait()
+            resuming.release.set()
+            await deciding
+            await stopping
+            await started.wait_entered()
+
+            assert await app.manager.turn_states(repair.project_id) == {WRITER: "running"}
+            sent = await app.manager.send(repair.project_id, WRITER, "A third message")
+            assert sent.status == "queued"
+            await app.manager.stop(repair.project_id, WRITER)
+            started.release.set()
+            await repair.turns.wait_ended(queued_id)
+            while True:  # the third message's turn runs on that worker, and asks again
+                if [t for t in repair.turns.waited if t != turn_id]:
+                    break
+                await asyncio.sleep(0.02)
+    finally:
+        started.release.set()
+
+    assert repair.ends(turn_id) == ["stopped"]
+    assert repair.ends(queued_id) == ["stopped"]
+    assert len(repair.turns.ended) == 2
+    assert await app.manager.turn_states(repair.project_id) == {WRITER: "waiting"}
+
+
 async def test_a_stop_while_an_approve_is_in_its_observers_leaves_it_approved_and_unresumed(
     repair: RepairEnv,
 ) -> None:
