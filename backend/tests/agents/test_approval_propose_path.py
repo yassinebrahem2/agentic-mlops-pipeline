@@ -227,7 +227,7 @@ async def test_rejecting_a_stall_ends_its_turn_stopped_with_no_audit_record(
     await collect_until_turn_waiting(sub)
     [waiting] = await approvals.pending(env.project_id)
     # A real waiting turn; its proposal is cancelled so that only the stall is pending.
-    await store.cancel_for_turn(env.project_id, waiting.turn_id)
+    await store.cancel_for_turn(env.project_id, waiting.turn_id, decided_by="system")
 
     stall = await approvals.create_stall(env.project_id, waiting.turn_id, 1, STALL_PREVIEW)
     await approvals.decide(env.project_id, stall.id, approve=False)

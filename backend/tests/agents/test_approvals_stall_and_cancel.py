@@ -25,21 +25,12 @@ from tests.agents.test_approvals_service import FakeSessionsForApproval
 PROJECT = "prj_stalldec"
 
 
-class StopRecordingSessions(FakeSessionsForApproval):
-    def __init__(self, store: SessionStore) -> None:
-        super().__init__(store)
-        self.stopped: list[tuple[str, str]] = []
-
-    async def stop(self, project_id: str, agent: str) -> None:
-        self.stopped.append((project_id, agent))
-
-
 class Env:
     def __init__(self, databases: Databases) -> None:
         self.databases = databases
         self.store = ApprovalStore(databases)
         self.events = SqliteEventLog(databases)
-        self.sessions = StopRecordingSessions(SessionStore(databases))
+        self.sessions = FakeSessionsForApproval(SessionStore(databases))
         self.service = ApprovalsService(
             databases,
             self.sessions,
@@ -109,7 +100,7 @@ async def test_approving_a_stall_resumes_the_turn_without_an_audit_record(
 
     assert view.status == "approved"
     assert env.sessions.resumed_turns == [(PROJECT, "ses_1", "trn_1")]
-    assert env.sessions.stopped == []
+    assert env.sessions.stopped_turns == []
     assert await env.audit_rows() == []
     assert await env.event_payloads("approval.decided") == [
         {"approval_id": stall_id, "status": "approved"}
@@ -127,7 +118,7 @@ async def test_rejecting_a_stall_stops_the_turn_without_an_audit_record(
     view = await env.service.decide(PROJECT, stall_id, approve=False)
 
     assert view.status == "rejected"
-    assert env.sessions.stopped == [(PROJECT, "orchestrator")]
+    assert env.sessions.stopped_turns == [(PROJECT, "ses_1", "trn_1")]
     assert env.sessions.resumed_turns == []
     assert await env.audit_rows() == []
     assert await env.event_payloads("approval.decided") == [

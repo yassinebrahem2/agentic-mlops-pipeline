@@ -198,3 +198,13 @@ async def agent_message_statuses(env: SessionEnv, agent: str = "orchestrator") -
         for m in await env.store.messages(env.project_id, session_id)
         if m.author_kind == "agent"
     ]
+
+
+async def until_idle(manager: SessionManager, project_id: str, agent: str) -> None:
+    """Until the agent's session is not busy: a worker finishes a turn's end (its approvals
+    sweep, its observers) after the stream's turn.ended, then leaves."""
+    async with asyncio.timeout(5):
+        while True:
+            if not (await manager.get(project_id, agent)).busy:
+                return
+            await asyncio.sleep(0.01)

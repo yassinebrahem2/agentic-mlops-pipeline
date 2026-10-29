@@ -64,8 +64,8 @@ class RecordingObserver(TurnObserver):
 class StoreAskGate(Gate):
     """A gate that records approvals into ApprovalStore and triggers LangGraph interrupt."""
 
-    def __init__(self, databases: Databases) -> None:
-        self.store = ApprovalStore(databases)
+    def __init__(self, databases: Databases, store: ApprovalStore | None = None) -> None:
+        self.store = store if store is not None else ApprovalStore(databases)
         self.decide_calls: list[GateCall] = []
 
     async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]:
@@ -511,7 +511,9 @@ async def test_decision_racing_with_stop_stop_wins_decision_gets_409(
     from mlops_agents.agents.approvals.service import ApprovalsService
     from mlops_agents.errors import DomainError
 
-    gate = StoreAskGate(databases)
+    # One store for the gate, the manager and the service, as `build_services` wires them.
+    approval_store = ApprovalStore(databases)
+    gate = StoreAskGate(databases, approval_store)
     audit = SqliteAuditLog(databases, secrets=[])
 
     env = await build_session_env(
@@ -524,11 +526,11 @@ async def test_decision_racing_with_stop_stop_wins_decision_gets_409(
         git_env,
         gate=gate,
         audit_log=audit,
+        approval_store=approval_store,
     )
     manager = env.manager
     project_id = env.project_id
     store = env.store
-    approval_store = ApprovalStore(databases)
     approvals_svc = ApprovalsService(
         databases=databases, sessions=manager, store=approval_store, audit_log=audit
     )
