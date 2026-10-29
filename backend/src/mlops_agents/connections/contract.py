@@ -38,7 +38,9 @@ class TableDetail(BaseModel):
 
     table: TableRef
     columns: list[ColumnInfo]
-    row_count: int
+    row_count: int | None  # None: not computed (a timed-out or incomplete profile)
+    timed_out: bool
+    incomplete: bool  # DuckDB's memory limit stopped the profile; what finished is kept
     data_version: str
     summary: str
 
@@ -92,6 +94,11 @@ class ConnectionKind(Protocol):
     def tables(self, settings: BaseModel) -> list[TableRef]: ...
 
     def data_version(self, settings: BaseModel, table: TableRef) -> str: ...
+
+    def read(self, settings: BaseModel) -> tuple[Findings, str | None]:
+        """One folder check and one scan: the findings and ConnectionView.data_version; None
+        when the kind cannot tell cheaply."""
+        ...
 
     def duckdb_source(self, settings: BaseModel, table: TableRef) -> DuckDbSource: ...
 

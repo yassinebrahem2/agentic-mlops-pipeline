@@ -9,6 +9,7 @@ from mlops_agents.agents.pr_reminder import PrReminder
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnState, create_turn_graph
 from mlops_agents.agents.runtime.hub import AsyncRLock
 from mlops_agents.agents.runtime.model_caller import ModelReply
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -159,6 +160,8 @@ async def test_turn_graph_with_pr_reminder_adds_step_when_changes_exist(
         turn_end=reminder,
         workspaces=tasks,
         approval_store=ApprovalStore(databases),
+        approvals=LateApprovals(),  # unbound: the recording caller never runs out of keys
+        events=None,
     )
     graph = create_turn_graph(
         agent=agent,

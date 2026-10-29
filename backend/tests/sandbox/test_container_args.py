@@ -4,9 +4,11 @@ from pathlib import Path
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
+from mlops_agents.connections.contract import Mount
 from mlops_agents.sandbox.containers import (
     build_run_args,
     container_name,
+    mounts_fingerprint,
 )
 
 
@@ -46,6 +48,9 @@ def test_build_run_args_default_network_disabled(tmp_path: Path) -> None:
         args[i + 1] for i, v in enumerate(args) if v == "--label"
     ]
     assert f"{APP_NAME}.network=false" in [
+        args[i + 1] for i, v in enumerate(args) if v == "--label"
+    ]
+    assert f"{APP_NAME}.mounts=4f53cda18c2baa0c" in [
         args[i + 1] for i, v in enumerate(args) if v == "--label"
     ]
 
@@ -104,3 +109,76 @@ def test_build_run_args_network_enabled_and_posix(tmp_path: Path) -> None:
     assert "-u" in args
     u_idx = args.index("-u") + 1
     assert args[u_idx] == "123:456"
+
+
+def test_mounts_fingerprint() -> None:
+    # Empty set has fixed value
+    assert mounts_fingerprint([]) == "4f53cda18c2baa0c"
+
+    m1 = Mount(host_path=Path("/host/data/a"), container_path="/data/alpha")
+    m2 = Mount(host_path=Path("/host/data/b"), container_path="/data/beta")
+
+    # Order-independent and stable
+    fp1 = mounts_fingerprint([m1, m2])
+    fp2 = mounts_fingerprint([m2, m1])
+    assert fp1 == fp2
+    assert len(fp1) == 16
+    assert all(c in "0123456789abcdef" for c in fp1)
+
+    # Different host path produces different fingerprint
+    m1_diff_host = Mount(host_path=Path("/host/data/other"), container_path="/data/alpha")
+    assert mounts_fingerprint([m1_diff_host, m2]) != fp1
+
+    # Different container path (e.g. connection name) produces different fingerprint
+    m1_diff_container = Mount(host_path=Path("/host/data/a"), container_path="/data/gamma")
+    assert mounts_fingerprint([m1_diff_container, m2]) != fp1
+
+
+def test_build_run_args_with_mounts(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_mounts",
+        title="Test Task Mounts",
+        branch="task-branch",
+        worktree=worktree,
+        status="active",
+    )
+
+    # Zero mounts
+    args_zero = build_run_args("prj_1", task, "env:tag", mounts=[])
+    assert f"{APP_NAME}.mounts=4f53cda18c2baa0c" in [
+        args_zero[i + 1] for i, v in enumerate(args_zero) if v == "--label"
+    ]
+    assert "--mount" not in args_zero
+
+    # One mount
+    m_single = Mount(host_path=Path("/host/hotels"), container_path="/data/hotels")
+    args_one = build_run_args("prj_1", task, "env:tag", mounts=[m_single])
+    assert "--mount" in args_one
+    vol_idx = args_one.index("-v")
+    mount_idx = args_one.index("--mount")
+    # Mount goes after worktree volume
+    assert mount_idx > vol_idx
+    expected_one_spec = f"type=bind,source={Path('/host/hotels')!s},target=/data/hotels,readonly"
+    assert args_one[mount_idx + 1] == expected_one_spec
+
+    # Two mounts: should be placed in container_path sorted order
+    m_beta = Mount(host_path=Path("/host/beta_dir"), container_path="/data/beta")
+    m_alpha = Mount(host_path=Path("/host/alpha_dir"), container_path="/data/alpha")
+    # Pass them in reverse container_path order
+    args_two = build_run_args("prj_1", task, "env:tag", mounts=[m_beta, m_alpha])
+
+    # Find all --mount arguments
+    mount_indices = [i for i, v in enumerate(args_two) if v == "--mount"]
+    assert len(mount_indices) == 2
+    assert mount_indices[0] > args_two.index("-v")
+    spec_alpha = f"type=bind,source={Path('/host/alpha_dir')!s},target=/data/alpha,readonly"
+    spec_beta = f"type=bind,source={Path('/host/beta_dir')!s},target=/data/beta,readonly"
+    assert args_two[mount_indices[0] + 1] == spec_alpha
+    assert args_two[mount_indices[1] + 1] == spec_beta
+
+    # Label matches fingerprint
+    expected_fp = mounts_fingerprint([m_alpha, m_beta])
+    assert f"{APP_NAME}.mounts={expected_fp}" in [
+        args_two[i + 1] for i, v in enumerate(args_two) if v == "--label"
+    ]

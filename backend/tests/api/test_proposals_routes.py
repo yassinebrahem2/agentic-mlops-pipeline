@@ -23,7 +23,6 @@ from mlops_agents.proposals.contract import (
     ApplyResult,
     CredentialSlot,
     HandoffPayload,
-    ProposalKind,
 )
 from mlops_agents.proposals.payloads import ConnectionsPayload
 from mlops_agents.storage.tables import proposals as proposals_table
@@ -35,6 +34,9 @@ class RouteTestKind:
     payload_model: type[BaseModel] = ConnectionsPayload
 
     def __init__(self) -> None:
+        self.entered = asyncio.Event()  # set when apply starts
+        self.release = asyncio.Event()  # apply waits on it once `gated`
+        self.gated = False
         self.name = CONNECTIONS_KIND
         self._slots = [
             CredentialSlot(index=0, label="Slot 0", source_type="token"),
@@ -53,7 +55,13 @@ class RouteTestKind:
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]:
         return list(self._slots)
 
+    async def _hold(self) -> None:
+        self.entered.set()
+        if self.gated:
+            await self.release.wait()
+
     async def apply(self, project_id: str, proposal_id: str, payload: BaseModel) -> ApplyResult:
+        await self._hold()
         return ApplyResult(applied=["ok"], failed={})
 
 
@@ -64,6 +72,7 @@ class MovingRouteTestKind(RouteTestKind):
         self._secrets = secrets
 
     async def apply(self, project_id: str, proposal_id: str, payload: BaseModel) -> ApplyResult:
+        await self._hold()
         src = proposal_slot_ref(project_id, proposal_id, 0)
         dst = f"project/{project_id}/moved_permanent"
         if await self._secrets.is_set(src):
@@ -228,23 +237,16 @@ async def test_slot_route_non_pending_is_409(
     assert services.project_secrets._keystore.get(ref_0) is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("moves_slot", [False, True])
-async def test_slot_route_put_racing_with_decide(
-    app: FastAPI,
-    client: httpx2.AsyncClient,
-    tmp_path: Path,
-    git_env: dict[str, str],
-    moves_slot: bool,
-) -> None:
+async def _race_setup(
+    app: FastAPI, tmp_path: Path, git_env: dict[str, str], moves_slot: bool
+) -> tuple[str, RouteTestKind, str]:
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
-    kind: ProposalKind = (
+    kind: RouteTestKind = (
         MovingRouteTestKind(services.project_secrets) if moves_slot else RouteTestKind()
     )
     with contextlib.suppress(ValueError):
         services.proposal_kinds.register(kind)
-
     view = await services.proposals.create(
         project_id,
         agent="architect",
@@ -254,37 +256,91 @@ async def test_slot_route_put_racing_with_decide(
         turn_id="trn_race",
         tool_call_id="call_race",
     )
+    return project_id, kind, view.id
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moves_slot", [False, True])
+async def test_slot_put_in_flight_before_apply_is_moved_or_swept(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    moves_slot: bool,
+) -> None:
+    project_id, kind, proposal_id = await _race_setup(app, tmp_path, git_env, moves_slot)
+    secrets = app.state.services.project_secrets
+    src = proposal_slot_ref(project_id, proposal_id, 0)
+    dst = f"project/{project_id}/moved_permanent"
     secret_val = "race_secret_value"
-    ref_0 = proposal_slot_ref(project_id, view.id, 0)
-    dst_ref = f"project/{project_id}/moved_permanent"
+    in_put = asyncio.Event()
+    finish_put = asyncio.Event()
+    real_put = secrets.put
 
-    async def do_put() -> httpx2.Response:
-        return await client.put(
-            f"/api/projects/{project_id}/proposals/{view.id}/credentials/0",
+    async def slow_put(ref: str, value: str) -> None:
+        in_put.set()
+        await finish_put.wait()
+        await real_put(ref, value)
+
+    secrets.put = slow_put  # the PUT is mid-write when decide starts
+
+    put = asyncio.create_task(
+        client.put(
+            f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
             json={"value": secret_val},
         )
+    )
+    await in_put.wait()
+    decide = asyncio.create_task(
+        app.state.services.proposals.decide(project_id, proposal_id, approved=True)
+    )
+    await asyncio.sleep(0.05)
+    assert not kind.entered.is_set()  # decide waits for the PUT's lock
+    finish_put.set()
+    put_resp = await put
+    await decide
 
-    async def do_decide() -> ApplyResult | None:
-        return await services.proposals.decide(project_id, view.id, approved=True)
+    assert put_resp.status_code == 200
+    assert secret_val not in put_resp.text
+    assert secrets._keystore.get(src) is None
+    assert secrets._keystore.get(dst) == (secret_val if moves_slot else None)
 
-    put_resp, _decide_res = await asyncio.gather(do_put(), do_decide())
 
-    assert put_resp.status_code in (200, 409)
-    if put_resp.status_code == 409:
-        assert put_resp.json()["code"] == "proposal_not_pending"
-        assert not await services.project_secrets.is_set(ref_0)
-        assert services.project_secrets._keystore.get(ref_0) is None
-        if moves_slot:
-            assert services.project_secrets._keystore.get(dst_ref) is None
-    else:
-        assert put_resp.status_code == 200
-        assert not await services.project_secrets.is_set(ref_0)
-        assert services.project_secrets._keystore.get(ref_0) is None
-        if moves_slot:
-            assert services.project_secrets._keystore.get(dst_ref) == secret_val
-        else:
-            assert services.project_secrets._keystore.get(dst_ref) is None
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moves_slot", [False, True])
+async def test_slot_put_during_apply_waits_and_gets_409(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    moves_slot: bool,
+) -> None:
+    project_id, kind, proposal_id = await _race_setup(app, tmp_path, git_env, moves_slot)
+    secrets = app.state.services.project_secrets
+    src = proposal_slot_ref(project_id, proposal_id, 0)
+    dst = f"project/{project_id}/moved_permanent"
+    kind.gated = True
+
+    decide = asyncio.create_task(
+        app.state.services.proposals.decide(project_id, proposal_id, approved=True)
+    )
+    await kind.entered.wait()
+    put = asyncio.create_task(
+        client.put(
+            f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
+            json={"value": "late_secret"},
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert not put.done()  # the lock holds the PUT back while apply runs
+    kind.release.set()
+    await decide
+    put_resp = await put
+
+    assert put_resp.status_code == 409
+    assert put_resp.json()["code"] == "proposal_not_pending"
+    assert secrets._keystore.get(src) is None
+    assert secrets._keystore.get(dst) is None
 
 
 @pytest.mark.asyncio

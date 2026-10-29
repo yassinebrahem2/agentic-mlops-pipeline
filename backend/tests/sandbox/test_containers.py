@@ -7,7 +7,8 @@ import pytest
 
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
-from mlops_agents.sandbox.containers import ContainerManager
+from mlops_agents.connections.contract import Mount
+from mlops_agents.sandbox.containers import ContainerManager, mounts_fingerprint
 from mlops_agents.sandbox.contract import SandboxUnavailable
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerResult
 from tests.sandbox.fakes import FakeDockerRunner
@@ -74,8 +75,50 @@ async def test_container_manager_start_failure(tmp_path: Path) -> None:
         status="active",
     )
 
-    with pytest.raises(SandboxUnavailable, match="Failed to start sandbox container"):
+    with pytest.raises(SandboxUnavailable, match="Failed to start sandbox container:"):
         await manager.start("prj_1", task, "mlops-agents-env:prj_1-abc")
+
+
+async def test_container_manager_start_failure_with_mounts_names_paths(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    runner.fail_run = True
+    manager = ContainerManager(runner)
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_fail_mounts",
+        title="Task Fail Mounts",
+        branch="branch-fail",
+        worktree=worktree,
+        status="active",
+    )
+    mounts = [
+        Mount(host_path=Path("/host/events"), container_path="/data/events"),
+        Mount(host_path=Path("/host/hotels"), container_path="/data/hotel-data"),
+    ]
+
+    with pytest.raises(
+        SandboxUnavailable,
+        match=r"while mounting /data/events, /data/hotel-data: docker run failed",
+    ):
+        await manager.start("prj_1", task, "mlops-agents-env:prj_1-abc", mounts=mounts)
+
+
+async def test_container_manager_inspect_mounts_label(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    manager = ContainerManager(runner)
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_inspect_m",
+        title="Task Inspect Mounts",
+        branch="branch-m",
+        worktree=worktree,
+        status="active",
+    )
+    mounts = [Mount(host_path=Path("/host/hotels"), container_path="/data/hotel-data")]
+    cname = await manager.start("prj_1", task, "mlops-agents-env:prj_1-abc", mounts=mounts)
+    info = await manager.inspect(cname)
+    assert info is not None
+    assert info.mounts == mounts_fingerprint(mounts)
 
 
 async def test_ensure_container_reuses_running(tmp_path: Path) -> None:
@@ -154,6 +197,114 @@ async def test_ensure_container_recreates_on_network_change(tmp_path: Path) -> N
     info2 = await manager.inspect(f"{APP_NAME}-task_recreate_net")
     assert info2 is not None
     assert info2.network is True
+
+
+async def test_ensure_container_reuses_matching_mounts(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    manager = ContainerManager(runner)
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_mount_reuse",
+        title="Task Mount Reuse",
+        branch="branch-mr",
+        worktree=worktree,
+        status="active",
+    )
+    mounts = [Mount(host_path=Path("/host/d1"), container_path="/data/d1")]
+
+    name1 = await manager.ensure_container(
+        "prj_1", task, "mlops-agents-env:prj_1-abc", network=False, mounts=mounts
+    )
+    calls_after_first = len(runner.calls)
+
+    name2 = await manager.ensure_container(
+        "prj_1", task, "mlops-agents-env:prj_1-abc", network=False, mounts=mounts
+    )
+    assert name1 == name2
+    # Second call reuses running container (only inspect called, no rm, no run)
+    assert not any(c[0] in ("rm", "run") for c in runner.calls[calls_after_first:])
+
+
+async def test_ensure_container_recreates_on_mounts_change(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    manager = ContainerManager(runner)
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_mount_change",
+        title="Task Mount Change",
+        branch="branch-mc",
+        worktree=worktree,
+        status="active",
+    )
+    mounts1 = [Mount(host_path=Path("/host/d1"), container_path="/data/d1")]
+    mounts2 = [
+        Mount(host_path=Path("/host/d1"), container_path="/data/d1"),
+        Mount(host_path=Path("/host/d2"), container_path="/data/d2"),
+    ]
+
+    await manager.ensure_container(
+        "prj_1", task, "mlops-agents-env:prj_1-abc", network=False, mounts=mounts1
+    )
+    info1 = await manager.inspect(f"{APP_NAME}-task_mount_change")
+    assert info1 is not None
+    assert info1.mounts == mounts_fingerprint(mounts1)
+
+    calls_before = len(runner.calls)
+    await manager.ensure_container(
+        "prj_1", task, "mlops-agents-env:prj_1-abc", network=False, mounts=mounts2
+    )
+    info2 = await manager.inspect(f"{APP_NAME}-task_mount_change")
+    assert info2 is not None
+    assert info2.mounts == mounts_fingerprint(mounts2)
+
+    # Old container was removed and new one started
+    assert any(c[0] == "rm" for c in runner.calls[calls_before:])
+    assert any(c[0] == "run" for c in runner.calls[calls_before:])
+
+
+async def test_ensure_container_recreates_when_missing_mounts_label(tmp_path: Path) -> None:
+    runner = FakeDockerRunner()
+    manager = ContainerManager(runner)
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_no_label",
+        title="Task No Label",
+        branch="branch-nl",
+        worktree=worktree,
+        status="active",
+    )
+
+    cname = f"{APP_NAME}-task_no_label"
+    # Pre-populate container with no mounts label
+    runner.containers[cname] = {
+        "Id": "cid_no_label",
+        "Name": f"/{cname}",
+        "State": {"Running": True, "Paused": False, "Status": "running"},
+        "Config": {
+            "Labels": {
+                f"{APP_NAME}": "true",
+                f"{APP_NAME}.project": "prj_1",
+                f"{APP_NAME}.task": task.id,
+                f"{APP_NAME}.image_tag": "mlops-agents-env:prj_1-abc",
+                f"{APP_NAME}.network": "false",
+            },
+            "Image": "mlops-agents-env:prj_1-abc",
+        },
+        "HostConfig": {"NetworkMode": "none"},
+    }
+
+    info = await manager.inspect(cname)
+    assert info is not None
+    assert info.mounts is None
+
+    # Calling ensure_container should remove and recreate it because mounts label is missing
+    await manager.ensure_container(
+        "prj_1", task, "mlops-agents-env:prj_1-abc", network=False, mounts=[]
+    )
+    assert any(c[0] == "rm" for c in runner.calls)
+    info_after = await manager.inspect(cname)
+    assert info_after is not None
+    assert info_after.mounts == mounts_fingerprint([])
 
 
 async def test_ensure_container_recreates_stopped_container(tmp_path: Path) -> None:

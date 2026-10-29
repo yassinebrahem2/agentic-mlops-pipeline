@@ -137,6 +137,47 @@ async def test_current_and_resume_task(
         )
 
 
+async def test_resume_records_task_started_event(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, events, project_id, _ = await _setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await _create_session(databases, project_id, "ses_coder", agent="coder")
+
+    task = await service.start(
+        project_id=project_id,
+        session_id="ses_coder",
+        agent="coder",
+        title="Resume event task",
+    )
+    assert len(events.records) == 1
+
+    resumed = await service.resume(
+        project_id=project_id,
+        session_id="ses_coder",
+        agent="coder",
+        task_id=task.id,
+    )
+    assert resumed.id == task.id
+
+    assert len(events.records) == 2
+    event = events.records[1]
+    assert event["project_id"] == project_id
+    assert event["type"] == "task.started"
+    assert event["source"] == "coder"
+    assert event["subject_id"] == task.id
+    assert event["payload"] == {
+        "task_id": task.id,
+        "title": task.title,
+        "branch": task.branch,
+    }
+
+
 async def test_view_and_open_tasks(
     tmp_path: Path,
     paths: DataPaths,

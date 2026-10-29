@@ -113,7 +113,6 @@ turns = Table(
     Column("created_at", Text, nullable=False),
     Column("started_at", Text),
     Column("ended_at", Text),
-    Column("error_kind", Text),
 )
 
 messages = Table(

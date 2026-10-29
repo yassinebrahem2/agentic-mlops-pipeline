@@ -7,6 +7,8 @@ import { IssuesSection } from "./IssuesSection";
 import { MessagingSection } from "./MessagingSection";
 import { PermissionsSection } from "./PermissionsSection";
 import { SandboxSection } from "./SandboxSection";
+import { ConnectionsSection } from "./ConnectionsSection";
+import { EmbedderSection } from "./EmbedderSection";
 import { RemoveProjectDialog } from "./RemoveProjectDialog";
 
 export function ProjectSettingsPage() {
@@ -33,8 +35,10 @@ function ProjectSettings({ projectId }: { projectId: string }) {
           <AgentsSection projectId={projectId} />
           <PermissionsSection projectId={projectId} />
           <SandboxSection projectId={projectId} />
+          <ConnectionsSection projectId={projectId} />
           <IssuesSection projectId={projectId} />
           <MessagingSection projectId={projectId} />
+          <EmbedderSection projectId={projectId} />
           <RemoveProjectDialog project={project.data} />
         </>
       )}

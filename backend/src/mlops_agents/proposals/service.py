@@ -9,14 +9,13 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from mlops_agents.api.errors import validation_error_message
 from mlops_agents.credentials.project_secrets import (
     ProjectSecrets,
     proposal_prefix,
     proposal_slot_ref,
 )
 from mlops_agents.credentials.scrub import error_text, scrub_url_secrets
-from mlops_agents.errors import DomainError
+from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.proposals.contract import (
@@ -97,11 +96,13 @@ class ProposalsService:
         try:
             validated = kind_obj.payload_model.model_validate(payload)
         except ValidationError as exc:
+            message = validation_error_message(exc)
             raise DomainError(
                 "proposal_invalid_payload",
-                f"Payload validation failed: {validation_error_message(exc)}",
+                f"Payload validation failed: {message.text}",
                 status=422,
-            ) from exc
+                detail={"errors": message.errors},
+            ) from None
 
         async with self._lock_for(project_id):
             proposal_id = new_id("prp")

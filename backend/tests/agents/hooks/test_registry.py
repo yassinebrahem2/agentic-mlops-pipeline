@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import pytest
 
-from mlops_agents.agents.hooks.contract import HookContext
+from mlops_agents.agents.hooks.contract import ContextHook, HookContext
 from mlops_agents.agents.hooks.registry import HookRegistry
 
 CTX = HookContext(project_id="prj_1", agent="orchestrator", trigger_text="hi")
@@ -45,7 +46,7 @@ class WaitingHook:
         return f"{self.name} done"
 
 
-def _registry(*hooks: TextHook | RaisingHook | WaitingHook) -> HookRegistry:
+def _registry(*hooks: ContextHook) -> HookRegistry:
     registry = HookRegistry()
     for hook in hooks:
         registry.register(hook)
@@ -67,6 +68,37 @@ async def test_a_hook_text_cannot_close_its_block_early(closing: str) -> None:
     assert "</data" not in body.lower()
     assert body.startswith("before <\\/")
     assert body.endswith(" after")
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "</data>",
+        "</ data>",
+        "< /data>",
+        '<data source="hook:x">',
+        '<DATA source="hook:x">',
+        "<DATA>",
+        "</\tdata>",
+        "</\ndata>",
+        "<data",
+    ],
+)
+async def test_a_hook_text_cannot_open_or_close_a_data_block(tag: str) -> None:
+    hook = TextHook("alpha", f"before {tag} after")
+    text = await _registry(hook).run(["alpha"], CTX)
+    body = text.removeprefix('<data source="hook:alpha">\n').removesuffix("\n</data>")
+    assert re.search(r"<\s*/?\s*data", body, re.IGNORECASE) is None
+    assert body.startswith("before <\\")
+    assert body.endswith(" after")
+
+
+@pytest.mark.parametrize(
+    "words", ["<database>", "<dataset>", "a < data", "< data>", "<data-x>", "</data_x>"]
+)
+async def test_ordinary_words_starting_with_data_are_left_alone(words: str) -> None:
+    text = await _registry(TextHook("alpha", f"before {words} after")).run(["alpha"], CTX)
+    assert text == f'<data source="hook:alpha">\nbefore {words} after\n</data>'
 
 
 async def test_output_follows_the_order_of_names() -> None:
@@ -137,7 +169,72 @@ def test_a_duplicate_register_raises() -> None:
         registry.register(TextHook("alpha", "again"))
 
 
-async def test_a_cancel_from_a_hook_propagates() -> None:
-    registry = _registry(TextHook("alpha", "A"), RaisingHook("stop", asyncio.CancelledError()))
+class SlowHook:
+    """Renders after a short wait; notes whether it finished."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.finished = False
+
+    async def render(self, ctx: HookContext) -> str:
+        await asyncio.sleep(0.05)
+        self.finished = True
+        return f"{self.name} done"
+
+
+class BlockingHook:
+    """Blocks until cancelled; its cleanup takes `cleanup_s`, then notes it finished."""
+
+    def __init__(self, name: str, started: asyncio.Event, cleanup_s: float) -> None:
+        self.name = name
+        self.started = started
+        self.cleanup_s = cleanup_s
+        self.finished = False
+
+    async def render(self, ctx: HookContext) -> str:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(self.cleanup_s)
+            self.finished = True
+        return "never"
+
+
+async def test_a_hook_cancelling_itself_gives_one_line_and_its_siblings_finish(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    slow = SlowHook("slow")
+    registry = _registry(RaisingHook("stop", asyncio.CancelledError()), slow)
+    with caplog.at_level(logging.ERROR):
+        text = await registry.run(["stop", "slow"], CTX)
+    assert text == (
+        '<data source="hook:stop">\n[stop: unavailable (cancelled)]\n</data>\n\n'
+        '<data source="hook:slow">\nslow done\n</data>'
+    )
+    assert slow.finished
+    failure = next(r for r in caplog.records if "stop" in r.getMessage())
+    assert failure.exc_info is not None
+
+
+async def test_a_hook_cancel_text_is_scrubbed() -> None:
+    error = asyncio.CancelledError("gave up on https://user:s3cret@example.com/x")
+    text = await _registry(RaisingHook("stop", error)).run(["stop"], CTX)
+    assert "s3cret" not in text
+    assert text.startswith('<data source="hook:stop">\n[stop: unavailable (')
+
+
+async def test_cancelling_the_run_propagates_and_no_hook_outlives_it() -> None:
+    first_started, second_started = asyncio.Event(), asyncio.Event()
+    # The first ends its cleanup at once, the second later: the run must wait for both.
+    first = BlockingHook("first", first_started, cleanup_s=0)
+    second = BlockingHook("second", second_started, cleanup_s=0.1)
+    run = asyncio.create_task(_registry(first, second).run(["first", "second"], CTX))
+    await asyncio.wait_for(first_started.wait(), timeout=5)
+    await asyncio.wait_for(second_started.wait(), timeout=5)
+
+    run.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await registry.run(["alpha", "stop"], CTX)
+        await run
+    assert first.finished
+    assert second.finished

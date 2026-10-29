@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -13,11 +15,19 @@ from mlops_agents.sandbox.docker import (
     DockerRunner,
     docker_error_boundary,
 )
+from mlops_agents.sandbox.projects import Mount
 
 
 def container_name(task_id: str) -> str:
     """Returns the container name for a task."""
     return f"{APP_NAME}-{task_id}"
+
+
+def mounts_fingerprint(mounts: Sequence[Mount] = ()) -> str:
+    """Computes a stable 16-hex sha256 fingerprint of canonical JSON of sorted [host_path, container_path] pairs."""
+    pairs = sorted([[str(m.host_path), str(m.container_path)] for m in mounts])
+    canonical = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def build_run_args(
@@ -27,6 +37,7 @@ def build_run_args(
     *,
     network: bool = False,
     user: str | None = None,
+    mounts: Sequence[Mount] = (),
 ) -> list[str]:
     """Builds docker run arguments for starting a task container."""
     name = container_name(task.id)
@@ -46,6 +57,8 @@ def build_run_args(
         f"{APP_NAME}.image_tag={image_tag}",
         "--label",
         f"{APP_NAME}.network={'true' if network else 'false'}",
+        "--label",
+        f"{APP_NAME}.mounts={mounts_fingerprint(mounts)}",
         "--cpus",
         "2",
         "--memory",
@@ -57,6 +70,13 @@ def build_run_args(
         "-v",
         f"{task.worktree!s}:/workspace",
     ]
+    for m in sorted(mounts, key=lambda x: x.container_path):
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={m.host_path!s},target={m.container_path},readonly",
+            ]
+        )
     if not network:
         args.extend(["--network", "none"])
     args.extend(
@@ -82,6 +102,7 @@ class ContainerInfo:
     network: bool
     project_id: str | None
     task_id: str | None
+    mounts: str | None = None
     paused: bool = False
 
 
@@ -151,6 +172,7 @@ class ContainerManager:
 
         project_id = labels.get(f"{APP_NAME}.project")
         task_id = labels.get(f"{APP_NAME}.task")
+        mounts_label = labels.get(f"{APP_NAME}.mounts")
 
         return ContainerInfo(
             name=name,
@@ -159,6 +181,7 @@ class ContainerManager:
             network=network,
             project_id=project_id,
             task_id=task_id,
+            mounts=mounts_label,
             paused=paused,
         )
 
@@ -169,6 +192,7 @@ class ContainerManager:
         image_tag: str,
         *,
         network: bool = False,
+        mounts: Sequence[Mount] = (),
     ) -> str:
         """Starts a new container for the task and returns its name."""
         name = container_name(task.id)
@@ -179,6 +203,7 @@ class ContainerManager:
             image_tag,
             network=network,
             user=self._user,
+            mounts=mounts,
         )
         async with docker_error_boundary(
             "start sandbox container",
@@ -187,6 +212,14 @@ class ContainerManager:
             res = await self._runner.run(args, timeout_s=30.0)
         if res.exit_code != 0:
             detail = res.stderr.strip() or res.stdout.strip() or "docker run failed"
+            if mounts:
+                sorted_paths = [
+                    m.container_path for m in sorted(mounts, key=lambda m: m.container_path)
+                ]
+                paths_str = ", ".join(sorted_paths)
+                raise SandboxUnavailable(
+                    f"Failed to start sandbox container while mounting {paths_str}: {detail}"
+                )
             raise SandboxUnavailable(f"Failed to start sandbox container: {detail}")
         return name
 
@@ -274,12 +307,20 @@ class ContainerManager:
         image_tag: str,
         *,
         network: bool = False,
+        mounts: Sequence[Mount] = (),
     ) -> str:
-        """Ensures a container is running for the task on the specified image and network setting."""
+        """Ensures a container is running for the task on the specified image, network, and mounts setting."""
         name = container_name(task.id)
+        expected_mounts = mounts_fingerprint(mounts)
         info = await self.inspect(name)
         if info is not None:
-            if info.running and info.image_tag == image_tag and info.network == network:
+            if (
+                info.running
+                and info.image_tag == image_tag
+                and info.network == network
+                and info.mounts is not None
+                and info.mounts == expected_mounts
+            ):
                 if info.paused:
                     await self.unpause(name)
                 return name
@@ -290,6 +331,7 @@ class ContainerManager:
             task,
             image_tag,
             network=network,
+            mounts=mounts,
         )
 
 
