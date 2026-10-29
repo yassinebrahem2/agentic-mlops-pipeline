@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ApprovalPart } from "../ApprovalCard";
 import { ApprovalControls } from "../ApprovalControls";
-import { APPROVAL_STATUS_CONFIG, type ApprovalBadgeStatus } from "../GenericApprovalCard";
+import { APPROVAL_STATUS_CONFIG, type ApprovalBadgeStatus } from "../approvalStatus";
 import type { ProposalView } from "./useProposal";
 
 export interface ProposalShellProps {
