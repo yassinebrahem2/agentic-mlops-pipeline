@@ -218,7 +218,7 @@ async def test_auth_failure_marks_provider_needs_attention(
     assert secret_key not in prov.status_detail
 
 
-async def test_error_after_streaming_started_fails_at_once_with_partial_text(
+async def test_error_after_streaming_started_retries_then_fails_with_partial_text(
     databases: Databases,
     keystore: MemoryKeyStore,
     fake_openai: RunningFake,
@@ -239,9 +239,9 @@ async def test_error_after_streaming_started_fails_at_once_with_partial_text(
 
     # Received partial text
     assert len(received) > 0
-    # No retries occurred
-    assert env.clock.sleeps == []
-    assert len(fake_openai.state.requests) == 1
+    # A keyless provider retries a transient error after each backoff, then fails
+    assert env.clock.sleeps == list(TRANSIENT_BACKOFFS)
+    assert len(fake_openai.state.requests) == 1 + len(TRANSIENT_BACKOFFS)
     assert not failed.value.message.endswith(" ")
 
 

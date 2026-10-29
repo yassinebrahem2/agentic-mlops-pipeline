@@ -20,7 +20,6 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.runtime import executor, waiting
-from mlops_agents.agents.runtime.agent import TurnRefused
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.graph import turn_checkpointer
 from mlops_agents.paths import DataPaths
@@ -213,9 +212,8 @@ async def test_a_failing_cleanup_keeps_the_resume_failure(
         await turn.approve()
         assert (await turn.ended()).data.status == "failed"
 
-    failed = next(r for r in caplog.records if "failed unexpectedly" in r.getMessage())
-    assert failed.exc_info is not None
-    assert isinstance(failed.exc_info[1], TurnRefused)
+    # The refusal is the turn's failure, not an unexpected one.
+    assert not [r for r in caplog.records if "failed unexpectedly" in r.getMessage()]
     cleanup = next(r for r in caplog.records if "checkpoint thread" in r.getMessage())
     assert "s3cret" not in cleanup.getMessage()
     assert cleanup.exc_info is None
