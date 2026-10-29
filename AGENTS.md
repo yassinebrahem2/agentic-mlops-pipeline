@@ -57,7 +57,7 @@ Run from `frontend/`:
 
 ## Team workflow
 
-The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
+The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner and one area, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
 
 Roles:
 - Lead: GitHub `yassinebrahem2`. Decides what is built. Writes the specs, the stage overviews, every plan, every task and every issue; owns the interfaces between plans; does the final review of every PR, merges, closes plan issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
@@ -103,10 +103,10 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 - A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with branch, Consumes and Produces. Each plan links to it instead of repeating it.
 - Plans depend on interfaces, not on whole plans. A plan's first tasks produce what other plans consume, so those interfaces reach `main` early; a task can start as soon as everything it consumes is on `main`, and its issue says which interfaces those are. Plans whose interfaces are on `main` run in parallel.
 - Files that several plans edit (routers, service registries, the frontend route table) are set up once so that each plan only adds its own lines or its own file, never edits someone else's.
-- Plans are moderately detailed, not a second copy of the code:
-  - every task names its exact files and the interfaces it consumes and produces (exact names and types);
-  - tests are written as code, or as a precise list of behaviors and failure cases to verify;
-  - full implementation code only where a mistake is costly or subtle (security, data loss, platform quirks, tricky concurrency); elsewhere, precise implementation notes.
+- Plans are short, not a second copy of the code:
+  - every task names its exact files and the interfaces it consumes and produces (exact names and types), and where each shared rule, type or constant lives (DRY and separation of concerns are settled here, not mid-work);
+  - tests are a list of the behaviours to verify: the main path and the failures that really happen;
+  - implementation notes or code only where a mistake is costly (security, secrets, data loss, the hard limits, platform quirks); elsewhere the owner decides.
 - A task's tests are its stop condition: the task is done when they pass, together with lint, type checks and CI.
 - Unfinished plans are committed to `docs/superpowers/plans/drafts/` on `main`, each with a banner listing what is still missing (see that folder's README), never kept in local scratch files or unpushed branches. A draft is never implemented.
 

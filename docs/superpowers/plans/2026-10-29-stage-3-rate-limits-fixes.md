@@ -21,13 +21,13 @@ Task 2 waits because the approvals-fixes plan (#390) edits `graph_run.py`. Start
 
 ### Task 1: Keyless retry and a deleted provider
 
-**Files:** `backend/src/mlops_agents/providers/failover.py`; `agents/runtime/model_caller.py` (where a resumed turn resolves its model); their tests.
+**Files:** `backend/src/mlops_agents/providers/failover.py`; `agents/runtime/executor.py` (`run` and `resume`); their tests.
 
 **Implementation notes:**
 - **Item 1: a keyless provider retries a transient error.** Both `if not provider.keys: result = await attempt(None)` branches in `KeyFailover` (`call` and its streaming twin) make one attempt. A keyless provider retries the same call after each of `TRANSIENT_BACKOFFS` on a `TRANSIENT` or `UNREACHABLE` error (`_SAME_KEY_RETRY`), as a keyed provider retries its key, then raises the last error. Write the retry once and use it for the keyed and keyless paths. A keyless provider is still never marked (Decision #384).
-- **Item 6: a provider deleted while stalled.** After Try again on a stall whose provider was deleted, the turn continues with the agent's model. When that model's provider is gone, the turn fails with `provider_not_found`'s own message, not the generic failure text.
+- **Item 6: a provider deleted while stalled** (Decision #443). Deleting a provider deletes its models, so after Try again the builder refuses the resumed turn (`TurnRefused`, from `model_missing` in `AgentSettingsService.resolve`). `resume` handles a `TurnRefused` exactly as `run` does, through one function both call: an end of `done` ends the turn done; any other end posts the system message and fails the turn with the refusal's own text, never "failed unexpectedly". Where resume must differ (its turn already has messages), the shared function takes that as a parameter; say so in the PR. This covers every refusal on resume (missing project, no model, unusable model), not only a deleted provider.
 
-**Tests (stop condition):** a keyless provider answering 503 then 200 succeeds after one backoff (fake clock or patched sleep, no real wait), and an `UNREACHABLE` error is retried the same way; a keyless provider failing every attempt raises the last error and is not marked; the keyed path's existing retry tests pass unchanged; a deleted provider after Try again fails the turn with the text of the `provider_not_found` `DomainError` the lookup raised (asserted against that error's message, not a copied string); full backend suite, ruff, format, pyright; CI green.
+**Tests (stop condition):** a keyless provider answering 503 then 200 succeeds after one backoff (fake clock or patched sleep, no real wait), and an `UNREACHABLE` error is retried the same way; a keyless provider failing every attempt raises the last error and is not marked; the keyed path's existing retry tests pass unchanged; a deleted provider after Try again fails the turn with the refusal's own text (asserted against the raised error's message, not a copied string); a refusal with end `done` on resume ends the turn done, as on `run`; full backend suite, ruff, format, pyright; CI green.
 
 ---
 
