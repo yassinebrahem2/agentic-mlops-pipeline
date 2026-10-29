@@ -313,7 +313,8 @@ class KnowledgeService(Knowledge):
             logger.warning("Vector search query failed: %s", exc)
             if pass_state is None:
                 pass_state = self._passes.setdefault(project_id, ReembedPass())
-            clean_msg = error_text(exc)
+            orig = getattr(exc, "orig", None)
+            clean_msg = error_text(orig if orig is not None else exc)
             pass_state.record_failure(clean_msg, self._monotonic())
             ranked_views = await get_notes_by_ids(
                 engine, candidate_ids[:clamped_limit], note_type=type

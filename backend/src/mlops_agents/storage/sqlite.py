@@ -23,6 +23,7 @@ def check_sqlite_version() -> None:
         found_ver = ".".join(map(str, sqlite3.sqlite_version_info))
         raise RuntimeError(f"SQLite {min_ver} or later is required, but found {found_ver}")
 
+
 PRAGMAS: tuple[str, ...] = (
     "PRAGMA journal_mode=WAL",
     "PRAGMA busy_timeout=5000",

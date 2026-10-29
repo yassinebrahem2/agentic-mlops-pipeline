@@ -268,7 +268,7 @@ async def test_exhausted_embedder_fallback_and_cooldown(
     await service.search(project_id, query="truck", type=None, limit=5)
     await service.wait_idle(project_id)
 
-    # Embedder was called to embed query and the pending batch (call_count >= 3: 1 original + 1 query + 1 pending batch)
+    # Embedder was called to embed the pending batch on restart (call_count >= 2)
     assert concept_embedder.call_count >= 2
 
     # Assert Beta Note now has an embedded vector in note_embeddings

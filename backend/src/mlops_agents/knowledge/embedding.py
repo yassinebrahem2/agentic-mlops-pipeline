@@ -145,9 +145,11 @@ async def run_reembed_pass(
         raise
     except (EmbedderUnavailable, VectorStoreError) as exc:
         logger.warning("Re-embedding pass failed: %s", exc)
-        pass_state.record_failure(error_text(exc), monotonic())
+        orig = getattr(exc, "orig", None)
+        pass_state.record_failure(error_text(orig if orig is not None else exc), monotonic())
     except Exception as exc:
         logger.exception("Unexpected error in re-embedding pass: %s", exc)
-        pass_state.record_failure(error_text(exc), monotonic())
+        orig = getattr(exc, "orig", None)
+        pass_state.record_failure(error_text(orig if orig is not None else exc), monotonic())
     finally:
         pass_state.task = None

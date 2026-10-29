@@ -29,11 +29,17 @@ async def test_smoke_knowledge_without_embedder(
 ) -> None:
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
-    knowledge = services.knowledge
 
-    save_tool = SaveNote(knowledge)
-    search_tool = SearchNotes(knowledge)
-    hook = KnowledgeHook(knowledge)
+    # Retrieve tools and hook from the application's actual registries
+    save_tool = services.tools.get("SaveNote")
+    assert isinstance(save_tool, SaveNote)
+    search_tool = services.tools.get("SearchNotes")
+    assert isinstance(search_tool, SearchNotes)
+
+    hook_registry = services.sessions._builder._hooks
+    assert hook_registry is not None
+    hook = hook_registry._hooks["knowledge"]
+    assert isinstance(hook, KnowledgeHook)
     ctx = tool_context(DummyFiles(), project_id=project_id, agent="dev_agent")
     hook_ctx = HookContext(project_id=project_id, agent="dev_agent", trigger_text="postgres")
 
@@ -101,9 +107,16 @@ async def test_smoke_knowledge_with_fake_embedder(
     )
     assert emb_res.status_code == 200
 
-    save_tool = SaveNote(knowledge)
-    search_tool = SearchNotes(knowledge)
-    hook = KnowledgeHook(knowledge)
+    # Retrieve tools and hook from the application's actual registries
+    save_tool = services.tools.get("SaveNote")
+    assert isinstance(save_tool, SaveNote)
+    search_tool = services.tools.get("SearchNotes")
+    assert isinstance(search_tool, SearchNotes)
+
+    hook_registry = services.sessions._builder._hooks
+    assert hook_registry is not None
+    hook = hook_registry._hooks["knowledge"]
+    assert isinstance(hook, KnowledgeHook)
     ctx = tool_context(DummyFiles(), project_id=project_id, agent="dev_agent")
     hook_ctx = HookContext(project_id=project_id, agent="dev_agent", trigger_text="neural")
 

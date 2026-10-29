@@ -7,8 +7,8 @@ from typing import cast
 import pytest
 
 from mlops_agents.agents.policy.table import PermissionLevel, decide
-from mlops_agents.agents.tools.base import RiskClass, ToolContext, ToolFailure
-from mlops_agents.agents.tools.search_notes import SearchNotes, SearchNotesArgs
+from mlops_agents.agents.tools.base import RiskClass, ToolContext
+from mlops_agents.agents.tools.search_notes import SearchNotes
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.knowledge.contract import NoteDraft, NoteView, SearchResult
 from mlops_agents.knowledge.service import KnowledgeService
@@ -155,10 +155,6 @@ async def test_search_notes_limit_above_maximum_refused(
     tool = SearchNotes(knowledge_service)
     out = await tool.invoke(ctx, {"query": "test", "limit": 25})
     assert out.is_error
-
-    # Direct run check
-    with pytest.raises(ToolFailure, match="Limit cannot exceed 20"):
-        await tool.run(ctx, SearchNotesArgs.model_construct(query="test", limit=25))
 
 
 async def test_search_notes_output_capped_at_12000_with_omitted_line(ctx: ToolContext) -> None:

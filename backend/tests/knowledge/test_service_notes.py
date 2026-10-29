@@ -429,3 +429,18 @@ async def test_edit_note_removes_stale_note_embeddings_when_vectors_unavailable(
             select(note_embeddings).where(note_embeddings.c.note_id == note.id)
         )
         assert res.first() is None, "Stale note_embeddings row must be deleted on edit"
+
+    # 6. Restore vectors and verify the note gets re-embedded on a subsequent pass
+    from tests.knowledge.fakes import ConceptEmbedder
+
+    monkeypatch.undo()
+    embedder = ConceptEmbedder("fake:4@4", 4, {"c1": {"updated", "text"}})
+    fake_embedders.set_embedder(project_id, embedder)
+    service.kick(project_id)
+    await service.wait_idle(project_id)
+
+    async with engine.connect() as conn:
+        res = await conn.execute(
+            select(note_embeddings).where(note_embeddings.c.note_id == note.id)
+        )
+        assert res.first() is not None, "Note must be re-embedded after vectors are available"
