@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping
 
 import httpx2
-from sqlalchemy import RowMapping, delete, insert, select, update
+from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.clock import now_iso
 from mlops_agents.credentials import KeyStore
-from mlops_agents.credentials.scrub import error_text, mask_key, scrub_values
+from mlops_agents.credentials.scrub import error_text, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.providers import listing
+from mlops_agents.providers.env_keys import detect_env_keys, known_env_key
 from mlops_agents.providers.errors import ProviderCallError
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.keys import StoredKeys
@@ -26,18 +26,11 @@ from mlops_agents.providers.models import (
     ProviderStatus,
     RemoteModel,
 )
+from mlops_agents.providers.rows import model_from_row, provider_from_row
 from mlops_agents.providers.verification import probe_embedder, probe_model
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import models as models_table
 from mlops_agents.storage.tables import provider_keys, providers
-
-# Environment variables recognised by "detect keys": name -> (provider name, base URL).
-KNOWN_ENV_KEYS: dict[str, tuple[str, str]] = {
-    "GROQ_API_KEY": ("groq", "https://api.groq.com/openai/v1"),
-    "GEMINI_API_KEY": ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
-    "OPENROUTER_API_KEY": ("openrouter", "https://openrouter.ai/api/v1"),
-}
-_ENV_VAR = re.compile(r"^(?P<base>[A-Z0-9_]+?)(?:_\d+)?$")
 
 
 class ProvidersService:
@@ -77,7 +70,7 @@ class ProvidersService:
             hints.setdefault(k["provider_id"], []).append(
                 KeyHint(position=k["position"], hint=k["hint"])
             )
-        return [_provider(row, hints.get(row["id"], [])) for row in rows]
+        return [provider_from_row(row, hints.get(row["id"], [])) for row in rows]
 
     async def get_provider(self, name: str) -> Provider:
         for provider in await self.list_providers():
@@ -233,7 +226,7 @@ class ProvidersService:
         )
         async with engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
-        return [_model(row) for row in rows]
+        return [model_from_row(row) for row in rows]
 
     async def get_model(self, address: str) -> ModelEntry | None:
         return next((m for m in await self.list_models() if m.address == address), None)
@@ -377,35 +370,11 @@ class ProvidersService:
     async def detect_env_keys(self, env: Mapping[str, str] | None = None) -> list[DetectedKey]:
         source = os.environ if env is None else env
         existing = {p.name for p in await self.list_providers()}
-        found: list[DetectedKey] = []
-        for base, (provider_name, base_url) in KNOWN_ENV_KEYS.items():
-            pattern = re.compile(rf"^{re.escape(base)}(?:_(?P<num>\d+))?$")
-            candidates: list[tuple[tuple[int, int], str, str]] = []
-            for var, value in source.items():
-                if not value:
-                    continue
-                match = pattern.match(var)
-                if match:
-                    num_str = match.group("num")
-                    sort_key = (-1, 0) if num_str is None else (int(num_str), 1)
-                    candidates.append((sort_key, var, value))
-            candidates.sort(key=lambda c: c[0])
-            for _, var, value in candidates:
-                found.append(
-                    DetectedKey(
-                        env_var=var,
-                        provider_name=provider_name,
-                        base_url=base_url,
-                        hint=mask_key(value),
-                        provider_exists=provider_name in existing,
-                    )
-                )
-        return found
+        return detect_env_keys(source, existing)
 
     async def import_env_key(self, env_var: str, env: Mapping[str, str] | None = None) -> Provider:
         source = os.environ if env is None else env
-        match = _ENV_VAR.match(env_var)
-        known = KNOWN_ENV_KEYS.get(match.group("base")) if match else None
+        known = known_env_key(env_var)
         if known is None:
             raise DomainError("unknown_env_key", f"{env_var} is not a recognised key.", status=422)
         value = source.get(env_var)
@@ -417,33 +386,3 @@ class ProvidersService:
                 ProviderCreate(name=provider_name, kind="hosted", base_url=base_url)
             )
         return await self.add_key(provider_name, value)
-
-
-def _provider(row: RowMapping, keys: list[KeyHint]) -> Provider:
-    return Provider(
-        id=row["id"],
-        name=row["name"],
-        kind=row["kind"],
-        base_url=row["base_url"],
-        status=row["status"],
-        status_detail=row["status_detail"],
-        keys=keys,
-        cooldown_minutes=row["cooldown_minutes"],
-    )
-
-
-def _model(row: RowMapping) -> ModelEntry:
-    return ModelEntry(
-        address=row["address"],
-        provider_id=row["provider_id"],
-        provider_name=row["provider_name"],
-        wire_model_id=row["wire_model_id"],
-        context_window=row["context_window"],
-        tool_calling=bool(row["tool_calling"]),
-        streaming=bool(row["streaming"]),
-        availability=row["availability"],
-        availability_detail=row["availability_detail"],
-        verified_at=row["verified_at"],
-        model_type=row["model_type"],
-        dimensions=row["dimensions"],
-    )
