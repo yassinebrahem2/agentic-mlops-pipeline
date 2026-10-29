@@ -12,6 +12,7 @@ from mlops_agents.providers.failover import (
     KeyState,
     RateLimited,
 )
+from mlops_agents.providers.models import Provider
 from tests.providers.fake_clock import (
     FakeClock,
     Script,
@@ -28,6 +29,16 @@ from tests.providers.fake_clock import (
 
 COOLDOWN = 15
 MODEL = "llama-3.3-70b"
+
+
+class Recorder:
+    """An `on_success` hook that records the providers it was called for."""
+
+    def __init__(self) -> None:
+        self.calls: list[Provider] = []
+
+    async def __call__(self, called: Provider) -> None:
+        self.calls.append(called)
 
 
 @pytest.fixture
@@ -247,6 +258,36 @@ async def test_a_provider_without_keys_is_called_once_with_none(
     assert attempt.keys == [None]
     assert clock.sleeps == []
     assert failover.states(keyless, MODEL) == []
+
+
+async def test_a_keyless_provider_retries_a_transient_error_after_a_backoff(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    attempt = Script(overloaded(), "reply")
+
+    assert await failover.call(provider(0), MODEL, attempt, cooldown_minutes=COOLDOWN) == "reply"
+    assert attempt.keys == [None, None]
+    assert clock.sleeps == [TRANSIENT_BACKOFFS[0]]
+
+
+@pytest.mark.parametrize("make_error", [overloaded, unreachable])
+async def test_a_keyless_provider_failing_every_attempt_raises_the_last_error_unmarked(
+    clock: FakeClock, make_error: Callable[[], Exception]
+) -> None:
+    keyless = provider(0)
+    marks = Recorder()
+    failover = KeyFailover(clock, on_success=marks)
+    last = make_error()
+    attempt = Script(*(make_error() for _ in TRANSIENT_BACKOFFS), last)
+
+    with pytest.raises(type(last)) as raised:
+        await failover.call(keyless, MODEL, attempt, cooldown_minutes=COOLDOWN)
+
+    assert raised.value is last
+    assert attempt.keys == [None] * (len(TRANSIENT_BACKOFFS) + 1)
+    assert clock.sleeps == list(TRANSIENT_BACKOFFS)
+    assert failover.states(keyless, MODEL) == []
+    assert marks.calls == []
 
 
 async def test_two_concurrent_calls_limited_on_one_key_do_not_exhaust_it(
