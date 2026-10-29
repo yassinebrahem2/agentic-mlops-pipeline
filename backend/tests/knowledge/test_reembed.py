@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -11,7 +12,7 @@ from sqlalchemy import text
 
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.knowledge.contract import NoteDraft
-from mlops_agents.knowledge.embedding import embedder_key
+from mlops_agents.knowledge.embedding import ReembedPass, embedder_key, run_reembed_pass
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.state import get_vectors_ready_for
 from mlops_agents.knowledge.vectors import SqliteVectorStore
@@ -400,3 +401,64 @@ async def test_close_cancels_running_pass_and_new_service_resumes(databases: Dat
     res = await service2.search(project_id, query="alpha", type=None, limit=5)
     assert res.used_vectors is True
     assert len(res.notes) == 1
+
+
+async def test_embedding_pass_failing_sql_stores_driver_message_without_sql_text(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_sqlerr"
+    vectors = SqliteVectorStore(databases)
+    embedder = ConceptEmbedder("model-err", 2, {"c": {"a"}})
+    fake_embedders = FakeEmbedders(embedder)
+    pass_state = ReembedPass()
+
+    real_engine = await databases.project(project_id)
+
+    class ProxyEngine:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(real_engine, name)
+
+        def connect(self) -> Any:
+            conn_cm = real_engine.connect()
+
+            class ConnProxy:
+                async def __aenter__(self) -> Any:
+                    conn = await conn_cm.__aenter__()
+                    try:
+                        await conn.execute(
+                            text("SELECT * FROM non_existent_table_in_embedding_pass")
+                        )
+                    except BaseException as exc:
+                        await conn_cm.__aexit__(type(exc), exc, exc.__traceback__)
+                        raise
+                    return conn
+
+                async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+                    return await conn_cm.__aexit__(exc_type, exc_val, exc_tb)
+
+            return ConnProxy()
+
+    async def fake_project(pid: str) -> Any:
+        del pid
+        return ProxyEngine()
+
+    monkeypatch.setattr(databases, "project", fake_project)
+
+    locks: dict[str, asyncio.Lock] = {}
+
+    def get_lock(pid: str) -> asyncio.Lock:
+        return locks.setdefault(pid, asyncio.Lock())
+
+    await run_reembed_pass(
+        project_id,
+        pass_state,
+        databases=databases,
+        embedders=fake_embedders,
+        vectors=vectors,
+        get_project_lock=get_lock,
+        monotonic=time.monotonic,
+    )
+
+    assert pass_state.last_failure_msg is not None
+    assert "[SQL:" not in pass_state.last_failure_msg
+    assert "no such table: non_existent_table_in_embedding_pass" in pass_state.last_failure_msg

@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy import delete, insert, select, update
 
 from mlops_agents.clock import now_iso
-from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
+from mlops_agents.credentials.scrub import db_error_text, scrub_url_secrets, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import EventLog
 from mlops_agents.ids import new_id
@@ -313,8 +313,7 @@ class KnowledgeService(Knowledge):
             logger.warning("Vector search query failed: %s", exc)
             if pass_state is None:
                 pass_state = self._passes.setdefault(project_id, ReembedPass())
-            orig = getattr(exc, "orig", None)
-            clean_msg = error_text(orig if orig is not None else exc)
+            clean_msg = db_error_text(exc)
             pass_state.record_failure(clean_msg, self._monotonic())
             ranked_views = await get_notes_by_ids(
                 engine, candidate_ids[:clamped_limit], note_type=type

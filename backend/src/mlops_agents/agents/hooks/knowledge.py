@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.exc import SQLAlchemyError
 
 from mlops_agents.agents.hooks.contract import HookContext
-from mlops_agents.credentials.scrub import error_text
+from mlops_agents.credentials.scrub import db_error_text
 from mlops_agents.errors import DomainError
 
 if TYPE_CHECKING:
@@ -40,8 +40,7 @@ class KnowledgeHook:
             )
         except (DomainError, SQLAlchemyError) as exc:
             logger.warning("Knowledge notes query failed in hook: %s", exc)
-            orig = getattr(exc, "orig", None)
-            err_msg = error_text(orig if orig is not None else exc)
+            err_msg = db_error_text(exc)
             return f"Knowledge notes are unavailable: {err_msg}"
 
         if not result.notes:

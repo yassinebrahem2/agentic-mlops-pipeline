@@ -13,7 +13,7 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import events
-from tests.knowledge.fakes import FakeEmbedders, no_secrets
+from tests.knowledge.fakes import ConceptEmbedder, FakeEmbedders, no_secrets
 
 
 class SpyVectorStore:
@@ -412,28 +412,26 @@ async def test_edit_note_removes_stale_note_embeddings_when_vectors_unavailable(
     async def fake_ensure(eng: object) -> None:
         raise VectorStoreError("Vector search is not available on this installation.")
 
-    monkeypatch.setattr(real_vectors, "_ensure_vec_available", fake_ensure)
+    with monkeypatch.context() as m:
+        m.setattr(real_vectors, "_ensure_vec_available", fake_ensure)
 
-    # 4. Edit the note while vectors are unavailable
-    updated = await service.save(
-        project_id,
-        "alice",
-        NoteDraft(type="fact", title="Updated Title", text="Updated text"),
-        note_id=note.id,
-    )
-    assert updated.title == "Updated Title"
-
-    # 5. Verify the stale note_embeddings row was removed!
-    async with engine.connect() as conn:
-        res = await conn.execute(
-            select(note_embeddings).where(note_embeddings.c.note_id == note.id)
+        # 4. Edit the note while vectors are unavailable
+        updated = await service.save(
+            project_id,
+            "alice",
+            NoteDraft(type="fact", title="Updated Title", text="Updated text"),
+            note_id=note.id,
         )
-        assert res.first() is None, "Stale note_embeddings row must be deleted on edit"
+        assert updated.title == "Updated Title"
 
-    # 6. Restore vectors and verify the note gets re-embedded on a subsequent pass
-    from tests.knowledge.fakes import ConceptEmbedder
+        # 5. Verify the stale note_embeddings row was removed!
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(note_embeddings).where(note_embeddings.c.note_id == note.id)
+            )
+            assert res.first() is None, "Stale note_embeddings row must be deleted on edit"
 
-    monkeypatch.undo()
+    # 6. Verify the note gets re-embedded on a subsequent pass once vectors are available
     embedder = ConceptEmbedder("fake:4@4", 4, {"c1": {"updated", "text"}})
     fake_embedders.set_embedder(project_id, embedder)
     service.kick(project_id)

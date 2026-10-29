@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-from mlops_agents.credentials.scrub import error_text
+from mlops_agents.credentials.scrub import db_error_text
 from mlops_agents.knowledge.contract import NoteDraft, NoteView, VectorStore
 from mlops_agents.knowledge.limits import EMBED_BATCH, EMBED_INPUT_CHARS, RETRY_AFTER_SECONDS
 from mlops_agents.knowledge.notes import get_note, row_to_note_view
@@ -145,11 +145,9 @@ async def run_reembed_pass(
         raise
     except (EmbedderUnavailable, VectorStoreError) as exc:
         logger.warning("Re-embedding pass failed: %s", exc)
-        orig = getattr(exc, "orig", None)
-        pass_state.record_failure(error_text(orig if orig is not None else exc), monotonic())
+        pass_state.record_failure(db_error_text(exc), monotonic())
     except Exception as exc:
         logger.exception("Unexpected error in re-embedding pass: %s", exc)
-        orig = getattr(exc, "orig", None)
-        pass_state.record_failure(error_text(orig if orig is not None else exc), monotonic())
+        pass_state.record_failure(db_error_text(exc), monotonic())
     finally:
         pass_state.task = None

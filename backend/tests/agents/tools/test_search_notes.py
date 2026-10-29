@@ -155,6 +155,7 @@ async def test_search_notes_limit_above_maximum_refused(
     tool = SearchNotes(knowledge_service)
     out = await tool.invoke(ctx, {"query": "test", "limit": 25})
     assert out.is_error
+    assert "less than or equal to 20" in out.content
 
 
 async def test_search_notes_output_capped_at_12000_with_omitted_line(ctx: ToolContext) -> None:

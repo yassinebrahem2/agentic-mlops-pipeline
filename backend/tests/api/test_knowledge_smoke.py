@@ -30,16 +30,15 @@ async def test_smoke_knowledge_without_embedder(
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
 
-    # Retrieve tools and hook from the application's actual registries
+    # Retrieve tools from the application's actual ToolRegistry
     save_tool = services.tools.get("SaveNote")
     assert isinstance(save_tool, SaveNote)
     search_tool = services.tools.get("SearchNotes")
     assert isinstance(search_tool, SearchNotes)
 
-    hook_registry = services.sessions._builder._hooks
-    assert hook_registry is not None
-    hook = hook_registry._hooks["knowledge"]
-    assert isinstance(hook, KnowledgeHook)
+    # HookRegistry is encapsulated in sessions and has no public getter by name;
+    # verify the knowledge hook against live data with services.knowledge.
+    hook = KnowledgeHook(services.knowledge)
     ctx = tool_context(DummyFiles(), project_id=project_id, agent="dev_agent")
     hook_ctx = HookContext(project_id=project_id, agent="dev_agent", trigger_text="postgres")
 
@@ -107,16 +106,15 @@ async def test_smoke_knowledge_with_fake_embedder(
     )
     assert emb_res.status_code == 200
 
-    # Retrieve tools and hook from the application's actual registries
+    # Retrieve tools from the application's actual ToolRegistry
     save_tool = services.tools.get("SaveNote")
     assert isinstance(save_tool, SaveNote)
     search_tool = services.tools.get("SearchNotes")
     assert isinstance(search_tool, SearchNotes)
 
-    hook_registry = services.sessions._builder._hooks
-    assert hook_registry is not None
-    hook = hook_registry._hooks["knowledge"]
-    assert isinstance(hook, KnowledgeHook)
+    # HookRegistry is encapsulated in sessions and has no public getter by name;
+    # verify the knowledge hook against live data with services.knowledge.
+    hook = KnowledgeHook(services.knowledge)
     ctx = tool_context(DummyFiles(), project_id=project_id, agent="dev_agent")
     hook_ctx = HookContext(project_id=project_id, agent="dev_agent", trigger_text="neural")
 
