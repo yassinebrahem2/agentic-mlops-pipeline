@@ -1,4 +1,5 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { api, ApiError } from "@/lib/api";
 import * as streamModule from "@/lib/stream";
@@ -15,6 +16,7 @@ import { projectStub, sampleApprovals, sampleReviews, TestFakeStream } from "./t
 describe("InboxPage and badge", () => {
   let fakeStream: TestFakeStream;
   let getSpy: MockInstance | undefined;
+  let postSpy: MockInstance | undefined;
   let openStreamSpy: MockInstance | undefined;
 
   beforeEach(() => {
@@ -30,6 +32,7 @@ describe("InboxPage and badge", () => {
 
   afterEach(() => {
     getSpy?.mockRestore();
+    postSpy?.mockRestore();
     openStreamSpy?.mockRestore();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
