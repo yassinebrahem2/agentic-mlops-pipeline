@@ -106,8 +106,9 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
         event_log: EventLog | None = None,
     ) -> None:
         """Mark running turns and their incomplete messages (streaming/stopped) as interrupted,
-        and expire pending approvals whose turn is not waiting (through the app's one approval
-        store, so its observers are told).
+        stop the agent message a stopped turn left waiting (a crash inside its Stop), and expire
+        pending approvals whose turn is not waiting (through the app's one approval store, so
+        its observers are told).
         """
         engine = await self._databases.project(project_id)
         now = now_iso()
@@ -120,6 +121,16 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
             ).all()
             running_turns = [(str(r[0]), str(r[1])) for r in rows]
             running_turn_ids = [t[0] for t in running_turns]
+            stopped_turns = select(turns.c.id).where(turns.c.status == "stopped")
+            await conn.execute(
+                update(messages)
+                .where(
+                    messages.c.author_kind == "agent",
+                    messages.c.status == "waiting",
+                    messages.c.turn_id.in_(stopped_turns),
+                )
+                .values(status="stopped")
+            )
 
             if running_turn_ids:
                 await conn.execute(

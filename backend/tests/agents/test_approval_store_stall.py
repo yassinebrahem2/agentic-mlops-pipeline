@@ -72,7 +72,7 @@ async def test_two_concurrent_create_stall_calls_give_one_record(databases: Data
 async def test_a_new_stall_at_the_same_step_is_allowed_after_the_first_is_decided(
     databases: Databases,
 ) -> None:
-    await add_turn(databases, PROJECT, status="running")
+    await add_turn(databases, PROJECT)  # waiting: a stall is decided only while its turn waits
     store = ApprovalStore(databases)
 
     first, _ = await store.create_stall(PROJECT, "trn_1", 1, STALL_PREVIEW)

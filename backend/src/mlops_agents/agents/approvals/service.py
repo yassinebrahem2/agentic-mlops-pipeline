@@ -37,9 +37,9 @@ class ApprovalsService(Approvals):
         self._store.add_observer(observer)
 
     async def pending(self, project_id: str) -> list[ApprovalView]:
-        """List all pending approvals for a project."""
+        """The approvals the user can decide now: pending, and their turn waiting."""
         await self._sessions.ensure_recovered(project_id)
-        records = await self._store.pending(project_id)
+        records = await self._store.decidable(project_id)
         return [ApprovalView.model_validate(r) for r in records]
 
     async def create_stall(

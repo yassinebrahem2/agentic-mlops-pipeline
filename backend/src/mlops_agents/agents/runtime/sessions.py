@@ -109,7 +109,14 @@ class SessionManager(AgentSessions):
             ),
             observers=observers,
         )
-        self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
+        self._workers = TurnWorkers(
+            store=self._store,
+            executor=self._executor,
+            observers=observers,
+            approval_store=approval_store,
+            audit_log=audit_log,
+            event_log=event_log,
+        )
 
         self._registry = SessionRegistry(self._store)
         self._recovery = ProjectRecovery(

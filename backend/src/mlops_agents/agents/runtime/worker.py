@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
@@ -14,6 +15,7 @@ from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.turn_end import TurnEnds
 from mlops_agents.agents.runtime.waiting import _Ending, _ending_of, _observed
+from mlops_agents.events.contract import AuditLog, EventLog
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +33,21 @@ class TurnWorkers:
         store: SessionStore,
         executor: TurnExecutor,
         observers: Sequence[TurnObserver],
+        approval_store: ApprovalStore,
+        audit_log: AuditLog | None,
+        event_log: EventLog | None,
     ) -> None:
         self._store = store
         self._executor = executor
         self._observers = tuple(observers)
-        self._ends = TurnEnds(store=store, executor=executor, observers=self._observers)
+        self._ends = TurnEnds(
+            store=store,
+            executor=executor,
+            observers=self._observers,
+            approval_store=approval_store,
+            audit_log=audit_log,
+            event_log=event_log,
+        )
         self._workers: dict[SessionKey, asyncio.Task[None]] = {}
         self._child_tasks: dict[SessionKey, asyncio.Task[TurnOutcome]] = {}
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.

@@ -158,19 +158,24 @@ class RepairEnv:
         self.apps.append(app)
         return app
 
-    async def ask(self, calls: int = 1) -> tuple[str, list[ApprovalRecord]]:
-        """Send to the writer, whose step makes `calls` writes, each asking for approval; the
-        turn and its approvals once it waits."""
+    def script_writes(self, calls: int = 1) -> None:
+        """The writer's next step makes `calls` writes, each asking for approval."""
         self.fake.state.scripted_tool_calls = [
             {"name": "write_code_tool", "arguments": {"file_path": f"f{n}.py", "content": "x"}}
             for n in range(calls)
         ]
-        stream = await opened_stream(self.stall.session, WRITER)
-        await self.first.manager.send(self.project_id, WRITER, "Please write")
+
+    async def ask(self, calls: int = 1, app: App | None = None) -> tuple[str, list[ApprovalRecord]]:
+        """Send to the writer on `app` (the first by default), whose step makes `calls` writes,
+        each asking for approval; the turn and its approvals once it waits."""
+        app = app or self.first
+        self.script_writes(calls)
+        stream = await self.stream(app)
+        await app.manager.send(self.project_id, WRITER, "Please write")
         waited = await collect_until_turn_waiting(stream)
         turn_id = next(e for e in waited if isinstance(e, TurnWaiting)).data.turn_id
         await stream.aclose()
-        return turn_id, await self.first.store.list_for_step(self.project_id, turn_id)
+        return turn_id, await app.store.list_for_step(self.project_id, turn_id)
 
     async def ask_stall(self, agent: str = "orchestrator") -> ApprovalRecord:
         """Send to `agent` while the provider's one key is refused: its turn waits on a stall."""

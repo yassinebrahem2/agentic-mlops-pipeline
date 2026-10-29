@@ -158,9 +158,9 @@ async def test_a_stop_sent_first_after_the_restart_repairs_then_stops(repair: Re
 
     await app.manager.stop(repair.project_id, WRITER)
 
-    # Only what holds wherever the Stop lands in the resumed worker: the agent message's status
-    # depends on whether the worker had started the turn's task yet.
+    # Only what holds wherever the Stop lands in the resumed worker.
     assert await repair.ended(stream) == (turn_id, "stopped")
+    assert (await repair.message_of(approval)).status == "stopped"
     assert await app.store.pending(repair.project_id) == []
     assert (await repair.card(approval)).status == "approved"
     assert await repair.audit_of(approval.id) == [("user", "approved")]

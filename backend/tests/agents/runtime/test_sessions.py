@@ -215,9 +215,13 @@ async def test_three_messages_sent_at_once_queue_order(
     assert m2.id in updated_ids
     assert m3.id in updated_ids
 
-    # Eventually view is not busy
-    view_end = await manager.get(project_id, "orchestrator")
-    assert view_end.busy is False
+    # Eventually view is not busy: the worker finishes the last end (its approvals sweep, its
+    # observers) after the stream's turn.ended, then leaves.
+    async with asyncio.timeout(5):
+        while True:
+            if not (await manager.get(project_id, "orchestrator")).busy:
+                break
+            await asyncio.sleep(0.01)
 
     await manager.close()
 
