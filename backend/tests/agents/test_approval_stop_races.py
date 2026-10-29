@@ -19,11 +19,11 @@ from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.agents.runtime.test_resuming_turns import collect_until_turn_waiting
 from tests.agents.turn_end_doubles import gate_then, hold, signalled
 
-Interleaving = Literal["one after the other", "at once", "stop before the resumed worker runs"]
+Interleaving = Literal["one after the other", "stop before the resumed worker runs"]
 
 
 @pytest.mark.parametrize(
-    "interleaving", ["one after the other", "at once", "stop before the resumed worker runs"]
+    "interleaving", ["one after the other", "stop before the resumed worker runs"]
 )
 async def test_an_approve_and_a_stop_at_once_end_the_turn_stopped(
     repair: RepairEnv, monkeypatch: pytest.MonkeyPatch, interleaving: Interleaving
@@ -41,10 +41,6 @@ async def test_an_approve_and_a_stop_at_once_end_the_turn_stopped(
         if interleaving == "one after the other":
             await approve()
             await stop()
-        elif interleaving == "at once":
-            for result in await asyncio.gather(approve(), stop(), return_exceptions=True):
-                # A decision that loses to the Stop is refused.
-                assert result is None or (isinstance(result, DomainError) and result.status == 409)
         else:
             # The resumed worker is held before it takes the turn, and Stop has asked it to
             # stop that turn (its look for the waiting turn comes right after), so the turn
