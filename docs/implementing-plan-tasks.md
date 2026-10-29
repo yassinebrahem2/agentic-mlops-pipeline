@@ -59,7 +59,7 @@ Dispatch a fresh reviewer with the brief, the review package and these instructi
 - Do not trust the implementer's report. Read the code and run the tests and checks yourself.
 - Spec compliance: for each requirement in the task, ✅ met (with the file and line), ❌ missing or wrong, ⚠️ unclear. Also flag anything built that the task did not ask for.
 - Code quality: correctness, edge cases and failure paths (the plan's Review Focus first), tests that would catch a regression, the rules in `AGENTS.md`, and consistency with the surrounding code.
-- Rate each finding: **Critical** (wrong behaviour, data loss, security, a broken check), **Important** (a missing requirement or test, a rule broken, a likely bug), **Minor** (style, naming, small clarity). Rate by the effect on a real user or on the next task, not by how much there is to say.
+- Rate each finding (the bar of 2026-10-29, the same as the lead's merge gate in `docs/reviewing-and-merging.md`): **Critical** (wrong behaviour on a normal path, data loss, security or secrets, a broken hard limit, a broken check), **Important** (a missing requirement, a missing test of the main path, a test that passes on broken code, a likely bug that a real user hits), **Minor** (style, naming, file size, small duplication, an edge case that cannot occur in practice). Rate by the effect on a real user or on the next task, not by how much there is to say.
 - End with a verdict: clean, or the list of findings to fix.
 
 ### 4. Fix loop
@@ -68,7 +68,7 @@ If the review has Critical or Important findings:
 2. After each round, a fresh reviewer re-reviews only the findings and the code the fix touched (new package from the same base), and confirms nothing else regressed.
 3. At most 5 rounds. If findings remain after that, stop: the task is not done. Say so in the task's issue and raise it with the lead.
 
-Minor findings do not hold the task. Fix them in the loop if cheap; otherwise list them in the ledger and in the plan issue (see the last section).
+Minor findings do not hold the task. Fix them in the loop if cheap; otherwise a Minor that leaves a real shortcut or gap (a copy, a missing check, a test-only function, an oversized file) goes in the PR's "Known debt added" section (the lead records it in `docs/known-debt.md`); pure naming and style nits are not debt and are not tracked.
 
 ### 5. Finish
 1. Check the final state yourself: tests, lint and type checks pass on the branch head.
@@ -86,7 +86,7 @@ When the last task is done, run one review of the whole branch on the most capab
 
 ## Rules that hold throughout
 - **No rulings by the agent.** When the plan is wrong, unclear or needs a decision, do not choose for the lead: open a Decision issue linked to the task, naming it under "Blocked task" (the board moves the task to Blocked and back when the Decision closes). Continue only after the lead answers.
-- **No silent deferral.** Open Minor findings, concerns from a `DONE_WITH_CONCERNS` report, and anything done differently from the plan are written in the plan issue and, at the end, in the PR description. The ledger alone is not enough.
+- **No silent deferral.** Debt accepted on purpose, concerns from a `DONE_WITH_CONCERNS` report, and anything done differently from the plan are written in the plan issue and, at the end, in the PR description ("Not done" and "Known debt added"). The ledger alone is not enough.
 - **One task at a time.** Work only on your own plan's tasks, in order; only you commit to its branch. Bring `main` in with `git merge origin/main`, never rebase or force-push a branch with an open PR.
 - **Handoffs in the issue.** If you stop before a task is done, comment on its issue: what is committed, what is left, the base commit. The next person (or session) starts from that comment.
 - **Checks are real.** A task is done only when its tests, lint and type checks pass locally and CI on its pushed commit is green; report the real output. No issue is ever closed without green CI.
