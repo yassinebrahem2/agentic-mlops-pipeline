@@ -87,7 +87,10 @@ check_reviews() {
       if [[ "$committed" > "${reviewed#*@}" ]]; then
         seen reviews "rereview $short#$n $sha" || { mark reviews "rereview $short#$n $sha"; echo "REREVIEW $short#$n $sha"; }
       else
-        seen reviews "owner $short#$n ${reviewed#*@}" || { mark reviews "owner $short#$n ${reviewed#*@}"; echo "OWNER $short#$n"; }
+        # Once per change request: the card fix reads the board, which is costly to repeat each poll.
+        seen reviews "owner $short#$n ${reviewed#*@}" && continue
+        mark reviews "owner $short#$n ${reviewed#*@}"
+        echo "OWNER $short#$n"
         if [ "$short" = agentic-mlops-pipeline ]; then
           # The PR and every open issue it closes, as board.yml's own changes-requested move does.
           for item in "$n" $(gh pr view "$n" -R "$repo" --json closingIssuesReferences \
