@@ -263,8 +263,9 @@ class TurnExecutor:
     ) -> TurnOutcome:
         """How a turn ends when its agent cannot be built, for a new turn and a resumed one:
         a "done" refusal is the agent's answer and ends the turn done; any other fails it with
-        the refusal's own text. A resumed turn already has its agent message (`message.id`),
-        which is completed instead of added."""
+        the refusal's own text. A resumed turn already has its agent message (`message.id`): it is
+        completed instead of added, and the failure goes through `record_failure`, which also
+        completes it."""
         if refused.end == "done":
             answer = TextPart(type="text", text=refused.text)
             if message.id is None:
@@ -285,15 +286,15 @@ class TurnExecutor:
                     project_id, sink, lock, message.id, message.parts, "complete"
                 )
             return ("done", None)
-        await self.record_failure(
-            project_id,
-            session_id,
-            turn_id,
-            sink,
-            lock,
-            refused.text,
-            parts=message.parts if message.id is not None else None,
-        )
+        if message.id is None:
+            notice: list[Part] = [TextPart(type="text", text=refused.text)]
+            await self._add_message(
+                project_id, session_id, turn_id, sink, lock, "system", "system", notice, "complete"
+            )
+        else:
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, refused.text, parts=message.parts
+            )
         return ("failed", refused.text)
 
     async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
