@@ -38,7 +38,9 @@ class TableDetail(BaseModel):
 
     table: TableRef
     columns: list[ColumnInfo]
-    row_count: int
+    row_count: int | None  # None: not computed (a timed-out or incomplete profile)
+    timed_out: bool
+    incomplete: bool  # DuckDB's memory limit stopped the profile; what finished is kept
     data_version: str
     summary: str
 

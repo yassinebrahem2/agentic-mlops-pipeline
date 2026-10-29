@@ -22,6 +22,7 @@ from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
+from mlops_agents.credentials.scrub import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -180,23 +181,41 @@ class TurnExecutor:
         message = _AgentMessage()
 
         async def body() -> TurnOutcome:
-            agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
-            if agent_msg is None:
-                raise RuntimeError(f"No agent message found for turn {turn_id}")
-            message.id = agent_msg.id
-            message.parts.extend(agent_msg.parts)
+            try:
+                agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
+                if agent_msg is None:
+                    raise RuntimeError(f"No agent message found for turn {turn_id}")
+                message.id = agent_msg.id
+                message.parts.extend(agent_msg.parts)
 
-            async with lock:
-                updated_msg = await self._store.update_message(
-                    project_id, agent_msg.id, parts=message.parts, status="streaming"
+                async with lock:
+                    updated_msg = await self._store.update_message(
+                        project_id, agent_msg.id, parts=message.parts, status="streaming"
+                    )
+                    await sink.message(updated_msg, created=False)
+                await self._store.set_turn(project_id, turn_id, "running")
+
+                built_agent = await self._builder.build(
+                    project_id, agent, session_id=session_id, turn_id=turn_id
                 )
-                await sink.message(updated_msg, created=False)
-            await self._store.set_turn(project_id, turn_id, "running")
-
-            built_agent = await self._builder.build(
-                project_id, agent, session_id=session_id, turn_id=turn_id
-            )
-            summary, _ = await self._store.summary(project_id, session_id)
+                summary, _ = await self._store.summary(project_id, session_id)
+                command = await resume_command(
+                    built_agent, summary, self._store.db_path(project_id), turn_id
+                )
+            except BaseException:
+                # The graph owns the thread once it runs; a failure or a Stop before that ends
+                # the turn, and would leave its checkpoint behind. A failing cleanup never
+                # replaces what ended the turn: a Stop stays a Stop.
+                try:
+                    await self.delete_checkpoint(project_id, turn_id)
+                except Exception as exc:
+                    logger.error(
+                        "Could not delete the checkpoint thread of turn %s: %s: %s",
+                        turn_id,
+                        type(exc).__name__,
+                        error_text(exc),
+                    )
+                raise
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -204,9 +223,7 @@ class TurnExecutor:
                 turn_id,
                 agent_msg.id,
                 message.parts,
-                await resume_command(
-                    built_agent, summary, self._store.db_path(project_id), turn_id
-                ),
+                command,
                 sink,
                 lock,
             )

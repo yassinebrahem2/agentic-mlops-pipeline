@@ -13,6 +13,7 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.data_summary import DataSummaryHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
@@ -35,6 +36,8 @@ from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.data.cache import ProfileCache
+from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import StatusBoard
@@ -56,6 +59,8 @@ from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -75,6 +80,7 @@ class Services:
     sessions: AgentSessions
     messaging_settings: MessagingSettings
     connections: Connections
+    data_summaries: DataSummaries
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -84,6 +90,7 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    tracking: TrackingService
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
@@ -203,6 +210,9 @@ async def build_services(
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    # One instance for the hook and the table-detail route: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
+    hooks.register(DataSummaryHook(connections, data_summaries))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -254,6 +264,16 @@ async def build_services(
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
     handoffs = SqliteHandoffs(databases)
 
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http, github),
+        github_token=github.token,
+    )
+    stack.push_async_callback(tracking.close)
+
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers above this line. Close is registered
@@ -276,6 +296,7 @@ async def build_services(
         sessions=sessions,
         messaging_settings=messaging_settings,
         connections=connections,
+        data_summaries=data_summaries,
         sandbox=sandbox,
         events=events,
         audit=audit,
@@ -285,6 +306,7 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        tracking=tracking,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
