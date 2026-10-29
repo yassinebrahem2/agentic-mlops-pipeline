@@ -147,7 +147,7 @@ def _table(ref: TableRef, profile: TableProfile, data_version: str | None) -> st
     about = f"{ref.format}, files {_files(ref.files)}"
     if data_version is not None:
         about += f", data version {one_line(data_version)}"
-    stopped_by = _TIMED_OUT if profile.timed_out else _MEMORY_LIMIT
+    stopped_by = _MEMORY_LIMIT if profile.incomplete else _TIMED_OUT
     rows = (
         f"row count unknown ({stopped_by})"
         if profile.row_count is None

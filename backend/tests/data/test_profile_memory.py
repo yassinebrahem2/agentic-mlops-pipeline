@@ -13,7 +13,7 @@ from mlops_agents.data import profile as profile_module
 from mlops_agents.data.constants import SAMPLE_ROWS, TOP_VALUES
 from mlops_agents.data.profile import ColumnProfile, TableProfile, TableUnreadable, profile_table
 from tests.data.conftest import TeamFolder, sql_text, write_parquet
-from tests.data.summary_env import OUT_OF_MEMORY, out_of_memory_at
+from tests.data.summary_env import out_of_memory_at
 
 BIG_ROWS = 10_000_000
 # The 10M-row file is about 10 MB; the margin covers DuckDB's own temporary files.
@@ -77,16 +77,6 @@ async def test_out_of_memory_in_the_sample_keeps_the_top_values(
     assert profile.incomplete
     assert _column(profile, "kind").top_values == ["0", "1", "2", "3"]
     assert profile.sample == []
-
-
-async def test_out_of_memory_is_known_by_its_text_too(
-    mixed: TeamFolder, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A reader can wrap DuckDB's memory error in another error class."""
-    out_of_memory_at(monkeypatch, "_top_values", duckdb.InvalidInputException(OUT_OF_MEMORY))
-    profile = await profile_table(mixed.source("t"))
-    assert profile.incomplete
-    assert profile.row_count == 100
 
 
 async def test_out_of_memory_before_the_columns_are_known_is_unreadable(

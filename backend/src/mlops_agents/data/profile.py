@@ -34,8 +34,6 @@ _RANGE_TYPES: Final = frozenset(
 _RANGE_TYPE_PREFIXES: Final = ("DECIMAL", "TIMESTAMP")
 _TEXT_TYPE: Final = "VARCHAR"
 _NULL_CELL: Final = "NULL"
-# How DuckDB's memory error starts, whichever error class a reader wraps it in.
-_OUT_OF_MEMORY: Final = "Out of Memory Error"
 
 
 class ColumnProfile(BaseModel):
@@ -96,10 +94,6 @@ def _has_range(type_name: str) -> bool:
     return type_name in _RANGE_TYPES or type_name.startswith(_RANGE_TYPE_PREFIXES)
 
 
-def _out_of_memory(exc: duckdb.Error) -> bool:
-    return isinstance(exc, duckdb.OutOfMemoryException) or str(exc).startswith(_OUT_OF_MEMORY)
-
-
 def _profile(source: DuckDbSource, timeout_s: float) -> TableProfile:
     builder = _ProfileBuilder(source.sql_from)
     timed_out = incomplete = False
@@ -114,7 +108,7 @@ def _profile(source: DuckDbSource, timeout_s: float) -> TableProfile:
             # An interrupt can surface as any DuckDB error; past the deadline it is a timeout.
             if deadline.expired:
                 timed_out = True
-            elif _out_of_memory(exc) and builder.described:
+            elif isinstance(exc, duckdb.OutOfMemoryException) and builder.described:
                 # The step that ran out stops here, at every run (Decision #432).
                 incomplete = True
             else:

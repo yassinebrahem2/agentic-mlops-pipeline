@@ -19,11 +19,15 @@ from mlops_agents.data.profile import TableProfile, TableUnreadable, profile_tab
 from mlops_agents.data.render import DENYLISTED_FILE, render_table
 from mlops_agents.errors import DomainError
 
-# How long past its own `timeout_s` a caller waits. A profile stops itself at `timeout_s`
-# (its Deadline interrupts DuckDB; cancelling the worker thread would not), so the wait only
-# bounds a caller queued behind another caller's longer profile of the same table, or behind
-# the profiles holding every slot: a caller whose budget is spent while queued is cut.
-_WAIT_GRACE_S: Final = 1.0
+# How long past its own `timeout_s` a caller waits. A profile stops itself before then (its
+# Deadline interrupts DuckDB; cancelling the worker thread would not), so the wait only cuts
+# a caller queued behind another caller's longer profile of the same table, or one whose
+# time is spent while it waits for a profile slot.
+WAIT_GRACE_S: Final = 1.0
+# Room between a profile's deadline and its caller's cut, for the interrupt, the thread's
+# return and the cache write: the profile ends first, so its result is read and its slot
+# freed while its caller still waits.
+_STOP_MARGIN_S: Final = 0.5
 
 PROFILE_TIMEOUT_CODE: Final = "profile_timeout"
 # Fixed: nothing from the request or the team's files goes into it.
@@ -99,32 +103,47 @@ class DataSummaries:
     ) -> tuple[str, TableProfile]:
         """The table's data version, read now, and its profile at that version.
 
-        Raises `SecretTable` before anything is read, and `TimeoutError` when the waits for
-        another caller's profile of the table or for a free profile slot, together with the
-        profile, outlast `timeout_s`.
+        Raises `SecretTable` before anything is read, and `TimeoutError` when the caller's
+        time is spent waiting for another caller's profile of the table or for a free profile
+        slot. A profile that starts late gets what is left of that time, and is returned
+        timed out when it does not finish within it.
         """
         if any(is_secret(file) for file in table.files):
             raise SecretTable
         data_version = await self._connections.data_version(project_id, connection_id, table.name)
         source = await self._connections.duckdb_source(project_id, connection_id, table.name)
 
+        loop = asyncio.get_running_loop()
+        cut_at = loop.time() + timeout_s + WAIT_GRACE_S
+
         async def compute() -> TableProfile:
-            return await self._profile_in_a_slot(source, timeout_s)
+            return await self._profile_in_a_slot(source, timeout_s, cut_at)
 
         profile = await asyncio.wait_for(
             self._cache.get_or_compute(
                 project_id, connection_id, table.name, data_version, source.sql_from, compute
             ),
-            timeout_s + _WAIT_GRACE_S,
+            cut_at - loop.time(),
         )
         return data_version, profile
 
-    async def _profile_in_a_slot(self, source: DuckDbSource, timeout_s: float) -> TableProfile:
-        """`profile_table` once one of the `MAX_CONCURRENT_PROFILES` slots is free; its
-        `timeout_s` starts then. The slot is held until the profile's thread ends, also when
-        the caller stops waiting: the thread cannot be cancelled and runs to its deadline."""
+    async def _profile_in_a_slot(
+        self, source: DuckDbSource, timeout_s: float, cut_at: float
+    ) -> TableProfile:
+        """`profile_table` once one of the `MAX_CONCURRENT_PROFILES` slots is free, under
+        `timeout_s` or what is left before its caller is cut at `cut_at` (loop time), whichever
+        is shorter: the wait counts against the caller's time, as the hook's budget does, and
+        the profile ends before its caller stops waiting for it. The slot is held until the
+        profile's thread ends: the thread cannot be cancelled and runs to its deadline.
+
+        Raises `TimeoutError`, without profiling, when the caller's time is spent queued.
+        """
         await self._slots.acquire()
-        running = asyncio.create_task(profile_table(source, timeout_s))
+        left = cut_at - asyncio.get_running_loop().time() - _STOP_MARGIN_S
+        if left <= 0:
+            self._slots.release()
+            raise TimeoutError
+        running = asyncio.create_task(profile_table(source, min(timeout_s, left)))
         self._running.add(running)
         running.add_done_callback(self._free_slot)
         return await asyncio.shield(running)
