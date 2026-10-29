@@ -532,6 +532,7 @@ async def test_decision_racing_with_stop_stop_wins_decision_gets_409(
     approvals_svc = ApprovalsService(
         databases=databases, sessions=manager, store=approval_store, audit_log=audit
     )
+    manager.bind_approvals(approvals_svc)
 
     view = await manager.get(project_id, "orchestrator")
     sub = manager.subscribe(project_id, "orchestrator", after_seq=view.last_seq)

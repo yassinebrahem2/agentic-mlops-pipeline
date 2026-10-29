@@ -121,6 +121,7 @@ async def test_a_propose_call_asks_at_every_level_and_its_part_carries_the_propo
     await set_permission_level(databases, env.project_id, level)
     await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases, env.manager, store=store)
+    env.manager.bind_approvals(approvals)
     fake_openai.state.scripted_tool_calls = [
         {"name": "propose_test", "arguments": {"kind": "handoff", "payload": {}}}
     ]
@@ -178,7 +179,9 @@ async def test_a_call_of_another_class_has_no_proposal_kind(
     await env.manager.send(env.project_id, "writer", "Write a.py")
     await collect_until_turn_waiting(sub)
 
-    [pending] = await ApprovalsService(databases, env.manager, store=store).pending(env.project_id)
+    approvals = ApprovalsService(databases, env.manager, store=store)
+    env.manager.bind_approvals(approvals)
+    [pending] = await approvals.pending(env.project_id)
     assert (pending.kind, pending.proposal_kind) == ("tool", None)
     [part] = await _stored_approval_parts(env, "writer")
     assert part.proposal_kind is None
@@ -214,6 +217,7 @@ async def test_rejecting_a_stall_ends_its_turn_stopped_with_no_audit_record(
     await set_permission_level(databases, env.project_id, "ask")
     await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases, env.manager, store=store, audit_log=audit)
+    env.manager.bind_approvals(approvals)
     fake_openai.state.scripted_tool_calls = [
         {"name": "propose_test", "arguments": {"kind": "handoff", "payload": {}}}
     ]

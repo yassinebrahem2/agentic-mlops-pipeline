@@ -2026,18 +2026,6 @@
             "title": "Created At",
             "type": "string"
           },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
-          },
           "from_agent": {
             "anyOf": [
               {
@@ -3130,6 +3118,23 @@
         "title": "ProviderCreate",
         "type": "object"
       },
+      "ProviderSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "cooldown_minutes": {
+            "description": "Minutes an exhausted key rests before it is tried again.",
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Cooldown Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cooldown_minutes"
+        ],
+        "title": "ProviderSettings",
+        "type": "object"
+      },
       "RelinkProject": {
         "additionalProperties": false,
         "properties": {
@@ -3906,18 +3911,6 @@
               }
             ],
             "title": "Error"
-          },
-          "error_kind": {
-            "anyOf": [
-              {
-                "const": "keys_exhausted",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Kind"
           },
           "status": {
             "enum": [
@@ -7108,6 +7101,58 @@
           }
         },
         "summary": "List Remote Models",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/api/providers/{name}/settings": {
+      "put": {
+        "operationId": "update_provider_settings_api_providers__name__settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Provider Settings",
         "tags": [
           "providers"
         ]

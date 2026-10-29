@@ -8,6 +8,7 @@ from typing import Literal
 
 import httpx2
 
+from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
@@ -27,6 +28,7 @@ from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import stop_waiting_turn
 from mlops_agents.agents.runtime.worker import TurnWorkers
@@ -35,6 +37,7 @@ from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -57,6 +60,7 @@ class SessionManager(AgentSessions):
         settings: AgentSettingsService,
         providers: ProvidersService,
         http: httpx2.AsyncClient,
+        failover: KeyFailover,
         gate: Gate,
         inbound: InboundSource,
         turn_end: TurnEndCheck,
@@ -82,7 +86,8 @@ class SessionManager(AgentSessions):
         self._approval_store = approval_store
 
         self._store = SessionStore(databases, audit_log=self._audit_log, event_log=self._event_log)
-        self._caller = ModelCaller(providers=providers, http=http)
+        self._caller = ModelCaller(providers=providers, http=http, failover=failover)
+        self._approvals = LateApprovals()
         self._builder = AgentBuilder(
             workspace=workspace,
             catalog=catalog,
@@ -102,6 +107,8 @@ class SessionManager(AgentSessions):
                 turn_end=turn_end,
                 workspaces=workspaces,
                 approval_store=approval_store,
+                approvals=self._approvals,
+                events=event_log,
             ),
             observers=observers,
         )
@@ -113,6 +120,11 @@ class SessionManager(AgentSessions):
 
         if bus is not None:
             bus.bind(self)
+
+    def bind_approvals(self, approvals: Approvals) -> None:
+        """The approvals service, which takes this manager and so is built after it; a turn's
+        stall goes through it. A second call raises RuntimeError."""
+        self._approvals.bind(approvals)
 
     async def ensure_recovered(self, project_id: str) -> None:
         """Public method to ensure a project's state is recovered before use."""

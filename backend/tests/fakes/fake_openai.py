@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -58,6 +58,13 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "Write": {"file_path": "NOTES.md", "content": "# Notes\n\nNotes created by fake-write.\n"},
 }
 SLOW_TEXT = " ".join(f"word{i}" for i in range(40))
+# One chat request's answer for a key: "ok" serves it as usual; ("429", retry_after) is a rate
+# limit; "429-quota-wording" a per-minute limit worded as a quota; "402" and
+# "insufficient_quota" (a 429) billing; "401" a rejected key.
+KeyOutcome = (
+    Literal["ok", "429-quota-wording", "402", "insufficient_quota", "401"]
+    | tuple[Literal["429"], float | None]
+)
 
 
 def _open_gate() -> threading.Event:
@@ -83,6 +90,7 @@ class FakeState:
     sse_error_message: str = "Tool call validation failed in stream"
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     request_headers: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    key_scripts: dict[str, list[KeyOutcome]] = field(default_factory=dict[str, list[KeyOutcome]])
     # Embeddings
     embedding_wrong_dimensions: int | None = None
     embedding_truncate_count: int | None = None
@@ -90,6 +98,11 @@ class FakeState:
     embedding_error_message: str | None = None
     embedding_error_code: str = "bad_request"
     _slow_gate: threading.Event = field(default_factory=_open_gate)
+
+    def script_for_key(self, key: str, outcomes: list[KeyOutcome]) -> None:
+        """Answer the next chat requests made with `key`, one outcome each, in order; once they
+        are used up the key is served as usual."""
+        self.key_scripts[key] = list(outcomes)
 
     def hold_slow(self) -> None:
         self._slow_gate.clear()
@@ -119,6 +132,29 @@ class FakeState:
         self.embedding_error_code = "bad_request"
         self.requests.clear()
         self.request_headers.clear()
+        self.key_scripts.clear()
+
+
+def _scripted_response(state: FakeState, request: Request) -> Response | None:
+    """The scripted answer for the request's bearer key, or None to serve it as usual."""
+    authorization = request.headers.get("authorization", "")
+    script = state.key_scripts.get(authorization.removeprefix("Bearer "))
+    if not script:
+        return None
+    outcome = script.pop(0)
+    if outcome == "ok":
+        return None
+    if outcome == "429-quota-wording":
+        return _error(429, "You exceeded your current quota", "rate_limit_exceeded")
+    if outcome == "402":
+        return _error(402, "Payment required", "payment_required")
+    if outcome == "insufficient_quota":
+        return _error(429, "You exceeded your current quota", "insufficient_quota")
+    if outcome == "401":
+        return _error(401, "Invalid API key", "invalid_api_key")
+    _, retry_after = outcome
+    headers = {"retry-after": str(retry_after)} if retry_after is not None else None
+    return _error(429, "Rate limit reached", "rate_limit_exceeded", headers)
 
 
 def _error(status: int, message: str, code: str, headers: dict[str, str] | None = None) -> Response:
@@ -332,6 +368,9 @@ def create_fake_app(state: FakeState) -> FastAPI:
         body: dict[str, Any] = await request.json()
         state.requests.append(body)
         state.request_headers.append(dict(request.headers))
+        scripted = _scripted_response(state, request)
+        if scripted is not None:
+            return scripted
         if state.rate_limit_remaining > 0:
             state.rate_limit_remaining -= 1
             return _error(429, "Rate limit reached", "rate_limit_exceeded", {"retry-after": "0"})

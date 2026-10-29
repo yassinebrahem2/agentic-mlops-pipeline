@@ -13,12 +13,14 @@ from mlops_agents.agents.settings import (
 )
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.errors import DomainError
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import agent_model_defaults
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
+from tests.providers.fake_clock import FakeClock
 
 SECRET_KEY_1 = "gsk_test_key_alpha_111111"
 SECRET_KEY_2 = "gsk_test_key_beta_222222"
@@ -52,7 +54,7 @@ async def providers_svc(
     keystore: MemoryKeyStore,
     model_http: httpx2.AsyncClient,
 ) -> ProvidersService:
-    return ProvidersService(databases, keystore, model_http)
+    return ProvidersService(databases, keystore, model_http, KeyFailover(FakeClock()))
 
 
 @pytest.fixture
@@ -358,19 +360,15 @@ async def test_resolve_and_problem_states(
     await providers_svc.verify_model(model.address)
     assert (await settings_svc.get("orchestrator", "prj_1")).model_problem is None
 
-    # 5. Provider needs attention
+    # 5. A provider marked needs attention only informs: the model is still usable (#384)
     await providers_svc.mark_needs_attention(provider.id, "Account billing suspended")
-    with pytest.raises(DomainError) as err:
-        await settings_svc.resolve("prj_1", "orchestrator")
-    assert err.value.status == 409
-    assert err.value.code == "provider_needs_attention"
-    expected_msg = "groq needs attention: Account billing suspended. Fix it in AI providers."
-    assert err.value.message == expected_msg
-    assert (await settings_svc.get("orchestrator", "prj_1")).model_problem == expected_msg
-
-    # Adding a working key proves the key works and automatically resets status to ok
-    await providers_svc.add_key("groq", SECRET_KEY_3)
+    resolved, _ = await settings_svc.resolve("prj_1", "orchestrator")
+    assert resolved.address == model.address
     assert (await settings_svc.get("orchestrator", "prj_1")).model_problem is None
+
+    # Adding a working key resets the status to ok, as before
+    await providers_svc.add_key("groq", SECRET_KEY_3)
+    assert (await providers_svc.get_provider("groq")).status == "ok"
 
     # 6. Hosted provider with no keys (remove all keys)
     prov = await providers_svc.get_provider("groq")
@@ -457,7 +455,8 @@ async def test_list_settings_works_with_locked_keystore(
 ) -> None:
     broken_keystore = BrokenKeyStore()
     client = httpx2.AsyncClient()
-    providers_svc = ProvidersService(databases, broken_keystore, client)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, broken_keystore, client, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
     try:
@@ -699,12 +698,14 @@ async def test_check_model_raises_runtime_error_if_context_window_missing(
         await settings_svc.resolve("prj_1", "orchestrator")
 
 
-async def test_setters_accept_model_when_provider_needs_attention(
+async def test_a_provider_needing_attention_is_not_a_model_problem(
     settings_svc: AgentSettingsService,
     providers_svc: ProvidersService,
     databases: Databases,
     fake_openai: RunningFake,
 ) -> None:
+    """The mark only informs (the AI providers page shows it); a turn still reaches the model,
+    so a cooldown probe or Try again can find a key that works again (#384)."""
     base_url = fake_openai.base_url
     await databases.project("prj_1")
 
@@ -716,43 +717,21 @@ async def test_setters_accept_model_when_provider_needs_attention(
         ModelCreate(provider="groq", wire_model_id="fake-tools", context_window=32768)
     )
     await providers_svc.verify_model(model.address)
-
-    # Put provider in needs_attention
     await providers_svc.mark_needs_attention(provider.id, "Account billing suspended")
-    expected_msg = "groq needs attention: Account billing suspended. Fix it in AI providers."
 
-    # set_default_model succeeds even though provider needs attention
     view = await settings_svc.set_default_model("orchestrator", model.address)
-    assert view.default_model == model.address
     assert view.effective_model == model.address
-    assert view.model_problem == expected_msg
+    assert view.model_problem is None
+    assert (await settings_svc.get("orchestrator", "prj_1")).model_problem is None
+    resolved, _ = await settings_svc.resolve("prj_1", "orchestrator")
+    assert resolved.address == model.address
 
-    # get also reflects provider_needs_attention
-    get_view = await settings_svc.get("orchestrator", "prj_1")
-    assert get_view.model_problem == expected_msg
-
-    # resolve raises provider_needs_attention
-    with pytest.raises(DomainError) as err:
-        await settings_svc.resolve("prj_1", "orchestrator")
-    assert err.value.status == 409
-    assert err.value.code == "provider_needs_attention"
-    assert err.value.message == expected_msg
-
-    # Clear default
     await settings_svc.set_default_model("orchestrator", None)
-
-    # set_project_model also succeeds when provider needs attention
     p_view = await settings_svc.set_project_model("prj_1", "orchestrator", model.address)
-    assert p_view.project_model == model.address
     assert p_view.effective_model == model.address
-    assert p_view.model_problem == expected_msg
-
-    # resolve still raises provider_needs_attention
-    with pytest.raises(DomainError) as err:
-        await settings_svc.resolve("prj_1", "orchestrator")
-    assert err.value.status == 409
-    assert err.value.code == "provider_needs_attention"
-    assert err.value.message == expected_msg
+    assert p_view.model_problem is None
+    resolved, _ = await settings_svc.resolve("prj_1", "orchestrator")
+    assert resolved.address == model.address
 
 
 async def test_embedder_model_rejected_for_agents(

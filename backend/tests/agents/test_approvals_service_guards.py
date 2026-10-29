@@ -99,11 +99,9 @@ async def _service_after_restart(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
     apr = await waiting_approval(databases, env.project_id, turn_status="running")
-    return (
-        ApprovalsService(databases, env.manager, store=env.approval_store),
-        env.project_id,
-        apr,
-    )
+    service = ApprovalsService(databases, env.manager, store=env.approval_store)
+    env.manager.bind_approvals(service)
+    return service, env.project_id, apr
 
 
 async def test_pending_after_a_restart_lists_no_approval_of_a_turn_that_is_not_waiting(

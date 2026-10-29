@@ -19,6 +19,7 @@ from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -27,6 +28,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_proj
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ async def build_builder_env(
         extra_dirs,
         hook_names=hooks.names() if hooks is not None else frozenset(),
     )
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    providers_svc = ProvidersService(databases, keystore, model_http, KeyFailover(FakeClock()))
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     workspace_svc = workspace_service(paths, databases, keystore)
     store = SessionStore(databases)
