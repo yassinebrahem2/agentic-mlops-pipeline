@@ -30,11 +30,13 @@ class ApprovalView(BaseModel):
 
 class ApprovalObserver(Protocol):
     """Told of every approval asked, and of every move out of pending (approve, reject,
-    cancel, Stop, expiry), each after it is stored. An observer must not block. Two paths hold
-    a lock while they tell `decided`: Stop (the session lock) and recovery expiry (the recovery
-    lock); both only reject or cancel, and an observer must not call back into Approvals or
-    AgentSessions from them. The approve path holds no lock, so an observer may post messages
-    there (onboarding's kickoff does)."""
+    cancel, Stop, a turn's end, expiry), each after it is stored. A user's approve or reject
+    holds no lock, so slow work (a proposal's apply) is allowed there, and the observer may call
+    Approvals or AgentSessions. Stop (the session lock) and recovery expiry (the project's
+    recovery lock) hold a lock while they tell, and the turn-end sweep runs inside the turn's
+    shielded end; they only give `cancelled` or `expired`, and for those an observer must not
+    block or call back. `decided` may be told again for an approval after a crash (the restart
+    repair), so an observer must be idempotent."""
 
     async def asked(self, view: ApprovalView) -> None: ...
 
@@ -42,7 +44,9 @@ class ApprovalObserver(Protocol):
 
 
 class Approvals(Protocol):
-    async def pending(self, project_id: str) -> list[ApprovalView]: ...
+    async def pending(self, project_id: str) -> list[ApprovalView]:
+        """The approvals the user can decide now: pending, and their turn waiting."""
+        ...
 
     async def decide(
         self, project_id: str, approval_id: str, *, approve: bool, note: str | None

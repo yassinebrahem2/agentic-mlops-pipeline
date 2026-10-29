@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
 from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
@@ -14,6 +15,7 @@ from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.turn_end import TurnEnds
 from mlops_agents.agents.runtime.waiting import _Ending, _ending_of, _observed
+from mlops_agents.events.contract import AuditLog, EventLog
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +33,21 @@ class TurnWorkers:
         store: SessionStore,
         executor: TurnExecutor,
         observers: Sequence[TurnObserver],
+        approval_store: ApprovalStore,
+        audit_log: AuditLog | None,
+        event_log: EventLog | None,
     ) -> None:
         self._store = store
         self._executor = executor
         self._observers = tuple(observers)
-        self._ends = TurnEnds(store=store, executor=executor, observers=self._observers)
+        self._ends = TurnEnds(
+            store=store,
+            executor=executor,
+            observers=self._observers,
+            approval_store=approval_store,
+            audit_log=audit_log,
+            event_log=event_log,
+        )
         self._workers: dict[SessionKey, asyncio.Task[None]] = {}
         self._child_tasks: dict[SessionKey, asyncio.Task[TurnOutcome]] = {}
         # The turn each worker is on, from the moment it takes it, and the ones Stop ended.
@@ -160,16 +172,21 @@ class TurnWorkers:
                 async with lock:
                     if resuming is not None:
                         trigger_id = await self._store.turn_trigger_id(project_id, resuming)
-                        next_turn: tuple[str, str] | None = (resuming, trigger_id or "")
+                        # The one check that the turn still waits: a Stop that stored it
+                        # stopped first wins, and this worker takes nothing (#445).
+                        taken = await self._store.take_waiting_turn(project_id, resuming)
+                        next_turn: tuple[str, str] | None = (
+                            (resuming, trigger_id or "") if taken else None
+                        )
                     else:
                         next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    if next_turn is None:
+                        # Under the lock, so a send from here on starts a new worker.
+                        self._leave(key)
+                        break
                     # Taking the turn and claiming an early Stop happen with no await between
                     # them, so a Stop lands either here or on the turn itself.
                     self._first_look.discard(key)
-                    if next_turn is None:
-                        self._stop_next.discard(key)
-                        self._workers.pop(key, None)
-                        break
                     turn_id, trigger_msg_id = next_turn
                     self._current_turns[key] = turn_id
                     self._turn_over.discard(key)
@@ -190,10 +207,18 @@ class TurnWorkers:
                     break
 
         finally:
-            self._first_look.discard(key)
-            self._stop_next.discard(key)
-            self._turn_over.discard(key)
-            self._workers.pop(key, None)
+            self._leave(key)
+
+    def _leave(self, key: SessionKey) -> None:
+        """Drop the session's worker state, only while the session's worker is this one: a
+        resume's worker whose take lost to a Stop may have been replaced by the worker that Stop
+        started for a queued turn, whose state is not this worker's to drop (#445)."""
+        if self._workers.get(key) is not asyncio.current_task():
+            return
+        self._first_look.discard(key)
+        self._stop_next.discard(key)
+        self._turn_over.discard(key)
+        self._workers.pop(key, None)
 
     async def _take_turn(
         self,
