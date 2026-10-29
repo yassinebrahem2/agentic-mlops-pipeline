@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from sqlalchemy import func, select
 
 from mlops_agents.storage.tables import (
@@ -454,3 +455,91 @@ async def test_missing_adapter_records_error(tracking_env: TrackingEnv) -> None:
 
     updated = (await env.service.sources(env.project_id))[0]
     assert updated.last_error == "No adapter for this source type"
+
+
+async def test_sync_failure_in_store_write_records_error_and_event(
+    tracking_env: TrackingEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+
+    async def broken_save(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("database disk failure during save")
+
+    monkeypatch.setattr("mlops_agents.tracking.service.save_sync_result", broken_save)
+
+    await env.service.run_sync(env.project_id, source.id)
+
+    updated = (await env.service.sources(env.project_id))[0]
+    assert updated.last_error is not None
+    assert "database disk failure during save" in updated.last_error
+
+    events = await env.events.history(env.project_id, types=["tracking.synced"])
+    assert len(events) == 1
+    assert events[0].payload["ok"] is False
+    assert "database disk failure during save" in str(events[0].payload["error"])
+
+
+async def test_github_token_and_credentials_kept_out_of_last_error(
+    tracking_env: TrackingEnv,
+) -> None:
+    env = tracking_env
+    env.github_token_value = "ghp_super_secret_github_token_999"
+
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="credential",
+    )
+    await env.service.set_credential(env.project_id, source.id, "my_db_password_xyz")
+
+    async def failing_sync(source: Any, credential: Any, since: Any) -> SyncResult:
+        raise RuntimeError(
+            "Connection failed with my_db_password_xyz and ghp_super_secret_github_token_999 at http://user:my_db_password_xyz@host/test"
+        )
+
+    env.adapters["mlflow"].sync = failing_sync  # type: ignore[method-assign]
+
+    await env.service.run_sync(env.project_id, source.id)
+
+    updated = (await env.service.sources(env.project_id))[0]
+    assert updated.last_error is not None
+    assert "my_db_password_xyz" not in updated.last_error
+    assert "ghp_super_secret_github_token_999" not in updated.last_error
+
+
+async def test_close_cancels_background_sync(tracking_env: TrackingEnv) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+    sync_started = asyncio.Event()
+    cancelled_seen = asyncio.Event()
+
+    async def hanging_sync(source: Any, credential: Any, since: Any) -> SyncResult:
+        sync_started.set()
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            cancelled_seen.set()
+            raise
+        return SyncResult(
+            versions=[], runs=[], metrics=[], aliases={}, ci_runs=[], evaluations=[], error=None
+        )
+
+    env.adapters["mlflow"].sync = hanging_sync  # type: ignore[method-assign]
+
+    await env.service.sync(env.project_id, source.id)
+    await sync_started.wait()
+
+    await env.service.close()
+    assert cancelled_seen.is_set()

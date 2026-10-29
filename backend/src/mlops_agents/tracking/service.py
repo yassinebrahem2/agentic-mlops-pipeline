@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -13,7 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import ProjectSecrets, tracking_ref
-from mlops_agents.credentials.scrub import error_text, scrub_values
+from mlops_agents.credentials.scrub import error_text, scrub_url_secrets, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
@@ -51,6 +52,8 @@ from mlops_agents.tracking.store import (
     query_versions,
     save_sync_result,
 )
+
+_log = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -186,6 +189,16 @@ class TrackingService(Tracking):
     async def sync(self, project_id: str, source_id: str | None = None) -> None:
         """Starts a sync in the background; tracking.synced reports its end."""
         await self._check_project(project_id)
+        if source_id is not None:
+            engine = await self._databases.project(project_id)
+            async with engine.connect() as conn:
+                row = await load_source_row(conn, source_id)
+            if row is None:
+                raise DomainError(
+                    "tracking_source_not_found",
+                    f"Tracking source '{source_id}' does not exist.",
+                    status=404,
+                )
         task = asyncio.create_task(self.run_sync(project_id, source_id, check_project=False))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
@@ -227,64 +240,64 @@ class TrackingService(Tracking):
             return
 
         source = await row_to_source_view(row, project_id, self._secrets)
-
         credential: str | None = None
-        if source.auth == "credential":
-            ref = tracking_ref(project_id, source.id)
-            credential = await asyncio.to_thread(self._keystore.get, ref)
-            if credential is None:
-                await self._record_sync_error(
-                    project_id,
-                    source,
-                    "The credential is missing from the key store; set it again",
-                    credential=None,
-                )
-                return
-        elif source.type == "github_actions":
-            credential = await self._github_token()
-
-        adapter = self._adapters.get(source.type)
-        if adapter is None:
-            await self._record_sync_error(
-                project_id, source, "No adapter for this source type", credential=credential
-            )
-            return
 
         try:
+            if source.auth == "credential":
+                ref = tracking_ref(project_id, source.id)
+                credential = await asyncio.to_thread(self._keystore.get, ref)
+                if credential is None:
+                    await self._record_sync_error(
+                        project_id,
+                        source,
+                        "The credential is missing from the key store; set it again",
+                        credential=None,
+                    )
+                    return
+            elif source.type == "github_actions":
+                credential = await self._github_token()
+
+            adapter = self._adapters.get(source.type)
+            if adapter is None:
+                await self._record_sync_error(
+                    project_id, source, "No adapter for this source type", credential=credential
+                )
+                return
+
             result = await adapter.sync(source, credential, since=source.last_sync)
+            if result.error is not None:
+                await self._record_sync_error(
+                    project_id, source, result.error, credential=credential
+                )
+                return
+
+            # Success: write in one transaction
+            now_dt = self._clock()
+            async with engine.begin() as conn:
+                await save_sync_result(conn, source.id, result, now_dt)
+
+            # Record tracking.synced event
+            payload = {
+                "source_id": source.id,
+                "type": source.type,
+                "ok": True,
+                "versions": len(result.versions),
+                "runs": len(result.runs),
+                "metrics": len(result.metrics),
+                "ci_runs": len(result.ci_runs),
+                "evaluations": len(result.evaluations),
+                "error": None,
+            }
+            await self._events.record(
+                project_id,
+                source="system",
+                type="tracking.synced",
+                subject_id=source.id,
+                payload=payload,
+            )
         except Exception as exc:
             err = error_text(exc)
             await self._record_sync_error(project_id, source, err, credential=credential)
-            return
-
-        if result.error is not None:
-            await self._record_sync_error(project_id, source, result.error, credential=credential)
-            return
-
-        # Success: write in one transaction
-        now_dt = self._clock()
-        async with engine.begin() as conn:
-            await save_sync_result(conn, source.id, result, now_dt)
-
-        # Record tracking.synced event
-        payload = {
-            "source_id": source.id,
-            "type": source.type,
-            "ok": True,
-            "versions": len(result.versions),
-            "runs": len(result.runs),
-            "metrics": len(result.metrics),
-            "ci_runs": len(result.ci_runs),
-            "evaluations": len(result.evaluations),
-            "error": None,
-        }
-        await self._events.record(
-            project_id,
-            source="system",
-            type="tracking.synced",
-            subject_id=source.id,
-            payload=payload,
-        )
 
     async def _record_sync_error(
         self,
@@ -294,7 +307,14 @@ class TrackingService(Tracking):
         credential: str | None,
     ) -> None:
         secrets_to_scrub = [credential] if credential else []
-        scrubbed = scrub_values(error_msg, secrets_to_scrub)
+        try:
+            gh_token = await self._github_token()
+            if gh_token:
+                secrets_to_scrub.append(gh_token)
+        except Exception:
+            _log.debug("Could not resolve github token for error scrubbing")
+        scrubbed = scrub_url_secrets(error_msg)
+        scrubbed = scrub_values(scrubbed, secrets_to_scrub)
         if len(scrubbed) > ERROR_MAX_CHARS:
             scrubbed = scrubbed[:ERROR_MAX_CHARS]
 

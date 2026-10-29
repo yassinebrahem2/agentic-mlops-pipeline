@@ -125,10 +125,20 @@ async def tracking_env(
     mlflow_adapter = FakeTrackingAdapter("mlflow")
     adapters: dict[SourceType, FakeTrackingAdapter] = {"mlflow": mlflow_adapter}
 
-    github_token_val: str | None = "fake-gh-token"
+    env = TrackingEnv(
+        service=None,  # type: ignore[arg-type]
+        databases=databases,
+        keystore=keystore,
+        secrets=secrets,
+        events=events,
+        adapters=adapters,
+        project_id=project_id,
+        clock=test_clock,
+        github_token_value="fake-gh-token",
+    )
 
     async def gh_token() -> str | None:
-        return github_token_val
+        return env.github_token_value
 
     service = TrackingService(
         databases=databases,
@@ -139,18 +149,7 @@ async def tracking_env(
         github_token=gh_token,
         clock=test_clock,
     )
-
-    env = TrackingEnv(
-        service=service,
-        databases=databases,
-        keystore=keystore,
-        secrets=secrets,
-        events=events,
-        adapters=adapters,
-        project_id=project_id,
-        clock=test_clock,
-        github_token_value=github_token_val,
-    )
+    env.service = service
 
     yield env
     await service.close()

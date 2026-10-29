@@ -1444,6 +1444,14 @@
             ],
             "title": "Context Window"
           },
+          "model_type": {
+            "enum": [
+              "chat",
+              "embedder"
+            ],
+            "title": "Model Type",
+            "type": "string"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -1497,6 +1505,26 @@
               }
             ],
             "title": "Context Window"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "model_type": {
+            "default": "chat",
+            "enum": [
+              "chat",
+              "embedder"
+            ],
+            "title": "Model Type",
+            "type": "string"
           },
           "problem": {
             "anyOf": [
@@ -2508,6 +2536,7 @@
       "SetCredentialBody": {
         "properties": {
           "credential": {
+            "minLength": 1,
             "title": "Credential",
             "type": "string"
           }
@@ -5372,26 +5401,12 @@
           },
           {
             "in": "query",
-            "name": "source_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Id"
-            }
-          },
-          {
-            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5402,6 +5417,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -5486,6 +5502,8 @@
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5496,6 +5514,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -5576,26 +5595,12 @@
           },
           {
             "in": "query",
-            "name": "source_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Id"
-            }
-          },
-          {
-            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5606,6 +5611,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -5696,26 +5702,12 @@
           },
           {
             "in": "query",
-            "name": "source_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Id"
-            }
-          },
-          {
-            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5726,6 +5718,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -5778,6 +5771,8 @@
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5788,6 +5783,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -5852,26 +5848,12 @@
           },
           {
             "in": "query",
-            "name": "source_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Id"
-            }
-          },
-          {
-            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -5882,6 +5864,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -6267,6 +6250,8 @@
             "required": false,
             "schema": {
               "default": 50,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -6277,6 +6262,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
