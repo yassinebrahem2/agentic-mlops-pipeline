@@ -127,6 +127,9 @@ class ApprovalsService(Approvals):
         )
 
     async def _resume_when_none_pending(self, project_id: str, record: ApprovalRecord) -> None:
+        """Resume the turn once none of its approvals is pending or still settling. A resumed turn
+        reads its message once and writes it back, so a card written after the resume is lost:
+        the last decision to settle resumes it (each one settles before it looks)."""
         step_approvals = await self._store.list_for_step(project_id, record.turn_id)
-        if not any(a.status == "pending" for a in step_approvals):
+        if not any(a.status == "pending" or a.settled_at is None for a in step_approvals):
             await self._sessions.resume_turn(project_id, record.session_id, record.turn_id)

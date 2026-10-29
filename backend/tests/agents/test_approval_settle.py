@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import event, func, select
 
 from mlops_agents.agents.approvals import store as store_module
+from mlops_agents.agents.approvals.contract import ApprovalView
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.runtime.contract import Part
 from mlops_agents.storage.databases import Databases
@@ -245,6 +246,50 @@ async def test_the_sweeps_store_who_decided_in_the_same_update(databases: Databa
     assert (stopped.status, stopped.decided_by) == ("cancelled", "user")
     assert (expired.status, expired.decided_by) == ("expired", "system")
     assert (await env.stored(expired.id)).decided_by == "system"
+
+
+# the turn resumes only once every decision of it is settled
+
+
+class HoldsOneDecision:
+    """Holds the observers' `decided` of one approval until released: its status is committed,
+    its card not written yet."""
+
+    def __init__(self, approval_id: str) -> None:
+        self.approval_id = approval_id
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def asked(self, view: ApprovalView) -> None:
+        return None
+
+    async def decided(self, view: ApprovalView) -> None:
+        if view.id == self.approval_id:
+            self.entered.set()
+            await self.release.wait()
+
+
+async def test_a_decision_does_not_resume_the_turn_while_another_of_it_is_not_settled(
+    databases: Databases,
+) -> None:
+    # A resumed turn reads its message's parts once and writes them back: a card written after
+    # the resume is lost, so the turn resumes only once every card of it is written.
+    env = SettleEnv(databases)
+    first, second = await env.tool_approvals(2)
+    held = HoldsOneDecision(second.id)
+    env.store.add_observer(held)
+    sessions = FakeSessionsForApproval(env.sessions)
+    service = ApprovalsService(databases, sessions, store=env.store, event_log=env.event_log)
+    deciding_second = asyncio.create_task(service.decide(PROJECT, second.id, approve=True))
+    await asyncio.wait_for(held.entered.wait(), timeout=5)
+
+    await service.decide(PROJECT, first.id, approve=True)
+
+    assert sessions.resumed_turns == []
+    held.release.set()
+    await deciding_second
+    assert sessions.resumed_turns == [(PROJECT, "ses_1", "trn_1")]
+    assert [(await env.card(a)).status for a in (first, second)] == ["approved", "approved"]
 
 
 async def test_an_approval_with_no_known_actor_is_recorded_as_system(databases: Databases) -> None:
