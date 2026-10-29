@@ -304,22 +304,23 @@ class KnowledgeService(Knowledge):
         ready_key = await get_vectors_ready_for(self._databases, project_id)
 
         pass_state = self._passes.get(project_id)
-        if pass_state is not None and not pass_state.should_retry(self._monotonic()):
-            ranked_views = await get_notes_by_ids(
-                engine,
-                candidate_ids[:clamped_limit],
-                note_type=type,
-            )
-            return SearchResult(
-                notes=ranked_views,
-                used_vectors=False,
-                detail=pass_state.last_failure_msg,
-            )
-
-        # Search kicks re-embedding once cooldown has passed so pending notes get embedded
-        self.kick(project_id)
+        if pass_state is not None and pass_state.last_failure_time is not None:
+            if not pass_state.should_retry(self._monotonic()):
+                ranked_views = await get_notes_by_ids(
+                    engine,
+                    candidate_ids[:clamped_limit],
+                    note_type=type,
+                )
+                return SearchResult(
+                    notes=ranked_views,
+                    used_vectors=False,
+                    detail=pass_state.last_failure_msg,
+                )
+            # Stalled pass retry: cooldown has elapsed, restart embedding pass
+            self.kick(project_id)
 
         if ready_key != key:
+            self.kick(project_id)
             ranked_views = await get_notes_by_ids(
                 engine,
                 candidate_ids[:clamped_limit],
