@@ -204,7 +204,9 @@ async def test_no_profile_outlives_its_queued_caller(
         *(env.summaries.profile(env.project_id, con, ref, timeout_s=2.0) for ref in refs)
     )
 
-    cut_at = started + 2.0 + summaries_module.WAIT_GRACE_S
+    # Each caller's own cut is a little later (its setup comes first): slack well under the
+    # stop margin.
+    cut_at = started + 2.0 + summaries_module.WAIT_GRACE_S + 0.25
     assert len(ended) == 4
     assert max(ended) < cut_at
     assert sorted(p.timed_out for p in profiles) == [False, False, True, True]
@@ -219,9 +221,9 @@ async def test_a_queued_detail_is_a_timed_out_partial_profile(
     con, (a, b, c) = await _tables(env, "abc")
     env.spy.slow.update({"a.csv", "b.csv", "c.csv"})
     for module in (summaries_module, cache_module):
-        monkeypatch.setattr(module, "PROFILE_TIMEOUT_S", 2.0)
+        monkeypatch.setattr(module, "PROFILE_TIMEOUT_S", 3.0)
     holders = [
-        asyncio.create_task(env.summaries.profile(env.project_id, con, ref, timeout_s=2.0))
+        asyncio.create_task(env.summaries.profile(env.project_id, con, ref, timeout_s=1.0))
         for ref in (a, b)
     ]
     await env.spy.started("b.csv")
@@ -231,6 +233,31 @@ async def test_a_queued_detail_is_a_timed_out_partial_profile(
     assert detail.timed_out is True
     assert detail.columns == [ColumnInfo(name="range", type="BIGINT")]
     assert all(p.timed_out for p in await asyncio.gather(*holders))
+
+
+async def test_a_caller_whose_time_is_spent_when_it_gets_a_slot_never_starts(
+    env: SummaryEnv, gauge: Gauge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its slot goes back at once: the profiles after it still run two at once."""
+    con, (a, b, c) = await _tables(env, "abc")
+    gauge.gate.set()
+    margin = f"{summaries_module.__name__}._STOP_MARGIN_S"
+    kept: float = getattr(summaries_module, margin.rsplit(".", 1)[1])
+    monkeypatch.setattr(margin, 100.0)
+
+    started = time.monotonic()
+    with pytest.raises(DomainError) as caught:
+        await env.summaries.profile(env.project_id, con, a)
+
+    assert time.monotonic() - started < MARGIN_S
+    _assert_profile_timeout(caught.value)
+    assert env.spy.count("a.csv") == 0
+    monkeypatch.setattr(margin, kept)
+    gauge.gate.clear()
+    tasks = [asyncio.create_task(env.summaries.profile(env.project_id, con, ref)) for ref in (b, c)]
+    await gauge.until_open(MAX_CONCURRENT_PROFILES)
+    gauge.gate.set()
+    assert [p.row_count for p in await asyncio.gather(*tasks)] == [3, 3]
 
 
 async def test_a_slot_is_held_until_the_profile_of_a_cut_caller_ends(
