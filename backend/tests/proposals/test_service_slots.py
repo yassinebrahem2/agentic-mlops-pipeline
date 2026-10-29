@@ -19,6 +19,7 @@ from mlops_agents.proposals.contract import ApplyResult, ProposalKind
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import events as events_table
 from mlops_agents.storage.tables import proposals as proposals_table
 from tests.conftest import MemoryKeyStore
 from tests.proposals.conftest import ScriptedTestKind
@@ -83,10 +84,13 @@ async def test_put_credential_and_secret_absence(
     if row["result"] is not None:
         assert secret_val not in str(row["result"])
 
-    # 3. Event log history
-    events = await event_log.history(project_id, types=["proposal.created", "proposal.decided"])
-    for ev in events:
-        assert secret_val not in str(ev.payload)
+    # 3. Event log history (scan all event types in database)
+    async with engine.connect() as conn:
+        all_events = (await conn.execute(select(events_table))).mappings().all()
+    assert len(all_events) > 0
+    for ev in all_events:
+        assert secret_val not in str(ev["payload"])
+        assert secret_val not in str(ev)
 
 
 @pytest.mark.asyncio

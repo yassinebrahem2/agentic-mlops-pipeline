@@ -114,6 +114,10 @@ async def test_attach_and_superseding(
     assert v1_check is not None
     assert v1_check.status == "pending"
     assert await project_secrets.is_set(ref_0)
+    v2_check = await service.get_by_approval(project_id, "apr_2")
+    assert v2_check is not None
+    assert v2_check.status == "pending"
+    assert v2_check.kind == kind2.name
 
     # Create draft 3 with same kind but DIFFERENT key -> leaves draft 1 untouched
     v3_diff_key = await service.create(
@@ -132,6 +136,11 @@ async def test_attach_and_superseding(
     assert v1_superseded is not None
     assert v1_superseded.status == "superseded"
     assert not await project_secrets.is_set(ref_0)
+
+    # v2_diff_kind (kind 2) is still pending
+    v2_still_pending = await service.get_by_approval(project_id, "apr_2")
+    assert v2_still_pending is not None
+    assert v2_still_pending.status == "pending"
 
 
 @pytest.mark.asyncio
