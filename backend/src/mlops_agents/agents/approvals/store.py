@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Literal, cast
 
-from sqlalchemy import ColumnElement, select, text, update
+from sqlalchemy import ColumnElement, TextClause, select, text, update
 from sqlalchemy.dialects.sqlite import insert
 
 from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
@@ -29,6 +29,8 @@ _UNSET = object()
 # The WHERE of the partial unique index approvals_stall_step (0004_stage3.sql), as literal SQL:
 # SQLite matches an upsert's conflict target to a partial index only by its written terms.
 _PENDING_STALL = text("kind = 'stall' AND status = 'pending'")
+# The WHERE of the partial index approvals_unsettled (0006_approval_settling.sql), literal too.
+_UNSETTLED = text("status <> 'pending' AND settled_at IS NULL")
 
 # Who moved an approval out of pending: the user (approve, reject, Stop) or the system (a
 # superseded proposal, expiry). NULL on a row decided before it was stored: unknown.
@@ -367,20 +369,32 @@ class ApprovalStore:
 
     async def pending(self, project_id: str) -> list[ApprovalRecord]:
         """List all pending approvals for a project."""
+        return await self._listed(project_id, approvals.c.status == "pending")
+
+    async def unsettled(self, project_id: str) -> list[ApprovalRecord]:
+        """The decided approvals, of any turn, whose records and card are not both written."""
+        return await self._listed(project_id, _UNSETTLED)
+
+    async def of_waiting_turns(self, project_id: str) -> list[ApprovalRecord]:
+        """Every approval, whatever its status, of a turn that waits."""
+        waiting_turns = select(turns.c.id).where(turns.c.status == "waiting")
+        return await self._listed(project_id, approvals.c.turn_id.in_(waiting_turns))
+
+    async def retell_decided(self, records: Sequence[ApprovalRecord]) -> None:
+        """Tell the observers again of decisions a crash may have cut while they were told."""
+        await self._observers.tell("decided", records)
+
+    async def _listed(
+        self, project_id: str, where: ColumnElement[bool] | TextClause
+    ) -> list[ApprovalRecord]:
+        """The matching approvals, oldest first."""
+        query = select(approvals).where(where)
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
-            rows = (
-                (
-                    await conn.execute(
-                        select(approvals)
-                        .where(approvals.c.status == "pending")
-                        .order_by(approvals.c.created_at.asc(), approvals.c.id.asc())
-                    )
-                )
-                .mappings()
-                .all()
+            rows = await conn.execute(
+                query.order_by(approvals.c.created_at.asc(), approvals.c.id.asc())
             )
-        return [_row_to_record(r) for r in rows]
+            return [_row_to_record(r) for r in rows.mappings().all()]
 
     async def cancel_for_turn(
         self, project_id: str, turn_id: str, *, decided_by: DecidedBy

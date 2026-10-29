@@ -36,6 +36,7 @@ class FakeSessionsForApproval:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self.resumed_turns: list[tuple[str, str, str]] = []
+        self.stopped_turns: list[tuple[str, str, str]] = []
         self.recovered_projects: list[str] = []
         self._lock = asyncio.Lock()
 
@@ -63,6 +64,9 @@ class FakeSessionsForApproval:
 
     async def stop(self, project_id: str, agent: str) -> None:
         pass
+
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        self.stopped_turns.append((project_id, session_id, turn_id))
 
     async def close_project(self, project_id: str) -> None:
         pass

@@ -76,7 +76,7 @@ class ApprovalsService(Approvals):
         await self._settle(project_id, updated_rec)
 
         if record.kind == "stall" and not approve:
-            await self._sessions.stop(project_id, record.agent)
+            await self._sessions.stop_turn(project_id, record.session_id, record.turn_id)
         else:
             await self._resume_when_none_pending(project_id, record)
         return ApprovalView.model_validate(updated_rec)

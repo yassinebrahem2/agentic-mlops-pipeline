@@ -42,8 +42,9 @@ class OrderedSessions(FakeSessionsForApproval):
         await super().resume_turn(project_id, session_id, turn_id)
         self.calls.append(("resumed", turn_id, ""))
 
-    async def stop(self, project_id: str, agent: str) -> None:
-        self.calls.append(("stopped", agent, ""))
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        await super().stop_turn(project_id, session_id, turn_id)
+        self.calls.append(("stopped", turn_id, ""))
 
 
 async def _tool_approval(
@@ -198,7 +199,7 @@ async def test_every_decided_completes_before_a_rejected_stall_stops_the_turn(
 
     await service.decide(PROJECT, stall.id, approve=False)
 
-    assert calls == [("decided", stall.id, "rejected"), ("stopped", "orchestrator", "")]
+    assert calls == [("decided", stall.id, "rejected"), ("stopped", "trn_1", "")]
 
 
 @pytest.mark.asyncio

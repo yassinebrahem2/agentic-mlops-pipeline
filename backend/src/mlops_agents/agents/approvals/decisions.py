@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -16,10 +17,12 @@ from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import events
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["PartRewriter", "record_decisions", "settle_decisions"]
 
 # Rewrites one message's parts: (session ID, message ID, transform); each caller binds its
-# project, and stores (and publishes, when live) the result.
+# project, and stores (and publishes, when live) the result. None: the message is gone.
 PartRewriter = Callable[[str, str, Callable[[list[Part]], list[Part]]], Awaitable[object]]
 
 # Literal text, as the partial expression index audit_approval_id (0006) is written: SQLite
@@ -144,7 +147,13 @@ async def settle_decisions(
             approval
         )
     for (session_id, message_id), cards in by_message.items():
-        await rewrite_part(session_id, message_id, _cards_of(cards))
+        if await rewrite_part(session_id, message_id, _cards_of(cards)) is None:
+            # Nothing holds the card any more; the decision's records are written all the same.
+            logger.warning(
+                "Message %s is gone: approvals %s are settled without their card.",
+                message_id,
+                ", ".join(cards),
+            )
 
     await store.mark_settled(project_id, [approval.id for approval, _ in decided])
 
