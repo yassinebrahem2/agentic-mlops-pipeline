@@ -88,6 +88,7 @@ async def test_connections_routes_crud(
     )
     assert bad_name_res.status_code == 400
     assert bad_name_res.json()["code"] == "invalid_connection_name"
+    assert "BAD NAME" not in bad_name_res.text
 
     # 5. List
     list_res = await client.get(f"/api/projects/{project_id}/connections")
