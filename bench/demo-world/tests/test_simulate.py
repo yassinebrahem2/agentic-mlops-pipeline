@@ -370,3 +370,12 @@ def test_zero_seconds_per_day_never_sleeps(loaded: pd.DataFrame) -> None:
     )
 
     assert fake.sleeps == []
+
+
+def test_a_state_file_without_the_first_day_is_refused_by_name(loaded: pd.DataFrame) -> None:
+    world = _world(loaded)
+    world.folder.mkdir(parents=True)
+    (world.folder / "state.json").write_text('{"last_done": "2016-01-02"}\n', encoding="utf-8")
+
+    with pytest.raises(simulate.SimulateError, match=r"state.json"):
+        _run(world)

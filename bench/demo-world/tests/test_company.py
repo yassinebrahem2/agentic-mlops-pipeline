@@ -43,13 +43,22 @@ def test_the_cli_runs_in_the_checkout_with_the_worlds_folders(
 
 
 def test_the_company_is_run_with_uv_from_its_checkout(checkout: Path) -> None:
-    recorder = Recorder()
-    real = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir(), runner=recorder)
+    argvs: list[list[str]] = []
+    cwds: list[Path] = []
+
+    def runner(argv: Sequence[str], cwd: Path, env: Mapping[str, str]) -> company.Finished:
+        # Records only: nothing is started.
+        argvs.append(list(argv))
+        cwds.append(cwd)
+        return company.Finished(0, "", "")
+
+    real = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir(), runner=runner)
 
     real.update()
     real.cli(["daily", "--date", "2016-01-01"])
 
-    assert recorder.argvs[1] == [
+    assert argvs[0] == ["git", "pull", "--ff-only"]
+    assert argvs[1] == [
         "uv",
         "run",
         "--project",
@@ -59,7 +68,7 @@ def test_the_company_is_run_with_uv_from_its_checkout(checkout: Path) -> None:
         "--date",
         "2016-01-01",
     ]
-    assert recorder.cwds == [checkout, checkout]
+    assert cwds == [checkout, checkout]
 
 
 def test_a_failing_command_is_logged_with_its_exit_code_and_output(

@@ -115,6 +115,9 @@ def _read_state(folder: Path) -> _State | None:
     if not path.exists():
         return None
     state = json.loads(path.read_text(encoding="utf-8"))
+    if "first" not in state or "last_done" not in state:
+        # A world started before the schedule's first day was recorded cannot place it.
+        raise SimulateError(f"{path} lacks 'first' or 'last_done'; start a new world folder")
     return _State(date.fromisoformat(state["first"]), date.fromisoformat(state["last_done"]))
 
 
