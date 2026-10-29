@@ -4,6 +4,11 @@
 #   CI    <repo>#n <sha> pass|fail              every check on that head finished
 #   CARD  <status> #n <state> <title>           a card in Blocked or In review, a closed card not in
 #                                               Done, or an open Decision issue
+#   REREVIEW <repo>#n <sha>                     changes were requested and the owner pushed since:
+#                                               the PR waits on the lead
+#   OWNER <repo>#n                              changes were requested and nothing was pushed since:
+#                                               the PR waits on its owner (its card is moved to
+#                                               In progress when it sits in In review)
 # Each event is printed once; a card is printed again only after 30 minutes out of those states.
 # State lives outside the repo, so restarts don't repeat events. Only one watcher runs at a time.
 # Usage: scripts/lead-watch.sh [poll-seconds]   (default 60)
@@ -66,8 +71,39 @@ check_cards() {
   mv "$state/cards.tmp" "$state/cards"
 }
 
+# The board's own "changes requested" move can miss a review, so this re-derives who a PR waits on
+# from the last change request and the commits after it.
+check_reviews() {
+  local repo short rows n sha reviewed committed status
+  touch "$state/reviews"
+  for repo in $REPOS; do
+    short=${repo#*/}
+    rows=$(gh pr list -R "$repo" --state open --base main --json number,headRefOid,reviews,commits \
+      --jq '.[] | [.number, .headRefOid[0:7],
+        ([.reviews[] | select(.state == "CHANGES_REQUESTED" or .state == "APPROVED") ] | last | if . == null then "" else (.state + "@" + .submittedAt) end),
+        (.commits[-1].committedDate // "")] | @tsv' 2>/dev/null) || continue
+    while IFS=$'\t' read -r n sha reviewed committed; do
+      case $reviewed in CHANGES_REQUESTED@*) ;; *) continue ;; esac
+      if [[ "$committed" > "${reviewed#*@}" ]]; then
+        seen reviews "rereview $short#$n $sha" || { mark reviews "rereview $short#$n $sha"; echo "REREVIEW $short#$n $sha"; }
+      else
+        seen reviews "owner $short#$n ${reviewed#*@}" || { mark reviews "owner $short#$n ${reviewed#*@}"; echo "OWNER $short#$n"; }
+        if [ "$short" = agentic-mlops-pipeline ]; then
+          # The PR and every open issue it closes, as board.yml's own changes-requested move does.
+          for item in "$n" $(gh pr view "$n" -R "$repo" --json closingIssuesReferences \
+              --jq '.closingIssuesReferences[].number' 2>/dev/null); do
+            status=$("$here/board-list.sh" open 2>/dev/null | awk -F'\t' -v k="#$item" '$2 == k { print $1 }')
+            [ "$status" = "In review" ] && "$here/board-status.sh" "$item" "In progress" >/dev/null 2>&1
+          done
+        fi
+      fi
+    done <<<"$rows"
+  done
+}
+
 while :; do
   check_prs
+  check_reviews
   check_cards
   sleep "$POLL"
 done
