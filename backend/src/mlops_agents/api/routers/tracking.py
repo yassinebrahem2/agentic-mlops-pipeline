@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.tracking.constants import (
@@ -133,17 +134,20 @@ def _tracking_query(
     limit: int = QUERY_LIMIT_DEFAULT,
     offset: int = 0,
 ) -> TrackingQuery:
-    return TrackingQuery.model_construct(
-        what=what,
-        model=model,
-        version=version,
-        source_id=source_id,
-        run_key=run_key,
-        metric=metric,
-        latest=latest,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        return TrackingQuery(
+            what=what,
+            model=model,
+            version=version,
+            source_id=source_id,
+            run_key=run_key,
+            metric=metric,
+            latest=latest,
+            limit=limit,
+            offset=offset,
+        )
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
 
 @router.get("/projects/{project_id}/tracking/models", response_model=Page[ModelSummary])
