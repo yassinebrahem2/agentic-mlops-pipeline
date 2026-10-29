@@ -142,7 +142,7 @@ class _Call:
 
     model: ResolvedModel  # with the keys read for this call
     provider: Provider
-    secrets: tuple[str, ...]
+    secrets: tuple[str, ...] = field(repr=False)  # key values: never in a repr
 
 
 class _Stream:

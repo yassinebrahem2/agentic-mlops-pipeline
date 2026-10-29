@@ -9,7 +9,11 @@ import httpx2
 import pytest
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted, TurnFailed
+from mlops_agents.agents.runtime.model_caller import (
+    ModelKeysExhausted,
+    TurnFailed,
+    _Call,  # pyright: ignore[reportPrivateUsage]  # the record whose repr is checked
+)
 from mlops_agents.providers.bridge import KEYLESS
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.caller_env import (
@@ -255,3 +259,12 @@ async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_th
     assert keys_used(fake_openai) == [KEYLESS]
     provider = await env.providers.get_provider_by_id(env.model.provider_id)
     assert provider.status == "ok"
+
+
+async def test_a_calls_record_shows_no_key_value_in_its_repr(env: CallerEnv) -> None:
+    # Secrets never go in a repr (AGENTS.md): the record of one failover call holds the keys.
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    record = _Call(env.model, provider, KEYS)
+
+    for key in KEYS:
+        assert key not in repr(record)
