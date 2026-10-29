@@ -30,9 +30,11 @@ COUNTED_LINE_RESERVE: Final = len(render.left_out_entries_line(10**9)) + 1
 
 
 class DataSummaryHook:
-    """Every line goes through the one cap, `DATA_SUMMARY_MAX_CHARS` (Decision #430). Once a
-    line would pass it, no further line is written or table profiled: the text ends with one
-    line counting the entries left out, an entry being a connection or a table."""
+    """Every line goes through the one cap, `DATA_SUMMARY_MAX_CHARS` (Decision #430). A table
+    whose detail does not fit is listed by name and the next tables are still tried (Decision
+    #431). Once a line would pass the cap, no further line is written or table profiled: the
+    text ends with one line counting the entries left out, an entry being a connection or a
+    table."""
 
     name: str = DATA_SUMMARY_HOOK
 
@@ -77,8 +79,9 @@ class DataSummaryHook:
     async def _table(
         self, project_id: str, view: ConnectionView, ref: TableRef, text: _Text
     ) -> str:
-        if text.full:
-            return render.left_out_line(ref, render.SIZE_CAP)
+        listed = render.left_out_line(ref, render.SIZE_CAP)
+        if not text.fits(listed):  # not even listed: the text stops here, unprofiled
+            return listed
         remaining = text.deadline - time.monotonic()
         if remaining <= 0:
             return render.left_out_line(ref, render.TIME_BUDGET)
@@ -105,23 +108,20 @@ class DataSummaryHook:
             # Cut by the budget, not the full timeout: the next turn profiles it again.
             return render.left_out_line(ref, render.TIME_BUDGET)
         detail = render.render_versioned_table(ref, data_version, profile)
-        if not text.fits(detail):
-            text.full = True
-            return render.left_out_line(ref, render.SIZE_CAP)
-        return detail
+        # A table that misses the cap is listed; the next ones are still tried (Decision #431).
+        return detail if text.fits(detail) else listed
 
 
 @dataclass
 class _Text:
     """The hook's lines so far, against its size cap and time budget.
 
-    `full`: a table's detail no longer fits, so later tables are listed by name. `stopped`:
-    a line no longer fits, so the rest is only counted, in the line `joined` ends with.
+    `stopped`: a line no longer fits, so the rest is only counted, in the line `joined` ends
+    with.
     """
 
     cap: int
     deadline: float
-    full: bool = False
     stopped: bool = False
     _lines: list[str] = field(default_factory=list[str])
     _size: int = 0

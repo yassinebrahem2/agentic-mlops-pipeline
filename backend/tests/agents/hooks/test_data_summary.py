@@ -109,7 +109,7 @@ async def test_a_wide_table_shows_fifty_columns_and_counts_the_rest(env: Summary
     assert lines[-1] == "[" + ", ".join(f'"{i}"' for i in range(50)) + "]"
 
 
-async def test_tables_past_the_size_cap_are_listed_and_never_profiled(
+async def test_tables_whose_detail_does_not_fit_are_listed(
     env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await env.connect("sales", {f"{name}.csv": csv_rows(5) for name in ("a", "b", "c")})
@@ -126,7 +126,25 @@ async def test_tables_past_the_size_cap_are_listed_and_never_profiled(
     text = await env.render()
 
     assert text == full[: full.index('\nTable "b"')] + listed
-    assert env.spy.count("c.csv") == 0
+    # A miss does not stop later tables (Decision #431): c is still tried.
+    assert dict(env.spy.calls) == {"a.csv": 1, "b.csv": 1, "c.csv": 1}
+
+
+async def test_a_wide_table_does_not_hide_the_detail_of_later_tables(env: SummaryEnv) -> None:
+    """Thirty text columns of full-width cells: its detail alone is past the whole cap."""
+    header = ",".join(f"text_{i:02}" for i in range(30))
+    cells = ",".join(f"{i:02}" + "w" * 78 for i in range(30))
+    wide = header + "\n" + "".join(f"{row:02}{cells[2:]}\n" for row in range(SAMPLE_ROWS))
+    await env.connect("sales", {"a_wide.csv": wide, "b.csv": csv_rows(2), "c.csv": csv_rows(3)})
+
+    text = await env.render()
+
+    assert len(text) <= DATA_SUMMARY_MAX_CHARS
+    lines = text.split("\n")
+    assert 'Table "a_wide" (csv): detail left out: size cap' in lines
+    assert any(line.startswith('Table "b" (csv, ') and line.endswith("2 rows") for line in lines)
+    assert any(line.startswith('Table "c" (csv, ') and line.endswith("3 rows") for line in lines)
+    assert "more entries left out" not in text
 
 
 async def test_a_table_larger_than_the_whole_cap_is_listed(
@@ -145,7 +163,8 @@ async def test_a_table_larger_than_the_whole_cap_is_listed(
     text = await env.render()
 
     assert text == listed
-    assert (env.spy.count("a.csv"), env.spy.count("b.csv")) == (1, 0)
+    # b's listed line fits, so b is still tried after a's miss (Decision #431).
+    assert (env.spy.count("a.csv"), env.spy.count("b.csv")) == (1, 1)
 
 
 async def test_lines_past_the_cap_are_counted_in_one_line(

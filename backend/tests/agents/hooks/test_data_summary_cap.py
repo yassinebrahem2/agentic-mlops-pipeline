@@ -93,7 +93,9 @@ async def test_a_full_cap_then_many_long_named_tables(env: SummaryEnv, tmp_path:
     assert len(text) <= DATA_SUMMARY_MAX_CHARS
     assert re.search(r"\nand \d+ more entries left out: size cap$", text)
     assert _accounted(text) == (1 + 20) + 4 * (1 + 60)
-    assert all(name.startswith("t") for name in env.spy.calls)
+    # Each table is tried until the stop (Decision #431), and none after it.
+    named = set(re.findall(r'^Table "([^"]+)"', text, re.MULTILINE))
+    assert {name.removesuffix(".csv") for name in env.spy.calls} == named
     _assert_no_host_path(text, tmp_path)
 
 
@@ -123,8 +125,12 @@ async def test_tables_after_a_stop_on_a_listed_line_are_never_profiled(
         "sales", {"a.csv": b"a,b\n1,\xff\xfe\n", "b.csv": "x\n1\n", "c.csv": "x\n1\n"}
     )
     kept = f'{render.header()}\nConnection "sales" (local_folder, ok) at /data/sales:'
+    # Room for a's listed line, so a is profiled, but not for its longer unreadable line.
+    listed = '\nTable "a" (csv): detail left out: size cap'
     monkeypatch.setattr(
-        hook_module, "DATA_SUMMARY_MAX_CHARS", len(kept) + hook_module.COUNTED_LINE_RESERVE
+        hook_module,
+        "DATA_SUMMARY_MAX_CHARS",
+        len(kept) + len(listed) + hook_module.COUNTED_LINE_RESERVE,
     )
 
     text = await env.render()
