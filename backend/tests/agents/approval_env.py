@@ -1,18 +1,22 @@
 """A project with one session, one waiting turn and its agent message, for the approval tests;
-and an observer that records what it is told."""
+an already-decided approval; and an observer that records what it is told."""
 
 from __future__ import annotations
 
 import asyncio
 
+from sqlalchemy import update
+
 from mlops_agents.agents.approvals.contract import ApprovalView
-from mlops_agents.agents.runtime.contract import Part
+from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore, DecidedBy
+from mlops_agents.agents.runtime.contract import DecidedApprovalStatus, Part
 from mlops_agents.agents.runtime.store import SessionStore
-from mlops_agents.agents.tools.base import Preview
+from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import sessions, turns
+from mlops_agents.storage.tables import approvals, sessions, turns
 
 STALL_PREVIEW = Preview(kind="text", title="Stalled: no usable key", body="key 1: limited")
+TOOL_PREVIEW = Preview(kind="diff", title="edit main.py", body="- old\n+ new")
 
 
 async def add_turn(
@@ -61,6 +65,49 @@ async def add_turn(
         status=status if status == "waiting" else "complete",
     )
     return message.id
+
+
+async def seed_decided_approval(
+    databases: Databases,
+    store: ApprovalStore,
+    project_id: str,
+    *,
+    status: DecidedApprovalStatus,
+    id: str | None = None,
+    turn_id: str = "trn_1",
+    session_id: str = "ses_1",
+    message_id: str = "msg_1",
+    tool_call_id: str = "call_1",
+    tool: str = "edit_file",
+    risk_class: RiskClass = RiskClass.WRITE_CODE,
+    preview: Preview = TOOL_PREVIEW,
+    decided_by: DecidedBy = "user",
+) -> ApprovalRecord:
+    """A tool approval decided and settled before the test starts. Production never inserts a
+    decided row, so it is settled here: nothing later re-tells or re-settles it."""
+    record = await store.create(
+        project_id,
+        id=id,
+        turn_id=turn_id,
+        session_id=session_id,
+        message_id=message_id,
+        agent="orchestrator",
+        tool_call_id=tool_call_id,
+        tool=tool,
+        risk_class=risk_class,
+        preview=preview,
+        status=status,
+    )
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(approvals)
+            .where(approvals.c.id == record.id)
+            .values(settled_at=record.decided_at, decided_by=decided_by)
+        )
+    settled = await store.get(project_id, record.id)
+    assert settled is not None
+    return settled
 
 
 class RecordingObserver:

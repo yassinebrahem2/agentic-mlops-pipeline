@@ -65,6 +65,19 @@ class TurnsStore(StoreBase):
 
             await conn.execute(update(turns).where(turns.c.id == turn_id).values(**values))
 
+    @shielded
+    async def take_waiting_turn(self, project_id: str, turn_id: str) -> bool:
+        """Mark a waiting turn running, in one conditional UPDATE; False when it no longer waits
+        (a Stop stored it stopped first)."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                update(turns)
+                .where(turns.c.id == turn_id, turns.c.status == "waiting")
+                .values(status="running")
+            )
+        return result.rowcount == 1
+
     async def next_queued_turn(self, project_id: str, session_id: str) -> tuple[str, str] | None:
         """Find the oldest queued turn for session_id. Returns (turn_id, trigger_message_id) or None."""
         engine = await self._databases.project(project_id)

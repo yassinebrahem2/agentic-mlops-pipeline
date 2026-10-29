@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict
 
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.issues import get_issue
-from mlops_agents.integrations.github.pulls import get_pull
+from mlops_agents.integrations.github.pulls import get_pull, list_pull_files
 
 if TYPE_CHECKING:
     import httpx2
@@ -20,6 +23,21 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.auth import GitHubAuth
 
 logger = logging.getLogger(__name__)
+
+
+class PrChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: int
+    state: Literal["open", "merged", "closed"]
+    merged_at: datetime | None
+    head_branch: str
+    agent: str
+    files: list[str]
+
+
+class PrObserver(Protocol):
+    async def changed(self, project_id: str, pr: PrChange) -> None: ...
 
 
 class PrSyncObserver:
@@ -38,6 +56,10 @@ class PrSyncObserver:
         self._http = http
         self._last_sync: dict[str, float] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._observers: list[PrObserver] = []
+
+    def add_observer(self, observer: PrObserver) -> None:
+        self._observers.append(observer)
 
     async def turn_started(self, project_id: str, agent: str, turn_id: str) -> None:
         now = time.monotonic()
@@ -111,15 +133,53 @@ class PrSyncObserver:
                 continue
 
             if pr.merged:
-                try:
-                    await self._tasks.end(project_id, task.id, status="merged")
-                except Exception as exc:
-                    logger.warning("PR sync could not end task %s as merged: %s", task.id, exc)
+                state = "merged"
+                merged_at = pr.merged_at
             elif pr.state == "closed":
+                state = "closed"
+                merged_at = pr.merged_at
+            else:
+                continue
+
+            try:
+                pull_files = await list_pull_files(self._http, token, repo_slug, task.pr_number)
+            except Exception as exc:
+                logger.warning(
+                    "PR sync could not list files for PR #%s in %s: %s",
+                    task.pr_number,
+                    repo_slug,
+                    exc,
+                )
+                continue
+
+            files: list[str] = []
+            for pf in pull_files:
+                if pf.previous_filename and pf.previous_filename not in files:
+                    files.append(pf.previous_filename)
+                if pf.filename not in files:
+                    files.append(pf.filename)
+
+            try:
+                await self._tasks.end(project_id, task.id, status=state)
+            except Exception as exc:
+                logger.warning("PR sync could not end task %s as %s: %s", task.id, state, exc)
+                continue
+
+            change = PrChange(
+                number=task.pr_number,
+                state=state,
+                merged_at=merged_at,
+                head_branch=task.branch,
+                agent=task.agent,
+                files=files,
+            )
+            for observer in self._observers:
                 try:
-                    await self._tasks.end(project_id, task.id, status="closed")
+                    await observer.changed(project_id, change)
                 except Exception as exc:
-                    logger.warning("PR sync could not end task %s as closed: %s", task.id, exc)
+                    logger.warning(
+                        "PrObserver %s failed on project %s: %s", observer, project_id, exc
+                    )
 
         # After the PRs, so a failing issue refresh never keeps a merged PR from ending its task.
         try:

@@ -39,7 +39,7 @@ class Databases:
                 db_path = self._paths.project_db(project_id)
                 backup_dir = self._paths.backups / "migrations" / "projects" / project_id
                 await asyncio.to_thread(migrate, db_path, "project", backup_dir)
-                engine = create_engine_for(db_path)
+                engine = create_engine_for(db_path, vectors=True)
                 self._projects[project_id] = engine
             return engine
 

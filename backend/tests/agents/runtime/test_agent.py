@@ -7,8 +7,6 @@ import pytest
 from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.store import SessionStore
@@ -26,7 +24,12 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
-from tests.agents.runtime.builder_env import build_builder_env, start_turn, workspace_service
+from tests.agents.runtime.builder_env import (
+    build_builder_env,
+    start_turn,
+    status_board_hooks,
+    workspace_service,
+)
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
@@ -356,10 +359,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     fake_board = _FakeStatusBoard(summary_text="- Orchestrator: idle\n- Retraining: running")
 
-    status_hook = StatusBoardHook()
-    status_hook.bind(fake_board)
-    hooks = HookRegistry()
-    hooks.register(status_hook)
+    hooks = status_board_hooks(fake_board)
     store = SessionStore(databases)
 
     builder = AgentBuilder(

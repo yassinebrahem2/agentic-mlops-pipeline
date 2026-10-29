@@ -102,7 +102,7 @@ class Embedders(Protocol):            # injected into the services that need it,
 ConnectionStatus = Literal["ok", "unreachable"]
 class TableRef(BaseModel): name: str; files: list[str]; format: Literal["csv", "parquet", "json", "jsonl"]
 class ColumnInfo(BaseModel): name: str; type: str
-class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int | None; timed_out: bool; data_version: str; summary: str   # row_count None: not computed (a timed-out profile); Decision #425: the data-summary owner edits contracts' connections/contract.py and regenerates openapi.json in task 5   # served by data-summary from its cache
+class TableDetail(BaseModel): table: TableRef; columns: list[ColumnInfo]; row_count: int | None; timed_out: bool; incomplete: bool; data_version: str; summary: str   # row_count None: not computed (a timed-out profile); Decision #425: the data-summary owner edits contracts' connections/contract.py and regenerates openapi.json in task 5   # served by data-summary from its cache
 class Mount(BaseModel): host_path: Path; container_path: str        # always read-only
 class DuckDbSource(BaseModel): sql_from: str; allowed_directories: list[Path]
 class Finding(BaseModel): path: str; reason: str
@@ -218,6 +218,8 @@ class HookRegistry:
 
 ### I19: proposals (`proposals/contract.py`)
 
+> Changed by stages 4-6 (Decision #447): contracts task 4 widens `ProposalView.payload` to a union discriminated by `kind`.
+
 ```python
 ProposalStatus = Literal["pending", "approved", "rejected", "superseded"]
 class CredentialSlot(BaseModel): index: int; label: str; source_type: str
@@ -288,6 +290,8 @@ class Proposals(Protocol):          # proposals
 - Routes: `PUT /api/projects/{id}/proposals/{prp}/credentials/{slot}` (keystore only; refused unless pending); `GET .../proposals/by-approval/{apr}`. Events `proposal.created`, `proposal.decided`, `handoff.approved`.
 
 ### I20: the current handoff (types in `proposals/contract.py` by contracts; `SqliteHandoffs` in `proposals/handoffs.py` by proposals)
+
+> Changed by stages 4-6 (Decision #448): contracts task 1 adds `HandoffObserver` and `Handoffs.add_observer`, called after `store` commits.
 
 ```python
 class HandoffView(BaseModel): proposal_id: str; version: int; approved: datetime; payload: HandoffPayload

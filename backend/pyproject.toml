@@ -5,6 +5,7 @@ description = "Multi-agent system for autonomous MLOps pipelines"
 requires-python = ">=3.12"
 dependencies = [
   "aiosqlite>=0.22.1",
+  "croniter==6.0.0",
   "cryptography>=46.0.7",
   "duckdb==2.0.0",
   "fastapi>=0.143.2",
@@ -64,6 +65,8 @@ ignore = ["E501", "S603", "S607"]
 "tests/**" = ["S101", "S104", "S105", "S106"]
 # The fake server polls the gate across threads.
 "tests/fakes/fake_openai.py" = ["ASYNC110"]
+# The data tests build DuckDB SQL from test constants and fixture paths.
+"tests/data/**" = ["S608"]
 
 [tool.pyright]
 include = ["src", "tests", "../scripts"]

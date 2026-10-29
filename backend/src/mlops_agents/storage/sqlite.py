@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,21 @@ from typing import Any
 import aiosqlite
 from sqlalchemy import URL, event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+from mlops_agents.storage.vector_extension import load_vector_extension
+
+logger = logging.getLogger(__name__)
+
+MIN_SQLITE_VERSION: tuple[int, int, int] = (3, 35, 0)
+
+
+def check_sqlite_version() -> None:
+    """Refuse to run if SQLite is older than 3.35 (required for UPDATE ... RETURNING)."""
+    if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
+        min_ver = ".".join(map(str, MIN_SQLITE_VERSION))
+        found_ver = ".".join(map(str, sqlite3.sqlite_version_info))
+        raise RuntimeError(f"SQLite {min_ver} or later is required, but found {found_ver}")
+
 
 PRAGMAS: tuple[str, ...] = (
     "PRAGMA journal_mode=WAL",
@@ -16,7 +32,8 @@ PRAGMAS: tuple[str, ...] = (
 )
 
 
-def create_engine_for(path: Path) -> AsyncEngine:
+def create_engine_for(path: Path, *, vectors: bool = False) -> AsyncEngine:
+    check_sqlite_version()
     url = URL.create("sqlite+aiosqlite", database=str(path))
     engine = create_async_engine(url)
 
@@ -27,12 +44,25 @@ def create_engine_for(path: Path) -> AsyncEngine:
         for pragma in PRAGMAS:
             cursor.execute(pragma)
         cursor.close()
+        if vectors:
+            try:
+
+                def _load_vec(_raw: object) -> Any:
+                    return load_vector_extension(dbapi_connection.driver_connection)
+
+                dbapi_connection.run_async(_load_vec)
+            except (AttributeError, sqlite3.OperationalError, OSError) as exc:
+                logger.warning(
+                    "sqlite-vec extension failed to load (%s); vector features will be unavailable",
+                    type(exc).__name__,
+                )
 
     return engine
 
 
 def connect_sync(path: Path) -> sqlite3.Connection:
     """A stdlib connection in autocommit mode: callers manage transactions explicitly."""
+    check_sqlite_version()
     conn = sqlite3.connect(path, isolation_level=None)
     for pragma in PRAGMAS:
         conn.execute(pragma)
@@ -40,6 +70,7 @@ def connect_sync(path: Path) -> sqlite3.Connection:
 
 
 async def connect_checkpointer(path: Path) -> aiosqlite.Connection:
+    check_sqlite_version()
     conn = await aiosqlite.connect(path)
     for pragma in PRAGMAS:
         await conn.execute(pragma)

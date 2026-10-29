@@ -8,6 +8,8 @@ import unicodedata
 from collections.abc import Iterable
 from urllib.parse import SplitResult, quote, quote_plus, unquote_plus, urlsplit
 
+from sqlalchemy.exc import DBAPIError
+
 MASK = "***"
 
 # Parameter names that carry a credential, compared after _normalized_name. Credentials belong
@@ -112,6 +114,14 @@ def error_text(exc: BaseException) -> str:
     if isinstance(exc, httpx2.InvalidURL):
         return "the URL could not be parsed (its text is withheld: it can quote part of a key)"
     return scrub_url_secrets(str(exc))
+
+
+def db_error_text(exc: BaseException) -> str:
+    """`str(exc)` made safe to show, unwrapping SQLAlchemy `DBAPIError` to the underlying
+    driver exception so raw SQL statements and bound parameters are not exposed."""
+    if isinstance(exc, DBAPIError) and exc.orig is not None:
+        return error_text(exc.orig)
+    return error_text(exc)
 
 
 def _lower_hex(text: str) -> str:

@@ -72,7 +72,7 @@ async def test_two_concurrent_create_stall_calls_give_one_record(databases: Data
 async def test_a_new_stall_at_the_same_step_is_allowed_after_the_first_is_decided(
     databases: Databases,
 ) -> None:
-    await add_turn(databases, PROJECT, status="running")
+    await add_turn(databases, PROJECT)  # waiting: a stall is decided only while its turn waits
     store = ApprovalStore(databases)
 
     first, _ = await store.create_stall(PROJECT, "trn_1", 1, STALL_PREVIEW)
@@ -126,7 +126,7 @@ async def test_pending_expiry_and_cancel_for_turn_include_a_stall(databases: Dat
     expired = await store.expire_non_waiting(PROJECT)
     assert [(a.id, a.kind, a.status) for a in expired] == [(stale_stall.id, "stall", "expired")]
 
-    cancelled = await store.cancel_for_turn(PROJECT, "trn_1")
+    cancelled = await store.cancel_for_turn(PROJECT, "trn_1", decided_by="user")
     assert [(a.id, a.kind, a.status) for a in cancelled] == [
         (waiting_stall.id, "stall", "cancelled")
     ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 
 import httpx2
 from pydantic import BaseModel, ValidationError
@@ -14,6 +15,11 @@ from mlops_agents.integrations.github.api import (
 )
 
 
+class PullFile(BaseModel):
+    filename: str
+    previous_filename: str | None = None
+
+
 class PullRequest(BaseModel):
     number: int
     title: str
@@ -21,6 +27,8 @@ class PullRequest(BaseModel):
     html_url: str
     state: str = "open"
     merged: bool = False
+    merged_at: datetime | None = None
+    changed_files: int | None = None
 
 
 async def create_pull(
@@ -119,3 +127,44 @@ async def get_pull(
         return PullRequest.model_validate(response.json())
     except (ValidationError, ValueError):
         raise unreadable() from None
+
+
+async def list_pull_files(
+    http: httpx2.AsyncClient,
+    token: str,
+    repo: str,
+    number: int,
+) -> list[PullFile]:
+    files: list[PullFile] = []
+    page = 1
+    per_page = 100
+    while True:
+        response = await request(
+            http,
+            "GET",
+            f"/repos/{repo}/pulls/{number}/files?per_page={per_page}&page={page}",
+            token,
+        )
+        if response.status_code == 404:
+            raise DomainError(
+                "github_pr_not_found", f"Pull request #{number} no longer exists.", status=404
+            )
+        if response.status_code == 403:
+            raise permission_missing(PERMISSION_PULL_REQUESTS_WRITE)
+        if response.status_code != 200:
+            raise DomainError(
+                "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+            )
+        try:
+            data = response.json()
+            if not isinstance(data, list):
+                raise unreadable()
+            page_files = [PullFile.model_validate(it) for it in cast(list[object], data)]
+        except (ValidationError, ValueError):
+            raise unreadable() from None
+
+        files.extend(page_files)
+        if len(page_files) < per_page:
+            break
+        page += 1
+    return files
