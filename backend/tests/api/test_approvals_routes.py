@@ -14,6 +14,7 @@ from mlops_agents.agents.runtime.contract import ApprovalPart, ApprovalStatus
 from mlops_agents.agents.tools.base import Preview, RiskClass
 from mlops_agents.api.services import Services
 from mlops_agents.storage.tables import messages, sessions, turns
+from tests.agents.approval_env import seed_decided_approval
 from tests.api.conftest import add_local_project
 
 
@@ -76,6 +77,17 @@ async def _setup_session_turn_and_approval(
         )
 
     store = ApprovalStore(databases)
+    if status != "pending":
+        await seed_decided_approval(
+            databases,
+            store,
+            project_id,
+            status=status,
+            id=approval_id,
+            tool_call_id=f"call_{approval_id}",
+            preview=preview,
+        )
+        return approval_id
     await store.create(
         project_id,
         id=approval_id,
@@ -87,7 +99,6 @@ async def _setup_session_turn_and_approval(
         tool="edit_file",
         risk_class=RiskClass.WRITE_CODE,
         preview=preview,
-        status=status,
     )
     return approval_id
 

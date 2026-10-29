@@ -27,6 +27,7 @@ from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import sessions, turns
+from tests.agents.approval_env import seed_decided_approval
 
 
 class FakeSessionsForApproval:
@@ -35,6 +36,7 @@ class FakeSessionsForApproval:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self.resumed_turns: list[tuple[str, str, str]] = []
+        self.stopped_turns: list[tuple[str, str, str]] = []
         self.recovered_projects: list[str] = []
         self._lock = asyncio.Lock()
 
@@ -62,6 +64,9 @@ class FakeSessionsForApproval:
 
     async def stop(self, project_id: str, agent: str) -> None:
         pass
+
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        self.stopped_turns.append((project_id, session_id, turn_id))
 
     async def close_project(self, project_id: str) -> None:
         pass
@@ -173,17 +178,15 @@ async def test_approvals_service_pending(databases: Databases, tmp_path: Path) -
         preview=preview,
     )
     # apr3 already decided
-    await store.create(
+    await seed_decided_approval(
+        databases,
+        store,
         project_id,
-        turn_id="trn_1",
-        session_id="ses_1",
-        message_id="msg_1",
-        agent="orchestrator",
+        status="approved",
         tool_call_id="call_3",
         tool="bash",
         risk_class=RiskClass.RUN,
         preview=preview,
-        status="approved",
     )
 
     fake_sessions = FakeSessionsForApproval(SessionStore(databases))
@@ -364,18 +367,16 @@ async def test_approvals_service_errors(databases: Databases, tmp_path: Path) ->
     await _setup_session_and_turn(databases, project_id)
 
     store = ApprovalStore(databases)
-    apr = await store.create(
+    apr = await seed_decided_approval(
+        databases,
+        store,
         project_id,
+        status="approved",
         id="apr_test3",
-        turn_id="trn_1",
-        session_id="ses_1",
-        message_id="msg_1",
-        agent="orchestrator",
         tool_call_id="call_3",
         tool="bash",
         risk_class=RiskClass.RUN,
         preview=Preview(kind="command", title="Bash", body="ls"),
-        status="approved",
     )
 
     fake_sessions = FakeSessionsForApproval(SessionStore(databases))
@@ -679,18 +680,8 @@ async def test_store_decide_not_pending_raises_409(databases: Databases, tmp_pat
     project_id = "prj_storenotpending"
     await _setup_session_and_turn(databases, project_id)
     store = ApprovalStore(databases)
-    preview = Preview(kind="diff", title="edit main.py", body="- old\n+ new")
-    apr = await store.create(
-        project_id,
-        turn_id="trn_1",
-        session_id="ses_1",
-        message_id="msg_1",
-        agent="orchestrator",
-        tool_call_id="call_x",
-        tool="edit_file",
-        risk_class=RiskClass.WRITE_CODE,
-        preview=preview,
-        status="cancelled",
+    apr = await seed_decided_approval(
+        databases, store, project_id, status="cancelled", tool_call_id="call_x"
     )
     with pytest.raises(DomainError) as exc_info:
         await store.decide(project_id, apr.id, approve=True)
