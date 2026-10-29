@@ -7,18 +7,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from mlops_agents.agents.approvals.decisions import record_decisions
-from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.approvals.decisions import settle_decisions
+from mlops_agents.agents.approvals.store import ApprovalStore, DecidedBy
 from mlops_agents.agents.runtime.contract import (
     ApprovalPart,
+    MessageStatus,
     Part,
     ToolCallPart,
     TurnEnd,
@@ -47,7 +48,9 @@ __all__ = [
     "_Ending",
     "_ending_of",
     "_observed",
+    "cancel_turn_approvals",
     "delete_checkpoint_thread",
+    "finish_waiting_message",
     "handle_turn_waiting",
     "open_checkpointer",
     "stop_waiting_turn",
@@ -200,6 +203,66 @@ async def handle_turn_waiting(
         await _observed(observer.turn_waiting(project_id, agent, turn_id))
 
 
+async def cancel_turn_approvals(
+    project_id: str,
+    session_id: str,
+    turn_id: str,
+    *,
+    decided_by: DecidedBy,
+    store: SessionStore,
+    hub: SessionHub,
+    lock: AbstractAsyncContextManager[Any],
+    approval_store: ApprovalStore,
+    audit_log: AuditLog | None,
+    event_log: EventLog | None,
+) -> None:
+    """The one sweep of an ended turn: cancel its pending approvals (telling their observers),
+    then write their records and cards. Each card is rewritten in the approval's own message
+    and only where it exists (a turn that has not waited yet holds none); only that rewrite
+    takes the session lock."""
+    cancelled = await approval_store.cancel_for_turn(project_id, turn_id, decided_by=decided_by)
+
+    async def rewrite_part(
+        _approval_session: str, message_id: str, transform: Callable[[list[Part]], list[Part]]
+    ) -> object:
+        # Every approval of the turn is in the turn's session, whose hub and lock these are.
+        async with lock:
+            updated = await store.rewrite_parts(project_id, session_id, message_id, transform)
+            if updated is not None:
+                await hub.message(updated, created=False)
+        return updated
+
+    await settle_decisions(
+        project_id,
+        cancelled,
+        store=approval_store,
+        databases=store.databases,
+        audit_log=audit_log,
+        event_log=event_log,
+        rewrite_part=rewrite_part,
+    )
+
+
+async def finish_waiting_message(
+    project_id: str,
+    session_id: str,
+    turn_id: str,
+    status: MessageStatus,
+    *,
+    store: SessionStore,
+    hub: SessionHub,
+    lock: AbstractAsyncContextManager[Any],
+) -> None:
+    """Give the ended turn's agent message its final status when it is still `waiting`: a turn
+    that ends without running again (a Stop before its worker ran, a failed write of its wait)
+    would otherwise keep it."""
+    async with lock:
+        message = await store.turn_agent_message(project_id, session_id, turn_id)
+        if message is not None and message.status == "waiting":
+            updated = await store.update_message(project_id, message.id, status=status)
+            await hub.message(updated, created=False)
+
+
 async def stop_waiting_turn(
     *,
     project_id: str,
@@ -214,34 +277,27 @@ async def stop_waiting_turn(
     event_log: EventLog | None = None,
     observers: Sequence[TurnObserver] = (),
 ) -> None:
-    """Stop a waiting turn: cancel approvals, mark message and turn stopped, delete checkpoint, notify."""
-    cancelled = await approval_store.cancel_for_turn(project_id, turn_id)
-    cancelled_ids = {a.id for a in cancelled}
-
-    await record_decisions(
+    """Stop a waiting turn: store it stopped first, so no decision commits for it any more and
+    a crash before the sweep leaves pending approvals that recovery expires; then the sweep,
+    the stopped message, the end's publish, the checkpoint and the observers. The caller holds
+    the session lock (so nothing here takes it again)."""
+    await store.set_turn(project_id, turn_id, "stopped")
+    held_by_caller = nullcontext()
+    await cancel_turn_approvals(
         project_id,
-        cancelled,
-        "cancelled",
-        actor="user",
-        databases=store.databases,
+        session_id,
+        turn_id,
+        decided_by="user",
+        store=store,
+        hub=hub,
+        lock=held_by_caller,
+        approval_store=approval_store,
         audit_log=audit_log,
         event_log=event_log,
     )
-
-    agent_msg = await store.turn_agent_message(project_id, session_id, turn_id)
-    if agent_msg is not None:
-        new_parts: list[Part] = []
-        for part in agent_msg.parts:
-            if isinstance(part, ApprovalPart) and part.approval_id in cancelled_ids:
-                new_parts.append(part.model_copy(update={"status": "cancelled"}))
-            else:
-                new_parts.append(part)
-        updated_msg = await store.update_message(
-            project_id, agent_msg.id, parts=new_parts, status="stopped"
-        )
-        await hub.message(updated_msg, created=False)
-
-    await store.set_turn(project_id, turn_id, "stopped")
+    await finish_waiting_message(
+        project_id, session_id, turn_id, "stopped", store=store, hub=hub, lock=held_by_caller
+    )
     await hub.turn_ended(turn_id, status="stopped", error=None)
 
     await executor.delete_checkpoint(project_id, turn_id)

@@ -20,7 +20,11 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    until_idle,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta
@@ -216,8 +220,7 @@ async def test_three_messages_sent_at_once_queue_order(
     assert m3.id in updated_ids
 
     # Eventually view is not busy
-    view_end = await manager.get(project_id, "orchestrator")
-    assert view_end.busy is False
+    await until_idle(manager, project_id, "orchestrator")
 
     await manager.close()
 

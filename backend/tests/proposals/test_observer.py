@@ -446,7 +446,7 @@ async def test_stop_and_recovery_expiry_fire_decided_and_empty_slots(
 
         # Trigger recovery (discard from recovered set to simulate restart/fresh check)
         assert isinstance(services.sessions, SessionManager)
-        services.sessions._recovered_projects.discard(project_id)  # pyright: ignore[reportPrivateUsage]
+        services.sessions._recovery.forget(project_id)  # pyright: ignore[reportPrivateUsage]
         assert await services.approvals.pending(project_id) == []
 
         p_stale_after = await services.proposals.get_by_approval(project_id, stale_appr.id)

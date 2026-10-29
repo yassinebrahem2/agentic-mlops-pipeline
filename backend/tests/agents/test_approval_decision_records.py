@@ -1,6 +1,6 @@
 """One owner writes an approval decision's audit record and `approval.decided` event, and the
-three places that decide approvals (a user's decision, Stop, recovery) all go through it
-(#258 item 4, Decision #278)."""
+three places that decide approvals (a user's decision, Stop, recovery) all settle through it
+(#258 item 4, Decision #278, #381)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ import httpx2
 import pytest
 from sqlalchemy import select
 
-from mlops_agents.agents.approvals.decisions import record_decisions
+from mlops_agents.agents.approvals.decisions import (
+    PartRewriter,
+    record_decisions,
+    settle_decisions,
+)
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.approvals.store import ApprovalRecord, ApprovalStore
@@ -32,7 +36,8 @@ from tests.agents.test_approvals_service_guards import waiting_approval
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
-Call = tuple[str, list[str], DecidedApprovalStatus, str, str | None]
+# Each settled approval as (ID, status, who decided it).
+Call = tuple[str, list[tuple[str, str, str | None]]]
 
 
 def spy_on(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[Call]:
@@ -42,27 +47,25 @@ def spy_on(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[Call]:
     async def spy(
         project_id: str,
         approvals: Sequence[ApprovalRecord],
-        decision: DecidedApprovalStatus,
         *,
-        actor: str,
+        store: ApprovalStore,
         databases: Databases,
         audit_log: AuditLog | None,
         event_log: EventLog | None,
-        note: str | None = None,
+        rewrite_part: PartRewriter,
     ) -> None:
-        calls.append((project_id, [a.id for a in approvals], decision, actor, note))
-        await record_decisions(
+        calls.append((project_id, [(a.id, a.status, a.decided_by) for a in approvals]))
+        await settle_decisions(
             project_id,
             approvals,
-            decision,
-            actor=actor,
+            store=store,
             databases=databases,
             audit_log=audit_log,
             event_log=event_log,
-            note=note,
+            rewrite_part=rewrite_part,
         )
 
-    monkeypatch.setattr(module, "record_decisions", spy)
+    monkeypatch.setattr(module, "settle_decisions", spy)
     return calls
 
 
@@ -156,7 +159,7 @@ async def test_a_users_decision_is_recorded_by_the_shared_function(
 
     await service.decide(project_id, apr.id, approve=False, note="Not now")
 
-    assert calls == [(project_id, [apr.id], "rejected", "user", "Not now")]
+    assert calls == [(project_id, [(apr.id, "rejected", "user")])]
     assert [r["decision"] for r in await _audit_rows(databases, project_id)] == ["rejected"]
 
 
@@ -192,7 +195,7 @@ async def test_stop_on_a_waiting_turn_records_its_cancels_by_the_shared_function
 
     await env.manager.stop(env.project_id, "orchestrator")
 
-    assert calls == [(env.project_id, [pending.id], "cancelled", "user", None)]
+    assert calls == [(env.project_id, [(pending.id, "cancelled", "user")])]
     rows = await _audit_rows(databases, env.project_id)
     assert [(r["decision"], r["actor"]) for r in rows if r["action"] == "approval"] == [
         ("cancelled", "user")
@@ -213,7 +216,7 @@ async def test_recovery_records_its_expiries_by_the_shared_function(
 
     await store.recover(project_id, approval_store=ApprovalStore(databases))
 
-    assert calls == [(project_id, [apr.id], "expired", "system", None)]
+    assert calls == [(project_id, [(apr.id, "expired", "system")])]
     assert [(r["decision"], r["actor"]) for r in await _audit_rows(databases, project_id)] == [
         ("expired", "system")
     ]

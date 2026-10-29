@@ -56,10 +56,12 @@ export function stubRoutes(routes: Record<string, RouteHandler>): RecordedReques
   return requests;
 }
 
-export function renderSection(ui: ReactElement): RenderResult {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+export function renderSection(ui: ReactElement, client?: QueryClient): RenderResult {
+  const queryClient =
+    client ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 

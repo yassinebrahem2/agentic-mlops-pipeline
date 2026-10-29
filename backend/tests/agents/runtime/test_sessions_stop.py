@@ -18,7 +18,11 @@ from mlops_agents.agents.tools.base import AgentTool, RiskClass, ToolContext, To
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.observer_fakes import HeldObserver, turn_statuses
-from tests.agents.runtime.session_env import build_session_env, collect_until_turn_ended
+from tests.agents.runtime.session_env import (
+    build_session_env,
+    collect_until_turn_ended,
+    until_idle,
+)
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.stream_helpers import through_first_delta, through_tool_started
@@ -150,6 +154,7 @@ async def test_stop_during_slow_tool(
     )
 
     held.release.set()
+    await until_idle(manager, project_id, "heldagent")
     m = await manager.send(project_id, "heldagent", "New turn")
     assert m.status == "complete"
     evs = await collect_until_turn_ended(sub)

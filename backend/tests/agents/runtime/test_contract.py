@@ -244,6 +244,9 @@ class DummySessions:
     async def stop(self, project_id: str, agent: str) -> None:
         pass
 
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        pass
+
     async def subscribe(
         self, project_id: str, agent: str, after_seq: int | None
     ) -> AsyncGenerator[StreamEvent, None]:
