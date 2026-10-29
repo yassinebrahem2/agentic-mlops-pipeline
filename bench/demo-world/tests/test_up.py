@@ -58,7 +58,9 @@ def _alive(pid: int) -> bool:
 
 
 def _server_pids(checkout: Path) -> list[int]:
-    return [int(pid) for pid in (checkout / "server_pids.txt").read_text().split()]
+    """The fake server, its child and, once it has started, the interpreter that child runs."""
+    files = [checkout / "server_pids.txt", checkout / "sleeper_pid.txt"]
+    return [int(pid) for file in files if file.exists() for pid in file.read_text().split()]
 
 
 def _assert_all_stopped(pids: list[int]) -> None:
@@ -69,11 +71,19 @@ def _assert_all_stopped(pids: list[int]) -> None:
 
 
 def _up_with[T](checkout: Path, play: Callable[[], T], timeout: float = 30) -> T:
+    def started() -> T:
+        # Play only once the server's child runs, so every test stops a whole tree.
+        deadline = time.monotonic() + 10
+        while not (checkout / "sleeper_pid.txt").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert len(_server_pids(checkout)) == 3
+        return play()
+
     return up.up(
         fake_company(checkout),
         paths.world_dir(),
         newrun.free_port(),
-        play,
+        started,
         health_timeout=timeout,
     )
 
@@ -90,8 +100,8 @@ def test_up_serves_mlflow_while_the_loop_plays_then_stops_both(
         seen.append(uri)
         with urllib.request.urlopen(f"{uri}/health", timeout=5) as response:  # noqa: S310
             assert response.read() == b"OK"
-        # Both the server and its child run while the loop plays, so "stopped" below means it.
-        assert [_alive(pid) for pid in _server_pids(checkout)] == [True, True]
+        # The server's processes run while the loop plays, so "stopped" below means it.
+        assert [_alive(pid) for pid in _server_pids(checkout)] == [True, True, True]
         return simulate.simulate(world, FIXTURE_START, date(2016, 1, 2), FAST)
 
     summary = _up_with(checkout, play)
@@ -130,6 +140,15 @@ def test_an_error_in_the_loop_stops_both_processes(checkout: Path) -> None:
     _assert_all_stopped(_server_pids(checkout))
 
 
+def test_a_child_that_ignores_the_stop_signal_is_stopped_too(checkout: Path) -> None:
+    # The server exits on the signal and its child does not: the world must still reach it.
+    (checkout / "server_stubborn").touch()
+
+    _up_with(checkout, lambda: None)
+
+    _assert_all_stopped(_server_pids(checkout))
+
+
 def test_a_server_that_never_answers_is_stopped_with_a_clear_error(checkout: Path) -> None:
     (checkout / "server_silent").touch()
     played: list[bool] = []
@@ -148,6 +167,26 @@ def test_a_server_that_exits_is_reported_with_its_exit_code(checkout: Path) -> N
         _up_with(checkout, lambda: None)
 
     assert "failed on purpose" in (paths.world_dir() / up.SERVER_LOG).read_text(encoding="utf-8")
+
+
+def test_the_companys_environment_is_ready_before_the_server_starts(checkout: Path) -> None:
+    _up_with(checkout, lambda: None)
+
+    assert [c["argv"][:2] for c in calls(checkout)] == [
+        ["mlflow", "--version"],
+        ["mlflow", "server"],
+    ]
+
+
+def test_a_company_environment_without_mlflow_is_reported_before_any_server(
+    checkout: Path,
+) -> None:
+    (checkout / "failures.json").write_text('["mlflow --version"]', encoding="utf-8")
+
+    with pytest.raises(up.UpError, match="does not run from the company's environment"):
+        _up_with(checkout, lambda: None)
+
+    assert not (checkout / "server_pids.txt").exists()
 
 
 def test_the_server_serves_the_companys_store_and_keeps_artifacts_in_its_folder(

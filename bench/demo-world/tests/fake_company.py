@@ -6,7 +6,9 @@ gave it and whether the day's files were in the data folder, and `failures.json`
 the starts of the commands that must fail. `deploy` marks a production model in the MLflow
 folder, which the `mlflow` probe then finds. `mlflow server` starts a child process, as `uv
 run` does, writes both process IDs to `server_pids.txt` and answers `/health` on its port
-until it is stopped (or answers nothing when `server_silent` exists).
+until it is stopped (or answers nothing when `server_silent` exists). The child writes its
+own process ID to `sleeper_pid.txt`, ignoring the stop signal first when `server_stubborn`
+exists.
 """
 
 import json
@@ -20,6 +22,8 @@ CALLS = "calls.jsonl"
 FAILURES = "failures.json"
 SERVER_PIDS = "server_pids.txt"
 SILENT = "server_silent"
+STUBBORN = "server_stubborn"
+SLEEPER_PID = "sleeper_pid.txt"
 ENVIRONMENT = ("HOTEL_DEMO_DATA", "HOTEL_DEMO_MLFLOW", "MLFLOW_TRACKING_URI", "VIRTUAL_ENV")
 NOT_FOUND = (
     "mlflow.exceptions.MlflowException: Registered Model with name=hotel-cancellation not found"
@@ -64,8 +68,15 @@ class _Health(BaseHTTPRequestHandler):
 
 
 def _server(args: list[str], checkout: Path) -> int:
-    sleeper = [sys.executable, "-c", "import time; time.sleep(600)"]
-    child = subprocess.Popen(sleeper)  # noqa: S603 (the test's own interpreter)
+    # The child writes its own process ID: a venv's python.exe on Windows is a launcher that
+    # runs the interpreter as a child of its own, as uv does.
+    code = f"import os, pathlib; pathlib.Path({str(checkout / SLEEPER_PID)!r})"
+    code += ".write_text(str(os.getpid())); import time; time.sleep(600)"
+    if (checkout / STUBBORN).exists():
+        # A child that ignores the stop signal, as a worker still shutting down would.
+        ignore = "import signal; signal.signal(getattr(signal, 'SIGBREAK', signal.SIGTERM), "
+        code = f"{ignore}signal.SIG_IGN); {code}"
+    child = subprocess.Popen([sys.executable, "-c", code])  # noqa: S603 (the test's own interpreter)
     (checkout / SERVER_PIDS).write_text(f"{os.getpid()}\n{child.pid}\n", encoding="utf-8")
     if (checkout / SILENT).exists():
         return child.wait()
@@ -95,6 +106,9 @@ def main() -> int:
         return 3
     if program == "mlflow" and args[:1] == ["server"]:
         return _server(args, checkout)
+    if program == "mlflow" and args == ["--version"]:
+        print("mlflow, version 0 (fake)")
+        return 0
     if program == "mlflow":
         return _mlflow(mlflow)
     return _hotel_demo(args, mlflow)
