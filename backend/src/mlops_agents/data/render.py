@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
+from itertools import takewhile
 from pathlib import Path
 from typing import Final
 
@@ -24,9 +25,11 @@ CACHE_UNAVAILABLE: Final = "profile cache unavailable"
 DENYLISTED_FILE: Final = "looks like a secret file"
 UNKNOWN_ROW_COUNT: Final = "row count unknown (timed out)"
 _REASON_CUT: Final = TEXT_CUT * 2
-# DuckDB's CSV errors give only the place on their first line; the cause follows, after a
-# copy of the team's row when there is one (Decision #431).
+# DuckDB's CSV errors give only the place on their first line. The cause is the last line
+# before a blank line or DuckDB's advice ("Possible fixes:", "Possible Solution:"); a copy
+# of the team's row, which can span lines, may come before it (Decision #431).
 _PLACE_ONLY: Final = re.compile(r"CSV Error on Line: \d+$")
+_ADVICE: Final = "Possible "
 _ROW_COPY: Final = "Original Line:"
 
 # What JSON leaves unescaped without `ensure_ascii`: DEL, the C1 controls (NEL among them),
@@ -71,9 +74,11 @@ def _cause(reason: str) -> str:
     lines = reason.splitlines()
     first = lines[0] if lines else ""
     if _PLACE_ONLY.search(first):
-        later = (line.strip() for line in lines[1:] if not line.startswith(_ROW_COPY))
-        if cause := next((line for line in later if line), ""):
-            first = f"{first}: {cause}"
+        body = list(
+            takewhile(lambda line: line.strip() and not line.startswith(_ADVICE), lines[1:])
+        )
+        if body and not body[-1].startswith(_ROW_COPY):
+            first = f"{first}: {body[-1].strip()}"
     return first[:_REASON_CUT]
 
 

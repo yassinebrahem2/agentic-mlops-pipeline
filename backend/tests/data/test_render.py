@@ -158,11 +158,28 @@ def test_a_csv_error_keeps_the_sentence_naming_its_cause() -> None:
     )
 
 
-def test_a_csv_error_without_a_cause_keeps_its_first_line() -> None:
-    reason = "Invalid Input Error: CSV Error on Line: 7\nOriginal Line: a,b,c\n\n"
-    assert unreadable_line(PEOPLE, reason) == (
-        'Table "people" (csv): unreadable: Invalid Input Error: CSV Error on Line: 7'
+def test_a_row_copied_over_several_lines_is_not_taken_for_the_cause() -> None:
+    """A quoted cell can hold a line break, so the copy of the row can span lines: the cause
+    is the line before DuckDB's advice."""
+    reason = (
+        "Invalid Input Error: CSV Error on Line: 30002\n"
+        'Original Line: 1,"multi\n'
+        'line",3\n'
+        "Expected Number of Columns: 2 Found: 3\n"
+        "Possible fixes:\n"
+        "* Enable ignore errors (ignore_errors=true) to skip this row\n"
     )
+    assert unreadable_line(PEOPLE, reason) == (
+        'Table "people" (csv): unreadable: Invalid Input Error: CSV Error on Line: 30002: '
+        "Expected Number of Columns: 2 Found: 3"
+    )
+
+
+def test_a_csv_error_without_a_cause_keeps_its_first_line() -> None:
+    expected = 'Table "people" (csv): unreadable: Invalid Input Error: CSV Error on Line: 7'
+    for rest in ("Original Line: a,b,c\n\n", 'Original Line: "a\n\nb",c\n\nPossible fixes:'):
+        reason = f"Invalid Input Error: CSV Error on Line: 7\n{rest}"
+        assert unreadable_line(PEOPLE, reason) == expected
 
 
 def test_an_unreachable_detail_is_cut_like_a_reason() -> None:
