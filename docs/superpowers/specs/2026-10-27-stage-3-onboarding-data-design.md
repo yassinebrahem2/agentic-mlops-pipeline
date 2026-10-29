@@ -1,6 +1,6 @@
 # Stage 3: Onboarding and data access
 
-Date: 2026-10-27. Status: approved by the lead on 2026-10-28.
+Date: 2026-10-27. Status: approved by the lead on 2026-10-28; the additions required by stage 4 (pipeline edges, the results location, time zones, serving mode, error costs, groups, feeds and deadlines, commands, on-call, server-mode folders, one-minute sync) approved on 2026-10-28 with the stage 4 spec; the additions required by stage 5 (several models per project, per-model commands in the `command` or `ci_dispatch` shape with placeholders and `deploys`, who promotes, the alias-to-environment map, the production signal, tracking fetching the evaluation record, superseding by kind and key) approved on 2026-10-28 with the stage 5 spec.
 Contracts used here (IDs, folder layout, SQLite rules, agent definition format, risk classes, event and audit records) are in `docs/roadmap.md`; this spec changes them there first where it says so. Background and the decisions behind it: `project_knowledge.md` (entries of 2026-10-27). Stage 1 and stage 2 behavior not mentioned here stays as their specs say.
 
 ## Goal
@@ -38,10 +38,10 @@ In:
 
 Out:
 - Connection kinds other than local folder: PostgreSQL first, then S3, GCS, Azure, MySQL, SQLite files and others. The kind interface (§4) takes each as one new file; none ships now. Excel files: they need a DuckDB extension shipped per platform.
-- File connections in server mode: they would read the server's disk. The connections section says so in server mode.
 - Trackers other than MLflow; a separate git commits and tags adapter (lineage comes from the git commit MLflow records on each run).
 - Network rules finer than on or off (as in stage 2).
 - Model failover: a turn stays on its agent's model; when every key for it is exhausted, it pauses (§2).
+- A read-only tracker credential inside the sandbox (§7): not built in this stage; agents read tracking history through `TrackingHistory` and `tracking_summary`, which use the credential in the app. Giving a credential to the agent's own Bash needs a design of its own (stage 4's hook credentials reach one hook run only, never the agent's Bash) and is not scheduled.
 - Reading monitoring results and checks (stage 4), deploy hooks (stage 5), the Knowledge, Stats, Activity and Usage pages (stage 6). Stage 3 stores what they read.
 - The Data page's quality and drift history: empty until stage 4; the page says so.
 
@@ -123,6 +123,7 @@ class ConnectionKind(Protocol):
 **Rules:**
 - Only the user creates, changes or deletes a connection: in project settings, or by approving a `connections` proposal (§9). No agent tool creates one.
 - A local folder must exist and be readable, and must not be inside the app's data folder. Links are resolved before the check.
+- In server mode (the app running continuously on a server, as it is meant to run), a local folder is a folder on that server, for example a mounted data disk; the folder picker browses the server's disk as the add-project wizard does in local mode, and the same checks apply.
 - Files in it that match the secret denylist are listed as a warning in the form and the proposal card. A read-only mount cannot hide them; the user decides.
 - The UI lists only the kinds that ship.
 
@@ -130,7 +131,7 @@ class ConnectionKind(Protocol):
 
 - Whether a task container can reach a service on the host bound to 127.0.0.1 (Docker Desktop on Windows, `host.docker.internal`, network on) is measured by a named test in this stage's sandbox plan; the demo's MLflow address follows from it.
 - Each connection with a mount is bind-mounted read-only into every task container of the project at `/data/<connection name>`, next to the worktree. A container's fingerprint gains its mounts, so changing connections recreates the project's containers at their next Bash call (today only the image tag and the network flag are compared).
-- The environment image installs DuckDB (the Python package and the CLI) outside `/workspace`, at the app's DuckDB version: 2.0.0, from one constant.
+- The environment image installs the DuckDB CLI outside `/workspace`, at the app's DuckDB version: 2.0.0, from one constant. Not the Python package (changed 2026-10-28, #405's review): installing it into the team's environment would override the DuckDB version the team pins, so their code would run against another library in the sandbox than in production, and DuckDB 2.0.0 needs Python 3.11 or later, which would break the image of a project on an older Python. The CLI is a static binary that needs neither. The app's own data summary uses the Python package on the host, in the app's environment.
 - Agents explore data with Bash: `duckdb`, pandas, or the project's own code, on `/data/...`. Bash output stays capped as in stage 2, which keeps a whole table out of the context; the container's memory limit (4 GB) stays.
 
 ## 6. Context hooks
@@ -142,7 +143,7 @@ class ConnectionKind(Protocol):
   - per column: null count, approximate distinct count, min and max for numbers and dates, top 5 values for text;
   - the first 20 rows.
   - Caps: 20 rows; text cut at 80 characters; 50 columns per table (the rest counted); 20 tables per connection (the rest named); one size cap for the whole hook (a constant), past which tables are listed without detail.
-  - DuckDB runs locked to the connection's folder, set in this order on each connection, then locked: `autoinstall_known_extensions` and `autoload_known_extensions` off, `SET allowed_directories=[<folder>]`, `SET enable_external_access=false`, `SET lock_configuration=true` (verified on DuckDB 2.0.0: a path outside, `../` included, is refused, and the lock cannot be undone).
+  - DuckDB runs locked to the connection's folder, set in this order on each connection, then locked: `autoinstall_known_extensions` and `autoload_known_extensions` off, `SET allowed_directories=[<folder>]`, `SET enable_external_access=false`, `SET TimeZone='UTC'` (every time the app shows is UTC), `SET lock_configuration=true` (verified on DuckDB 2.0.0: a path outside, `../` included, is refused for reads and writes, and the lock cannot be undone). DuckDB cannot make the allowed folder read-only (measured on 2.0.0, Decision #411: `COPY ... TO` and `ATTACH` inside it succeed, also with a read-only database), so the boundary is the SQL itself: the locked connection runs only SQL the app builds, never text written by an agent or a user, and every value from the team's folder in that SQL (file names in `sql_from`, column names from headers) is quoted by one function and tested with hostile values.
   - Results, never data, are cached in `projects/<id>/cache/`, keyed by connection, table, the summary's format version and the table's data version. The cache has a 500 MB cap per project and evicts the least recently used.
 - **`tracking_summary`** (§7) and **`knowledge`** (§8).
 
@@ -154,14 +155,14 @@ class ConnectionKind(Protocol):
 - `tracked_models` (name), `model_versions` (version, source run, aliases, created), `tracked_runs` (run ID, experiment, status, start, end, params, tags including the git commit, dataset inputs where recorded), `run_metrics` (run, key, step, value, time), `deployments` (model, alias, from version, to version, seen at: the alias history, since MLflow keeps only current aliases), `ci_runs` (workflow, run ID, status, conclusion, start, duration, commit, URL).
 
 **Adapters**, one file each under `tracking/adapters/`, one interface `sync(source, since) -> SyncResult`:
-- **MLflow** over its REST API with the app's HTTP client (no MLflow package): experiments, runs and metric history, registered models, versions and aliases.
+- **MLflow** over its REST API with the app's HTTP client (no MLflow package): experiments, runs and metric history, registered models, versions and aliases, and, for each model version's run, the standard evaluation record artifact (`mlops_agents/evaluation.json`, stage 5) when present, fetched through the tracker's artifact API and stored with the version.
 - **GitHub Actions** over the stage 2 GitHub client: workflow runs.
-- A sync loop per project runs each source on an interval (a project setting, default 5 minutes) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
+- A sync loop per project runs each source on an interval (a project setting, default 1 minute, so the app is the first to know when a job or a run fails) and on demand from the Runs page, records `tracking.synced`, and keeps the last good data when a source fails (its error is shown on the Runs page).
 
 **For agents:**
 - `tracking_summary` hook: the production model and version, its latest metrics, the last runs and CI runs; capped.
 - `TrackingHistory` tool (`read`; justified: the record is in the app's database): models, versions, runs, metrics over time, deployments and CI runs, filtered, with a row cap.
-- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox gets a read-only credential only if the user grants one, so it can read and never write. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
+- With network granted, agents may call the tracker's API from Bash. For a tracker with authentication, the sandbox holds no credential in this stage (see Out); agents read its history through the app. For a tracker without authentication (`auth: "none"`), anyone who can reach it can change it, the agents included at `autonomous` and `bypass` levels: Onboarding reports it as a gap and proposes a PR enabling the tracker's authentication; the network grant in the handoff card says so in one sentence; every Bash command is in the audit log. If the user keeps it open, that is their choice.
 
 ## 8. The Knowledge store
 
@@ -178,7 +179,7 @@ class ConnectionKind(Protocol):
 
 ## 9. Proposals
 
-**One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version (a newer pending proposal of the same kind supersedes the older one).
+**One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version, and a key (a newer pending proposal of the same kind and key supersedes the older one; the key is the kind's choice: the project for `connections` and `handoff`).
 - A proposal is a stage 2 approval: the tool call asks, the card renders the payload by its kind, the user approves or rejects with a note, the turn resumes. On approval the app runs the kind's `apply()`; the tool result tells the agent what was applied, what failed and why.
 - **Secrets never pass through a proposal.** A card that needs a credential (a tracker's) has a field that posts it straight to the keystore through its own endpoint, keyed by the proposal's ID and the source's position in the payload; the approval, its preview, the audit record, the events and the checkpoint only ever hold "credential set: yes or no". Applying the proposal moves the credential to the new tracking source; rejecting it, superseding it or failing to create that source deletes it, so no orphan secret stays in the keystore.
 - **New risk class `propose`:** it asks at every permission level, `bypass` included. A proposal changes what the agents may do or see, so the user always decides it. Roadmap change below.
@@ -187,12 +188,15 @@ class ConnectionKind(Protocol):
 **`connections` payload:** the connections to create (kind, name, settings) and why each, from what Onboarding found in the code and heard from the user. Applying creates them (§4).
 
 **`handoff` payload** (needs the project's connections to exist):
-- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive.
-- **Data roles:** per table of the connections: `training`, `serving_inputs`, `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
+- **Models:** a project can have several production models; the profile below, the data roles' prediction and label tables, the commands and the promotion mode are given per model (one model is the common case).
+- **Profile:** the objective in the user's words, problem type, target column, positive class, primary metric and why, operating threshold if any, how late labels arrive, how the model is served (`batch`, `online` or `streaming`), the cost of each kind of error (a false alarm against a miss, in the user's words and as a ratio when known), and the groups that matter (columns and values, such as a region or customer type, whose metrics are watched separately).
+- **Data roles:** per table of the connections: `training`, `serving_inputs` (the model's raw inputs as served), `predictions`, `labels` or `other`, with the ID column that joins predictions to labels and the time column.
 - **Tracking:** the sources to create (MLflow URL and whether it needs a credential; the GitHub workflows that matter).
-- **Pipeline:** the stages (name, entry file or command, inputs, outputs, order). The Dashboard draws them in stage 4.
-- **Commands:** the team's train, evaluate, deploy and rollback commands where found. Stage 5 registers them as deploy hooks.
-- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured), and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
+- **Pipeline:** the stages (name, entry file or command, inputs, outputs, order) and the edges between them (which stage's output feeds which), so stage 4 groups a cascade of failures into one incident. The Dashboard draws them in stage 4.
+- **Results location:** where the agents' checks will write their standard result records (a connection path or the tracker's metrics).
+- **Commands:** the team's action commands where found, each with what it does (train, evaluate, deploy, rollback, rerun a job, hold or quarantine a batch, fall back), its type (`command`: a template; `ci_dispatch`: workflow, ref and inputs), the placeholders it takes (`{request_id}`, `{model}`, `{candidate_version}`, `{champion_version}`, `{window_start}`, `{window_end}`, `{mode}`, `{threshold}`), and whether its pipeline deploys at its end (`deploys`). Stage 4 and stage 5 run them as hooks; Onboarding only records them.
+- **Promotion:** per model, who promotes new versions (`team_gate`: the team's automated gate, full CD; or `person`), which tracker alias means which environment, and the production signal the app reads to know a deploy happened (a tracker alias, a CI deploy job, or a file path a connection reads).
+- **Operations:** the team's scheduler (what runs scheduled jobs, where it is configured); every data feed and scheduled job with its expected time or cadence, its grace period and its time zone (a missing result past it is an incident in stage 4); on-call people (who, their hours and time zone, how to reach them, and who to escalate to); and its existing monitoring as a list of checks, each with a stable `check_id`, name, category (`data_quality`, `drift`, `model_performance`, `operational`), cadence, and where its results land: `file` (connection and path pattern), `ci` (workflow) or `mlflow` (metric key). Stage 4 reads these results; this list is the baseline.
 - **Gaps:** what Onboarding could not find or set up, each with its next step (for example "predictions are not saved: PR #12 adds logging with a shared ID"; "MLflow has no authentication: PR #13 enables it").
 - **Grants:** sandbox network on or off, and the permission level, which can never be set to `bypass` by a proposal.
 

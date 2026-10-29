@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
+from mlops_agents.agents.hooks.contract import HookContext
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.events.hub import EventHub
@@ -356,15 +359,24 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
         last_opened_at=None,
     )
 
-    orch_summary = await board.summary(project_id) if d_orch.status_board else None
-    retrain_summary = await board.summary(project_id) if d_retrain.status_board else None
+    hook = StatusBoardHook()
+    hook.bind(board)
+    hooks = HookRegistry()
+    hooks.register(hook)
 
-    assert orch_summary is not None
-    assert retrain_summary is None
+    async def hook_context(definition: AgentDefinition) -> str:
+        ctx = HookContext(project_id=project_id, agent=definition.name, trigger_text="")
+        return await hooks.run(definition.hook_names, ctx)
 
-    orch_msgs = build_messages(d_orch, project, "README.md", None, [], status_summary=orch_summary)
+    orch_context = await hook_context(d_orch)
+    retrain_context = await hook_context(d_retrain)
+
+    assert orch_context.startswith('<data source="hook:status_board">\nStatus board:\n')
+    assert retrain_context == ""
+
+    orch_msgs = build_messages(d_orch, project, "README.md", None, [], hook_context=orch_context)
     retrain_msgs = build_messages(
-        d_retrain, project, "README.md", None, [], status_summary=retrain_summary
+        d_retrain, project, "README.md", None, [], hook_context=retrain_context
     )
 
     orch_content = str(orch_msgs[0].content)

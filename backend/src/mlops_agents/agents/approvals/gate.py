@@ -44,6 +44,15 @@ def _extract_target(tool_name: str, args: BaseModel) -> str:
     return tool_name
 
 
+def _proposal_kind(call: GateCall) -> str | None:
+    """The kind a call of a tool of class propose proposes: its `kind` argument when that is a
+    string. The risk class decides, never the tool's name."""
+    if call.tool.risk != RiskClass.PROPOSE:
+        return None
+    kind: object = getattr(call.args, "kind", None)
+    return kind if isinstance(kind, str) else None
+
+
 class ApprovalGate(Gate):
     """The gate enforcing permission policy on every tool call."""
 
@@ -51,18 +60,12 @@ class ApprovalGate(Gate):
         self,
         databases: Databases | None = None,
         *,
-        store: ApprovalStore | None = None,
+        store: ApprovalStore,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
     ) -> None:
         self._databases = databases
-        if store is not None:
-            self._store: ApprovalStore | None = store
-        elif databases is not None:
-            self._store = ApprovalStore(databases)
-        else:
-            self._store = None
-
+        self._store = store
         self._audit_log = audit_log
         self._event_log = event_log
 
@@ -140,10 +143,7 @@ class ApprovalGate(Gate):
 
                 preview = await call.tool.preview(call.ctx, call.args)
                 task_id = call.ctx.task.id if call.ctx.task is not None else None
-                if self._store is None:
-                    raise ValueError(
-                        "Either databases or store must be provided to ApprovalGate for ask approvals"
-                    )
+                proposal_kind = _proposal_kind(call)
                 approval = await self._store.create(
                     project_id,
                     turn_id=call.ctx.turn_id,
@@ -155,6 +155,7 @@ class ApprovalGate(Gate):
                     risk_class=risk,
                     preview=preview,
                     task_id=task_id,
+                    proposal_kind=proposal_kind,
                 )
 
                 if self._event_log is not None:
@@ -175,6 +176,7 @@ class ApprovalGate(Gate):
                     message=None,
                     approval_id=approval.id,
                     preview=preview,
+                    proposal_kind=proposal_kind,
                 )
 
         return results
@@ -186,11 +188,6 @@ class ApprovalGate(Gate):
         approval_ids = [d.approval_id for d in decisions.values() if d.approval_id is not None]
         if not approval_ids:
             return decisions
-
-        if self._store is None:
-            raise ValueError(
-                "Either databases or store must be provided to ApprovalGate for wait approvals"
-            )
 
         approvals = await self._store.list_for_step(project_id, turn_id, approval_ids=approval_ids)
 

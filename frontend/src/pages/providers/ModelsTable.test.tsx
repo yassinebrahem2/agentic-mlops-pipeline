@@ -54,11 +54,13 @@ const groq: Provider = {
   base_url: "https://api.groq.com/openai/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [{ position: 1, hint: "gsk_...abcd" }],
 };
 
 const untested: ModelEntry = {
   address: "fake:fake-tools",
+  model_type: "chat",
   provider_id: "prv_2",
   provider_name: "fake",
   wire_model_id: "fake-tools",
@@ -82,6 +84,7 @@ const verified: ModelEntry = {
 
 const slashed: ModelEntry = {
   address: "groq:openai/gpt-oss-120b",
+  model_type: "chat",
   provider_id: "prv_1",
   provider_name: "groq",
   wire_model_id: "openai/gpt-oss-120b",
@@ -92,6 +95,32 @@ const slashed: ModelEntry = {
   availability_detail: "the stream ended without a tool call",
   verified_at: "2026-10-20T08:30:00+00:00",
   problem: "The model groq:openai/gpt-oss-120b failed: the stream ended without a tool call.",
+};
+
+const untestedEmbedder: ModelEntry = {
+  address: "fake:fake-embed",
+  model_type: "embedder",
+  provider_id: "prv_2",
+  provider_name: "fake",
+  wire_model_id: "fake-embed",
+  context_window: null,
+  dimensions: null,
+  tool_calling: false,
+  streaming: false,
+  availability: "untested",
+  availability_detail: null,
+  verified_at: null,
+  problem: "The embedder fake:fake-embed has not passed verification.",
+};
+
+const verifiedEmbedder: ModelEntry = {
+  ...untestedEmbedder,
+  address: "fake:verified-embed",
+  wire_model_id: "verified-embed",
+  dimensions: 1536,
+  availability: "verified",
+  verified_at: "2026-10-21T10:00:00+00:00",
+  problem: null,
 };
 
 afterEach(() => {
@@ -374,7 +403,15 @@ describe("models table", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
     expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
-      ["POST", "/api/models", { provider: "groq", wire_model_id: "openai/gpt-oss-120b" }],
+      [
+        "POST",
+        "/api/models",
+        {
+          provider: "groq",
+          wire_model_id: "openai/gpt-oss-120b",
+          model_type: "chat",
+        },
+      ],
     ]);
   });
 
@@ -405,8 +442,62 @@ describe("models table", () => {
       [
         "POST",
         "/api/models",
-        { provider: "groq", wire_model_id: "openai/gpt-oss-120b", context_window: 131072 },
+        {
+          provider: "groq",
+          wire_model_id: "openai/gpt-oss-120b",
+          context_window: 131072,
+          model_type: "chat",
+        },
       ],
+    ]);
+  });
+
+  it("shows chat and embedder rows with correct traits, type, and dimensions", async () => {
+    stubApi({ "GET /api/models": () => json([verified, untestedEmbedder, verifiedEmbedder]) });
+    renderPage("/providers");
+
+    const chatRow = await findRow("fake:fake-tools");
+    expect(within(chatRow).getByText("Chat")).toBeInTheDocument();
+    expect(within(chatRow).getAllByText("Yes")).toHaveLength(2);
+    expect(within(chatRow).getByText("32768")).toBeInTheDocument();
+    expect(within(chatRow).getByText("Not applicable")).toBeInTheDocument(); // Dimensions
+
+    const untestedRow = await findRow("fake:fake-embed");
+    expect(within(untestedRow).getByText("Embedder")).toBeInTheDocument();
+    expect(within(untestedRow).getAllByText("Not applicable")).toHaveLength(3); // Tool calling, Streaming, Context window
+    expect(within(untestedRow).queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+    expect(within(untestedRow).getByText("Not checked")).toBeInTheDocument(); // Dimensions
+
+    const verifiedRow = await findRow("fake:verified-embed");
+    expect(within(verifiedRow).getByText("Embedder")).toBeInTheDocument();
+    expect(within(verifiedRow).getAllByText("Not applicable")).toHaveLength(3);
+    expect(within(verifiedRow).queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+    expect(within(verifiedRow).getByText("1536")).toBeInTheDocument(); // Dimensions
+  });
+
+  it("verifying an embedder updates its dimensions and availability", async () => {
+    const sent = stubApi({
+      "GET /api/models": () => json([untestedEmbedder]),
+      "POST /api/models/verify": () =>
+        json({
+          ...untestedEmbedder,
+          dimensions: 1536,
+          availability: "verified",
+          problem: null,
+        }),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-embed");
+    expect(within(row).getByText("Not checked")).toBeInTheDocument();
+    expect(within(row).getAllByText("Not applicable")).toHaveLength(3);
+
+    await user.click(within(row).getByRole("button", { name: "Verify fake:fake-embed" }));
+    expect(await within(row).findByText("1536")).toBeInTheDocument();
+    expect(within(row).getByText("Verified")).toBeInTheDocument();
+    expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
+      ["POST", "/api/models/verify", { address: "fake:fake-embed" }],
     ]);
   });
 });

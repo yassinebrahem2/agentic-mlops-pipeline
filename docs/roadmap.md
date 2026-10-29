@@ -39,7 +39,7 @@ Agreed:
 - Status board: every agent publishes what it is doing, what it finished, PRs it opened and what it waits on (from the event stream). A summary is injected into each Orchestrator turn; details on request.
 - Tools: Write and Edit (inside the task's worktree), Bash (only inside the sandbox), ListAgents, SendMessage, PR and issue tools.
 - Docker sandbox: Linux container per agent task. It mounts a filtered view of the worktree (git-tracked files minus the secret denylist). Network access is off by default. Read, Glob and Grep see the same view.
-- Git: one git worktree per agent task, under `projects/<id>/worktrees/`. Branch name `agent/<agent>/<task>`. File claims, enforced by the runtime, keep two agents from changing the same files at once. Agents never edit the default branch.
+- Git: one git worktree per agent task, under `projects/<id>/worktrees/`. Branch name `agent/<agent>/<task>`. File claims, enforced by the runtime, keep two agents from changing the same files at once. Agents never push to the default branch; at `bypass` they may merge their own PRs through the platform under the merge rules below (stage 5).
 - PRs: at the end of each turn the runtime reminds the agent when its work may need a PR; the agent decides and opens it through GitHub on the user's behalf. The PR body says which agent opened it and why. PR identity is the user's choice: their own token, or later a bot (GitHub App).
 - Issues: an agent opens an issue when a human must act and a PR when it has a fix. A PR that fixes an issue says `Fixes #n`. Before opening, the agent searches open issues and comments on a match instead. Only incidents above a configurable priority become issues. Labels: agent, category, priority.
 - Local repo without a remote: agent branch; the diff is reviewed in the Inbox; approving merges it.
@@ -91,35 +91,25 @@ Answered in the stage 3 spec (`docs/superpowers/specs/2026-10-27-stage-3-onboard
 
 ### Stage 4: Monitoring loop
 
-Agreed:
-- Checks are deterministic code written by agents and delivered to the team's repository by PR; the team's own scheduler or CI runs them, never the app (the app can be offline). The app reads every result, and the LLM wakes only when one needs attention. A team with no scheduler gets one proposed by PR.
-- Data Quality keeps two test families, validation and drift. It classifies each change as bad data or real drift before acting, and explains every flag.
-- Model Performance uses metrics suited to the problem. For imbalanced data: PR-AUC, recall at a fixed precision, per-class metrics, never accuracy alone. It accounts for label delay.
-- Incidents have a category: data quality, drift, model performance, operational.
-- Alert Prioritization deduplicates, ranks and routes alerts, and merges raw alerts that share a cause into one incident.
-- Notifications: Discord and email (SMTP) in this stage. WhatsApp and Slack later.
-- Operational telemetry: GitHub Actions run history first. Airflow, cron and other schedulers come in through data connections.
-- Dashboard (one screen, each card linking to its page): pipeline map from Onboarding (stages are not fixed), current model version and metrics, deployment status, data quality, open incidents, agent status.
-- Shadow baseline, recorded silently from the very first result and never notifying anyone: the team's own existing monitoring (the checks, alerts and reports it ran before the agents), found by Onboarding and approved by the user. The app reads its results where they already land and never re-runs it; a per-source parser, approved by the user, turns each result into "ran / fired". A project with no readable existing monitoring has no baseline, and Stats says so instead of inventing one.
-- Verdicts on every incident, one click: real issue / not an issue / wrong type. Also: user-reported misses, baseline alerts the agents stayed silent on that the user marks real, and automatic confirmation when labels prove a metric drop. Verdicts cannot be backfilled, so they ship here.
+Agreed (spec: `docs/superpowers/specs/2026-10-28-stage-4-monitoring-design.md`, approved):
+- The app watches at any hour and is the first to know. It runs continuously and catches up after downtime without missing or repeating anything.
+- Checks are deterministic code written by agents and delivered to the team's repository by PR; the team's own scheduler or CI runs them, never the app. The app reads every result through sources and parsers into one standard result record; a feed or job that misses its expected time is a signal too (silence).
+- Signals are grouped by cause (and down the pipeline graph) into incidents with a lifecycle; the matching agent diagnoses and picks from the response menu, safest first, within the three tiers, always through the team's own commands (action hooks). Pre-approved rules are evaluated in code by the gate.
+- Data Quality keeps validation and drift, classifies bad data against real drift, and explains every flag. Model Performance uses metrics suited to the problem and the error costs, never accuracy alone, and accounts for label delay.
+- Severity and routing are deterministic code: paging never waits for a model. Alert Prioritization explains, merges and adjusts by one level. Discord and email; critical wakes the on-call person at any hour and escalates; a morning report. A heartbeat route lets the team's scheduler notice the app being down.
+- Dashboard (one screen, each card linking to its page): pipeline map, current model and metrics, open incidents, expectations at risk, agent status.
+- Baseline: the team's existing monitoring, read and recorded silently from the first result, never re-run and never notifying. Without readable existing monitoring there is no baseline, and Stats says so.
+- Verdicts on every incident (real issue / not an issue / wrong type), user-reported misses, automatic confirmation by labels. Verdicts cannot be backfilled, so they ship here.
 
-The spec must answer:
-- The incident data model and lifecycle.
-- How Alert Prioritization ranks (inputs and rules).
-- The scheduler design inside the single process.
-- Where results are read from and how each source's parser is stored and run (that checks live in the team's repository and run on the team's scheduler is decided).
+### Stage 5: Training, evaluation and promotion
 
-### Stage 5: Action agents
-
-Agreed:
-- Retraining decides when to retrain from drift and performance signals. It trains, then evaluates the new model against the current one in shadow, and asks for approval before promotion.
-- Deployment & Rollback rolls out gradually (canary) behind monitoring gates and reverts automatically on degradation.
-- Both act through hooks (train / evaluate / deploy / rollback commands) that agents find or write in the user's project. The system never assumes the user's infrastructure.
-- Deployments page: which model version runs where, and the rollout and rollback history.
-
-The spec must answer:
-- Where hooks run: the sandbox, the host, or the user's own infrastructure (GPUs, cloud credentials, network access).
-- The promotion and rollback gates and their thresholds.
+Agreed (spec: `docs/superpowers/specs/2026-10-28-stage-5-action-agents-design.md`, approved):
+- One system, the team's: agents run the team's own pipelines and improve any part of them through PRs, continuously (Agents and the team's system, below). The app has no training, evaluation or deploy path of its own.
+- A diagnosing agent requests a fix; Retraining chooses it (re-threshold, recalibrate, retrain, or decline) and runs the team's pipeline through parameterised hooks (`command`, `ci_dispatch` on the default branch only), linked back to the tracker by a request ID.
+- Training policies let the team's training run without asking within limits the user approved; a pipeline that deploys at its end (full CD) runs the same way only where the team's gate is the promotion authority and the model has a production signal the app reads; a `deploys: false` run that moved production suspends the hook.
+- Evaluation lives in the team's pipeline and writes one standard evaluation record (parity, champion against challenger on the same production inputs, a time-based holdout, per-group metrics with intervals, calibration, cost at the threshold, serving compatibility, the gate's decision); records are compared only when made by the same code.
+- Promotion follows the team's mechanism: their gate (full CD) or a person (or the agent at `bypass`), after a complete, fresh report. Gradual rollout and shadow traffic are the team's deployment's, added by PR where missing; reverting is stage 4's rollback rule.
+- Deployments page: which version runs in each environment, promotions and rollbacks with who decided, each report.
 
 ### Stage 6: Pages over collected data
 
@@ -172,8 +162,8 @@ Ideas, not adopted (see `project_knowledge.md`):
 ## Run modes
 
 - `local` (default): `mlops-agents start`. Binds to 127.0.0.1. Access token in the URL opened at start, exchanged for a session cookie. Local folders and GitHub repos. Keys in the OS keyring.
-- `server`: `mlops-agents start --server`. Password login (`MLOPS_AGENTS_PASSWORD`). GitHub repos only. Keys in an encrypted file unlocked by `MLOPS_AGENTS_MASTER_KEY`. HTTPS from a reverse proxy.
-- In both modes every API request needs a valid session, `Host`/`Origin` are checked, and state-changing requests carry a CSRF token. Mode rules are enforced by the API, not only the UI.
+- `server`: `mlops-agents start --server`. Password login (`MLOPS_AGENTS_PASSWORD`). Projects are GitHub repos only; a data connection may still be a folder on the server's disk (stage 3), chosen with the folder picker. Keys in an encrypted file unlocked by `MLOPS_AGENTS_MASTER_KEY`. HTTPS from a reverse proxy.
+- In both modes every API request needs a valid session, `Host`/`Origin` are checked, and state-changing requests carry a CSRF token. Mode rules are enforced by the API, not only the UI. One exception (stage 4): `GET /api/health/heartbeat`, which carries no data, takes no input and changes nothing, is answered without a session and without the Origin check; the Host check accepts the configured `public_url` host.
 
 ## IDs
 
@@ -197,6 +187,17 @@ Every stored entity has an ID of the form `<prefix>_<ULID>` (ULID: 26 characters
 | `trk` | tracking source | 3 |
 | `prp` | proposal | 3 |
 | `kno` | knowledge note | 3 |
+| `fix` | fix request | 5 |
+| `trq` | training request | 5 |
+| `pol` | training policy | 5 |
+| `rep` | evaluation report | 5 |
+| `prm` | promotion | 5 |
+| `res` | result record | 4 |
+| `sig` | signal | 4 |
+| `rul` | pre-approved rule | 4 |
+| `hok` | action hook | 4 |
+| `win` | maintenance window | 4 |
+| `chk` | registered check | 4 |
 | `inc` | incident | 4 |
 
 Model registry entries use addresses, not IDs: `<provider-name>:<wire-model-id>`. Tracking record rows mirror another system's IDs and are keyed by their tracking source and that ID, with no prefix.
@@ -259,8 +260,8 @@ Role prompt.
 | `run` | Bash in the sandbox |
 | `message` | SendMessage, ScheduleWakeup |
 | `github` | OpenPullRequest, OpenIssue, CommentOnIssue |
-| `deploy` | train / deploy / rollback hooks |
-| `propose` | Propose (connections, handoff; later checks, parsers, deploy hooks) |
+| `deploy` | action hooks: the team's train, evaluate, deploy, rollback, rerun, hold and fall-back commands; MergePullRequest |
+| `propose` | Propose (connections, handoff; stage 4: parsers, rules, action hooks, maintenance windows). Checks are delivered by PR (`github`). |
 
 Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec §5):
 
@@ -272,6 +273,38 @@ Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec 
 | bypass | allow | allow | allow | allow | allow | allow | ask |
 
 `propose` is the one class `bypass` does not skip: a proposal changes what agents may see or do, so the user always decides it.
+
+`deploy` exceptions (stages 4 and 5). For an action hook the gate also receives the hook's kind, the rule or training policy it cites, and the hook's verified `deploys` and production signal, and evaluates them in code:
+
+| Action | Within an approved rule or training policy | Otherwise |
+|---|---|---|
+| promotion (deploy hook), MergePullRequest | as the `deploy` column: denied at `suggest`, ask at `ask` and `autonomous`, allow at `bypass` | same |
+| train, evaluate | allow at `ask` and above | ask |
+| a pipeline run that deploys at its end, where the team's gate is the promotion authority and the model has a production signal | allow at `ask` and above | ask |
+| rollback, rerun, fall back | allow at `ask` and above; deny at `suggest` | the `deploy` column |
+| hold | allow at every level except `suggest`, where the person applies it in one click | same |
+
+A PR that touches a protection surface (the promotion gate, the evaluation step's decision logic, the workflows behind required checks, `CODEOWNERS`) is never merged by an agent, at any level.
+
+### Hard limits
+
+At every level, `bypass` included, enforced in code:
+- nothing runs outside the sandbox;
+- connections are read-only, and nothing outside approved folders is read;
+- secrets never reach the sandbox, code, commits, PRs, logs or a model's context (a hook's credential reaches only that hook's run);
+- no push to the default branch, force-push or history rewrite; merging only as above, only when the platform reports the PR clean, never with an admin override, with at least one passing check;
+- no unmerged code runs with the team's secrets;
+- the team's protections (branch protection, required reviews, the team's gate) are never overridden;
+- agents never give themselves more access (folders, network, credentials, a higher level, rules, policies): always the user's click;
+- the audit log records everything and cannot be turned off;
+- the team's history is never destroyed: no deleting model versions, runs, tables or others' branches, no closing the team's PRs or issues by hand (an issue closed by a merged agent PR that says `Fixes #n` is expected);
+- text in data, results and logs is data, never instructions;
+- no promotion without a complete, fresh evaluation report made by the same code;
+- no contact outside the configured channels and people.
+
+### Agents and the team's system
+
+There is one system, the team's. Agents change any part of it through PRs, continuously, whenever a need appears, with this discipline: search open PRs (the team's included) and update a matching agent PR instead of duplicating; one concern per PR, owned by the agent whose area it is; a cap on open improvement PRs (fixes for open incidents exempt); PRs that change decision semantics are labeled `decision-semantics` and state the behavior before and after; stale or conflicting agent PRs are updated or closed with a note; a PR closed unmerged becomes a Knowledge note with its reason; after an incident, recent changes (the team's and the agents') are linked to it, and agents may revert their own.
 
 ## Event and audit records (stage 2)
 

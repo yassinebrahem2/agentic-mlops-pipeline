@@ -76,7 +76,7 @@ def test_version_1_database_migrates_to_2_keeping_every_row_and_seq(tmp_path: Pa
     conn.close()
     assert [row[0] for row in before] == [1, 3]
 
-    assert migrate(db, "project", tmp_path / "bk") == [2, 3]
+    assert migrate(db, "project", tmp_path / "bk") == [2, 3, 4]
 
     conn = connect_sync(db)
     try:
@@ -110,7 +110,7 @@ def test_backup_is_taken_first_and_still_has_the_version_1_schema(tmp_path: Path
 
 def test_fresh_database_gets_both_migrations(tmp_path: Path) -> None:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4]
     conn = connect_sync(db)
     try:
         assert {
@@ -124,7 +124,7 @@ def test_fresh_database_gets_both_migrations(tmp_path: Path) -> None:
             "wakeups",
         } <= _names(conn, "table")
         assert _message_columns(conn)[-3:] == ["exchange_id", "hop", "read_by_turn"]
-        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone() == (3,)
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone() == (4,)
     finally:
         conn.close()
 
@@ -210,7 +210,9 @@ def _approval(conn: sqlite3.Connection, approval_id: str = "apr_1", **overrides:
     }
     values.update(overrides)
     conn.execute(
-        "INSERT INTO approvals VALUES (:id, :turn_id, :session_id, :message_id, :agent, "
+        "INSERT INTO approvals (id, turn_id, session_id, message_id, agent, tool_call_id, tool, "
+        "risk_class, preview, status, note, created_at, decided_at, task_id) "
+        "VALUES (:id, :turn_id, :session_id, :message_id, :agent, "
         ":tool_call_id, :tool, :risk_class, :preview, :status, :note, :created_at, :decided_at, :task_id)",
         values,
     )

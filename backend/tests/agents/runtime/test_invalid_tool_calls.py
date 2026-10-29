@@ -32,7 +32,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, graph_hooks, make_agent, stage1_hooks
 from tests.agents.runtime.test_graph_tools import MockModelCaller, ModelReply
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -68,7 +68,13 @@ async def _setup_executor_env(
     agent_settings = AgentSettingsService(databases, providers, catalog)
     github = GitHubAuth(databases, keystore, httpx2.AsyncClient(), FakeGh(None))
     workspace = WorkspaceService(
-        settings, paths, databases, GitRunner(paths.bin, github.token), github, httpx2.AsyncClient()
+        settings,
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        httpx2.AsyncClient(),
+        memory_project_secrets(databases),
     )
     workspaces = FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
     builder = AgentBuilder(
@@ -77,13 +83,14 @@ async def _setup_executor_env(
         settings=agent_settings,
         workspace=workspace,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
     store = SessionStore(databases)
     executor = TurnExecutor(
         store=store,
         caller=ModelCaller(providers, model_http),
         builder=builder,
-        hooks=stage1_hooks(workspaces),
+        hooks=stage1_hooks(workspaces, databases),
     )
 
     prov = await providers.create_provider(
@@ -333,7 +340,7 @@ async def test_graph_invalid_tool_call_with_mock_caller(
         message_id=agent_msg.id,
         current_parts=current_parts,
         lock=AsyncRLock(),
-        hooks=graph_hooks(agent),
+        hooks=graph_hooks(agent, databases),
     )
 
     initial_state: TurnState = {

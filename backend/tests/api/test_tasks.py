@@ -13,7 +13,10 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import ToolFinished
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -34,7 +37,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
@@ -165,6 +168,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         runner,
         github,
         http,
+        memory_project_secrets(databases),
     )
     events = SqliteEventLog(databases)
     _audit = SqliteAuditLog(databases, secrets=lambda: [])
@@ -197,6 +201,10 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     await agent_settings.set_default_model("orchestrator", f"{prov.name}:fake-tools")
 
     status_board = SqliteStatusBoard(catalog, events)
+    status_board_hook = StatusBoardHook()
+    status_board_hook.bind(status_board)
+    hooks = HookRegistry()
+    hooks.register(status_board_hook)
     session_mgr = SessionManager(
         databases=databases,
         workspace=workspace,
@@ -209,7 +217,8 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=tasks_svc,
-        status_board=status_board,
+        approval_store=ApprovalStore(databases),
+        hooks=hooks,
     )
 
     session_view = await session_mgr.get(project.id, "orchestrator")

@@ -9,6 +9,7 @@ from sqlalchemy import RowMapping, delete, insert, select, update
 
 from mlops_agents.clock import now_iso
 from mlops_agents.config import RunMode, Settings
+from mlops_agents.credentials.project_secrets import ProjectSecrets, project_prefix
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.integrations.github.api import get_login, get_repo
@@ -39,6 +40,7 @@ class WorkspaceService:
         git: GitRunner,
         github: GitHubAuth,
         http: httpx2.AsyncClient,
+        project_secrets: ProjectSecrets,
         *,
         remote_url: Callable[[str], str] = _default_remote_url,
     ) -> None:
@@ -48,6 +50,7 @@ class WorkspaceService:
         self._git = git
         self._github = github
         self._http = http
+        self._project_secrets = project_secrets
         self._remote_url = remote_url
 
     # Queries
@@ -161,7 +164,6 @@ class WorkspaceService:
         return await self.get(project_id)
 
     async def browse(self, path_text: str | None) -> FolderListing:
-        self._require_local_mode()
         return await browse_folder(path_text)
 
     # GitHub projects
@@ -298,6 +300,8 @@ class WorkspaceService:
 
     async def remove(self, project_id: str) -> None:
         project = await self.get(project_id)
+        # First, so a key store failure leaves the project listed and its removal retryable.
+        await self._project_secrets.delete_prefix(project_prefix(project_id))
         repo_root = self.repo_root(project)
         await self._dbs.close_project(project_id)
         await asyncio.to_thread(rmtree, self._paths.project_dir(project_id))

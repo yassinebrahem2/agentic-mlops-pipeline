@@ -7,11 +7,10 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
 from mlops_agents.errors import DomainError
 
 ORCHESTRATOR = "orchestrator"
-# Context hooks (data commands) arrive in stage 3; until then no definition may use one.
-KNOWN_HOOKS: frozenset[str] = frozenset()
 
 
 class Limits(BaseModel):
@@ -34,6 +33,14 @@ class AgentDefinition(BaseModel):
     status_board: bool = False
     limits: Limits = Limits()
     prompt: str = Field(min_length=1)
+
+    @property
+    def hook_names(self) -> tuple[str, ...]:
+        """The context hooks this agent gets: `status_board: true` counts as that hook until
+        the definitions list it in `context_hooks` and the field is removed."""
+        if self.status_board and STATUS_BOARD_HOOK not in self.context_hooks:
+            return (*self.context_hooks, STATUS_BOARD_HOOK)
+        return self.context_hooks
 
 
 class DefinitionError(Exception):
@@ -60,7 +67,13 @@ def parse_definition(text: str, source: str) -> AgentDefinition:
 
 
 class AgentCatalog:
-    def __init__(self, definitions: Iterable[AgentDefinition], tool_names: frozenset[str]) -> None:
+    def __init__(
+        self,
+        definitions: Iterable[AgentDefinition],
+        tool_names: frozenset[str],
+        *,
+        hook_names: frozenset[str] = frozenset(),
+    ) -> None:
         self._by_name: dict[str, AgentDefinition] = {}
         for definition in definitions:
             if definition.name in self._by_name:
@@ -73,13 +86,19 @@ class AgentCatalog:
                 raise DefinitionError(
                     f"agent {d.name} may message unknown agents: {', '.join(unknown)}"
                 )
-            if unknown := sorted(set(d.context_hooks) - KNOWN_HOOKS):
+            if unknown := sorted(set(d.context_hooks) - hook_names):
                 raise DefinitionError(
                     f"agent {d.name} uses unknown context hooks: {', '.join(unknown)}"
                 )
 
     @classmethod
-    def load(cls, tool_names: frozenset[str], extra_dirs: Iterable[Path] = ()) -> AgentCatalog:
+    def load(
+        cls,
+        tool_names: frozenset[str],
+        extra_dirs: Iterable[Path] = (),
+        *,
+        hook_names: frozenset[str] = frozenset(),
+    ) -> AgentCatalog:
         folder = files("mlops_agents.agents").joinpath("definitions")
         definitions = [
             parse_definition(entry.read_text("utf-8"), entry.name)
@@ -90,7 +109,7 @@ class AgentCatalog:
             definitions.extend(
                 parse_definition(p.read_text("utf-8"), str(p)) for p in sorted(extra.glob("*.md"))
             )
-        return cls(definitions, tool_names)
+        return cls(definitions, tool_names, hook_names=hook_names)
 
     def get(self, name: str) -> AgentDefinition:
         definition = self._by_name.get(name)

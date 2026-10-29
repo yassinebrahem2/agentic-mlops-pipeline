@@ -25,6 +25,7 @@ describe("MessageView approvals", () => {
         { type: "text", text: "I need your approval to run this." },
         {
           type: "approval",
+          kind: "tool",
           approval_id: "apr_1",
           tool_call_id: "c8",
           preview: { kind: "command", title: "Run command", body: "rm -rf build" },
@@ -59,6 +60,7 @@ describe("MessageView approvals", () => {
         },
         {
           type: "approval",
+          kind: "tool",
           approval_id: "apr_99",
           tool_call_id: "call_1",
           preview: { kind: "text", title: "Write NOTES.md", body: "File content preview" },

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import httpx2
@@ -8,16 +7,17 @@ import pytest
 from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
+from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
 from mlops_agents.agents.runtime.context import build_messages
+from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.agents.tools.files import RepoFiles
-from mlops_agents.config import RunMode, Settings, load_settings
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.events.contract import AgentStatus, StatusBoard
-from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
@@ -25,10 +25,10 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.builder_env import build_builder_env, start_turn, workspace_service
 from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
-from tests.integrations.test_github_auth import FakeGh
 
 
 async def _set_project_status(
@@ -43,21 +43,6 @@ async def _set_project_status(
         )
 
 
-def _settings(paths: DataPaths) -> Settings:
-    base = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(paths.root)})
-    return replace(base, mode=RunMode.LOCAL)
-
-
-def _workspace_svc(
-    paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
-) -> WorkspaceService:
-    http = httpx2.AsyncClient()
-    github = GitHubAuth(databases, keystore, http, FakeGh(None))
-    return WorkspaceService(
-        _settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
-    )
-
-
 async def _setup_services(
     tmp_path: Path,
     paths: DataPaths,
@@ -67,33 +52,8 @@ async def _setup_services(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
 ) -> tuple[AgentBuilder, WorkspaceService, AgentSettingsService, str]:
-    tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
-    providers_svc = ProvidersService(databases, keystore, model_http)
-    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
-    git = GitRunner(paths.bin)
-
-    workspaces = FakeWorkspaces(workspace=workspace_svc, git=git)
-    builder = AgentBuilder(
-        catalog=catalog,
-        tools=tools,
-        settings=settings_svc,
-        workspace=workspace_svc,
-        workspaces=workspaces,
-    )
-
-    prov = await providers_svc.create_provider(
-        ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
-    )
-    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
-    await providers_svc.verify_model(f"{prov.name}:fake-tools")
-
-    repo_dir = make_repo(tmp_path / "test_repo", {"README.md": "# Hello\nWorld\n"}, git_env)
-    project = await workspace_svc.add_local(str(repo_dir))
-    await settings_svc.set_default_model("orchestrator", f"{prov.name}:fake-tools")
-
-    return builder, workspace_svc, settings_svc, project.id
+    env = await build_builder_env(tmp_path, paths, databases, keystore, fake, model_http, git_env)
+    return env.builder, env.workspace, env.settings, env.project_id
 
 
 async def test_agent_builder_missing_project_refusal(
@@ -204,7 +164,7 @@ async def test_agent_builder_keystore_error_refusal(
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
+    workspace_svc = workspace_service(paths, databases, keystore)
     git = GitRunner(paths.bin)
 
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=git)
@@ -214,6 +174,7 @@ async def test_agent_builder_keystore_error_refusal(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
 
     prov = await providers_svc.create_provider(
@@ -286,7 +247,7 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
+    workspace_svc = workspace_service(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     builder = AgentBuilder(
         catalog=catalog,
@@ -294,6 +255,7 @@ async def test_agent_builder_custom_agent_in_extra_dir(
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
+        store=SessionStore(databases),
     )
 
     prov = await providers_svc.create_provider(
@@ -318,7 +280,7 @@ async def test_repository_only_workspaces_has_no_task_and_the_repository_files(
     keystore: MemoryKeyStore,
     git_env: dict[str, str],
 ) -> None:
-    workspace = _workspace_svc(paths, databases, keystore)
+    workspace = workspace_service(paths, databases, keystore)
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hi\n"}, git_env)
     project = await workspace.add_local(str(repo_dir))
     workspaces = FakeWorkspaces(workspace=workspace, git=GitRunner(paths.bin))
@@ -385,9 +347,15 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     catalog = AgentCatalog([d_orch, d_other], tool_names=tools.names())
     providers_svc = ProvidersService(databases, keystore, model_http)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
-    workspace_svc = _workspace_svc(paths, databases, keystore)
+    workspace_svc = workspace_service(paths, databases, keystore)
     workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
     fake_board = _FakeStatusBoard(summary_text="- Orchestrator: idle\n- Retraining: running")
+
+    status_hook = StatusBoardHook()
+    status_hook.bind(fake_board)
+    hooks = HookRegistry()
+    hooks.register(status_hook)
+    store = SessionStore(databases)
 
     builder = AgentBuilder(
         catalog=catalog,
@@ -395,7 +363,8 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
-        status_board=fake_board,
+        store=store,
+        hooks=hooks,
     )
 
     prov = await providers_svc.create_provider(
@@ -410,13 +379,21 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     await settings_svc.set_default_model("other", f"{prov.name}:fake-tools")
 
     # 1. Build Orchestrator: definition has status_board=True
-    orch_agent = await builder.build(project.id, "orchestrator")
-    assert orch_agent.status_summary == fake_board.summary_text
+    orch_session, orch_turn = await start_turn(store, project.id, "orchestrator", "Hi")
+    orch_agent = await builder.build(
+        project.id, "orchestrator", session_id=orch_session, turn_id=orch_turn
+    )
+    assert orch_agent.hook_context == (
+        f'<data source="hook:status_board">\nStatus board:\n{fake_board.summary_text}\n</data>'
+    )
     assert fake_board.calls == [project.id]
 
     # 2. Build Other: definition has status_board=False
-    other_agent = await builder.build(project.id, "other")
-    assert other_agent.status_summary is None
+    other_session, other_turn = await start_turn(store, project.id, "other", "Hi")
+    other_agent = await builder.build(
+        project.id, "other", session_id=other_session, turn_id=other_turn
+    )
+    assert other_agent.hook_context is None
     # No additional call to summary
     assert fake_board.calls == [project.id]
 
@@ -427,7 +404,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         orch_agent.layout,
         None,
         [],
-        status_summary=orch_agent.status_summary,
+        hook_context=orch_agent.hook_context,
     )
     other_msgs = build_messages(
         other_agent.definition,
@@ -435,7 +412,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         other_agent.layout,
         None,
         [],
-        status_summary=other_agent.status_summary,
+        hook_context=other_agent.hook_context,
     )
 
     orch_content = str(orch_msgs[0].content)

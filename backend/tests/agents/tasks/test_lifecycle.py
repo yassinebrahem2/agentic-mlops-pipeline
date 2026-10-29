@@ -24,7 +24,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import file_claims, sessions, task_reads, tasks
 from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.integrations.test_github_auth import FakeGh
 
 
@@ -116,7 +116,9 @@ async def _setup_service(
     runner = GitRunner(paths.bin, github.token)
     await runner.run(["config", "user.name", "Jane Doe"], cwd=repo)
     await runner.run(["config", "user.email", "jane@example.com"], cwd=repo)
-    workspace = WorkspaceService(_settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(
+        _settings(paths), paths, databases, runner, github, http, memory_project_secrets(databases)
+    )
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     service = TasksService(
@@ -347,6 +349,7 @@ async def test_worktree_recreation_on_files_and_pending_note(
         turn_id="trn_1",
         files=files,
         task=current_ref,
+        tool_call_id="call_1",
     )
     read_tool = ReadTool(tasks=service)
     output = await read_tool.run(ctx, ReadArgs(file_path="recreated.py"))

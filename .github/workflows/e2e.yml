@@ -9,6 +9,9 @@ concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
+env:
+  UV_VERSION: "0.13.6"
+
 jobs:
   e2e:
     timeout-minutes: 15
@@ -25,6 +28,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - run: npm ci
       - run: npx playwright install --with-deps chromium

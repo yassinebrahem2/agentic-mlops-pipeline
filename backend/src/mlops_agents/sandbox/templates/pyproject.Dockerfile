@@ -13,4 +13,6 @@ RUN python -m venv /opt/venv && \
 COPY pyproject.toml /tmp/pyproject.toml
 RUN python -c "import subprocess, sys; toml = __import__('tomllib' if sys.version_info >= (3, 11) else 'pip._vendor.tomli', fromlist=['load']); data = toml.load(open('/tmp/pyproject.toml', 'rb')); deps = data.get('project', {}).get('dependencies', []); subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *deps]) if deps else None"
 
+# @duckdb
+
 WORKDIR /workspace

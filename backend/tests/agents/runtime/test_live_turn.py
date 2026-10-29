@@ -8,6 +8,7 @@ import pytest
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -22,7 +23,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -63,12 +64,15 @@ async def test_live_turn_orchestrator_readme(
     async with httpx2.AsyncClient(timeout=30.0) as http:
         github = GitHubAuth(databases, keystore, http, FakeGh(None))
         git = GitRunner(paths.bin, github.token)
-        workspace_svc = WorkspaceService(settings, paths, databases, git, github, http)
+        workspace_svc = WorkspaceService(
+            settings, paths, databases, git, github, http, memory_project_secrets(databases)
+        )
         tools = default_registry()
         catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
         providers_svc = ProvidersService(databases, keystore, http)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
 
+        approval_store = ApprovalStore(databases)
         manager = SessionManager(
             databases=databases,
             workspace=workspace_svc,
@@ -77,10 +81,11 @@ async def test_live_turn_orchestrator_readme(
             settings=settings_svc,
             providers=providers_svc,
             http=http,
-            gate=ApprovalGate(databases),
+            gate=ApprovalGate(databases, store=approval_store),
             inbound=NoInbound(),
             turn_end=NoTurnEndCheck(),
             workspaces=FakeWorkspaces(workspace=workspace_svc, git=git),
+            approval_store=approval_store,
         )
 
         prov = await providers_svc.create_provider(

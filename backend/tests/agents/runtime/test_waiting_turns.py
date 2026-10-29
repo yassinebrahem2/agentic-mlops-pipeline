@@ -10,6 +10,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import interrupt
 from sqlalchemy import RowMapping, select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.runtime.contract import (
     MessageUpdated,
@@ -36,7 +37,7 @@ from mlops_agents.storage.tables import turns
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -112,7 +113,13 @@ def _make_manager(
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     workspace_svc = WorkspaceService(
-        _get_settings(paths), paths, databases, GitRunner(paths.bin, github.token), github, http
+        _get_settings(paths),
+        paths,
+        databases,
+        GitRunner(paths.bin, github.token),
+        github,
+        http,
+        memory_project_secrets(databases),
     )
     return SessionManager(
         databases=databases,
@@ -126,6 +133,7 @@ def _make_manager(
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),
         workspaces=FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin)),
+        approval_store=ApprovalStore(databases),
     )
 
 
@@ -363,7 +371,7 @@ async def test_recovery_preserves_waiting_turn_and_message(
     await manager.close()
 
     # Re-run recovery via a new store recovery call or rebuilding SessionManager
-    await store.recover(project_id)
+    await store.recover(project_id, approval_store=ApprovalStore(databases))
 
     # Verify turn is still waiting
     turn = await _get_turn(databases, project_id, turn_id)

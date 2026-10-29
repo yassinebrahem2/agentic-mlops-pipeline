@@ -19,6 +19,7 @@ class RiskClass(StrEnum):
     MESSAGE = "message"
     GITHUB = "github"
     DEPLOY = "deploy"
+    PROPOSE = "propose"
 
 
 class ToolFailure(Exception):
@@ -71,6 +72,7 @@ class ToolContext:
     turn_id: str
     files: FileAccess  # the current task's worktree view, else the repository's
     task: TaskRef | None
+    tool_call_id: str  # the model's ID for this call; an approval of it stores the same ID
 
 
 class Preview(BaseModel):
@@ -86,7 +88,32 @@ def _summary(exc: ValidationError) -> str:
     )
 
 
+def _inline_refs(node: object, defs: Mapping[str, Any], seen: tuple[str, ...] = ()) -> Any:
+    """`node` with every `$ref` replaced by a copy of its definition; keys beside a `$ref` (a
+    field's description) win over the definition's."""
+    if isinstance(node, list):
+        return [_inline_refs(item, defs, seen) for item in cast(list[object], node)]
+    if not isinstance(node, dict):
+        return node
+    source = cast(dict[str, Any], node)
+    out: dict[str, Any] = {}
+    ref = source.get("$ref")
+    if isinstance(ref, str):
+        name = ref.removeprefix("#/$defs/")
+        if name in seen:
+            raise ValueError(f"the schema of {name} refers to itself, so it cannot be inlined")
+        out.update(_inline_refs(defs[name], defs, (*seen, name)))
+    for key, value in source.items():
+        if key != "$ref":
+            out[key] = _inline_refs(value, defs, seen)
+    return out
+
+
 def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    # A tool schema sent to a provider is self-contained: not every provider resolves `$ref`.
+    defs = schema.pop("$defs", None)
+    if isinstance(defs, dict):
+        schema = cast(dict[str, Any], _inline_refs(schema, cast(dict[str, Any], defs)))
     schema.pop("title", None)
     props = schema.get("properties")
     if isinstance(props, dict):
@@ -115,11 +142,6 @@ def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
                                 if k not in prop_dict:
                                     prop_dict[k] = v
                 _clean_schema(prop_dict)
-    defs = schema.get("$defs")
-    if isinstance(defs, dict):
-        for d in cast(dict[str, Any], defs).values():
-            if isinstance(d, dict):
-                _clean_schema(cast(dict[str, Any], d))
     items = schema.get("items")
     if isinstance(items, dict):
         cast(dict[str, Any], items).pop("title", None)

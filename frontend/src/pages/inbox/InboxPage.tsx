@@ -90,6 +90,9 @@ function Inbox({ projectId }: { projectId: string }) {
                 preview: approval.preview,
                 status: approval.status,
                 note: approval.note,
+                kind: approval.kind,
+                step: approval.step,
+                proposal_kind: approval.proposal_kind,
               };
 
               return (
@@ -98,7 +101,11 @@ function Inbox({ projectId }: { projectId: string }) {
                     <span>From agent:</span>
                     <span className="font-medium text-foreground">{approval.agent}</span>
                   </div>
-                  <ApprovalCard approval={part} toolName={approval.tool} projectId={projectId} />
+                  <ApprovalCard
+                    approval={part}
+                    toolName={approval.tool ?? undefined}
+                    projectId={projectId}
+                  />
                 </div>
               );
             })}

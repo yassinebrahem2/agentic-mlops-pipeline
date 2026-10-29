@@ -30,7 +30,7 @@ from mlops_agents.storage.tables import integrations
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.ctx import tool_context
 from tests.agents.tasks.helpers import FakeEventLog, cmd, settings
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
 from tests.integrations.test_github_auth import FakeGh
 
@@ -91,7 +91,9 @@ async def setup_test_env(
 
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     runner = GitRunner(paths.bin, github.token)
-    workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(
+        settings(paths), paths, databases, runner, github, http, memory_project_secrets(databases)
+    )
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     files = RepoFiles(repo, GitRunner(paths.bin))

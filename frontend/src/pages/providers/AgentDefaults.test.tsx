@@ -54,6 +54,7 @@ const groq: Provider = {
   base_url: "https://api.groq.com/openai/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [{ position: 1, hint: "gsk_...abcd" }],
 };
 
@@ -64,11 +65,13 @@ const ollama: Provider = {
   base_url: "http://localhost:11434/v1",
   status: "ok",
   status_detail: null,
+  cooldown_minutes: 15,
   keys: [],
 };
 
 const groqLlama: ModelEntry = {
   address: "groq:llama-3.3-70b-versatile",
+  model_type: "chat",
   provider_id: "prv_groq",
   provider_name: "groq",
   wire_model_id: "llama-3.3-70b-versatile",
@@ -83,6 +86,7 @@ const groqLlama: ModelEntry = {
 
 const ollamaMistral: ModelEntry = {
   address: "ollama:mistral",
+  model_type: "chat",
   provider_id: "prv_ollama",
   provider_name: "ollama",
   wire_model_id: "mistral",
@@ -97,6 +101,7 @@ const ollamaMistral: ModelEntry = {
 
 const brokenModel: ModelEntry = {
   address: "groq:broken-model",
+  model_type: "chat",
   provider_id: "prv_groq",
   provider_name: "groq",
   wire_model_id: "broken-model",
@@ -107,6 +112,22 @@ const brokenModel: ModelEntry = {
   availability_detail: "failed tool call",
   verified_at: "2026-10-21T10:00:00+00:00",
   problem: "The model groq:broken-model failed: failed tool call.",
+};
+
+const fakeEmbedder: ModelEntry = {
+  address: "groq:fake-embed",
+  model_type: "embedder",
+  provider_id: "prv_groq",
+  provider_name: "groq",
+  wire_model_id: "fake-embed",
+  context_window: null,
+  dimensions: 1536,
+  tool_calling: false,
+  streaming: false,
+  availability: "verified",
+  availability_detail: null,
+  verified_at: "2026-10-21T10:00:00+00:00",
+  problem: null,
 };
 
 const orchestrator: AgentInfo = {
@@ -148,11 +169,11 @@ afterEach(() => {
 });
 
 describe("AgentDefaults", () => {
-  it("the select offers only usable models plus None", async () => {
+  it("the select offers only usable models plus None and never embedders", async () => {
     const user = userEvent.setup();
     stubApi({
       "GET /api/agents": () => json([orchestrator]),
-      "GET /api/models": () => json([groqLlama, ollamaMistral, brokenModel]),
+      "GET /api/models": () => json([groqLlama, ollamaMistral, brokenModel, fakeEmbedder]),
     });
     renderPage("/providers", { routes: [route] });
 
@@ -161,6 +182,30 @@ describe("AgentDefaults", () => {
     const options = screen.getAllByRole("option").map((opt) => opt.textContent);
     expect(options).toEqual(["None", "groq:llama-3.3-70b-versatile", "ollama:mistral"]);
     expect(options).not.toContain("groq:broken-model");
+    expect(options).not.toContain("groq:fake-embed");
+  });
+
+  it("an agent whose default is an embedder shows '(not usable)' and stays selected", async () => {
+    const user = userEvent.setup();
+    const agentWithEmbedder: AgentInfo = {
+      ...orchestrator,
+      settings: {
+        ...orchestrator.settings,
+        default_model: "groq:fake-embed",
+        model_problem: "Model groq:fake-embed is an embedder, not a chat model.",
+      },
+    };
+    stubApi({
+      "GET /api/agents": () => json([agentWithEmbedder]),
+      "GET /api/models": () => json([groqLlama, ollamaMistral, fakeEmbedder]),
+    });
+    renderPage("/providers", { routes: [route] });
+
+    const trigger = await screen.findByRole("combobox", { name: "Model for Orchestrator" });
+    expect(trigger).toHaveTextContent("groq:fake-embed (not usable)");
+    await user.click(trigger);
+    const options = screen.getAllByRole("option").map((opt) => opt.textContent);
+    expect(options).toContain("groq:fake-embed (not usable)");
   });
 
   it("a current default that is no longer usable appears as '<address> (not usable)' and stays selected", async () => {

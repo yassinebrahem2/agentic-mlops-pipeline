@@ -11,7 +11,8 @@ import {
 export type EventRecord = components["schemas"]["EventRecord"];
 export type ProjectEventType = EventRecord["type"];
 
-export const PROJECT_EVENT_TYPES: readonly ProjectEventType[] = [
+// A tuple, not ProjectEventType[], so useProjectEvents.contract.test.ts can tell a missing type.
+export const PROJECT_EVENT_TYPES = [
   "turn.started",
   "turn.waiting",
   "turn.ended",
@@ -29,7 +30,18 @@ export const PROJECT_EVENT_TYPES: readonly ProjectEventType[] = [
   "sandbox.build.started",
   "sandbox.build.finished",
   "sandbox.build.failed",
-] satisfies readonly ProjectEventType[];
+  "connection.created",
+  "connection.updated",
+  "connection.deleted",
+  "tracking.synced",
+  "proposal.created",
+  "proposal.decided",
+  "handoff.approved",
+  "turn.stalled",
+  "turn.resumed",
+  "note.saved",
+  "note.deleted",
+] as const satisfies readonly ProjectEventType[];
 
 export type UseProjectEventsOptions = {
   onEvent?: (event: EventRecord) => void;

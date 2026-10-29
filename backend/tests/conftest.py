@@ -7,6 +7,7 @@ from typing import Any, cast
 import httpx2
 import pytest
 
+from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.paths import DataPaths
 from mlops_agents.sandbox.docker import CliDockerRunner
 from mlops_agents.storage.databases import Databases
@@ -79,6 +80,11 @@ class MemoryKeyStore:
 
     def delete(self, ref: str) -> None:
         self.data.pop(ref, None)
+
+
+def memory_project_secrets(databases: Databases) -> ProjectSecrets:
+    """Project secrets over a key store of their own, for tests that never read them back."""
+    return ProjectSecrets(MemoryKeyStore(), databases)
 
 
 @pytest.fixture

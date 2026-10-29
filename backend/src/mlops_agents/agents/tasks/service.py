@@ -5,10 +5,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from sqlalchemy import select
-from sqlalchemy.engine import RowMapping
-
 from mlops_agents.agents.runtime.contract import TaskView
+from mlops_agents.agents.tasks import queries
 from mlops_agents.agents.tasks.claims import claim_paths, get_task_read_hash, record_task_read
 from mlops_agents.agents.tasks.commit import (
     commit_task,
@@ -39,7 +37,6 @@ from mlops_agents.ids import new_id
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import tasks
 from mlops_agents.workspace.service import WorkspaceService
 
 if TYPE_CHECKING:
@@ -124,76 +121,17 @@ class TasksService(Tasks):
         self._current_tasks[(project_id, session_id)] = task_id
         return ref
 
-    def _get_task_ref(self, project_id: str, row: RowMapping) -> TaskRef:
-        # A pure read: the session view comes through here too, so the worktree is readied
-        # (and recreated when gone) only in `files`, on the turn path.
-        return TaskRef(
-            id=row["id"],
-            title=row["title"],
-            branch=row["branch"],
-            worktree=Path(row["worktree"]),
-            status=row["status"],
-            pending_note=self._pending_notes.get((project_id, row["id"])),
-        )
-
     async def current(self, project_id: str, session_id: str) -> TaskRef | None:
-        engine = await self._databases.project(project_id)
-        task_id = self._current_tasks.get((project_id, session_id))
-        if task_id:
-            async with engine.connect() as conn:
-                row = (
-                    (await conn.execute(select(tasks).where(tasks.c.id == task_id)))
-                    .mappings()
-                    .first()
-                )
-            if (
-                row is not None
-                and row["status"] in ("active", "in_review")
-                and row["session_id"] == session_id
-            ):
-                return self._get_task_ref(project_id, row)
-            self._current_tasks.pop((project_id, session_id), None)
-
-        async with engine.connect() as conn:
-            stmt = (
-                select(tasks)
-                .where(
-                    tasks.c.session_id == session_id,
-                    tasks.c.status.in_(("active", "in_review")),
-                )
-                .order_by(tasks.c.created_at.desc())
-            )
-            row = (await conn.execute(stmt)).mappings().first()
-
-        if row is None:
-            return None
-
-        self._current_tasks[(project_id, session_id)] = row["id"]
-        return self._get_task_ref(project_id, row)
-
-    def _build_task_view(self, row: RowMapping) -> TaskView:
-        return TaskView(
-            id=row["id"],
-            agent=row["agent"],
-            title=row["title"],
-            branch=row["branch"],
-            status=row["status"],
-            review_kind=row["review_kind"],
-            pr_number=row["pr_number"],
-            pr_url=row["pr_url"],
+        return await queries.current(
+            await self._databases.project(project_id),
+            project_id,
+            session_id,
+            self._current_tasks,
+            self._pending_notes,
         )
 
     async def view(self, project_id: str, task_id: str) -> TaskView:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            row = (
-                (await conn.execute(select(tasks).where(tasks.c.id == task_id))).mappings().first()
-            )
-
-        if row is None:
-            raise DomainError("task_not_found", f"Task {task_id} not found.", status=404)
-
-        return self._build_task_view(row)
+        return await queries.view(await self._databases.project(project_id), task_id)
 
     async def record_read(self, project_id: str, task: TaskRef, path: str, sha256: str) -> None:
         await record_task_read(await self._databases.project(project_id), task.id, path, sha256)
@@ -206,15 +144,7 @@ class TasksService(Tasks):
         await claim_paths(engine, task, paths)
 
     async def open_tasks(self, project_id: str) -> list[TaskView]:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            stmt = (
-                select(tasks)
-                .where(tasks.c.status.in_(("active", "in_review")))
-                .order_by(tasks.c.created_at.asc())
-            )
-            rows = (await conn.execute(stmt)).mappings().all()
-        return [self._build_task_view(row) for row in rows]
+        return await queries.open_tasks(await self._databases.project(project_id))
 
     async def files(self, project_id: str, task: TaskRef | None) -> FileAccess:
         project = await self._workspace.get(project_id)

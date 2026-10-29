@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api, errorText, unwrap } from "@/lib/api";
-import { hostedModelWarning } from "@/lib/models";
+import { hostedModelWarning, usableModels } from "@/lib/models";
 import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { useModels } from "@/lib/useModels";
 import { useProviders } from "@/lib/useProviders";
@@ -44,10 +44,9 @@ function AgentRow({
     },
   });
 
-  const usableModels = models.filter((m) => m.problem === null);
+  const usable = usableModels(models, "chat");
   const currentModel = agent.settings.default_model;
-  const isCurrentUsable =
-    currentModel !== null && usableModels.some((m) => m.address === currentModel);
+  const isCurrentUsable = currentModel !== null && usable.some((m) => m.address === currentModel);
   const showNotUsable = currentModel !== null && !isCurrentUsable;
 
   const modelObj = currentModel ? models.find((m) => m.address === currentModel) : undefined;
@@ -79,7 +78,7 @@ function AgentRow({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={SELECT_NONE}>None</SelectItem>
-                {usableModels.map((m) => (
+                {usable.map((m) => (
                   <SelectItem key={m.address} value={m.address}>
                     {m.address}
                   </SelectItem>

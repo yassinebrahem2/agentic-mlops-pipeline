@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import httpx2
 import pytest
@@ -20,7 +23,7 @@ from mlops_agents.storage.tables import integrations
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.tasks.helpers import FakeEventLog, cmd, create_session, settings
 from tests.agents.tools.test_pull_request import git_instead_of, make_bare_remote
-from tests.conftest import MemoryKeyStore, make_repo
+from tests.conftest import MemoryKeyStore, make_repo, memory_project_secrets
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
 from tests.integrations.test_github_auth import FakeGh
 
@@ -67,7 +70,9 @@ async def setup_sync_test(
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
     runner = GitRunner(paths.bin, github.token)
-    workspace = WorkspaceService(settings(paths), paths, databases, runner, github, http)
+    workspace = WorkspaceService(
+        settings(paths), paths, databases, runner, github, http, memory_project_secrets(databases)
+    )
     project = await workspace.add_local(str(repo))
     events = events or FakeEventLog()
 
@@ -319,5 +324,91 @@ async def test_pr_sync_records_issue_updated_when_an_issue_closes_on_github(
         # Nothing changed on GitHub, so the next sync records nothing.
         await observer.sync_now(project_id)
         assert len(await events.history(project_id, types=["issue.updated"])) == 1
+    finally:
+        await http.aclose()
+
+
+async def _record_opened(events: FakeEventLog, project_id: str, repo: str, number: int) -> None:
+    await events.record(
+        project_id,
+        source="coder",
+        type="issue.opened",
+        payload={
+            "number": number,
+            "url": f"https://github.com/{repo}/issues/{number}",
+            "title": f"Issue {number}",
+            "state": "open",
+        },
+        subject_id=str(number),
+    )
+
+
+def _closed_issue(repo: str, number: int) -> dict[str, object]:
+    return {
+        "number": number,
+        "title": f"Issue {number}",
+        "body": None,
+        "html_url": f"https://github.com/{repo}/issues/{number}",
+        "state": "closed",
+        "labels": [],
+    }
+
+
+async def test_pr_sync_skips_a_deleted_issue_quietly_and_refreshes_the_next(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events = FakeEventLog()
+    observer, _, project_id, _, http = await setup_sync_test(tmp_path, git_env, events)
+    try:
+        repo = "test-owner/test-repo"
+        # The deleted issue comes first, so the refresh must go on past it.
+        for number in (7, 8):
+            await _record_opened(events, project_id, repo, number)
+        fake_github.state.delete_issue(repo, 7)
+        fake_github.state.issues[(repo, 8)] = _closed_issue(repo, 8)
+
+        with caplog.at_level(logging.DEBUG, logger="mlops_agents.agents.pr_sync"):
+            await observer.sync_now(project_id)
+
+        updates = await events.history(project_id, types=["issue.updated"])
+        assert [u.payload["number"] for u in updates] == [8]
+        sync_records = [r for r in caplog.records if r.name == "mlops_agents.agents.pr_sync"]
+        assert [r for r in sync_records if r.levelno >= logging.WARNING] == []
+        assert any("#7" in r.getMessage() for r in sync_records if r.levelno == logging.DEBUG)
+    finally:
+        await http.aclose()
+
+
+async def test_pr_sync_refreshes_the_next_issue_after_a_transport_error(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    events = FakeEventLog()
+    observer, _, project_id, _, http = await setup_sync_test(tmp_path, git_env, events)
+    original_send = http.send
+    failed: list[str] = []
+
+    async def send(request: httpx2.Request, **kwargs: Any) -> httpx2.Response:
+        if request.url.path.endswith("/issues/9"):
+            failed.append(request.url.path)
+            raise httpx2.ConnectError("connection reset", request=request)
+        return await original_send(request, **kwargs)
+
+    try:
+        repo = "test-owner/test-repo"
+        for number in (9, 10):
+            await _record_opened(events, project_id, repo, number)
+        fake_github.state.issues[(repo, 10)] = _closed_issue(repo, 10)
+
+        with patch.object(http, "send", send):
+            await observer.sync_now(project_id)
+
+        updates = await events.history(project_id, types=["issue.updated"])
+        assert failed == ["/repos/test-owner/test-repo/issues/9"]
+        assert [u.payload["number"] for u in updates] == [10]
     finally:
         await http.aclose()

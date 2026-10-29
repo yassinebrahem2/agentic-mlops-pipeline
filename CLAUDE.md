@@ -8,7 +8,7 @@ The rules shared by every coding agent live in AGENTS.md and apply in full:
 
 ## Claude Code specifics
 
-- When `gh api user --jq .login` is `yassinebrahem2`, this session is the lead's and follows the Lead rules in AGENTS.md (other agents on that account do not).
+- A session is the lead's only when the person running it says so in the conversation (the login `yassinebrahem2` is not enough). Then it follows the Lead rules in AGENTS.md. Every other session on that account, Claude Code included, is an owner on the lead's plan and never does a lead action.
 - The lead's session reviews and merges PRs by `docs/reviewing-and-merging.md`, and writes no feature code: decisions become plan and issue edits for the owners.
 - Use the advisor tool: before committing to an approach, when stuck, and before declaring a task done. Give its advice serious weight; if it conflicts with evidence you have, raise the conflict in another advisor call instead of silently picking a side.
 - On specs and plans, keep calling the advisor until a round finds no blocking issues.
