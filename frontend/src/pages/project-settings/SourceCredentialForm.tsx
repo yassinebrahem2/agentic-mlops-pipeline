@@ -1,4 +1,4 @@
-import { useState, type SyntheticEvent } from "react";
+import { useEffect, useState, type SyntheticEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +21,12 @@ export function SourceCredentialForm({
   const [credential, setCredential] = useState("");
   const [error, setError] = useState<string | null>(initialError ?? null);
   const setCredentialMutation = useSetSourceCredential(projectId);
+
+  useEffect(() => {
+    if (initialError !== undefined) {
+      setError(initialError);
+    }
+  }, [initialError]);
 
   const handleSubmit = async (e: SyntheticEvent) => {
     e.preventDefault();

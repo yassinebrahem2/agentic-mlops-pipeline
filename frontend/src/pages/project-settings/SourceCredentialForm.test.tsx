@@ -1,4 +1,5 @@
-import { screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SourceCredentialForm } from "./SourceCredentialForm";
@@ -67,5 +68,31 @@ describe("SourceCredentialForm", () => {
 
     expect(await screen.findByText("Invalid credential value")).toBeInTheDocument();
     expect(input).toHaveValue("");
+  });
+
+  it("updates displayed error when initialError prop changes post-mount", () => {
+    stubRoutes({});
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCredentialForm projectId="prj_demo" sourceId="src_1" initialError={null} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <SourceCredentialForm
+          projectId="prj_demo"
+          sourceId="src_1"
+          initialError="Updated post-mount error"
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("Updated post-mount error")).toBeInTheDocument();
   });
 });

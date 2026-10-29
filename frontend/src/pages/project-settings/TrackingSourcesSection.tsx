@@ -14,13 +14,13 @@ function sourceTypeLabel(type: TrackingSourceView["type"]): string {
 }
 
 function sourceTarget(source: TrackingSourceView): string {
+  const settings: Record<string, unknown> =
+    (source as { settings?: Record<string, unknown> | null }).settings ?? {};
   if (source.type === "mlflow") {
-    return typeof source.settings.url === "string" ? source.settings.url : "";
+    return typeof settings.url === "string" ? settings.url : "";
   }
-  const repo = typeof source.settings.repository === "string" ? source.settings.repository : "";
-  const workflows = Array.isArray(source.settings.workflows)
-    ? (source.settings.workflows as string[])
-    : [];
+  const repo = typeof settings.repository === "string" ? settings.repository : "";
+  const workflows = Array.isArray(settings.workflows) ? (settings.workflows as string[]) : [];
   const wfText = workflows.length > 0 ? workflows.join(", ") : "all workflows";
   return repo ? `${repo} (${wfText})` : wfText;
 }

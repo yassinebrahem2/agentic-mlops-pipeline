@@ -400,4 +400,25 @@ describe("TrackingSourcesSection", () => {
       { timeout: 3000 },
     );
   });
+
+  it("safely handles tracking source with undefined or null settings", async () => {
+    const rawSource = {
+      id: "src_corrupt",
+      type: "github_actions",
+      settings: undefined as unknown as Record<string, unknown>,
+      auth: "none",
+      credential_set: false,
+      last_sync: null,
+      last_error: null,
+    } as unknown as TrackingSourceView;
+
+    stubRoutes({
+      [`GET ${BASE}/tracking/sources`]: () => json([rawSource]),
+    });
+
+    renderSection(<TrackingSourcesSection projectId="prj_demo" />);
+
+    expect(await screen.findByText("GitHub Actions")).toBeInTheDocument();
+    expect(screen.getByText("all workflows")).toBeInTheDocument();
+  });
 });
