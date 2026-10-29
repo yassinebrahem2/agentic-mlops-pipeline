@@ -13,6 +13,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import FakeState, RunningFake, fake_embedding, start_fake_server
+from tests.providers.fake_clock import FakeClock
 
 
 class RecordingFailover(KeyFailover):
@@ -250,7 +251,9 @@ async def test_permanent_error_scrubs_secrets(
     await svc.add_key("fake-hosted", secret_key)
     provider = await svc.get_provider("fake-hosted")
 
-    fake_openai.state.auth_fail = True
+    fake_openai.state.embedding_error_status = 400
+    fake_openai.state.embedding_error_message = f"Invalid input text with secret {secret_key}"
+    fake_openai.state.embedding_error_code = "bad_request"
     failover = KeyFailover()
     embedder = ProviderEmbedder(
         address="fake-hosted:fake-embed",
@@ -264,6 +267,7 @@ async def test_permanent_error_scrubs_secrets(
     with pytest.raises(EmbedderUnavailable) as err:
         await embedder.embed(["hello"])
     assert secret_key not in str(err.value)
+    assert "***" in str(err.value)
 
 
 async def test_wrong_dimensions_raises_verify_again(
@@ -325,7 +329,40 @@ async def test_returned_count_mismatch_raises_unavailable(
     assert "Verify it again in AI providers." in str(err.value)
 
 
-async def test_unreachable_provider_raises_scrubbed(
+async def test_unknown_model_permanent_error_scrubs_secrets(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    svc = ProvidersService(databases, keystore, model_http)
+    provider = await svc.create_provider(
+        ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
+    )
+    secret_key = "secret_embed_val_404"
+    await svc.add_key("fake-hosted", secret_key)
+    provider = await svc.get_provider("fake-hosted")
+
+    fake_openai.state.embedding_error_status = 404
+    fake_openai.state.embedding_error_message = f"Model not found with secret {secret_key}"
+    fake_openai.state.embedding_error_code = "model_not_found"
+    failover = KeyFailover()
+    embedder = ProviderEmbedder(
+        address="fake-hosted:fake-embed",
+        dimensions=16,
+        provider=provider,
+        wire_model_id="fake-embed",
+        failover=failover,
+        providers=svc,
+        http=model_http,
+    )
+    with pytest.raises(EmbedderUnavailable) as err:
+        await embedder.embed(["hello"])
+    assert secret_key not in str(err.value)
+    assert "***" in str(err.value)
+
+
+async def test_unreachable_provider_raises_unavailable(
     databases: Databases,
     keystore: MemoryKeyStore,
     model_http: httpx2.AsyncClient,
@@ -342,7 +379,7 @@ async def test_unreachable_provider_raises_scrubbed(
     # Stop server to make it unreachable
     running.stop()
 
-    failover = KeyFailover()
+    failover = KeyFailover(clock=FakeClock())
     embedder = ProviderEmbedder(
         address="fake-dead:fake-embed",
         dimensions=16,

@@ -34,6 +34,11 @@ const AVAILABILITY_LABELS: Record<ModelEntry["availability"], string> = {
   needs_attention: "Needs attention",
 };
 
+const TYPE_LABELS: Record<ModelEntry["model_type"], string> = {
+  chat: "Chat",
+  embedder: "Embedder",
+};
+
 function storeModel(queryClient: QueryClient, model: ModelEntry): void {
   queryClient.setQueryData<ModelEntry[]>(["models"], (list) =>
     list?.map((m) => (m.address === model.address ? model : m)),
@@ -72,9 +77,11 @@ export function ModelsTable() {
         <TableHeader>
           <TableRow>
             <TableHead>Address</TableHead>
+            <TableHead>Type</TableHead>
             <TableHead>Tool calling</TableHead>
             <TableHead>Streaming</TableHead>
             <TableHead>Context window</TableHead>
+            <TableHead>Dimensions</TableHead>
             <TableHead>Availability</TableHead>
             <TableHead>Last verified</TableHead>
             <TableHead>Actions</TableHead>
@@ -97,6 +104,7 @@ function trait(model: ModelEntry, value: boolean): string {
 
 function ModelRow({ model }: { model: ModelEntry }) {
   const queryClient = useQueryClient();
+  const isEmbedder = model.model_type === "embedder";
   // Verification makes a real model call; the row shows its answer, or why it failed.
   const verify = useMutation({
     mutationFn: async () =>
@@ -139,14 +147,24 @@ function ModelRow({ model }: { model: ModelEntry }) {
           <span>{model.address}</span>
         </div>
       </TableCell>
-      <TableCell>{trait(model, model.tool_calling)}</TableCell>
-      <TableCell>{trait(model, model.streaming)}</TableCell>
+      <TableCell>{TYPE_LABELS[model.model_type]}</TableCell>
+      <TableCell>{isEmbedder ? "Not applicable" : trait(model, model.tool_calling)}</TableCell>
+      <TableCell>{isEmbedder ? "Not applicable" : trait(model, model.streaming)}</TableCell>
       <TableCell>
-        {model.context_window === null ? (
+        {isEmbedder ? (
+          "Not applicable"
+        ) : model.context_window === null ? (
           <SetContextWindowDialog model={model} />
         ) : (
           model.context_window
         )}
+      </TableCell>
+      <TableCell>
+        {isEmbedder
+          ? model.dimensions !== null && model.dimensions !== undefined
+            ? model.dimensions
+            : "Not checked"
+          : "Not applicable"}
       </TableCell>
       <TableCell className="whitespace-normal">
         <p>{AVAILABILITY_LABELS[model.availability]}</p>
