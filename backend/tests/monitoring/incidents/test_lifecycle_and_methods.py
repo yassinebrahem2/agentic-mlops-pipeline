@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Literal
 
 import pytest
 
@@ -389,3 +391,139 @@ async def test_split_incident(
     assert any(e.type == "incident.split" for e in ev_orig)
     ev_new = await event_log.page(project_id, subject_id=new_inc.id)
     assert any(e.type == "incident.split" for e in ev_new)
+
+
+async def _incident_in(
+    service: IncidentsService, project_id: str, fake_clock: FakeClock, status: str
+) -> str:
+    """An incident moved to `status` through the service; returns its id."""
+    now = fake_clock.now()
+
+    def draft(subject: str, minutes: int) -> SignalDraft:
+        return SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject=subject,
+            model=None,
+            ran_at=now - timedelta(minutes=minutes),
+            detail={},
+        )
+
+    if status == "merged":
+        winner = await service.raise_signal(project_id, draft(f"{status}_w", 20), seen_at=now)
+        loser = await service.raise_signal(project_id, draft(f"{status}_l", 10), seen_at=now)
+        await service.merge(project_id, [winner.incident_id, loser.incident_id], agent="a")
+        return loser.incident_id
+    out = await service.raise_signal(project_id, draft(status, 10), seen_at=now)
+    if status == "resolved":
+        await service.update(project_id, out.incident_id, "a", IncidentPatch(status="resolved"))
+    elif status == "closed":
+        await service.close(project_id, out.incident_id)
+    return out.incident_id
+
+
+async def _assert_refused_unchanged(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    project_id: str,
+    incident_id: str,
+    call: Callable[[], Awaitable[object]],
+) -> None:
+    before = await service.get(project_id, incident_id)
+    events_before = await event_log.page(project_id, subject_id=incident_id)
+    with pytest.raises(DomainError) as exc_info:
+        await call()
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_not_live"
+    assert await service.get(project_id, incident_id) == before
+    assert await event_log.page(project_id, subject_id=incident_id) == events_before
+
+
+@pytest.mark.parametrize("status", ["closed", "resolved", "merged"])
+async def test_acknowledge_refused_when_not_live(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    project_id: str,
+    fake_clock: FakeClock,
+    status: str,
+) -> None:
+    inc_id = await _incident_in(service, project_id, fake_clock, status)
+    await _assert_refused_unchanged(
+        service, event_log, project_id, inc_id, lambda: service.acknowledge(project_id, inc_id)
+    )
+
+
+@pytest.mark.parametrize("status", ["closed", "merged"])
+async def test_close_refused_when_closed_or_merged(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    project_id: str,
+    fake_clock: FakeClock,
+    status: str,
+) -> None:
+    inc_id = await _incident_in(service, project_id, fake_clock, status)
+    await _assert_refused_unchanged(
+        service, event_log, project_id, inc_id, lambda: service.close(project_id, inc_id)
+    )
+
+
+async def test_close_allowed_on_resolved(
+    service: IncidentsService, project_id: str, fake_clock: FakeClock
+) -> None:
+    inc_id = await _incident_in(service, project_id, fake_clock, "resolved")
+    inc = await service.close(project_id, inc_id)
+    assert inc.status == "closed"
+
+
+@pytest.mark.parametrize("status", ["closed", "merged"])
+@pytest.mark.parametrize("new_status", ["mitigated", "resolved"])
+async def test_update_status_refused_when_closed_or_merged(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    project_id: str,
+    fake_clock: FakeClock,
+    status: str,
+    new_status: Literal["mitigated", "resolved"],
+) -> None:
+    inc_id = await _incident_in(service, project_id, fake_clock, status)
+    await _assert_refused_unchanged(
+        service,
+        event_log,
+        project_id,
+        inc_id,
+        lambda: service.update(project_id, inc_id, "a", IncidentPatch(status=new_status)),
+    )
+
+
+@pytest.mark.parametrize("status", ["closed", "merged"])
+async def test_merge_refused_when_any_incident_closed_or_merged(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    project_id: str,
+    fake_clock: FakeClock,
+    status: str,
+) -> None:
+    dead_id = await _incident_in(service, project_id, fake_clock, status)
+    live = await service.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="live",
+            model=None,
+            ran_at=fake_clock.now(),
+            detail={},
+        ),
+        seen_at=fake_clock.now(),
+    )
+    live_before = await service.get(project_id, live.incident_id)
+    live_events_before = await event_log.page(project_id, subject_id=live.incident_id)
+    await _assert_refused_unchanged(
+        service,
+        event_log,
+        project_id,
+        dead_id,
+        lambda: service.merge(project_id, [live.incident_id, dead_id], agent="a"),
+    )
+    assert await service.get(project_id, live.incident_id) == live_before
+    assert await event_log.page(project_id, subject_id=live.incident_id) == live_events_before

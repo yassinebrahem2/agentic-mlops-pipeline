@@ -397,6 +397,8 @@ async def build_services(
         handoffs=handoffs,
     )
     signals_from_results = SignalsFromResults(incidents, maintenance, results)
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
     results.add_observer(signals_from_results)
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
