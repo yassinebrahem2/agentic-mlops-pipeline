@@ -98,7 +98,8 @@ test("embedder settings flow: verify, app default, project override, and fallbac
     await expect(page.getByText(`Current folder: ${repoPath}`)).toBeVisible();
     await page.getByRole("button", { name: "Use this folder" }).click();
 
-    await expect(page).toHaveURL(/\/projects\/([^/]+)\/agents/);
+    // A new project opens on its Onboarding step.
+    await expect(page).toHaveURL(/\/projects\/([^/]+)\/onboarding/);
     const match = page.url().match(/\/projects\/([^/]+)/);
     if (!match) throw new Error("Could not extract projectId from URL");
     projectId = match[1];

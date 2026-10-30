@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useParams } from "react-router";
 import type { PageRoute } from "@/app/routes";
 import { renderPage } from "@/test/render";
 import { AddProjectPage } from "./AddProjectPage";
+
+function OnboardingStep() {
+  const { projectId } = useParams<{ projectId: string }>();
+  return <div>Onboarding step of {projectId}</div>;
+}
 
 const testRoutes: PageRoute[] = [
   {
@@ -11,8 +17,8 @@ const testRoutes: PageRoute[] = [
     element: <AddProjectPage />,
   },
   {
-    path: "/projects/:projectId",
-    element: <div>Project Page Content</div>,
+    path: "/projects/:projectId/onboarding",
+    element: <OnboardingStep />,
   },
   {
     path: "/integrations",
@@ -254,7 +260,7 @@ describe("AddProjectPage", () => {
       ),
     );
 
-    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
+    expect(await screen.findByText("Onboarding step of prj_gh_123")).toBeInTheDocument();
   });
 
   it("adding a non-git folder shows the dialog and the retry sends init_git: true", async () => {
@@ -358,7 +364,7 @@ describe("AddProjectPage", () => {
       });
     });
 
-    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
+    expect(await screen.findByText("Onboarding step of prj_local_1")).toBeInTheDocument();
   });
 
   it("not_repo_root offers the root and adding it sends that path", async () => {
@@ -453,7 +459,7 @@ describe("AddProjectPage", () => {
       });
     });
 
-    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
+    expect(await screen.findByText("Onboarding step of prj_local_2")).toBeInTheDocument();
   });
 
   it("project_exists links to the existing project", async () => {
@@ -594,6 +600,6 @@ describe("AddProjectPage", () => {
       ),
     );
 
-    expect(await screen.findByText("Project Page Content")).toBeInTheDocument();
+    expect(await screen.findByText("Onboarding step of prj_local_123")).toBeInTheDocument();
   });
 });

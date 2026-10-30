@@ -2,9 +2,18 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 // The access token and the data folder come from the environment: e2e/run.mjs (npm run e2e)
 // makes them before it starts Playwright and removes the folder after Playwright exits.
-import { ACCESS_TOKEN, APP_PORT, APP_URL, DATA_DIR, FAKE_BASE_URL, FAKE_PORT } from "./e2e/env";
+import {
+  ACCESS_TOKEN,
+  APP_PORT,
+  APP_URL,
+  DATA_DIR,
+  FAKE_BASE_URL,
+  FAKE_MLFLOW_URL,
+  FAKE_PORT,
+  MLFLOW_PORT,
+} from "./e2e/env";
 
-// Both servers run from the backend folder, so the plain `uv run ...` commands work on every OS.
+// Every server runs from the backend folder, so the plain `uv run ...` commands work on every OS.
 const backendDir = fileURLToPath(new URL("../backend", import.meta.url));
 const startupTimeout = 60_000;
 
@@ -25,6 +34,14 @@ export default defineConfig({
       command: `uv run python -m tests.fakes.fake_openai --port ${String(FAKE_PORT)}`,
       cwd: backendDir,
       url: `${FAKE_BASE_URL}/models`,
+      reuseExistingServer: false,
+      timeout: startupTimeout,
+    },
+    {
+      command: `uv run python -m tests.fakes.fake_mlflow --port ${String(MLFLOW_PORT)}`,
+      cwd: backendDir,
+      // The fake has no root page; this list answers 200 once it serves.
+      url: `${FAKE_MLFLOW_URL}/api/2.0/mlflow/registered-models/search`,
       reuseExistingServer: false,
       timeout: startupTimeout,
     },

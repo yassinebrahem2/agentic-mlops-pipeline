@@ -24,6 +24,7 @@ from mlops_agents.api.static import mount_ui
 from mlops_agents.config import APP_NAME, Settings
 from mlops_agents.credentials import KeyStore
 from mlops_agents.integrations.github.auth import GhLike
+from mlops_agents.providers.failover import Clock
 from mlops_agents.sandbox.docker import DockerRunner
 
 
@@ -34,6 +35,7 @@ def create_app(
     gh: GhLike | None = None,
     docker_runner: DockerRunner | None = None,
     web_dir: Path | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """Builds the app without I/O; the lifespan touches the data folder, key store and network."""
 
@@ -41,7 +43,12 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         async with AsyncExitStack() as stack:
             services = await build_services(
-                stack, settings, keystore=keystore, gh=gh, docker_runner=docker_runner
+                stack,
+                settings,
+                keystore=keystore,
+                gh=gh,
+                docker_runner=docker_runner,
+                clock=clock,
             )
             app.state.services = services
             app.state.signer = SessionSigner(await asyncio.to_thread(load_secret, services.paths))

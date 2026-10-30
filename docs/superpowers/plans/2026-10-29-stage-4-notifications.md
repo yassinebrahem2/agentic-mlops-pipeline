@@ -147,6 +147,8 @@ Tasks 1 to 3 are the core path; 4 and 5 are extras (overview, Plans).
   Event payloads are read as data. Their text reaches the person, not an agent.
 - `report_message(body)` is the one renderer of a report into a `Message`: one `lines` entry per incident (title, severity, status). Its severity is the highest of the listed incidents, `low` when there are none, and it is never `urgent`. The link is `inbox_link`. Sent with `Notifier.notify(kind="report", incident_id=None)`, it records `report.sent`. An empty report (nothing in any part) is not sent.
 
+- **Catch-up (2026-10-30, #540):** the scheduler's catch-up cursor is per job kind, so the morning report's `due()` works out each person's missed report itself from `notification_log` (a person whose report for a day was never sent gets it once), not from the scheduler's `after`.
+
 **Tests (stop condition):** a fake night with a critical incident, a high one outside hours, a rule-backed rollback (a `Hooks.runs` row), a hold, a pending approval, a suspended expectation, an incident resolved offline and a skipped wake. The person's report lists each once, with the action's basis. A second run for the same due sends nothing. Reports follow the person's time zone across a DST change. Two people with different hours get their own report at their own time. An empty night sends nothing. Full suite, ruff, format, pyright; CI green.
 
 ---
