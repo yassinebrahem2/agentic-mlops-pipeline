@@ -79,7 +79,7 @@ class AppScheduler:
             if job is None:
                 continue
 
-            latest_due = await self._store.latest_due(project_id, kind)
+            latest_due = await self._store.latest_due(project_id, kind, getattr(job, "subject", ""))
             if latest_due is not None:
                 after = latest_due
             else:
