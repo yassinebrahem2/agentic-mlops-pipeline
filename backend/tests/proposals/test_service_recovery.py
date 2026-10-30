@@ -219,14 +219,15 @@ async def test_recover_scrubs_failure_reasons(
     kinds: ProposalKinds,
     databases: Databases,
 ) -> None:
-    test_result_kind = ScriptedTestKind(name="failing_result_kind")
+    test_result_kind = ScriptedTestKind(name="connections")
     test_result_kind.apply_result = ApplyResult(
         applied=[],
         failed={"service": "Connection failed to http://user:secretpass@internal-service/api"},
     )
     kinds.register(test_result_kind)
 
-    test_raising_kind = ScriptedTestKind(name="raising_exc_kind")
+    test_raising_kind = ScriptedTestKind(name="handoff")
+    test_raising_kind.payload_model = HandoffPayload
     test_raising_kind.apply_error = RuntimeError(
         "Failed connecting to https://admin:supersecret@db.internal:5432"
     )
@@ -256,7 +257,7 @@ async def test_recover_scrubs_failure_reasons(
         "architect",
         test_raising_kind.name,
         "k_scrub_exc",
-        {"connections": [connection()]},
+        handoff(),
         "trn_sc2",
         "call_sc2",
     )

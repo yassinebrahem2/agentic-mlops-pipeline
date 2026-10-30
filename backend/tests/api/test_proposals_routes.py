@@ -71,7 +71,7 @@ class RouteTestKind:
 class MovingRouteTestKind(RouteTestKind):
     def __init__(self, secrets: ProjectSecrets) -> None:
         super().__init__()
-        self.name = "moving_kind"
+        self.name = CONNECTIONS_KIND
         self._secrets = secrets
 
     async def apply(self, project_id: str, proposal_id: str, payload: BaseModel) -> ApplyResult:
