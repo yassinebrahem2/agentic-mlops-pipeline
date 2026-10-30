@@ -354,3 +354,444 @@ def test_stage4_6_protocol_methods() -> None:
     assert _methods(Promotions) == {"validate", "history"}
     assert _methods(ProtectionSurfaces) == {"paths", "touches"}
     assert _methods(Stats) == {"compute"}
+
+
+def test_parity_result_category_and_action_kind() -> None:
+    from typing import get_args
+
+    from mlops_agents.agents.approvals.authority import ActionKind
+    from mlops_agents.monitoring.results.contract import ResultCategory
+    from mlops_agents.proposals.payloads import CheckSpec, CommandSpec
+
+    assert set(get_args(ResultCategory)) == set(
+        get_args(CheckSpec.model_fields["category"].annotation)
+    )
+    assert set(get_args(ActionKind)) == set(
+        get_args(CommandSpec.model_fields["kind"].annotation)
+    ) | {"merge_pr"}
+
+
+def test_diagnoser_targets_are_packaged_definitions() -> None:
+    from importlib.resources import files
+    from typing import get_args
+
+    from mlops_agents.monitoring.incidents.contract import diagnoser
+    from mlops_agents.monitoring.results.contract import ResultCategory
+
+    folder = files("mlops_agents.agents").joinpath("definitions")
+    packaged_names = {
+        entry.name.removesuffix(".md") for entry in folder.iterdir() if entry.name.endswith(".md")
+    }
+
+    subtypes = [None, "failed_training", "bad_deploy", "failed_scoring", "silence", "unknown"]
+    for cat in get_args(ResultCategory):
+        for sub in subtypes:
+            target = diagnoser(cat, sub)
+            assert target in packaged_names
+
+
+def test_tool_names_in_names_py_are_unique_and_collide_with_no_registered_tool() -> None:
+    import mlops_agents.agents.tools.names as tool_names_mod
+    from mlops_agents.agents.tools import (
+        BashTool,
+        CommentOnIssueTool,
+        EditTool,
+        GlobTool,
+        GrepTool,
+        ListAgentsTool,
+        OpenIssueTool,
+        OpenPullRequestTool,
+        ProposeTool,
+        ReadHandoffTool,
+        ReadTool,
+        ResumeTaskTool,
+        SaveNote,
+        ScheduleWakeupTool,
+        SearchIssuesTool,
+        SearchNotes,
+        StartTaskTool,
+        TrackingHistory,
+        WriteTool,
+    )
+    from mlops_agents.agents.tools.send_message import SendMessageTool
+
+    canonical_names = [
+        getattr(tool_names_mod, k)
+        for k in dir(tool_names_mod)
+        if k.isupper() and isinstance(getattr(tool_names_mod, k), str)
+    ]
+    assert len(canonical_names) == len(set(canonical_names))
+
+    stage1_3_tool_names = {
+        BashTool.name,
+        CommentOnIssueTool.name,
+        EditTool.name,
+        GlobTool.name,
+        GrepTool.name,
+        ListAgentsTool.name,
+        OpenIssueTool.name,
+        OpenPullRequestTool.name,
+        ProposeTool.name,
+        ReadHandoffTool.name,
+        ReadTool.name,
+        ResumeTaskTool.name,
+        SaveNote.name,
+        ScheduleWakeupTool.name,
+        SearchIssuesTool.name,
+        SearchNotes.name,
+        StartTaskTool.name,
+        TrackingHistory.name,
+        WriteTool.name,
+        SendMessageTool.name,
+    }
+    assert set(canonical_names) & stage1_3_tool_names == set()
+
+
+def test_kind_names_are_unique_and_cover_proposal_views() -> None:
+    from typing import get_args
+
+    from mlops_agents.proposals.contract import (
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        PARSER_KIND,
+        PROMOTION_KIND,
+        RULE_KIND,
+        TRAINING_POLICY_KIND,
+        AnyProposalView,
+    )
+
+    kind_names = [
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        PARSER_KIND,
+        RULE_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        TRAINING_POLICY_KIND,
+        PROMOTION_KIND,
+    ]
+    assert len(kind_names) == len(set(kind_names)) == 8
+
+    union_args = get_args(AnyProposalView)[0]
+    members = get_args(union_args)
+    member_kinds = {m.model_fields["kind"].default for m in members}
+    assert member_kinds == set(kind_names)
+    assert len(members) == len(kind_names)
+
+
+def test_every_event_type_is_in_event_type_once() -> None:
+    from typing import get_args
+
+    from mlops_agents.events.contract import EventType
+
+    types = get_args(EventType)
+    assert len(types) == len(set(types))
+
+    expected_stage4_6_types = {
+        "results.collected",
+        "signal.raised",
+        "incident.opened",
+        "incident.updated",
+        "incident.acknowledged",
+        "incident.snoozed",
+        "incident.severity_changed",
+        "incident.reopened",
+        "incident.merged",
+        "incident.split",
+        "incident.suspect_linked",
+        "incident.hold_recorded",
+        "incident.wake_skipped",
+        "incident.closed",
+        "check.registered",
+        "parser.disabled",
+        "notification.sent",
+        "notification.failed",
+        "escalation.sent",
+        "report.sent",
+        "hook.ran",
+        "hook.failed",
+        "hook.suspended",
+        "rule.satisfied",
+        "verdict.recorded",
+        "miss.reported",
+        "fix.requested",
+        "fix.chosen",
+        "fix.declined",
+        "fix.escalated",
+        "training.requested",
+        "training.linked",
+        "policy.suspended",
+        "report.saved",
+        "promotion.applied",
+        "promotion.refused",
+        "pr.merged_by_agent",
+    }
+    assert expected_stage4_6_types <= set(types)
+
+
+def test_stat_metrics_names_unique_and_cover_stat_groups() -> None:
+    from typing import get_args
+
+    from mlops_agents.stats.contract import (
+        STAT_METRICS,
+        STATS_MIN_VERDICTS,
+        StatGroup,
+    )
+
+    assert STATS_MIN_VERDICTS == 5
+    stat_groups = get_args(StatGroup)
+    assert len(stat_groups) == 8
+    assert set(STAT_METRICS.keys()) == set(stat_groups)
+
+    all_metrics: list[str] = []
+    for metrics in STAT_METRICS.values():
+        all_metrics.extend(metrics)
+    assert len(all_metrics) == len(set(all_metrics))
+
+
+def test_prefixes_equal_roadmap_table() -> None:
+    import re
+    from pathlib import Path
+
+    from mlops_agents.ids import PREFIXES
+
+    roadmap_path = Path(__file__).resolve().parents[2] / "docs" / "roadmap.md"
+    content = roadmap_path.read_text(encoding="utf-8")
+    table_match = re.search(
+        r"\| Prefix \| Entity \| Stage \|\n\|---\|---\|---\|\n([\s\S]*?)\n\n", content
+    )
+    assert table_match is not None, "Roadmap prefix table not found"
+    rows = table_match.group(1).strip().splitlines()
+    parsed_prefixes: set[str] = set()
+    for row in rows:
+        m = re.match(r"\|\s*`([a-z0-9]+)`\s*\|", row)
+        if m:
+            parsed_prefixes.add(m.group(1))
+
+    assert parsed_prefixes == PREFIXES
+
+
+def test_payload_and_view_models_forbid_extra_keys_except_evaluation_payload() -> None:
+    from pydantic import BaseModel
+
+    from mlops_agents.monitoring.expectations.contract import (
+        ExpectationKey,
+        ExpectationSpec,
+        ExpectationState,
+    )
+    from mlops_agents.monitoring.expr import AllOf, AnyOf, Compare, Not
+    from mlops_agents.monitoring.hooks.contract import (
+        CommandSpec,
+        HookProposal,
+        HookRunView,
+        HooksPayload,
+        HookView,
+        RunContext,
+    )
+    from mlops_agents.monitoring.incidents.contract import (
+        Delivery,
+        HoldScope,
+        IncidentChange,
+        IncidentPatch,
+        IncidentView,
+        MaintenancePayload,
+        RoutePlan,
+        SeverityDecision,
+        SignalDraft,
+        SignalOutcome,
+        SignalView,
+        WindowSpec,
+    )
+    from mlops_agents.monitoring.results.contract import (
+        CollectionReport,
+        ParseOutcome,
+        ParserCode,
+        ParserPayload,
+        ParserSpec,
+        ParserVersion,
+        ResultQuery,
+        ResultRecord,
+        SourceState,
+        StoredResult,
+    )
+    from mlops_agents.monitoring.rules.contract import (
+        RuleLimits,
+        RulePayload,
+        RuleSpec,
+        RuleTerm,
+        RuleView,
+    )
+    from mlops_agents.monitoring.scheduler.contract import HeartbeatView
+    from mlops_agents.monitoring.verdicts.contract import (
+        BaselineLink,
+        MissReport,
+        SilentTeamAlert,
+        VerdictDraft,
+        VerdictView,
+    )
+    from mlops_agents.notifications.contract import (
+        DiscordSettings,
+        EmailSettings,
+        Message,
+        MorningReportBody,
+        OnCallPerson,
+        ReportAction,
+    )
+    from mlops_agents.promotion.contract import (
+        DecisionRow,
+        DeploymentsView,
+        EnvironmentRow,
+        EvaluationPayload,
+        EvaluationView,
+        MergeCheck,
+        MetricSet,
+        MetricValue,
+        OpenPipelinePr,
+        ParityResult,
+        PromotionPayload,
+        PromotionView,
+        ReportDraft,
+        ReportField,
+        ReportView,
+    )
+    from mlops_agents.proposals.contract import (
+        ApplyResult,
+        BaseProposalView,
+        ConnectionsProposalView,
+        CredentialSlot,
+        HandoffProposalView,
+        HandoffView,
+        HooksProposalView,
+        MaintenanceProposalView,
+        ParserProposalView,
+        PromotionProposalView,
+        RuleProposalView,
+        SlotState,
+        TrainingPolicyProposalView,
+    )
+    from mlops_agents.stats.contract import StatsView, StatValue
+    from mlops_agents.training.contract import (
+        FixRequestView,
+        GuardRefusal,
+        GuardResult,
+        TrainingPolicyPayload,
+        TrainingPolicyView,
+        TrainingRequestView,
+        TrainingWindow,
+        WindowRule,
+    )
+
+    models_to_check: list[type[BaseModel]] = [
+        # expr
+        AllOf,
+        AnyOf,
+        Compare,
+        Not,
+        # expectations
+        ExpectationKey,
+        ExpectationSpec,
+        ExpectationState,
+        # hooks
+        CommandSpec,
+        HookProposal,
+        HookRunView,
+        HooksPayload,
+        HookView,
+        RunContext,
+        # incidents
+        Delivery,
+        HoldScope,
+        IncidentChange,
+        IncidentPatch,
+        IncidentView,
+        MaintenancePayload,
+        RoutePlan,
+        SeverityDecision,
+        SignalDraft,
+        SignalOutcome,
+        SignalView,
+        WindowSpec,
+        # results
+        CollectionReport,
+        ParseOutcome,
+        ParserCode,
+        ParserPayload,
+        ParserSpec,
+        ParserVersion,
+        ResultQuery,
+        ResultRecord,
+        SourceState,
+        StoredResult,
+        # rules
+        RuleLimits,
+        RulePayload,
+        RuleSpec,
+        RuleTerm,
+        RuleView,
+        # scheduler
+        HeartbeatView,
+        # verdicts
+        BaselineLink,
+        MissReport,
+        SilentTeamAlert,
+        VerdictDraft,
+        VerdictView,
+        # notifications
+        DiscordSettings,
+        EmailSettings,
+        Message,
+        MorningReportBody,
+        OnCallPerson,
+        ReportAction,
+        # promotion
+        DecisionRow,
+        DeploymentsView,
+        EnvironmentRow,
+        EvaluationView,
+        MergeCheck,
+        MetricSet,
+        MetricValue,
+        OpenPipelinePr,
+        ParityResult,
+        PromotionPayload,
+        PromotionView,
+        ReportDraft,
+        ReportField,
+        ReportView,
+        # proposals
+        ApplyResult,
+        BaseProposalView,
+        ConnectionsProposalView,
+        CredentialSlot,
+        HandoffProposalView,
+        HandoffView,
+        HooksProposalView,
+        MaintenanceProposalView,
+        ParserProposalView,
+        PromotionProposalView,
+        RuleProposalView,
+        SlotState,
+        TrainingPolicyProposalView,
+        # stats
+        StatValue,
+        StatsView,
+        # training
+        FixRequestView,
+        GuardRefusal,
+        GuardResult,
+        TrainingPolicyPayload,
+        TrainingPolicyView,
+        TrainingRequestView,
+        TrainingWindow,
+        WindowRule,
+    ]
+
+    for model in models_to_check:
+        assert model.model_config.get("extra") == "forbid", (
+            f"{model.__name__} must forbid extra keys"
+        )
+
+    # EvaluationPayload is the documented exception (I37: extra="allow" so team's extra fields survive)
+    assert EvaluationPayload.model_config.get("extra") != "forbid"

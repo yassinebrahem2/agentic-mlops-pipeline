@@ -7,11 +7,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from mlops_agents.agents.tools.base import Preview
+if TYPE_CHECKING:
+    from mlops_agents.agents.tools.base import Preview
 from mlops_agents.monitoring.hooks.contract import HooksPayload
 from mlops_agents.monitoring.incidents.contract import MaintenancePayload
 from mlops_agents.monitoring.results.contract import ParserPayload
