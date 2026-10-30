@@ -52,6 +52,7 @@ async def test_errors_are_results(ctx: ToolContext) -> None:
     assert (await ReadTool().invoke(ctx, {"path": "README.md"})).is_error
 
 
+@pytest.mark.serial
 async def test_oversized_single_line_file_reads_bounded(
     tmp_path: Path, git_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

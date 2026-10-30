@@ -5,9 +5,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
 
 from pydantic import BaseModel, ValidationError
+
+if TYPE_CHECKING:
+    from mlops_agents.agents.approvals.authority import ActionCall, Authority
 
 
 class RiskClass(StrEnum):
@@ -73,6 +76,7 @@ class ToolContext:
     files: FileAccess  # the current task's worktree view, else the repository's
     task: TaskRef | None
     tool_call_id: str  # the model's ID for this call; an approval of it stores the same ID
+    authority: Authority | None = None
 
 
 class Preview(BaseModel):
@@ -157,6 +161,9 @@ class AgentTool[A: BaseModel](ABC):
 
     @abstractmethod
     async def run(self, ctx: ToolContext, args: A) -> ToolOutput: ...
+
+    async def action_call(self, args: A, ctx: ToolContext) -> ActionCall | None:
+        return None
 
     def schema(self) -> dict[str, Any]:
         return {

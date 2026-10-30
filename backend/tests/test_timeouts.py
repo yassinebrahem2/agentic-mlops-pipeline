@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.serial
+
 pytest_plugins = ["pytester"]
 
 

@@ -38,7 +38,7 @@ Verify a Critical finding in the code yourself before acting on it. Reviewers ca
 
 All of these, every time (rule 6, Lead rules):
 1. The verdict is merge.
-2. CI on the PR's head: every job completed and green (`gh pr checks <n>`), including Backend's Windows job and Package's `install` jobs. Queued, running, cancelled or red means wait.
+2. CI on the PR's head: every job completed and green (`gh pr checks <n>`), including Backend's three Windows shards (`backend (windows-latest 1/3)` to `3/3`) and Package's `install` jobs. Queued, running, cancelled or red means wait.
 3. Up to date with `main`: `gh api repos/yassinebrahem2/agentic-mlops-pipeline/compare/main...<head branch> --jq .behind_by` is 0. If not, update the branch (`gh api -X PUT repos/yassinebrahem2/agentic-mlops-pipeline/pulls/<n>/update-branch -f expected_head_sha=<head>`), wait for CI on the new head, then check again.
 4. Approve (`gh pr review <n> --approve --body "..."`; a comment on your own PR), then merge with a merge commit pinned to the reviewed head:
    `gh api -X PUT repos/yassinebrahem2/agentic-mlops-pipeline/pulls/<n>/merge -f merge_method=merge -f sha=<head>`. Never squash or rebase.
