@@ -34,8 +34,9 @@ export function useActivity(projectId: string | undefined, filters: ActivityFilt
   });
 }
 
-export function entryKey(entry: ActivityEntry): string {
-  return entry.kind === "event" ? entry.event.id : entry.audit.id;
+/** One identity per entry: the dedupe in flattenPages, the React key and the test id use it. */
+export function entryIdentity(entry: ActivityEntry): string {
+  return `${entry.kind}-${entry.kind === "event" ? entry.event.id : entry.audit.id}`;
 }
 
 /**
@@ -47,7 +48,7 @@ export function flattenPages(pages: readonly { entries: ActivityEntry[] }[]): Ac
   const flat: ActivityEntry[] = [];
   for (const page of pages) {
     for (const entry of page.entries) {
-      const key = `${entry.kind}:${entryKey(entry)}`;
+      const key = entryIdentity(entry);
       if (!seen.has(key)) {
         seen.add(key);
         flat.push(entry);

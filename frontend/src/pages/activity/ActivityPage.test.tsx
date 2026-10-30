@@ -192,6 +192,23 @@ describe("ActivityPage", () => {
     expect(await screen.findByText("No activity yet.")).toBeInTheDocument();
   });
 
+  it("says nothing matches when a filter is active and the result is empty", async () => {
+    const user = userEvent.setup();
+    stubActivity((query) =>
+      query.source === "coder"
+        ? ok({ entries: [], next_before: null })
+        : ok({ entries: [eventEntry("evt_1", 1)], next_before: null }),
+    );
+    renderPage("/projects/prj_1/activity");
+    await screen.findByTestId("activity-event-evt_1");
+
+    await user.type(screen.getByLabelText("Agent"), "coder");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(await screen.findByText("No activity matches these filters.")).toBeInTheDocument();
+    expect(screen.queryByText("No activity yet.")).toBeNull();
+  });
+
   it("shows the server's error with a retry that reloads", async () => {
     const user = userEvent.setup();
     let calls = 0;

@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { formatTime } from "@/lib/format";
-import { entryKey, type ActivityEntry } from "./useActivity";
+import { entryIdentity, type ActivityEntry } from "./useActivity";
 
 // Payloads and audit details are already scrubbed by the server; React renders them as text.
 function Details({ value }: { value: Record<string, unknown> }) {
@@ -23,7 +23,7 @@ export function ActivityEntryRow({
   entry: ActivityEntry;
   projectId: string;
 }) {
-  const testId = `activity-${entry.kind}-${entryKey(entry)}`;
+  const testId = `activity-${entryIdentity(entry)}`;
   const isEvent = entry.kind === "event";
   const who = isEvent ? entry.event.source : entry.audit.actor;
 

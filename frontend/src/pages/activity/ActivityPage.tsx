@@ -16,7 +16,7 @@ import { errorText } from "@/lib/api";
 import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { PROJECT_EVENT_TYPES, type ProjectEventType } from "@/lib/useProjectEvents";
 import { ActivityEntryRow } from "./ActivityEntryRow";
-import { flattenPages, useActivity } from "./useActivity";
+import { entryIdentity, flattenPages, useActivity } from "./useActivity";
 
 export function ActivityPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -125,18 +125,18 @@ function Activity({ projectId }: { projectId: string }) {
 
       {!query.isLoading && !query.error && entries.length === 0 && (
         <div className="rounded-lg border border-dashed p-8 text-center">
-          <p className="text-sm text-muted-foreground">No activity yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {type !== undefined || source !== undefined
+              ? "No activity matches these filters."
+              : "No activity yet."}
+          </p>
         </div>
       )}
 
       {entries.length > 0 && (
         <ul className="space-y-3">
           {entries.map((entry) => (
-            <ActivityEntryRow
-              key={`${entry.kind}:${entry.kind === "event" ? entry.event.id : entry.audit.id}`}
-              entry={entry}
-              projectId={projectId}
-            />
+            <ActivityEntryRow key={entryIdentity(entry)} entry={entry} projectId={projectId} />
           ))}
         </ul>
       )}
