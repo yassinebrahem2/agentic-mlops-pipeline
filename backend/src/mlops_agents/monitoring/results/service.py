@@ -68,6 +68,9 @@ class ResultsService(Results):
 
     async def deliver_undelivered(self, project_id: str, now: datetime) -> None:
         """Delivers any previously committed but undelivered results to observers."""
+        if not self._observers:
+            return
+
         undelivered = await self._store.fetch_undelivered(project_id)
         if not undelivered:
             return
@@ -197,7 +200,7 @@ class ResultsService(Results):
                 failures[s_id] = outcome.last_error
 
         # 4. Deliver all newly stored records sorted by ran_at ASC, id ASC
-        if all_newly_stored:
+        if all_newly_stored and self._observers:
             all_newly_stored.sort(key=lambda r: (r.ran_at, r.id))
             for observer in self._observers:
                 try:

@@ -64,6 +64,9 @@ from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
+from mlops_agents.promotion.contract import EvaluationReader, Reports
+from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -118,6 +121,8 @@ class Services:
     scheduler: AppScheduler
     results: ResultsService
     kickoff: Kickoff
+    evaluation_reader: EvaluationReader
+    reports: Reports
 
 
 async def _app_secrets(
@@ -242,6 +247,8 @@ async def build_services(
         handoffs=handoffs,
     )
     stack.push_async_callback(tracking.close)
+    evaluation_reader = SqliteEvaluationReader(tracking, tasks)
+    reports = SqliteReports(databases, evaluation_reader, events)
 
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
@@ -259,6 +266,7 @@ async def build_services(
         proposal_kinds=proposal_kinds,
         tracking=tracking,
         handoffs=handoffs,
+        reports=reports,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -359,9 +367,6 @@ async def build_services(
         connections=connections,
         events=events,
     )
-    startup_now = clock.now()
-    for project in await workspace.list_projects():
-        await results.deliver_undelivered(project.id, startup_now)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -378,6 +383,11 @@ async def build_services(
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
+
+    # Deliver undelivered results across restarts, after all observers and services are registered and ready.
+    startup_now = clock.now()
+    for project in await workspace.list_projects():
+        await results.deliver_undelivered(project.id, startup_now)
 
     return Services(
         settings=settings,
@@ -414,4 +424,6 @@ async def build_services(
         scheduler=scheduler,
         results=results,
         kickoff=kickoff,
+        evaluation_reader=evaluation_reader,
+        reports=reports,
     )

@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from mlops_agents.api import services as services_module
+from mlops_agents.api.services import Services
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.results.contract import (
     ResultRecord,
+    StoredResult,
     source_id,
 )
 from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import (
     Cadence,
@@ -22,6 +30,9 @@ from mlops_agents.proposals.payloads import (
     Operations,
 )
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import projects
+from mlops_agents.storage.tables import results as results_table
+from tests.api.conftest import started_app
 from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs, FakeObserver
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
@@ -175,6 +186,12 @@ async def test_results_committed_not_delivered_are_delivered_at_next_start_once(
     undelivered = await service.store.fetch_undelivered(project_id)
     assert len(undelivered) == 1
 
+    # Calling deliver_undelivered with no observers does NOT mark records delivered
+    await service.deliver_undelivered(project_id, clock.now())
+    undelivered_still = await service.store.fetch_undelivered(project_id)
+    assert len(undelivered_still) == 1
+    assert undelivered_still[0].id == undelivered[0].id
+
     # Attach observer and run deliver_undelivered (startup hook)
     obs = FakeObserver()
     service.add_observer(obs)
@@ -186,6 +203,89 @@ async def test_results_committed_not_delivered_are_delivered_at_next_start_once(
     # Subsequent run delivers nothing again
     await service.deliver_undelivered(project_id, clock.now())
     assert len(obs.batches) == 1
+
+
+async def test_startup_delivery_real_wiring_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    paths = DataPaths(home)
+    paths.ensure()
+
+    # Pre-populate app database with a project and an undelivered result
+    databases = Databases(paths)
+    await databases.app()
+    project_id = "prj_wiring"
+    async with (await databases.app()).begin() as conn:
+        await conn.execute(
+            projects.insert().values(
+                id=project_id,
+                name="Wiring Test",
+                source="local",
+                local_path=str(home / "repo"),
+                local_path_key="key",
+                status="ok",
+                created_at="2026-10-30T10:00:00Z",
+            )
+        )
+
+    proj_engine = await databases.project(project_id)
+    t0 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+    async with proj_engine.begin() as conn:
+        await conn.execute(
+            results_table.insert().values(
+                id="res_pending_1",
+                source_id="file:*.jsonl:data",
+                source_key="results.jsonl:0",
+                check_id="chk_pending",
+                origin="agent",
+                ran_at=t0.isoformat(),
+                fired=False,
+                category="data_quality",
+                subject="s",
+                detail="{}",
+                source_ref="r",
+                seen_at=t0.isoformat(),
+                delivered_at=None,
+            )
+        )
+    await databases.dispose()
+
+    # 1. Start the app with zero observers registered.
+    # deliver_undelivered at startup must NOT mark records delivered when there are no observers.
+    async with started_app(home) as app:
+        services: Services = app.state.services
+        undelivered = await services.results.store.fetch_undelivered(project_id)
+        assert len(undelivered) == 1
+        assert undelivered[0].id == "res_pending_1"
+
+    # 2. In real wiring order, a later plan registers its observer on results during service initialization
+    # (before scheduler.start() and deliver_undelivered run at the end of build_services).
+    delivered_batches: list[list[StoredResult]] = []
+
+    class RealPlanObserver:
+        async def stored(self, project_id: str, results: Sequence[StoredResult]) -> None:
+            delivered_batches.append(list(results))
+
+    real_results_service_cls = services_module.ResultsService
+
+    class WiringResultsService(real_results_service_cls):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.add_observer(RealPlanObserver())
+
+    monkeypatch.setattr(services_module, "ResultsService", WiringResultsService)
+
+    async with started_app(home) as app:
+        services = app.state.services
+        # The observer registered during build_services received the crash-pending result on startup
+        assert len(delivered_batches) == 1
+        assert len(delivered_batches[0]) == 1
+        assert delivered_batches[0][0].id == "res_pending_1"
+
+        # And now it is marked delivered in the DB
+        undelivered_after = await services.results.store.fetch_undelivered(project_id)
+        assert len(undelivered_after) == 0
 
 
 async def test_raising_observer_does_not_stop_next_and_batch_marked_delivered(
@@ -253,8 +353,11 @@ async def test_cursor_survives_new_service_instance_restart(
 
     # Service instance 1
     service1 = ResultsService(databases, handoffs, connections, events)
+    obs1 = FakeObserver()
+    service1.add_observer(obs1)
     rep1 = await service1.collect(project_id, clock.now())
     assert rep1.stored == 1
+    assert len(obs1.batches) == 1
 
     # Service instance 2 (simulating restart)
     service2 = ResultsService(databases, handoffs, connections, events)
