@@ -176,6 +176,26 @@ async def test_payload_validation_failures(caplog: pytest.LogCaptureFixture) -> 
         assert "churn_predictor" in caplog.records[0].message
         assert "gate_v1" not in caplog.records[0].message
 
+    # 3. Record itself has schema_version != 1
+    bad_record_schema = _make_record(
+        source_id="src_bad_rec_schema",
+        schema_version=2,
+        payload={
+            "schema_version": 1,
+            "evaluation_commit": "commit_1",
+            "gate_config_version": "gate_v1",
+        },
+    )
+    tracking_rec_bad = FakeTracking([bad_record_schema])
+    reader_rec_bad = SqliteEvaluationReader(tracking_rec_bad, FakeTasks([]))
+
+    with caplog.at_level(logging.WARNING):
+        caplog.clear()
+        res_rec_bad = await reader_rec_bad.for_candidate("prj_1", "churn_predictor", "1.0.0")
+        assert res_rec_bad is None
+        assert len(caplog.records) == 1
+        assert "churn_predictor" in caplog.records[0].message
+
 
 @pytest.mark.asyncio
 async def test_extra_team_fields_survive() -> None:
@@ -374,3 +394,76 @@ def test_comparable() -> None:
         gate_config_version="v2.0",
     )
     assert comparable(base, diff_both) is False
+
+
+@pytest.mark.asyncio
+async def test_not_computed_prefix_fields_disambiguation() -> None:
+    """Ensure that when two fields share a prefix (e.g. 'decision' and 'decision_rate'),
+    a PR titled for the longer field does not incorrectly link to the prefix field."""
+    # Both 'decision' and 'decision_rate' are None
+    payload_data = {
+        "schema_version": 1,
+        "evaluation_commit": "c0ffee1",
+        "gate_config_version": "gate_v1",
+        "decision": None,
+        "decision_rate": None,
+    }
+    record = _make_record(payload=payload_data)
+
+    # 1. PR titled "Add decision_rate check" must link ONLY to decision_rate, not decision
+    task_dr = TaskView(
+        id="tsk_dr",
+        agent="deployment",
+        title="Add decision_rate check",
+        branch="feat/decision-rate",
+        status="active",
+        review_kind=None,
+        pr_number=102,
+        pr_url="https://github.com/org/repo/pull/102",
+    )
+    reader_dr = SqliteEvaluationReader(FakeTracking([record]), FakeTasks([task_dr]))
+    view_dr = await reader_dr.for_candidate("prj_1", "churn_predictor", "1.0.0")
+    assert view_dr is not None
+    assert view_dr.not_computed["decision_rate"] == "102"
+    assert view_dr.not_computed["decision"] is None
+
+    # 2. PR titled with spaces "Add decision rate check" must also link ONLY to decision_rate
+    task_dr_space = TaskView(
+        id="tsk_dr_space",
+        agent="deployment",
+        title="Add decision rate check",
+        branch="feat/decision-rate",
+        status="active",
+        review_kind=None,
+        pr_number=102,
+        pr_url="https://github.com/org/repo/pull/102",
+    )
+    reader_space = SqliteEvaluationReader(FakeTracking([record]), FakeTasks([task_dr_space]))
+    view_space = await reader_space.for_candidate("prj_1", "churn_predictor", "1.0.0")
+    assert view_space is not None
+    assert view_space.not_computed["decision_rate"] == "102"
+    assert view_space.not_computed["decision"] is None
+
+    # 3. PR titled "Add decision check" must link ONLY to decision
+    task_dec = TaskView(
+        id="tsk_dec",
+        agent="deployment",
+        title="Add decision check",
+        branch="feat/decision",
+        status="active",
+        review_kind=None,
+        pr_number=105,
+        pr_url="https://github.com/org/repo/pull/105",
+    )
+    reader_dec = SqliteEvaluationReader(FakeTracking([record]), FakeTasks([task_dec]))
+    view_dec = await reader_dec.for_candidate("prj_1", "churn_predictor", "1.0.0")
+    assert view_dec is not None
+    assert view_dec.not_computed["decision"] == "105"
+    assert view_dec.not_computed["decision_rate"] is None
+
+    # 4. When both tasks are open, both fields match their respective PRs
+    reader_both = SqliteEvaluationReader(FakeTracking([record]), FakeTasks([task_dr, task_dec]))
+    view_both = await reader_both.for_candidate("prj_1", "churn_predictor", "1.0.0")
+    assert view_both is not None
+    assert view_both.not_computed["decision_rate"] == "102"
+    assert view_both.not_computed["decision"] == "105"

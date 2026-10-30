@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Sequence
 
 from pydantic import ValidationError
 
@@ -25,6 +27,41 @@ def comparable(a: EvaluationPayload, b: EvaluationPayload) -> bool:
         a.evaluation_commit == b.evaluation_commit
         and a.gate_config_version == b.gate_config_version
     )
+
+
+def _match_fields_in_title(title: str, field_names: Sequence[str]) -> set[str]:
+    """Find all field names in a task title using exact token boundaries, prioritizing longer matches."""
+    matches: list[tuple[int, int, str]] = []  # (start, end, field_name)
+    for name in field_names:
+        variants = {
+            name.lower(),
+            name.replace("_", " ").lower(),
+            name.replace("_", "-").lower(),
+        }
+        for variant in variants:
+            pattern = re.compile(
+                r"(?<![a-zA-Z0-9_])" + re.escape(variant) + r"(?![a-zA-Z0-9_])",
+                re.IGNORECASE,
+            )
+            for m in pattern.finditer(title):
+                matches.append((m.start(), m.end(), name))
+
+    if not matches:
+        return set()
+
+    # Sort matches by length descending so longer matches claim their character spans first
+    matches.sort(key=lambda m: m[1] - m[0], reverse=True)
+
+    claimed_spans: list[tuple[int, int]] = []
+    matched_fields: set[str] = set()
+
+    for start, end, name in matches:
+        overlaps = any(max(start, c_start) < min(end, c_end) for c_start, c_end in claimed_spans)
+        if not overlaps:
+            claimed_spans.append((start, end))
+            matched_fields.add(name)
+
+    return matched_fields
 
 
 class SqliteEvaluationReader(EvaluationReader):
@@ -85,21 +122,19 @@ class SqliteEvaluationReader(EvaluationReader):
             return None
 
         open_tasks = await self._tasks.open_tasks(project_id)
-        not_computed: dict[str, str | None] = {}
+        all_field_names = list(EvaluationPayload.model_fields.keys())
+        task_field_map: dict[str, str] = {}
+        for task in open_tasks:
+            if task.agent == "deployment" and task.pr_number is not None:
+                named_fields = _match_fields_in_title(task.title, all_field_names)
+                for field in named_fields:
+                    if field not in task_field_map:
+                        task_field_map[field] = str(task.pr_number)
 
+        not_computed: dict[str, str | None] = {}
         for name, field_info in EvaluationPayload.model_fields.items():
             if not field_info.is_required() and getattr(payload, name) is None:
-                matching_pr: str | None = None
-                for task in open_tasks:
-                    if task.agent == "deployment" and task.pr_number is not None:
-                        title_lower = task.title.lower()
-                        if (
-                            name.lower() in title_lower
-                            or name.replace("_", " ").lower() in title_lower
-                        ):
-                            matching_pr = str(task.pr_number)
-                            break
-                not_computed[name] = matching_pr
+                not_computed[name] = task_field_map.get(name)
 
         return EvaluationView(
             record=record,
