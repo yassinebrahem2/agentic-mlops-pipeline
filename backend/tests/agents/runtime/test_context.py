@@ -366,4 +366,4 @@ def test_prompt_messages_appends_the_hook_context_as_the_last_system_section() -
 
     # Without hook context
     messages_without = prompt_messages(definition, project, layout, None, [])
-    assert "<data" not in str(messages_without[0].content)
+    assert '<data source="hook:' not in str(messages_without[0].content)

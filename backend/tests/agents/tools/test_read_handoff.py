@@ -23,6 +23,9 @@ class FakeHandoffs:
         self._view = current_view
         self.current_calls: list[str] = []
 
+    def add_observer(self, observer: Any) -> None:
+        pass
+
     async def current(self, project_id: str) -> HandoffView | None:
         self.current_calls.append(project_id)
         return self._view
