@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -23,6 +24,8 @@ INJECTIONS = {
     "model_decay": 'group = { market_segment = "Online TA", deposit_type = "No Deposit" }\n'
     "max_share = 1.0\n",
 }
+# The plan whose "Planted flaws" list `answer_key.PLANTED_FLAWS` carries.
+PLAN = Path(__file__).parents[3] / "docs" / "superpowers" / "plans" / "2026-10-27-demo-world.md"
 
 
 @pytest.fixture(scope="module")
@@ -312,7 +315,18 @@ def test_the_planted_flaws_are_written_to_the_world_folder(loaded: pd.DataFrame)
     assert len(written) == 7
     assert [flaw["id"] for flaw in written] == [flaw.id for flaw in answer_key.PLANTED_FLAWS]
     assert all(flaw.keys() == {"id", "category", "where", "what"} for flaw in written)
-    assert "0.98" in written[0]["what"]
+    assert "0.95" in written[0]["what"]
+
+
+def test_the_planted_flaws_match_the_plans_list() -> None:
+    # The plan's item after its bold title, code marks dropped. Flaw 7's text predates this and
+    # words the plan's sentence differently, so only its place in the list is checked.
+    items = re.findall(r"^(\d)\. \*\*.+?\*\* (.+)$", PLAN.read_text(encoding="utf-8"), re.M)
+    texts = [text.replace("`", "") for _, text in items]
+
+    assert [number for number, _ in items] == [str(n) for n in range(1, 8)]
+    assert [flaw.what for flaw in answer_key.PLANTED_FLAWS[:6]] == texts[:6]
+    assert "PR-AUC 0.95" in answer_key.PLANTED_FLAWS[0].what
 
 
 def test_nothing_in_the_data_folder_mentions_the_answer_key_or_the_flaws(

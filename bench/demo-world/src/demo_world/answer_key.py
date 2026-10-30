@@ -79,34 +79,37 @@ class Flaw:
     what: str
 
 
-# The demo-world plan's "Planted flaws", in its order; the numbers are the plan's replay figures.
+# The demo-world plan's "Planted flaws", in its order, with its measured numbers.
 PLANTED_FLAWS: tuple[Flaw, ...] = (
     Flaw(
         "random_validation_split",
         "model_performance",
         "train and evaluate (src/hotel_demo/pipeline.py)",
-        "evaluate scores a random 20% of the training window: PR-AUC about 0.98, "
-        "against about 0.66 on later bookings.",
+        "evaluate scores a random 20% of the training window: PR-AUC 0.95 (measured in task 3's "
+        "full run), against 0.63 to 0.66 on the bookings of July to October 2016.",
     ),
     Flaw(
         "accuracy_only_alert",
         "model_performance",
         "the accuracy alert (src/hotel_demo/checks/accuracy.py)",
-        "Accuracy stays between 0.66 and 0.78 while PR-AUC decays (about 0.74 in January 2016 "
-        "to 0.45 in October), because about 65% of bookings are never cancelled.",
+        "The company watches accuracy only, and most bookings are never cancelled (about 50 to "
+        "65% in task 3's run), so accuracy stays high (0.83 to 0.91 in task 3's run) whatever "
+        "happens to ranking quality. When the model decays (the model_decay scenario, task 4), "
+        "PR-AUC falls while the accuracy check stays quiet.",
     ),
     Flaw(
         "no_calibration_check",
         "model_performance",
         "the legacy monitoring (src/hotel_demo/checks/)",
-        "The model predicts a mean cancellation chance of about 0.15 against a real rate of "
-        "about 0.35, which is what overbooking depends on.",
+        "The model predicts a mean cancellation chance of 0.12 to 0.15 against a real rate of "
+        "0.35 to 0.38 (July to October 2016, task 3's run), which is what overbooking depends on.",
     ),
     Flaw(
         "manual_retraining_only",
         "operational",
         "the production schedule (ops/schedule.toml)",
-        "Retraining is by hand only: nothing schedules it, so the decay builds up.",
+        "Nothing schedules it, so once the model decays (task 4) the drop persists until someone "
+        "retrains.",
     ),
     Flaw(
         "drift_check_blind_to_categories",
