@@ -150,6 +150,7 @@ async def test_a_timed_out_profile_without_columns_is_a_profile_timeout(
     _assert_profile_timeout(caught.value, ref)
 
 
+@pytest.mark.serial
 async def test_waiting_on_another_callers_profile_is_bounded_by_its_own_timeout(
     env: SummaryEnv,
 ) -> None:
@@ -169,6 +170,7 @@ async def test_waiting_on_another_callers_profile_is_bounded_by_its_own_timeout(
     assert env.spy.count("people.csv") == 1
 
 
+@pytest.mark.serial
 async def test_a_detail_waiting_on_another_callers_profile_is_a_profile_timeout(
     env: SummaryEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
