@@ -53,6 +53,9 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.incidents.contract import MediumSeverity
+from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -125,6 +128,7 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    incidents: IncidentsService
 
 
 async def _app_secrets(
@@ -244,7 +248,6 @@ async def build_services(
 
     query_providers = QueryProviders()
     maintenance = NeverSuspended()
-    _ = maintenance
 
     tracking = TrackingService(
         databases=databases,
@@ -376,6 +379,17 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -436,4 +450,5 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        incidents=incidents,
     )
