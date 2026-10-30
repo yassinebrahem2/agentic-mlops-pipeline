@@ -1,8 +1,15 @@
 import { randomBytes } from "node:crypto";
+import { basename } from "node:path";
 import { expect, test } from "@playwright/test";
 import { APP_NAME } from "../src/config";
-import { ACCESS_TOKEN, APP_URL, FAKE_BASE_URL } from "./env";
-import { createTestRepo, README_FIRST_LINE, type TestRepo } from "./repo";
+import { ACCESS_TOKEN, APP_URL, FAKE_BASE_URL, FAKE_MLFLOW_URL } from "./env";
+import {
+  createDataFolder,
+  createTestRepo,
+  DATA_TABLES,
+  README_FIRST_LINE,
+  type TestRepo,
+} from "./repo";
 
 let repo: TestRepo | undefined;
 
@@ -191,4 +198,176 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     await expect(taskBar.getByText("local review")).toBeVisible();
     await expect(taskBar.getByRole("button", { name: "Discard task" })).toBeVisible();
   });
+});
+
+// The scripted fake-onboarding model's handoff (backend/tests/fakes/onboarding_script.py): the
+// values the cards and the API show back.
+const CONNECTION_NAME = "hotel-data";
+const MODEL_NAME = "hotel-cancel";
+const FEED_TIMEZONE = "Europe/Lisbon";
+const ON_CALL_HOURS = "08:30 - 17:30";
+const ONBOARDING_COMPLETE = "Onboarding is complete.";
+const AUDIT_CONTEXT = "Audit context included:";
+const AUDIT_AGENTS = ["Data Quality", "Model Performance", "Retraining", "Deployment & Rollback"];
+
+test("stage 3 flow: Onboarding proposes the connection and the handoff, and the audits start", async ({
+  page,
+}) => {
+  const onboardingRepo = createTestRepo();
+  try {
+    const projectName = basename(onboardingRepo.path);
+    const dataPath = createDataFolder();
+    const providerName = `fake-${randomBytes(3).toString("hex")}`;
+    const onboardingAddress = `${providerName}:fake-onboarding`;
+    const auditAddress = `${providerName}:fake-audit`;
+    let projectId = "";
+
+    await test.step("sign in; the fake's two scripted models are added, verified and assigned", async () => {
+      await page.goto(`${APP_URL}/#token=${ACCESS_TOKEN}`);
+      await expect(page.getByRole("heading", { name: APP_NAME, exact: true })).toBeVisible();
+
+      await page.getByRole("link", { name: "AI providers" }).click();
+      await expect(page.getByRole("heading", { name: "AI providers", level: 1 })).toBeVisible();
+      await page.getByRole("button", { name: "Add provider" }).click();
+      const providerDialog = page.getByRole("dialog", { name: "Add a provider" });
+      await providerDialog.getByLabel("Name").fill(providerName);
+      await providerDialog.getByRole("radio", { name: "Self-hosted" }).check();
+      await providerDialog.getByLabel("Base URL").fill(FAKE_BASE_URL);
+      await providerDialog.getByRole("button", { name: "Add provider" }).click();
+      await expect(providerDialog).toBeHidden();
+
+      for (const model of ["fake-onboarding", "fake-audit"]) {
+        await page.getByRole("button", { name: "Add model" }).click();
+        const modelDialog = page.getByRole("dialog", { name: "Add a model" });
+        await modelDialog.getByRole("combobox", { name: "Provider" }).click();
+        await page.getByRole("option", { name: providerName }).click();
+        await modelDialog.getByRole("combobox", { name: "Model" }).click();
+        await page.getByRole("option", { name: model }).click();
+        await expect(modelDialog.getByRole("combobox", { name: "Model" })).toHaveValue(model);
+        await modelDialog.getByRole("button", { name: "Add model" }).click();
+        await expect(modelDialog).toBeHidden();
+
+        const address = `${providerName}:${model}`;
+        await page.getByRole("button", { name: `Verify ${address}`, exact: true }).click();
+        const row = page.getByRole("row").filter({ hasText: address });
+        await expect(row.getByText("Verified")).toBeVisible();
+      }
+
+      const assign = async (agent: string, address: string) => {
+        const combobox = page.getByRole("combobox", { name: `Model for ${agent}` });
+        await combobox.click();
+        await page.getByRole("option", { name: address, exact: true }).click();
+        await expect(combobox).toHaveText(address);
+      };
+      await assign("Onboarding & Diagnosis", onboardingAddress);
+      for (const agent of AUDIT_AGENTS) {
+        await assign(agent, auditAddress);
+      }
+    });
+
+    const messages = page.getByRole("log", { name: "Messages" });
+
+    await test.step("add the repository: the Onboarding step starts the session", async () => {
+      await page.getByRole("link", { name: "Projects", exact: true }).click();
+      await page.getByRole("link", { name: "Add project" }).first().click();
+      await page.getByRole("tab", { name: "Local folder" }).click();
+      await expect(page.getByText("Current folder:")).toBeVisible();
+      await page.getByLabel("Folder path").fill(onboardingRepo.path);
+      await page.getByRole("button", { name: "Go", exact: true }).click();
+      await expect(page.getByText(`Current folder: ${onboardingRepo.path}`)).toBeVisible();
+      await page.getByRole("button", { name: "Use this folder" }).click();
+
+      await expect(page).toHaveURL(/\/projects\/[^/]+\/onboarding/);
+      projectId = /\/projects\/([^/]+)\//.exec(page.url())?.[1] ?? "";
+      expect(projectId).not.toBe("");
+      await expect(page.getByText(`Ready: ${onboardingAddress}`)).toBeVisible();
+      await page.getByRole("button", { name: "Start", exact: true }).click();
+
+      await expect(page).toHaveURL(/\/agents\?agent=onboarding/);
+      // The wizard's message names the project; the fake answers by asking for DATA_PATH=.
+      await expect(messages.getByText(projectName)).toBeVisible();
+      await expect(messages.getByText(/DATA_PATH=/)).toBeVisible();
+      await expect(messages.getByRole("status", { name: "Typing..." })).toHaveCount(0);
+    });
+
+    await test.step("approve the connection, then the handoff", async () => {
+      await page
+        .getByLabel("Message Onboarding & Diagnosis")
+        .fill(`DATA_PATH=${dataPath}\nMLFLOW_URL=${FAKE_MLFLOW_URL}`);
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+
+      const card = (kind: string) =>
+        messages
+          .locator('[data-testid^="approval-card-"]')
+          .filter({ hasText: `Proposal: ${kind}` });
+      const connectionsCard = card("connections");
+      await expect(connectionsCard.getByText(CONNECTION_NAME, { exact: true })).toBeVisible();
+      await expect(connectionsCard.getByText(dataPath)).toBeVisible();
+      await connectionsCard.getByRole("button", { name: "Approve" }).click();
+
+      // The resumed turn proposes the handoff.
+      const handoffCard = card("handoff");
+      const models = handoffCard.getByRole("region", { name: "Models" });
+      await expect(models.getByText(MODEL_NAME, { exact: true })).toBeVisible();
+      await expect(models.getByText("team_gate", { exact: true })).toBeVisible();
+      const roles = handoffCard.getByRole("region", { name: "Data Roles" });
+      for (const table of DATA_TABLES) {
+        await expect(roles.getByRole("cell", { name: table, exact: true })).toBeVisible();
+      }
+      const tracking = handoffCard.getByRole("region", { name: "Tracking" });
+      await expect(tracking.getByText(FAKE_MLFLOW_URL)).toBeVisible();
+      const operations = handoffCard.getByRole("region", { name: "Operations" });
+      await expect(operations.getByText(`Timezone: ${FEED_TIMEZONE}`).first()).toBeVisible();
+      await expect(operations.getByText(ON_CALL_HOURS)).toBeVisible();
+      await handoffCard.getByRole("button", { name: "Approve" }).click();
+
+      await expect(messages.getByText(ONBOARDING_COMPLETE, { exact: true })).toBeVisible();
+      await expect(messages.getByRole("status", { name: "Typing..." })).toHaveCount(0);
+    });
+
+    await test.step("the API shows the connection, the tracking source and the handoff", async () => {
+      const api = `${APP_URL}/api/projects/${projectId}`;
+      const connections = await page.request.get(`${api}/connections`);
+      expect(connections.ok()).toBe(true);
+      expect(await connections.json()).toEqual([
+        expect.objectContaining({ name: CONNECTION_NAME, status: "ok" }),
+      ]);
+
+      // The first sync of the new source succeeds against the fake MLflow server.
+      await expect
+        .poll(async () => (await page.request.get(`${api}/tracking/sources`)).json() as unknown)
+        .toEqual([
+          expect.objectContaining({
+            type: "mlflow",
+            settings: { url: FAKE_MLFLOW_URL },
+            last_sync: expect.any(String),
+            last_error: null,
+          }),
+        ]);
+
+      const handoff = await page.request.get(`${api}/handoff`);
+      expect(handoff.ok()).toBe(true);
+      const body = (await handoff.json()) as { payload: { models: { name: string }[] } };
+      expect(body.payload.models[0]?.name).toBe(MODEL_NAME);
+    });
+
+    await test.step("the audits start with the data summary; Onboarding gets no kickoff", async () => {
+      const agent = (name: string) =>
+        page.getByRole("listitem").filter({ hasText: name }).getByRole("button");
+      // Two of the four audit agents whose definitions name the data_summary hook.
+      for (const name of ["Data Quality", "Model Performance"]) {
+        await agent(name).click();
+        await expect(messages.getByText("Handoff", { exact: true })).toBeVisible();
+        const reply = messages.getByText(AUDIT_CONTEXT);
+        await expect(reply).toBeVisible();
+        await expect(reply).toContainText(`Table "${DATA_TABLES[0]}"`);
+      }
+
+      await agent("Onboarding & Diagnosis").click();
+      await expect(messages.getByText(ONBOARDING_COMPLETE, { exact: true })).toBeVisible();
+      await expect(messages.getByText("Handoff", { exact: true })).toHaveCount(0);
+    });
+  } finally {
+    onboardingRepo.remove();
+  }
 });
