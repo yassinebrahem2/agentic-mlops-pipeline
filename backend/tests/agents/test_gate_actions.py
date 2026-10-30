@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypedDict, cast
+from unittest.mock import MagicMock
 
 import aiosqlite
 import pytest
@@ -28,7 +29,6 @@ from mlops_agents.agents.runtime.graph import turn_checkpointer
 from mlops_agents.agents.runtime.hooks import GateDecision
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.tool_step import ToolStep
-from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import (
     AgentTool,
     RiskClass,
@@ -235,7 +235,7 @@ class _FakeActionTool(AgentTool[_FakeActionArgs]):
     args_model: ClassVar[type[BaseModel]] = _FakeActionArgs
 
     def __init__(self, kind: ActionKind) -> None:
-        self.kind = kind
+        self.kind: ActionKind = kind
         self.last_ctx: ToolContext | None = None
 
     async def run(self, ctx: ToolContext, args: _FakeActionArgs) -> ToolOutput:
@@ -278,8 +278,8 @@ class _StaticFacts(GateFacts):
 
 
 class _StaticAuthority:
-    def __init__(self, basis: Literal["rule", "policy", "none"]) -> None:
-        self.basis = basis
+    def __init__(self, basis: Literal["rule", "policy", "approval", "none"]) -> None:
+        self.basis: Literal["rule", "policy", "approval", "none"] = basis
 
     async def authorize(self, call: ActionCall) -> Authority:
         return Authority(basis=self.basis, reason="test authorization")
@@ -518,19 +518,6 @@ async def test_approved_ask_gives_approval_authority_surviving_checkpoint(
         assert restored_dec.authority.ref == apr_id
 
 
-class _DummyWorkspaces(TaskWorkspaces):
-    async def current(self, project_id: str, session_id: str) -> Any:
-        return None
-
-    async def files(self, project_id: str, task: Any) -> Any:
-        return FakeFileAccess()
-
-
-class _DummySink:
-    async def tool_finished(self, message_id: str, result: Any) -> None:
-        pass
-
-
 class _DummyLock:
     async def __aenter__(self) -> None:
         pass
@@ -564,14 +551,19 @@ async def test_tool_step_passes_authority_to_context(
         )(),
     )
 
+    workspaces = MagicMock()
+    workspaces.current = MagicMock(return_value=None)
+    workspaces.files = MagicMock(return_value=FakeFileAccess())
+    sink = MagicMock()
+
     async def _update_parts() -> None:
         pass
 
     step = ToolStep(
         agent=agent,
         gate=gate,
-        workspaces=_DummyWorkspaces(),
-        sink=_DummySink(),
+        workspaces=workspaces,
+        sink=sink,
         project_id=project_id,
         session_id="ses_1",
         turn_id="trn_1",
@@ -585,7 +577,7 @@ async def test_tool_step_passes_authority_to_context(
     expected_auth = Authority(basis="rule", ref="rul_1", reason="matched rule", evidence=[])
     decision = GateDecision(outcome="allow", authority=expected_auth)
 
-    output = await step._run_decided(
+    output = await step._run_decided(  # pyright: ignore[reportPrivateUsage]
         tool,
         {"id": "call_1", "name": tool.name, "args": {}},
         decision,

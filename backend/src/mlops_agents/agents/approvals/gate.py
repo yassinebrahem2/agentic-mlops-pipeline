@@ -99,7 +99,7 @@ class ApprovalGate(Gate):
             if action is None:
                 if risk == RiskClass.PROPOSE and level == "bypass":
                     proposal_kind = _proposal_kind(call)
-                    if proposal_kind in PROPOSE_BYPASS_OVERRIDES:
+                    if proposal_kind is not None and proposal_kind in PROPOSE_BYPASS_OVERRIDES:
                         policy_dec = PROPOSE_BYPASS_OVERRIDES[proposal_kind]
                     else:
                         policy_dec = policy_decide(risk, level)
