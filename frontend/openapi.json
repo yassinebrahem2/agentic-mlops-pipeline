@@ -3106,6 +3106,16 @@
             "title": "Model Type",
             "type": "string"
           },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "problem": {
             "anyOf": [
               {
@@ -3165,6 +3175,34 @@
           "problem"
         ],
         "title": "ModelEntry",
+        "type": "object"
+      },
+      "ModelPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_per_mtok": {
+            "title": "Completion Per Mtok",
+            "type": "number"
+          },
+          "prompt_per_mtok": {
+            "title": "Prompt Per Mtok",
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "provider",
+              "user"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt_per_mtok",
+          "completion_per_mtok",
+          "source"
+        ],
+        "title": "ModelPrice",
         "type": "object"
       },
       "ModelSpec": {
@@ -4560,6 +4598,16 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -5101,6 +5149,31 @@
           "token"
         ],
         "title": "SetGitHubToken",
+        "type": "object"
+      },
+      "SetPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "price"
+        ],
+        "title": "SetPrice",
         "type": "object"
       },
       "SignalView": {
@@ -5933,6 +6006,103 @@
         "title": "UpdateConnection",
         "type": "object"
       },
+      "UsageRow": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "completion_tokens": {
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "model_address": {
+            "title": "Model Address",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "week_start": {
+            "format": "date",
+            "title": "Week Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "agent",
+          "model_address",
+          "week_start",
+          "prompt_tokens",
+          "completion_tokens"
+        ],
+        "title": "UsageRow",
+        "type": "object"
+      },
+      "UsageView": {
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "unpriced_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "unpriced_models"
+        ],
+        "title": "UsageView",
+        "type": "object"
+      },
+      "UserPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_per_mtok": {
+            "minimum": 0.0,
+            "title": "Completion Per Mtok",
+            "type": "number"
+          },
+          "prompt_per_mtok": {
+            "minimum": 0.0,
+            "title": "Prompt Per Mtok",
+            "type": "number"
+          }
+        },
+        "required": [
+          "prompt_per_mtok",
+          "completion_per_mtok"
+        ],
+        "title": "UserPrice",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -6715,6 +6885,47 @@
           }
         },
         "summary": "Set Context Window",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/models/price": {
+      "put": {
+        "operationId": "set_price_api_models_price_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPrice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Price",
         "tags": [
           "models"
         ]
@@ -11034,6 +11245,56 @@
         "summary": "Discard Task",
         "tags": [
           "tasks"
+        ]
+      }
+    },
+    "/api/usage": {
+      "get": {
+        "operationId": "get_usage_api_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Usage",
+        "tags": [
+          "usage"
         ]
       }
     }
