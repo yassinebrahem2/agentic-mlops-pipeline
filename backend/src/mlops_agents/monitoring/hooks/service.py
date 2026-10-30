@@ -171,6 +171,26 @@ class HooksService:
             raise RuntimeError(f"Hook {hook_id!r} not found after update")
         return updated
 
+    async def set_credential(self, project_id: str, hook_id: str, credential: str) -> HookView:
+        hook = await self.get(project_id, hook_id)
+        if hook is None:
+            raise KeyError(f"Hook {hook_id!r} not found in project {project_id!r}")
+        await self._secrets.put(hook_ref(project_id, hook_id), credential)
+        updated = await self.get(project_id, hook_id)
+        if updated is None:
+            raise RuntimeError(f"Hook {hook_id!r} not found after update")
+        return updated
+
+    async def delete_credential(self, project_id: str, hook_id: str) -> HookView:
+        hook = await self.get(project_id, hook_id)
+        if hook is None:
+            raise KeyError(f"Hook {hook_id!r} not found in project {project_id!r}")
+        await self._secrets.delete(hook_ref(project_id, hook_id))
+        updated = await self.get(project_id, hook_id)
+        if updated is None:
+            raise RuntimeError(f"Hook {hook_id!r} not found after update")
+        return updated
+
     async def suspend(self, project_id: str, hook_id: str, reason: str) -> HookView:
         hook = await self.get(project_id, hook_id)
         if hook is None:

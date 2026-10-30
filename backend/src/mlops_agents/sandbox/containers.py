@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from mlops_agents.agents.tools.base import TaskRef
@@ -91,6 +92,56 @@ def build_run_args(
         args.extend(["-u", user])
     args.append(image_tag)
     args.extend(["sleep", "infinity"])
+    return args
+
+
+def build_one_shot_run_args(
+    project_id: str,
+    image_tag: str,
+    command: Sequence[str],
+    *,
+    network: bool = True,
+    mounts: Sequence[Mount] = (),
+    env_file: Path | None = None,
+) -> list[str]:
+    """Builds docker run arguments for a one-shot container execution."""
+    args = [
+        "run",
+        "--rm",
+        "--cpus",
+        "2",
+        "--memory",
+        "4g",
+        "--pids-limit",
+        "512",
+        "--workdir",
+        "/workspace",
+        "--label",
+        f"{APP_NAME}=true",
+        "--label",
+        f"{APP_NAME}.project={project_id}",
+    ]
+    for m in sorted(mounts, key=lambda x: x.container_path):
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={m.host_path!s},target={m.container_path},readonly",
+            ]
+        )
+    if not network:
+        args.extend(["--network", "none"])
+    if env_file is not None:
+        args.extend(["--env-file", str(env_file)])
+    args.extend(
+        [
+            "-e",
+            "HOME=/tmp",
+            "-e",
+            "PYTHONPATH=/workspace/src:/workspace",
+        ]
+    )
+    args.append(image_tag)
+    args.extend(command)
     return args
 
 
