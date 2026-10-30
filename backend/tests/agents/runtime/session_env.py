@@ -36,7 +36,13 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+    memory_project_secrets,
+)
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -87,10 +93,11 @@ async def build_session_env(
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
 
     tool_reg = tools if tools is not None else default_registry()
+    hook_names: frozenset[str] = STAGE_3_HOOKS if hooks is None else (STAGE_3_HOOKS | hooks.names())
     catalog = AgentCatalog.load(
         tool_reg.names() | STAGE_2_TOOLS,
         extra_dirs=extra_dirs or (),
-        hook_names=hooks.names() if hooks is not None else frozenset(),
+        hook_names=hook_names,
     )
 
     async def clear_attention(provider: Provider) -> None:  # wired as `build_services` does

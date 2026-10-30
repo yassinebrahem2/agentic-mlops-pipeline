@@ -17,11 +17,17 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+# Pyright checks tests/fakes as its own root (pyproject's executionEnvironments).
+if TYPE_CHECKING:
+    from onboarding_script import audit_reply, onboarding_reply
+else:
+    from tests.fakes.onboarding_script import audit_reply, onboarding_reply
 
 MODELS: dict[str, int] = {
     "fake-tools": 32768,
@@ -30,6 +36,8 @@ MODELS: dict[str, int] = {
     "fake-invalid-tools": 32768,
     "fake-mixed-tools": 32768,
     "fake-write": 32768,
+    "fake-onboarding": 131072,
+    "fake-audit": 131072,
 }
 EMBEDDING_MODELS: dict[str, int] = {
     "fake-embed": 16,
@@ -185,6 +193,10 @@ def _reply(
         return "Hello from the fake model.", None
     if any(tool["function"]["name"] == "report_capabilities" for tool in tools):
         return "", [{"name": "report_capabilities", "arguments": TOOL_ARGS["report_capabilities"]}]
+    if model == "fake-onboarding":
+        return onboarding_reply(messages, tools)
+    if model == "fake-audit":
+        return audit_reply(messages), None
     if model == "fake-slow":
         return SLOW_TEXT, None
     if model == "fake-write":

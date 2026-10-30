@@ -12,7 +12,7 @@ from mlops_agents.agents.hooks.knowledge import KnowledgeHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.errors import DomainError
 from mlops_agents.knowledge.contract import Knowledge, NoteView, SearchResult
-from tests.conftest import STAGE_2_TOOLS
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS
 
 
 class FakeKnowledge:
@@ -160,7 +160,6 @@ chat: true
 schedules: false
 can_message: []
 context_hooks: [knowledge]
-status_board: false
 limits:
   max_steps: 10
 ---
@@ -169,6 +168,8 @@ System prompt.
         encoding="utf-8",
     )
 
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=registry.names())
+    catalog = AgentCatalog.load(
+        STAGE_2_TOOLS, [tmp_path], hook_names=STAGE_3_HOOKS | registry.names()
+    )
     agent = catalog.get("knowledge-agent")
     assert agent.hook_names == ("knowledge",)

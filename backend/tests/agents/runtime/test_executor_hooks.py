@@ -170,5 +170,5 @@ async def test_an_agent_without_hooks_resumes_as_before(
     assert hook.seen == []
     assert _system_messages(resumed) == _system_messages(first)
     assert resumed[0]["role"] == "system"
-    assert "<data" not in str(resumed[0]["content"])
+    assert '<data source="hook:' not in str(resumed[0]["content"])
     await env.manager.close()

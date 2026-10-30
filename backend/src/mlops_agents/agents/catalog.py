@@ -8,7 +8,6 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
 from mlops_agents.errors import DomainError
 
 ORCHESTRATOR = "orchestrator"
@@ -31,16 +30,11 @@ class AgentDefinition(BaseModel):
     schedules: bool = False
     can_message: tuple[str, ...] = ()
     context_hooks: tuple[str, ...] = ()
-    status_board: bool = False
     limits: Limits = Limits()
     prompt: str = Field(min_length=1)
 
     @property
     def hook_names(self) -> tuple[str, ...]:
-        """The context hooks this agent gets: `status_board: true` counts as that hook until
-        the definitions list it in `context_hooks` and the field is removed."""
-        if self.status_board and STATUS_BOARD_HOOK not in self.context_hooks:
-            return (*self.context_hooks, STATUS_BOARD_HOOK)
         return self.context_hooks
 
 

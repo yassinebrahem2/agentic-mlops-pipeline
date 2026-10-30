@@ -50,7 +50,7 @@ from tests.agents.runtime.test_resuming_turns import (
     make_tool_reg,
     write_agent_def,
 )
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -113,7 +113,11 @@ class RepairEnv:
         """A new app over the same databases: a fresh key failover, approval store, sessions
         and approvals; its observer is the store's first."""
         tools = make_tool_reg(self.write_tool)
-        catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[self._definitions])
+        catalog = AgentCatalog.load(
+            tools.names() | STAGE_2_TOOLS,
+            extra_dirs=[self._definitions],
+            hook_names=STAGE_3_HOOKS,
+        )
         failover = KeyFailover(FakeClock())
         providers = ProvidersService(self.databases, self._keystore, self._model_http, failover)
         http = httpx2.AsyncClient()

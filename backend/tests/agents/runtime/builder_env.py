@@ -26,7 +26,13 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+    memory_project_secrets,
+)
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -102,10 +108,11 @@ async def build_builder_env(
     extra_dirs: Sequence[Path] = (),
 ) -> BuilderEnv:
     tools = default_registry()
+    hook_names: frozenset[str] = STAGE_3_HOOKS if hooks is None else (STAGE_3_HOOKS | hooks.names())
     catalog = AgentCatalog.load(
         tools.names() | STAGE_2_TOOLS,
         extra_dirs,
-        hook_names=hooks.names() if hooks is not None else frozenset(),
+        hook_names=hook_names,
     )
     providers_svc = ProvidersService(databases, keystore, model_http, KeyFailover(FakeClock()))
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)

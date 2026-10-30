@@ -40,7 +40,7 @@ from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.agents.runtime.session_env import build_session_env
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -499,7 +499,9 @@ async def test_resuming_turn_after_rebuilding_manager(
     from mlops_agents.workspace.service import WorkspaceService
     from tests.integrations.test_github_auth import FakeGh
 
-    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(
+        tool_reg.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS, extra_dirs=[def_dir]
+    )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
@@ -682,7 +684,9 @@ async def test_resuming_turn_task_mismatch(
     repo_dir = make_repo(tmp_path / "repo", {"README.md": "hello"}, git_env)
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
-    catalog = AgentCatalog.load(tool_reg.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(
+        tool_reg.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS, extra_dirs=[def_dir]
+    )
     from mlops_agents.agents.settings import AgentSettingsService
 
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
