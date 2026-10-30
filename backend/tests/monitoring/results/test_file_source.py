@@ -6,8 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
+from mlops_agents.connections.kinds.local_folder import LocalFolderKind
+from mlops_agents.connections.registry import KindRegistry
+from mlops_agents.connections.service import ConnectionsService
+from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.results.contract import ResultRecord, source_id
 from mlops_agents.monitoring.results.file_source import FileSourceReader
+from mlops_agents.paths import DataPaths
+from mlops_agents.storage.databases import Databases
 from tests.monitoring.results.conftest import FakeConnections
 
 
@@ -218,3 +225,69 @@ async def test_pattern_with_dotdot_symlink_out_of_root_and_env_store_nothing(
     s_id_env = source_id("file", ".env", "data_conn")
     out_env = await reader.read(project_id, s_id_env, cursor={})
     assert len(out_env.records) == 0
+
+
+async def test_secret_file_skip_against_real_connections_inspect(
+    tmp_path: Path, project_id: str
+) -> None:
+    home = tmp_path / "home"
+    paths = DataPaths(home)
+    paths.ensure()
+    databases = Databases(paths)
+    await databases.app()
+    await databases.project(project_id)
+    events = SqliteEventLog(databases)
+    registry = KindRegistry([LocalFolderKind(paths.root)])
+    connections = ConnectionsService(databases, events, registry)
+
+    # Prepare local folder connection directory
+    data_dir = tmp_path / "data_folder"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    sub_dir = data_dir / "sub"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Top-level secret file: .env
+    top_secret = data_dir / ".env"
+    top_secret.write_bytes(
+        b'{"check_id": "chk_top", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+
+    # 2. Nested secret file: sub/id_rsa
+    nested_secret = sub_dir / "id_rsa"
+    nested_secret.write_bytes(
+        b'{"check_id": "chk_nested", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+
+    # 3. Legitimate results file: sub/results.jsonl
+    legit_file = sub_dir / "results.jsonl"
+    legit_file.write_bytes(
+        b'{"check_id": "chk_valid", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+
+    # Verify real Connections.inspect finds both top-level and nested secret files
+    findings = await connections.inspect(project_id, LOCAL_FOLDER_KIND, {"path": str(data_dir)})
+    secret_paths = {f.path for f in findings.secret_files}
+    assert ".env" in secret_paths
+    assert "sub/id_rsa" in secret_paths
+
+    # Create connection in real service
+    await connections.create(
+        project_id,
+        LOCAL_FOLDER_KIND,
+        "results-conn",
+        {"path": str(data_dir)},
+    )
+
+    # Read files with recursive pattern "**/*"
+    reader = FileSourceReader(connections)
+    s_id = source_id("file", "**/*", "results-conn")
+    outcome = await reader.read(project_id, s_id, cursor={})
+
+    # Assert only the legitimate results file was read
+    assert len(outcome.records) == 1
+    assert outcome.records[0][1].check_id == "chk_valid"
+    assert "sub/results.jsonl" in outcome.cursor.get("files", {})
+    assert ".env" not in outcome.cursor.get("files", {})
+    assert "sub/id_rsa" not in outcome.cursor.get("files", {})
+
+    await databases.dispose()
