@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from onboarding_script import (
         AUDIT_NO_DATA,
         CONNECTION_NAME,
+        FEED_TIMEZONE,
         MODEL_NAME,
+        ON_CALL_TIMEZONE,
         ONBOARDING_COMPLETE,
         TABLES,
         audit_reply,
@@ -32,7 +34,9 @@ else:
     from tests.fakes.onboarding_script import (
         AUDIT_NO_DATA,
         CONNECTION_NAME,
+        FEED_TIMEZONE,
         MODEL_NAME,
+        ON_CALL_TIMEZONE,
         ONBOARDING_COMPLETE,
         TABLES,
         audit_reply,
@@ -142,9 +146,12 @@ def test_the_handoff_covers_every_part() -> None:
     ops = payload.operations
     assert ops.scheduler is not None
     [feed] = ops.feeds
-    assert feed.kind == "data" and feed.cadence.cron and feed.timezone
+    assert feed.kind == "data" and feed.cadence.cron
     [on_call] = ops.on_call
     assert on_call.hours.days and len(on_call.contacts) == 2
+    # Distinct zones, so a check on the card can tell the feed's line from the on-call's.
+    assert (feed.timezone, on_call.timezone) == (FEED_TIMEZONE, ON_CALL_TIMEZONE)
+    assert FEED_TIMEZONE != ON_CALL_TIMEZONE
     [check] = ops.checks
     assert check.results.model_dump().keys() == {"connection", "path_pattern"}
     assert len(payload.gaps) == 1

@@ -205,6 +205,7 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
 const CONNECTION_NAME = "hotel-data";
 const MODEL_NAME = "hotel-cancel";
 const FEED_TIMEZONE = "Europe/Lisbon";
+const ON_CALL_TIMEZONE = "Europe/Madrid";
 const ON_CALL_HOURS = "08:30 - 17:30";
 const ONBOARDING_COMPLETE = "Onboarding is complete.";
 const AUDIT_CONTEXT = "Audit context included:";
@@ -317,8 +318,13 @@ test("stage 3 flow: Onboarding proposes the connection and the handoff, and the 
       const tracking = handoffCard.getByRole("region", { name: "Tracking" });
       await expect(tracking.getByText(FAKE_MLFLOW_URL)).toBeVisible();
       const operations = handoffCard.getByRole("region", { name: "Operations" });
-      await expect(operations.getByText(`Timezone: ${FEED_TIMEZONE}`).first()).toBeVisible();
-      await expect(operations.getByText(ON_CALL_HOURS)).toBeVisible();
+      // The feed's line and the on-call line, each with its own time zone.
+      await expect(
+        operations.getByText(new RegExp(String.raw`Grace: \d+m \| Timezone: ${FEED_TIMEZONE}`)),
+      ).toBeVisible();
+      await expect(
+        operations.getByText(`(${ON_CALL_HOURS}) | Timezone: ${ON_CALL_TIMEZONE}`),
+      ).toBeVisible();
       await handoffCard.getByRole("button", { name: "Approve" }).click();
 
       await expect(messages.getByText(ONBOARDING_COMPLETE, { exact: true })).toBeVisible();

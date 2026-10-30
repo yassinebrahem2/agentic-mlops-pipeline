@@ -23,6 +23,8 @@ BOOKINGS: Final = "bookings_e2e"
 PREDICTIONS: Final = "predictions_e2e"
 LABELS: Final = "labels_e2e"
 TABLES: Final = (BOOKINGS, PREDICTIONS, LABELS)
+FEED_TIMEZONE: Final = "Europe/Lisbon"
+ON_CALL_TIMEZONE: Final = "Europe/Madrid"
 
 ASK_FOR_DATA: Final = (
     f"Where does the data live? Answer with {DATA_PATH_KEY}<folder> and {MLFLOW_URL_KEY}<url>, "
@@ -167,7 +169,7 @@ def handoff_payload(mlflow_url: str) -> dict[str, Any]:
                     "ref": {"connection": CONNECTION_NAME, "table": BOOKINGS},
                     "cadence": _cron("0 6 * * *"),
                     "grace_minutes": 60,
-                    "timezone": "Europe/Lisbon",
+                    "timezone": FEED_TIMEZONE,
                 }
             ],
             "on_call": [
@@ -182,7 +184,7 @@ def handoff_payload(mlflow_url: str) -> dict[str, Any]:
                         "start": "08:30",
                         "end": "17:30",
                     },
-                    "timezone": "Europe/Lisbon",
+                    "timezone": ON_CALL_TIMEZONE,
                     "escalation_order": 1,
                 }
             ],
