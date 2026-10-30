@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx2
 
+from mlops_agents.agents.approvals.authority import AuthorityRegistry
 from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
@@ -53,7 +54,13 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
+from mlops_agents.monitoring.scheduler.sync_jobs import (
+    AfterSyncJob,
+    SyncPrsJob,
+    SyncTrackingJob,
+)
 from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.contract import Notifier
 from mlops_agents.notifications.notifier import SqliteNotifier
@@ -80,7 +87,6 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
-from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -113,13 +119,14 @@ class Services:
     embedders: EmbeddersService
     knowledge: Knowledge
     tracking: TrackingService
-    tracking_loop: TrackingLoop
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
     query_providers: QueryProviders
+    authorities: AuthorityRegistry
     clock: Clock
     scheduler: AppScheduler
+    results: ResultsService
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
@@ -213,7 +220,14 @@ async def build_services(
     bus = SqliteMessageBus(databases, events, messaging_settings)
     # The one approval store: it holds the approval observers, so every transition reaches them.
     approval_store = ApprovalStore(databases)
-    gate = ApprovalGate(databases, store=approval_store, audit_log=audit, event_log=events)
+    authorities = AuthorityRegistry()
+    gate = ApprovalGate(
+        databases,
+        store=approval_store,
+        audit_log=audit,
+        event_log=events,
+        authorities=authorities,
+    )
 
     kind_registry = KindRegistry([LocalFolderKind(paths.root)])
     connections = ConnectionsService(databases, events, kind_registry)
@@ -357,19 +371,23 @@ async def build_services(
     async def _list_project_ids() -> list[str]:
         return [p.id for p in await workspace.list_projects()]
 
-    tracking_loop = TrackingLoop(
-        tracking=tracking,
-        projects=_list_project_ids,
-    )
-    stack.push_async_callback(tracking_loop.close)
-    await tracking_loop.start()
-
     scheduler = AppScheduler(
         databases=databases,
         projects=_list_project_ids,
         clock=clock,
         sleep=clock.sleep,
     )
+    scheduler.register(SyncTrackingJob(tracking))
+    scheduler.register(SyncPrsJob(databases, pr_sync))
+    scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
+
+    results = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -396,6 +414,11 @@ async def build_services(
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
+
+    # Deliver undelivered results across restarts, after all observers and services are registered and ready.
+    startup_now = clock.now()
+    for project in await workspace.list_projects():
+        await results.deliver_undelivered(project.id, startup_now)
 
     return Services(
         settings=settings,
@@ -424,13 +447,14 @@ async def build_services(
         embedders=embedders,
         knowledge=knowledge,
         tracking=tracking,
-        tracking_loop=tracking_loop,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
         query_providers=query_providers,
+        authorities=authorities,
         clock=clock,
         scheduler=scheduler,
+        results=results,
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
