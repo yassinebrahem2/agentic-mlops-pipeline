@@ -161,6 +161,7 @@ async def test_the_sample_is_capped_and_cut(team: TeamFolder) -> None:
     assert "NULL" in by_name["maybe"]
 
 
+@pytest.mark.serial
 async def test_a_slow_table_times_out_with_its_columns(
     team: TeamFolder, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -202,6 +202,7 @@ def test_quote_identifier_doubles_double_quotes() -> None:
     assert quote_identifier("plain") == '"plain"'
 
 
+@pytest.mark.serial
 def test_the_deadline_interrupts_a_running_query() -> None:
     with locked_connection([Path.cwd()]) as connection:
         deadline = Deadline(connection, 0.1)
@@ -215,6 +216,7 @@ def test_the_deadline_interrupts_a_running_query() -> None:
         assert time.monotonic() - started < 1
 
 
+@pytest.mark.serial
 def test_a_query_started_after_the_deadline_is_still_interrupted() -> None:
     """An interrupt on an idle connection is lost, so the watchdog keeps interrupting."""
     with locked_connection([Path.cwd()]) as connection:
