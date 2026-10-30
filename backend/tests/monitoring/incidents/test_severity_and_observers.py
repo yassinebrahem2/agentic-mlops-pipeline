@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from mlops_agents.events.log import SqliteEventLog
@@ -208,3 +210,43 @@ async def test_bind_verdicts_populates_verdict_field(
     assert inc_bound is not None
     assert inc_bound.verdict is not None
     assert inc_bound.verdict.value == "real_issue"
+
+
+async def test_attach_never_lowers_severity(
+    service: IncidentsService,
+    fake_severity: FakeSeverityPolicy,
+    event_log: SqliteEventLog,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    recorder = ChangeRecorder()
+    service.add_observer(recorder)
+    now = fake_clock.now()
+
+    def draft(minutes: int) -> SignalDraft:
+        return SignalDraft(
+            kind="fired_result",
+            category="drift",
+            subject="features",
+            model="churn",
+            ran_at=now - timedelta(minutes=minutes),
+            detail={},
+        )
+
+    fake_severity.default_severity = "high"
+    first = await service.raise_signal(project_id, draft(10), seen_at=now)
+    assert first.severity == "high"
+
+    # The policy now decides lower for the incident the second signal attaches to.
+    fake_severity.default_severity = "low"
+    second = await service.raise_signal(project_id, draft(5), seen_at=now)
+
+    assert second.change == "attached"
+    assert second.incident_id == first.incident_id
+    assert second.severity == "high"
+    incident = await service.get(project_id, first.incident_id)
+    assert incident is not None
+    assert incident.severity == "high"
+    events = await event_log.page(project_id, subject_id=first.incident_id)
+    assert not any(e.type == "incident.severity_changed" for e in events)
+    assert not any(c.kind in ("severity_raised", "severity_lowered") for c in recorder.changes)
