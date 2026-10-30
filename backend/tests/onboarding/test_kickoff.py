@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any
 
 import httpx2
 import pytest
 from sqlalchemy import func, insert, select, update
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import MessageView
 from mlops_agents.clock import now_iso
@@ -203,6 +206,52 @@ async def test_a_failing_post_leaves_its_row_pending_and_the_next_resume_posts_o
     assert {r["status"] for r in rows.values()} == {"posted"}
     found = await handoff_messages(databases, env.project_id)
     assert sorted(m.session_agent for m in found) == sorted(KICKOFF_AGENTS)
+
+
+async def test_a_failing_mark_counts_as_posted_and_a_repeat_posts_nothing_twice(
+    env: SessionEnv,
+    databases: Databases,
+    handoffs: SqliteHandoffs,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    version, payload = await _stored(handoffs, env.project_id)
+    kick = Kickoff(databases, env.manager, handoffs)
+    real_mark = kick._mark  # pyright: ignore[reportPrivateUsage]
+
+    async def mark_failing_for_retraining(
+        engine: AsyncEngine, version: int, agent: str, message_id: str
+    ) -> None:
+        if agent == "retraining":
+            raise OperationalError("UPDATE kickoff", {}, sqlite3.OperationalError("disk I/O error"))
+        await real_mark(engine, version, agent, message_id)
+
+    monkeypatch.setattr(kick, "_mark", mark_failing_for_retraining)
+
+    with caplog.at_level(logging.ERROR, logger="mlops_agents.onboarding.kickoff"):
+        posted = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await all_idle(env.manager, env.project_id)
+
+    # The post went through, so it counts; only its mark is left for the marker guard.
+    assert posted == list(KICKOFF_AGENTS)
+    assert any(r.exc_info is not None and "retraining" in r.getMessage() for r in caplog.records)
+    rows = await kickoff_rows(databases, env.project_id)
+    assert rows[(version, "retraining")]["status"] == "pending"
+    assert {rows[(version, a)]["status"] for a in KICKOFF_AGENTS if a != "retraining"} == {"posted"}
+    assert len(await handoff_messages(databases, env.project_id)) == len(KICKOFF_AGENTS)
+
+    monkeypatch.setattr(kick, "_mark", real_mark)
+    again = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await kick.resume()
+    await all_idle(env.manager, env.project_id)
+
+    assert again == []
+    rows = await kickoff_rows(databases, env.project_id)
+    assert {r["status"] for r in rows.values()} == {"posted"}
+    found = await handoff_messages(databases, env.project_id)
+    assert sorted(m.session_agent for m in found) == sorted(KICKOFF_AGENTS)
+    retraining = next(m for m in found if m.session_agent == "retraining")
+    assert rows[(version, "retraining")]["message_id"] == retraining.id
 
 
 # Restart

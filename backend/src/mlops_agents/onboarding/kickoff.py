@@ -175,12 +175,17 @@ class Kickoff:
         payload: HandoffPayload,
         agent: str,
     ) -> bool:
-        """Post to one agent unless an earlier run already did; True when posted now."""
-        earlier = await self._earlier_post(engine, agent, proposal_id)
-        if earlier is not None:  # posted before a crash, never marked
-            await self._mark(engine, version, agent, earlier)
-            return False
+        """Post to one agent unless an earlier run already did; True when posted now.
+
+        Nothing escapes: a failure leaves the row pending for the next run and never ends the
+        gather (and releases the lock) while the other agents' posts are still in flight.
+        """
+        posted = False
         try:
+            earlier = await self._earlier_post(engine, agent, proposal_id)
+            if earlier is not None:  # posted before a crash, never marked
+                await self._mark(engine, version, agent, earlier)
+                return False
             message = await self._sessions.post(
                 project_id,
                 agent,
@@ -190,17 +195,20 @@ class Kickoff:
                 exchange_id=None,
                 hop=None,
             )
+            posted = True
+            await self._mark(engine, version, agent, message.id)
         except Exception:
-            # The row stays pending: the next resume retries it. The other agents still go out.
+            # A message that went out still counts as posted now: the marker guard records it
+            # on the next run instead of posting again.
             logger.exception(
-                "The kickoff of handoff %s could not be posted to %s in project %s",
+                "The kickoff of handoff %s to %s in project %s did not finish (%s); the next "
+                "run retries it",
                 proposal_id,
                 agent,
                 project_id,
+                "posted, not recorded" if posted else "not posted",
             )
-            return False
-        await self._mark(engine, version, agent, message.id)
-        return True
+        return posted
 
     async def _earlier_post(self, engine: AsyncEngine, agent: str, proposal_id: str) -> str | None:
         async with engine.connect() as conn:
