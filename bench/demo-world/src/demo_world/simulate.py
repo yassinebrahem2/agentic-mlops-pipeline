@@ -11,7 +11,7 @@ every exit, Ctrl+C and errors included.
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -192,6 +192,9 @@ def simulate(world: World, start: date, end: date, pace: Pace) -> Summary:
     state = _read_state(world.folder)
     first = _first_day(state, start, end)
     origin = first if state is None else state.first
+    # Outcomes a scenario changes are set once, before any day's labels are built from them,
+    # and from the first day ever played, so a resumed run releases the same labels.
+    world = replace(world, loaded=world.scenario.relabel(world.loaded, origin))
     world.folder.mkdir(parents=True, exist_ok=True)
     answer_key.write_planted_flaws(world.folder)
 

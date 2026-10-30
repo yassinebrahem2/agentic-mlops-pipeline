@@ -1,10 +1,11 @@
 # The default scenario: one injected problem of each kind, and the natural shift the evaluation
-# scores. Dates are business dates (a bookings file's date is the day the bookings were made).
+# scores. Dates are business dates (a bookings file's date is the day the bookings were made),
+# except model_decay's, which are arrival dates (see it, last).
 # The simulation starts on 2016-07-01, and its first month, July, is the quiet baseline (each
-# legacy check fires on at most 2 of its days), so the windows start in August. They end before the
-# natural shift of November and December, and lie over 7 days apart, beyond the 7-day lookbacks
-# of the cancellation-rate and drift checks; neighbouring windows do fall within the accuracy
-# check's 30-day label window.
+# legacy check fires on at most 2 of its days), so the windows start in August. The windows of the
+# problems that break files or jobs end before the natural shift of November and December, and lie
+# over 7 days apart, beyond the 7-day lookbacks of the cancellation-rate and drift checks;
+# neighbouring windows do fall within the accuracy check's 30-day label window.
 # `simulate --scenario scenarios/default.toml` plays it; without `--scenario` nothing is injected.
 
 # Missing values in a share of each day's rows, as from a broken upstream join.
@@ -50,3 +51,20 @@ end = 2016-10-30
 columns = ["deposit_type", "market_segment"]
 start = 2016-11-01
 end = 2016-12-31
+
+# The model decays: a share of the outcomes turns against what the first model learned. For online
+# travel agent bookings with no deposit arriving in the window, cancellations start to follow a
+# rule: below a lead-time cut they cancel, above it they do not (in the source, long lead times
+# cancel more). The cut keeps the group's cancellation rate at its rate before the window. The
+# share of the group's bookings that follow the rule ramps from 0 at the start to `max_share` at
+# the end. Of 0.5, 0.7, 0.9 and 1.0, tried offline on the source, 0.7 is the largest at which a
+# model the company retrains on the window's first half scores on December's arrivals within 0.05
+# of the first model without the decay.
+# Only labels change, never a bookings file. It overlaps the natural shift on purpose, in another
+# segment and another category.
+[[injection]]
+kind = "model_decay"
+group = { market_segment = "Online TA", deposit_type = "No Deposit" }
+max_share = 0.7
+start = 2016-10-01
+end = 2017-01-15

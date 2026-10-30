@@ -6,12 +6,13 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from demo_world import scenarios, source
+from demo_world import model_decay, scenarios, source
 from demo_world.answer_key import Record
 from tests.fixture import DEFAULT_SCENARIO, FIXTURE_CSV
 
 DAY = date(2016, 1, 2)
 WINDOW = "start = 2016-01-02\nend = 2016-01-03\n"
+DECAY = 'kind = "model_decay"\ngroup = { market_segment = "Online TA" }\n'
 
 
 @pytest.fixture(scope="module")
@@ -45,8 +46,25 @@ def test_the_default_scenario_has_one_of_each_kind_and_the_natural_shift() -> No
     assert spike.columns == ("country", "adr")
 
 
+def test_the_default_model_decay_ramps_over_arrivals_from_october_to_mid_january() -> None:
+    decay = next(p for p in scenarios.load(DEFAULT_SCENARIO).problems if p.kind == "model_decay")
+
+    assert isinstance(decay, scenarios.ModelDecay)
+    assert decay.rule() == model_decay.Rule(
+        group=(("market_segment", "Online TA"), ("deposit_type", "No Deposit")),
+        start=date(2016, 10, 1),
+        end=date(2017, 1, 15),
+        max_share=0.7,
+    )
+
+
 def test_the_default_injections_sit_between_the_quiet_july_and_the_natural_shift() -> None:
-    injected = [p for p in scenarios.load(DEFAULT_SCENARIO).problems if p.kind != "natural_shift"]
+    # model_decay changes labels, not files, and overlaps the natural shift on purpose.
+    injected = [
+        p
+        for p in scenarios.load(DEFAULT_SCENARIO).problems
+        if p.kind not in ("natural_shift", "model_decay")
+    ]
 
     # The order and the window lengths (in days) kept from before the start moved to July.
     assert [(p.kind, (p.end - p.start).days + 1) for p in injected] == [
@@ -232,6 +250,27 @@ def test_an_injection_changes_nothing_outside_its_window(
             "overlap",
         ),
         ("[[injection]\n", "not valid TOML"),
+        (_injection(f"{DECAY}max_share = 1.5\n"), "max_share"),
+        (_injection(f"{DECAY}max_share = 0\n"), "max_share"),
+        (_injection(f"{DECAY}"), "missing 'max_share'"),
+        (_injection('kind = "model_decay"\ngroup = {}\nmax_share = 0.5\n'), "group"),
+        (_injection('kind = "model_decay"\ngroup = ["hotel"]\nmax_share = 0.5\n'), "group"),
+        (
+            _injection('kind = "model_decay"\ngroup = { room = "A" }\nmax_share = 0.5\n'),
+            "unknown column 'room'",
+        ),
+        (
+            _injection('kind = "model_decay"\ngroup = { lead_time = "5" }\nmax_share = 0.5\n'),
+            "text column",
+        ),
+        (
+            _injection('kind = "model_decay"\ngroup = { hotel = 5 }\nmax_share = 0.5\n'),
+            "text column",
+        ),
+        (
+            f"[[injection]]\n{DECAY}max_share = 0.5\nstart = 2016-02-01\nend = 2016-02-01\n",
+            "two days",
+        ),
     ],
 )
 def test_a_bad_scenario_fails_with_a_clear_error(tmp_path: Path, text: str, message: str) -> None:

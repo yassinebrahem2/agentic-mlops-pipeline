@@ -20,6 +20,8 @@ INJECTIONS = {
     "out_of_range": 'column = "adr"\nfactor = 100.0\n',
     "score_failure": "",
     "ci_failure": "",
+    "model_decay": 'group = { market_segment = "Online TA", deposit_type = "No Deposit" }\n'
+    "max_share = 1.0\n",
 }
 
 
@@ -316,9 +318,14 @@ def test_the_planted_flaws_are_written_to_the_world_folder(loaded: pd.DataFrame)
 def test_nothing_in_the_data_folder_mentions_the_answer_key_or_the_flaws(
     loaded: pd.DataFrame,
 ) -> None:
+    one_day = [kind for kind in INJECTIONS if kind != "model_decay"]
     text = "".join(
-        f'[[injection]]\nkind = "{kind}"\n{body}start = {day}\nend = {day}\n'
-        for kind, body, day in zip(INJECTIONS, INJECTIONS.values(), [*FIXTURE_DAYS], strict=True)
+        f'[[injection]]\nkind = "{kind}"\n{INJECTIONS[kind]}start = {day}\nend = {day}\n'
+        for kind, day in zip(one_day, FIXTURE_DAYS, strict=True)
+    )
+    text += (
+        f'[[injection]]\nkind = "model_decay"\n{INJECTIONS["model_decay"]}'
+        f"start = {FIXTURE_START}\nend = {FIXTURE_END}\n"
     )
     world = _world(loaded, text=text)
 

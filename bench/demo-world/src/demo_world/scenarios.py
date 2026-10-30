@@ -4,6 +4,8 @@ An injected problem changes the bookings frame of each day in its window after t
 built from the source and before it is written, and states how the written schema breaks the
 contract, so `source.write_frame` keeps checking every file against the schema it is given.
 `score_failure` and `ci_failure` change no file: the company step of the day loop acts on them.
+`model_decay` changes no bookings file either: it changes outcomes in the source, once, before
+the loop builds any day's labels from it.
 """
 
 import hashlib
@@ -18,7 +20,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 
-from demo_world import source
+from demo_world import model_decay, source
 from demo_world.answer_key import Category, Record
 
 type Bookings = tuple[pd.DataFrame, pa.Schema]
@@ -29,9 +31,17 @@ CATEGORIES: dict[str, Category] = {
     "out_of_range": "data_quality",
     "score_failure": "operational",
     "ci_failure": "operational",
+    "model_decay": "model_performance",
     "natural_shift": "drift",
 }
-INJECTED_KINDS = ("null_spike", "schema_break", "out_of_range", "score_failure", "ci_failure")
+INJECTED_KINDS = (
+    "null_spike",
+    "schema_break",
+    "out_of_range",
+    "score_failure",
+    "ci_failure",
+    "model_decay",
+)
 # The kinds that rewrite bookings files; their windows may not overlap, so no two of them
 # touch one file (a null spike on a column a schema break just dropped has no meaning).
 _FILE_KINDS = ("null_spike", "schema_break", "out_of_range")
@@ -55,6 +65,11 @@ class Problem:
     def change(self, bookings: Bookings, day: date) -> Bookings:
         """The day's bookings as this problem leaves them; most kinds leave them as they are."""
         return bookings
+
+    def relabel(self, loaded: pd.DataFrame, origin: date) -> pd.DataFrame:
+        """The source with this problem's outcomes, in a world first played on `origin`; most
+        kinds change none."""
+        return loaded
 
     def records(self) -> list[Record]:
         columns: tuple[str | None, ...] = self.columns or (None,)
@@ -112,6 +127,29 @@ class OutOfRange(Problem):
         return frame.assign(**{column: frame[column] * self.factor}), schema
 
 
+@dataclass(frozen=True, kw_only=True)
+class ModelDecay(Problem):
+    """Its window is of arrival dates: it changes the outcomes of the bookings arriving then."""
+
+    group: tuple[tuple[str, str], ...]
+    max_share: float
+
+    def rule(self) -> model_decay.Rule:
+        return model_decay.Rule(self.group, self.start, self.end, self.max_share)
+
+    def relabel(self, loaded: pd.DataFrame, origin: date) -> pd.DataFrame:
+        try:
+            return self.rule().relabel(loaded, origin)
+        except model_decay.DecayError as error:
+            raise ScenarioError(f"model_decay ({self.start} to {self.end}): {error}") from error
+
+    def records(self) -> list[Record]:
+        # One line naming every column the shift lives in: the group's and the lead time.
+        columns = ",".join([*(column for column, _ in self.group), "lead_time"])
+        start, end = self.start.isoformat(), self.end.isoformat()
+        return [Record(self.kind, CATEGORIES[self.kind], columns, start, end)]
+
+
 @dataclass(frozen=True)
 class Scenario:
     problems: tuple[Problem, ...]
@@ -123,6 +161,12 @@ class Scenario:
             if problem.active(day):
                 bookings = problem.change(bookings, day)
         return bookings
+
+    def relabel(self, loaded: pd.DataFrame, origin: date) -> pd.DataFrame:
+        """The source with every problem's outcomes, in a world first played on `origin`."""
+        for problem in self.problems:
+            loaded = problem.relabel(loaded, origin)
+        return loaded
 
     def key_records(self, day: date) -> list[Record]:
         """The answer-key records of every problem whose window holds `day`."""
@@ -182,6 +226,22 @@ class _Entry:
             raise self.error(f"'{key}' must be a number, not {value!r}")
         return float(value)
 
+    def group(self) -> tuple[tuple[str, str], ...]:
+        value = self.get("group")
+        if not isinstance(value, dict) or not value:
+            raise self.error("'group' must be a non-empty table of text columns and their values")
+        group: list[tuple[str, str]] = []
+        for column, wanted in value.items():
+            name = self._known(column, "group")
+            if source.BOOKINGS_SCHEMA.field(name).type != pa.string() or not isinstance(
+                wanted, str
+            ):
+                raise self.error(
+                    f"'group' matches a text column to a text value, not {name} = {wanted!r}"
+                )
+            group.append((name, wanted))
+        return tuple(group)
+
     def done(self) -> None:
         for key in self._table.keys() - self._read:
             raise self.error(f"unexpected '{key}'")
@@ -219,6 +279,17 @@ def _out_of_range(entry: _Entry, start: date, end: date) -> Problem:
     return OutOfRange(kind="out_of_range", start=start, end=end, columns=(column,), factor=factor)
 
 
+def _model_decay(entry: _Entry, start: date, end: date) -> Problem:
+    group, max_share = entry.group(), entry.number("max_share")
+    if not 0 < max_share <= 1:
+        raise entry.error(f"'max_share' must be above 0 and at most 1, not {max_share}")
+    if end == start:
+        raise entry.error(
+            "needs a window of at least two days: its share ramps from 0 to max_share"
+        )
+    return ModelDecay(kind="model_decay", start=start, end=end, group=group, max_share=max_share)
+
+
 type _Builder = Callable[[_Entry, date, date], Problem]
 
 
@@ -235,6 +306,7 @@ _BUILDERS: dict[str, _Builder] = {
     "out_of_range": _out_of_range,
     "score_failure": _failure("score_failure"),
     "ci_failure": _failure("ci_failure"),
+    "model_decay": _model_decay,
 }
 
 
