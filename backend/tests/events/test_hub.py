@@ -87,14 +87,22 @@ async def test_hub_live_subscriber_does_not_lose_event_during_subscribe(
     # Record initial event 1
     await event_log.record(project_id, source="user", type="turn.started", payload={"n": 1})
 
-    sub = event_log.subscribe(project_id, after_seq=None)
-    sub_task = asyncio.create_task(anext(sub))
-    await asyncio.sleep(0.01)
-    await event_log.record(project_id, source="user", type="message.sent", payload={"n": 2})
+    # Hook EventHub to record an event inside the subscribe setup window
+    recorded = False
 
-    ev = await asyncio.wait_for(sub_task, timeout=2.0)
+    async def recording_hook(pid: str) -> None:
+        nonlocal recorded
+        if not recorded and pid == project_id:
+            recorded = True
+            await event_log.record(project_id, source="user", type="message.sent", payload={"n": 2})
+
+    hub.setup_hook = recording_hook
+
+    sub = event_log.subscribe(project_id, after_seq=None)
+    ev = await asyncio.wait_for(anext(sub), timeout=2.0)
     assert isinstance(ev, EventRecord)
     assert ev.seq == 2
+    assert recorded
     await sub.aclose()
 
 
@@ -218,9 +226,15 @@ async def test_hub_subscribe_live_does_not_acquire_project_database(
 
     monkeypatch.setattr(databases, "project", fake_project)
 
+    ready = asyncio.Event()
+
+    async def on_setup(pid: str) -> None:
+        ready.set()
+
+    hub.setup_hook = on_setup
     sub = hub.subscribe(databases, project_id, after_seq=None)
     anext_task = asyncio.create_task(anext(sub))
-    await asyncio.sleep(0.01)
+    await ready.wait()
 
     ev = EventRecord(
         id="evt_1",
@@ -282,6 +296,12 @@ async def test_hub_close_project_terminates_stream_promptly_under_slow_db(
 
     monkeypatch.setattr(databases, "project", slow_project)
 
+    ready = asyncio.Event()
+
+    async def on_setup(pid: str) -> None:
+        ready.set()
+
+    hub.setup_hook = on_setup
     sub = hub.subscribe(databases, project_id, after_seq=None)
 
     async def consume(iterator: Any) -> list[object]:
@@ -291,7 +311,7 @@ async def test_hub_close_project_terminates_stream_promptly_under_slow_db(
         return items
 
     consume_task = asyncio.create_task(consume(sub))
-    await asyncio.sleep(0.02)
+    await ready.wait()
 
     await hub.close_project(project_id)
     result = await asyncio.wait_for(consume_task, timeout=1.0)

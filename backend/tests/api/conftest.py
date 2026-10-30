@@ -11,6 +11,7 @@ import httpx2
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from sse_starlette.sse import AppStatus
 
 from mlops_agents.api.app import create_app
 from mlops_agents.api.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, SessionSigner
@@ -152,10 +153,12 @@ class LiveServer:
     serving: asyncio.Task[None]
 
     async def stop(self) -> None:
-        if self.serving.done():
-            return
         self.server.should_exit = True
-        await self.serving
+        AppStatus.should_exit = True
+        try:
+            await self.serving
+        finally:
+            AppStatus.should_exit = False
 
 
 @asynccontextmanager

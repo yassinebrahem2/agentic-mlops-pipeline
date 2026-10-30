@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, Final
 
 from sqlalchemy import func, select
@@ -41,6 +41,7 @@ class EventHub:
         self._subscribers: dict[str, set[asyncio.Queue[EventRecord | Resync | None]]] = {}
         self._last_seq: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self.setup_hook: Callable[[str], Awaitable[None]] | None = None
 
     def _get_lock(self, project_id: str) -> asyncio.Lock:
         lock = self._locks.get(project_id)
@@ -77,6 +78,9 @@ class EventHub:
             self._subscribers.setdefault(project_id, set()).add(queue)
             buffer = self._buffers.get(project_id)
             buffer_copy = list(buffer) if buffer else []
+
+        if self.setup_hook is not None:
+            await self.setup_hook(project_id)
 
         try:
             replay: list[EventRecord] = []
