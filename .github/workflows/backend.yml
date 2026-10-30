@@ -15,12 +15,26 @@ env:
 
 jobs:
   backend:
+    name: backend (${{ matrix.name }})
     timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - name: ubuntu-latest
+            os: ubuntu-latest
+          # Windows splits the tests by folder over separate runners, each running its share in
+          # one process: pytest-xdist gains little there. The split is in "Tests (Windows shard)".
+          - name: windows-latest 1/3
+            os: windows-latest
+            shard: "1"
+          - name: windows-latest 2/3
+            os: windows-latest
+            shard: "2"
+          - name: windows-latest 3/3
+            os: windows-latest
+            shard: rest
     defaults:
       run:
         working-directory: backend
@@ -58,13 +72,43 @@ jobs:
       # sensitive to CPU load and run afterwards, alone.
       - name: Tests (parallel)
         id: parallel
+        if: runner.os == 'Linux'
         shell: bash
         run: uv run pytest -n 4 -m "not live and not docker and not serial"
       - name: Tests (serial)
         # Also after a parallel failure, so one run reports every failing test.
-        if: ${{ !cancelled() && steps.parallel.outcome != 'skipped' }}
+        if: ${{ runner.os == 'Linux' && !cancelled() && steps.parallel.outcome != 'skipped' }}
         shell: bash
         run: uv run pytest -m "serial and not live and not docker"
+      - name: Tests (Windows shard)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        # Each folder of tests/ named here runs in its shard, balanced by test time (about 260 s
+        # each locally). The "rest" shard runs everything else, so a new test folder or file is
+        # never left out.
+        run: |
+          declare -A folder_shard=(
+            [agents/runtime]=1
+            [agents/tasks]=1
+            [events]=1
+            [storage]=1
+            [api]=2
+            [agents/tools]=2
+            [agents/messaging]=2
+            [workspace]=2
+          )
+          args=()
+          if [ "$SHARD" = rest ]; then
+            args+=(tests)
+            for folder in "${!folder_shard[@]}"; do args+=("--ignore=tests/$folder"); done
+          else
+            for folder in "${!folder_shard[@]}"; do
+              if [ "${folder_shard[$folder]}" = "$SHARD" ]; then args+=("tests/$folder"); fi
+            done
+          fi
+          uv run pytest "${args[@]}"
 
   docker:
     timeout-minutes: 30
