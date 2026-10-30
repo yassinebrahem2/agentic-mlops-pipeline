@@ -56,7 +56,10 @@ function setup(failedPath: string) {
     }),
   );
   renderPage("/projects/new", {
-    routes: [route, { path: "/projects/:projectId", element: <h1>New project opened</h1> }],
+    routes: [
+      route,
+      { path: "/projects/:projectId/onboarding", element: <h1>Onboarding step opened</h1> },
+    ],
   });
   return { added, requested, user: userEvent.setup() };
 }
@@ -92,6 +95,8 @@ it("shows a failed repositories lookup and still accepts a manually entered repo
   expect(screen.queryByText("No repositories found")).not.toBeInTheDocument();
   await user.type(screen.getByRole("combobox", { name: "Repository" }), "owner/repo");
   await user.click(screen.getByRole("button", { name: "Add" }));
-  expect(await screen.findByRole("heading", { name: "New project opened" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "Onboarding step opened" }),
+  ).toBeInTheDocument();
   expect(added).toEqual([{ source: "github", repo: "owner/repo" }]);
 });

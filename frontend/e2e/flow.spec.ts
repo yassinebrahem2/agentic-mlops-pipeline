@@ -89,8 +89,10 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
     await expect(page.getByText(`Current folder: ${repoPath}`)).toBeVisible();
     await page.getByRole("button", { name: "Use this folder" }).click();
 
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/onboarding/);
+    // Only the Orchestrator has a model here, so Onboarding's Start stays disabled; go on to Agents.
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
     await expect(page).toHaveURL(/\/projects\/[^/]+\/agents/);
-    await expect(page.getByRole("link", { name: "Agents", exact: true })).toBeVisible();
   });
 
   const messages = page.getByRole("log", { name: "Messages" });
