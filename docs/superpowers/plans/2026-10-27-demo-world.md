@@ -9,10 +9,10 @@
 ## Planted flaws (the company's setup, by design)
 
 What a real mid-size company plausibly gets wrong. The agents' first audit should find them. `demo-world` writes this list to `world/planted_flaws.json` (id, category, where, what). The numbers come from a replay of the data close to this setup (first model on arrivals before 2016-01-01, never retrained); task 3 re-measures them on the built system.
-1. **Random validation split.** `evaluate` scores a random 20% of the training window: PR-AUC about 0.98, against about 0.66 on later bookings.
-2. **Accuracy-only performance alert.** Accuracy stays between 0.66 and 0.78 while PR-AUC decays (about 0.74 in January 2016 to 0.45 in October), because about 65% of bookings are never cancelled.
-3. **No calibration check.** The model predicts a mean cancellation chance of about 0.15 against a real rate of about 0.35, which is what overbooking depends on.
-4. **Retraining by hand only.** Nothing schedules it, so the decay builds up.
+1. **Random validation split.** `evaluate` scores a random 20% of the training window: PR-AUC 0.95 (measured in task 3's full run), against 0.63 to 0.66 on the bookings of July to October 2016.
+2. **Accuracy-only performance alert.** The company watches accuracy only, and most bookings are never cancelled (about 50 to 65% in task 3's run), so accuracy stays high (0.83 to 0.91 in task 3's run) whatever happens to ranking quality. When the model decays (the `model_decay` scenario, task 4), PR-AUC falls while the accuracy check stays quiet.
+3. **No calibration check.** The model predicts a mean cancellation chance of 0.12 to 0.15 against a real rate of 0.35 to 0.38 (July to October 2016, task 3's run), which is what overbooking depends on.
+4. **Retraining by hand only.** Nothing schedules it, so once the model decays (task 4) the drop persists until someone retrains.
 5. **Drift check blind to categories.** The drift report looks at four numeric columns only, so the late-2016 shift (non-refundable group bookings, in `deposit_type` and `market_segment`) goes unseen.
 6. **Training uses a value known only after the stay (minor).** `train` takes `booking_changes` from the labels (its final value), while bookings are scored with 0. On this data it costs little (PR-AUC 0.661 against 0.665): a finding, not a failure.
 7. **MLflow without authentication.** Anyone who can reach the tracking server can change the production model; the agents should report it and propose enabling MLflow's authentication. The world starts the server, so a PR to the company cannot close it: this flaw is scored on the audit report only.
@@ -24,6 +24,7 @@ What a real mid-size company plausibly gets wrong. The agents' first audit shoul
 | 1 | Package, fetch, history backfill | now |
 | 2 | The day loop, injected problems, answer key | now |
 | 3 | The company's daily job in the loop, the PR merger, `up`, CI runs | after demo-company merges |
+| 4 | The `model_decay` scenario (added 2026-10-30) | after task 3 |
 
 ---
 
@@ -68,3 +69,24 @@ What a real mid-size company plausibly gets wrong. The agents' first audit shoul
 
 **Tests (stop condition):** with a fake company CLI (a script recording its calls), the loop bootstraps once and runs each scheduled job on its due days with the right environment, and a job added to `ops/schedule.toml` between days runs from the next due day; `new-run` calls the template API and writes `run.env` (mocked `gh`); two `new-run`s get disjoint folders, and the second bootstraps its own model; a failing `daily` is logged and the next day runs; a `score_failure` window makes the real company's `daily` fail on that day (one test against the demo repo's CLI, marked to run only when `HOTEL_DEMO_COMPANY` is set); `ci_failure` and the CI runs call the right APIs at the right days (mocked `gh`); the merger merges a PR after N simulated days and never without the option (mocked `gh`); the world refuses to run against the original demo repository; the checkout is updated before each day; `up` starts and stops both processes (a short run, in the Ubuntu and Windows jobs); the contract test passes in CI.
 - **A full-data run** from 2016-07-01 to 2017-03-31 at full speed (the start moved from 2016-01-01 by Decision #423: January 2016's drift check fired on 4 days, so the plan's fallback applies), with no injections; the PR pastes the first model's PR-AUC and mean predicted versus actual cancellation rate per month, and each legacy check's firing days per month. The first simulated month, July 2016, must be quiet: at most 2 firing days per check. If it is not, stop and raise it in the plan issue (thresholds change only through a plan edit). Every `scenarios/default.toml` window starts on or after 2016-08-01 and keeps its length and order; the answer key follows.
+
+---
+
+### Task 4: The `model_decay` scenario (added 2026-10-30)
+
+Added by the lead's decision of 2026-10-30: task 3's full run showed the first model does not decay between July 2016 and March 2017 (PR-AUC rises), so flaws 2 and 4 had no visible effect and the stage 4-6 story (a performance incident, diagnosis, retraining, promotion) had nothing to react to. This task makes the decay real. It is carried in the plan's PR (#533).
+
+**Files:** `bench/demo-world/src/demo_world/scenarios.py` (the new kind), `bench/demo-world/scenarios/default.toml` (one `model_decay` entry), `bench/demo-world/src/demo_world/answer_key.py` (flaws 1 to 4 as written above), tests.
+
+**Notes:**
+- **A structured, learnable shift, not noise.** For bookings in one categorical group (default: `market_segment = "Online TA"` with `deposit_type = "No Deposit"`) whose **arrival date** falls in the window (default 2016-10-01 to 2017-01-15), the cancellation outcome starts to follow a rule the first model never learned and that runs against what it did learn (it is a LightGBM model, and long lead times cancel more in this data): within the group, bookings **below** a lead-time cut cancel and those above do not, the cut chosen so the group's cancellation rate stays at its pre-window rate. LightGBM can learn this group-by-lead-time interaction once it trains on data from inside the window. The share of the group's bookings that follow the rule ramps from 0 at the window start to a set maximum (a scenario parameter) at its end. A model retrained on data from inside the window can learn the rule; random label noise could not be learned, and the retrain-and-promote story would fail.
+- **Why these choices.** The overall cancellation rate stays roughly stable, so accuracy and the `cancellation_rate` check stay quiet (flaw 2). The shift lives in categorical columns and a lead-time interaction, so the numeric-only drift check misses it (flaw 5). Nothing retrains, so it persists (flaw 4). Choosing by arrival date makes the labels mature inside the run (the company's accuracy check reads matured labels only, #428), and leaves February and March 2017 for diagnosis, retraining and promotion. The window overlaps the natural shift of November and December 2016 on purpose, but in a different segment (non-refundable `Groups` bookings there, `Online TA` with no deposit here): the answer key scores the two separately by category (`model_performance` here, the natural shift's own category there) and by the columns each names.
+- **Label release stays valid.** A booking turned into a cancellation gets a cancellation date between its booking date and its arrival. Every changed label is released by the demo overview's label-release rule, so it is still released exactly once and never before its booking date.
+- **Answer key.** One entry `{kind: "model_decay", category: "model_performance", column: "market_segment,deposit_type,lead_time", start, end}`. It is never written into the data folder.
+- **Pass or fail, measured on one full-data run** (2016-07-01 to 2017-03-31, the default scenarios), reported in the PR body as a table like task 3's:
+  1. the production model's PR-AUC over matured labels of bookings arriving in the window's last full month is at least 0.15 below the same month's PR-AUC in task 3's run without the scenario (shown side by side);
+  2. the company's accuracy check fires on at most 2 days of the whole run, and `cancellation_rate` and `drift` fire on at most 2 more days than in task 3's run;
+  3. a model trained with the company's own `train` command on data through the window's midpoint scores, on the bookings arriving in the window's last full month, within 0.05 of that month's PR-AUC in task 3's run without the scenario.
+  If one honest run with the default parameters misses any of these, open a Decision issue with the measured numbers; do not keep tuning.
+
+**Tests (stop condition):** on the fixture, `model_decay` changes only labels of the group's bookings arriving in the window, keeps the group's cancellation rate within 0.02 of its pre-window rate, ramps the share as set, and releases every changed label exactly once and never before its booking date; the answer key has the entry and the data folder does not; the planted-flaws list matches the text above; the full-run table in the PR body meets the three numbers; demo-world tests, ruff; CI green.

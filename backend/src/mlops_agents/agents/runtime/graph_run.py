@@ -89,15 +89,18 @@ async def run_turn_graph(
             is_interrupted = True
 
         if is_interrupted:
-            cp.preserved = True
             try:
                 chk_state = await graph.aget_state(config)
-                decisions_to_record = chk_state.values.get("decisions")
-                stall = pending_stall(chk_state.values.get("stall"))
             except Exception:
-                logger.debug(
-                    "Could not read graph state decisions for turn %s", turn_id, exc_info=True
+                # A waiting turn without its card could never be resumed or stopped by the user:
+                # the turn fails (its checkpoint is deleted, its approvals swept) instead.
+                logger.warning(
+                    "Could not read the interrupted state of turn %s", turn_id, exc_info=True
                 )
+                raise
+            cp.preserved = True
+            decisions_to_record = chk_state.values.get("decisions")
+            stall = pending_stall(chk_state.values.get("stall"))
 
     if is_interrupted:
         await handle_turn_waiting(

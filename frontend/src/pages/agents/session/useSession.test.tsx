@@ -177,11 +177,12 @@ describe("useSession", () => {
     });
 
     // First refresh resolves LATER with older task1
-    act(() => {
+    await act(async () => {
       resolveFirstRefresh({
         data: { ...initialSession, current_task: task1 },
         response: new Response(null, { status: 200 }),
       });
+      await Promise.resolve();
     });
 
     // Older response must be dropped: current_task remains task2
