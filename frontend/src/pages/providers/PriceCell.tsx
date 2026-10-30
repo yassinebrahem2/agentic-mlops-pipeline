@@ -101,7 +101,9 @@ function SetPriceDialog({ model, onUpdated }: PriceCellProps) {
     save.mutate({ prompt: Number(prompt), completion: Number(completion) });
   }
 
-  const errors = fieldErrors(save.error);
+  // The server names a nested field by its path, e.g. "price.prompt_per_mtok".
+  const promptError = fieldErrors(save.error)["price.prompt_per_mtok"];
+  const completionError = fieldErrors(save.error)["price.completion_per_mtok"];
 
   return (
     <Dialog
@@ -142,9 +144,7 @@ function SetPriceDialog({ model, onUpdated }: PriceCellProps) {
                 setPrompt(event.target.value);
               }}
             />
-            {errors.prompt_per_mtok !== undefined && (
-              <p className="text-destructive">{errors.prompt_per_mtok}</p>
-            )}
+            {promptError !== undefined && <p className="text-destructive">{promptError}</p>}
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor={completionId}>Completion, USD per 1M tokens</Label>
@@ -159,11 +159,9 @@ function SetPriceDialog({ model, onUpdated }: PriceCellProps) {
                 setCompletion(event.target.value);
               }}
             />
-            {errors.completion_per_mtok !== undefined && (
-              <p className="text-destructive">{errors.completion_per_mtok}</p>
-            )}
+            {completionError !== undefined && <p className="text-destructive">{completionError}</p>}
           </div>
-          {save.isError && Object.keys(errors).length === 0 && (
+          {save.isError && promptError === undefined && completionError === undefined && (
             <p className="text-destructive">{errorText(save.error)}</p>
           )}
           <DialogFooter>

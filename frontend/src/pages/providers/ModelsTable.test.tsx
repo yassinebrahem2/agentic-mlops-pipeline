@@ -552,11 +552,25 @@ describe("model prices", () => {
     ]);
   });
 
-  it("shows the server's refusal as it is", async () => {
+  it("shows the server's refusal under the field it names", async () => {
     stubApi({
       "GET /api/models": () => json([verified]),
       "PUT /api/models/price": () =>
-        json({ code: "invalid_request", message: "A price cannot be negative.", detail: {} }, 422),
+        json(
+          {
+            code: "invalid_request",
+            message: "Some fields are missing or invalid.",
+            detail: {
+              errors: [
+                {
+                  field: "body.price.prompt_per_mtok",
+                  message: "Input should be greater than or equal to 0",
+                },
+              ],
+            },
+          },
+          422,
+        ),
     });
     const user = userEvent.setup();
     renderPage("/providers");
@@ -567,7 +581,30 @@ describe("model prices", () => {
     await user.type(screen.getByLabelText("Completion, USD per 1M tokens"), "1");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("A price cannot be negative.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Input should be greater than or equal to 0"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows any other refusal as it is", async () => {
+    stubApi({
+      "GET /api/models": () => json([verified]),
+      "PUT /api/models/price": () =>
+        json(
+          { code: "model_not_found", message: "There is no model fake:fake-tools.", detail: {} },
+          404,
+        ),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    await user.click(within(row).getByRole("button", { name: "Set price for fake:fake-tools" }));
+    await user.type(await screen.findByLabelText("Prompt, USD per 1M tokens"), "1");
+    await user.type(screen.getByLabelText("Completion, USD per 1M tokens"), "1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("There is no model fake:fake-tools.")).toBeInTheDocument();
   });
 
   it("clears the user's price", async () => {
