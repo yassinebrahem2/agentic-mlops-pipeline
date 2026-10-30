@@ -1431,6 +1431,172 @@
         "title": "EnvironmentStatus",
         "type": "object"
       },
+      "EvaluationPayload": {
+        "additionalProperties": true,
+        "properties": {
+          "calibration": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration"
+          },
+          "challenger_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetricSet"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "champion_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetricSet"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "champion_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Version"
+          },
+          "computed_where": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Where"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "promote",
+                  "hold",
+                  "reject"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "decision_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Rate"
+          },
+          "evaluation_commit": {
+            "title": "Evaluation Commit",
+            "type": "string"
+          },
+          "expected_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Cost"
+          },
+          "gate_config_version": {
+            "title": "Gate Config Version",
+            "type": "string"
+          },
+          "holdout_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParityResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "serving_compatibility": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serving Compatibility"
+          },
+          "training_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "evaluation_commit",
+          "gate_config_version"
+        ],
+        "title": "EvaluationPayload",
+        "type": "object"
+      },
       "EvaluationRecord": {
         "description": "A model version run's mlops_agents/evaluation.json (stage 5).",
         "properties": {
@@ -1475,6 +1641,38 @@
           "fetched_at"
         ],
         "title": "EvaluationRecord",
+        "type": "object"
+      },
+      "EvaluationView": {
+        "additionalProperties": false,
+        "properties": {
+          "not_computed": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Not Computed",
+            "type": "object"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/EvaluationPayload"
+          },
+          "record": {
+            "$ref": "#/components/schemas/EvaluationRecord"
+          }
+        },
+        "required": [
+          "record",
+          "payload",
+          "not_computed"
+        ],
+        "title": "EvaluationView",
         "type": "object"
       },
       "EventRecord": {
@@ -2431,6 +2629,75 @@
         "title": "MetricPoint",
         "type": "object"
       },
+      "MetricSet": {
+        "additionalProperties": false,
+        "properties": {
+          "overall": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MetricValue"
+            },
+            "title": "Overall",
+            "type": "object"
+          },
+          "per_group": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/MetricValue"
+              },
+              "type": "object"
+            },
+            "title": "Per Group",
+            "type": "object"
+          }
+        },
+        "required": [
+          "overall",
+          "per_group"
+        ],
+        "title": "MetricSet",
+        "type": "object"
+      },
+      "MetricValue": {
+        "additionalProperties": false,
+        "properties": {
+          "ci_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci High"
+          },
+          "ci_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Low"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "n"
+        ],
+        "title": "MetricValue",
+        "type": "object"
+      },
       "MlflowResults": {
         "additionalProperties": false,
         "properties": {
@@ -3376,6 +3643,25 @@
         "title": "Page[RunRow]",
         "type": "object"
       },
+      "ParityResult": {
+        "additionalProperties": false,
+        "properties": {
+          "mismatch_rate": {
+            "title": "Mismatch Rate",
+            "type": "number"
+          },
+          "tolerance": {
+            "title": "Tolerance",
+            "type": "number"
+          }
+        },
+        "required": [
+          "tolerance",
+          "mismatch_rate"
+        ],
+        "title": "ParityResult",
+        "type": "object"
+      },
       "PasswordSignIn": {
         "properties": {
           "password": {
@@ -4034,6 +4320,123 @@
           "description"
         ],
         "title": "RepoSummary",
+        "type": "object"
+      },
+      "ReportDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "assessments": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ReportField"
+            },
+            "title": "Assessments",
+            "type": "object"
+          },
+          "candidate_version": {
+            "title": "Candidate Version",
+            "type": "string"
+          },
+          "fix_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fix Id"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "training_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Request Id"
+          }
+        },
+        "required": [
+          "model",
+          "candidate_version",
+          "assessments"
+        ],
+        "title": "ReportDraft",
+        "type": "object"
+      },
+      "ReportField": {
+        "additionalProperties": false,
+        "properties": {
+          "not_applicable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Applicable Reason"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "ReportField",
+        "type": "object"
+      },
+      "ReportView": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/ReportDraft"
+          },
+          "evaluation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvaluationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "draft",
+          "created",
+          "author"
+        ],
+        "title": "ReportView",
         "type": "object"
       },
       "Resync": {
@@ -4997,6 +5400,27 @@
           "last_error"
         ],
         "title": "TrackingSourceView",
+        "type": "object"
+      },
+      "TrainingWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TrainingWindow",
         "type": "object"
       },
       "TurnEnded": {
@@ -7734,6 +8158,57 @@
         "summary": "Relink Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/reports/{report_id}": {
+      "get": {
+        "operationId": "get_report_api_projects__project_id__reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Report",
+        "tags": [
+          "promotion"
         ]
       }
     },
