@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, Final
 
 from sqlalchemy import func, select
@@ -41,6 +41,7 @@ class EventHub:
         self._subscribers: dict[str, set[asyncio.Queue[EventRecord | Resync | None]]] = {}
         self._last_seq: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self.setup_hook: Callable[[str], Awaitable[None]] | None = None
 
     def _get_lock(self, project_id: str) -> asyncio.Lock:
         lock = self._locks.get(project_id)
@@ -78,16 +79,19 @@ class EventHub:
             buffer = self._buffers.get(project_id)
             buffer_copy = list(buffer) if buffer else []
 
-        try:
-            engine = await databases.project(project_id)
+        if self.setup_hook is not None:
+            await self.setup_hook(project_id)
 
+        try:
             replay: list[EventRecord] = []
             needs_resync = False
 
             if after_seq is None:
                 last_yielded = baseline_seq
             else:
+                engine = None
                 if baseline_seq == 0:
+                    engine = await databases.project(project_id)
                     async with engine.connect() as conn:
                         res = (await conn.execute(select(func.max(events.c.seq)))).scalar()
                         if res is not None:
@@ -102,6 +106,8 @@ class EventHub:
                     replay = [e for e in buffer_copy if e.seq > after_seq]
                     last_yielded = replay[-1].seq if replay else after_seq
                 else:
+                    if engine is None:
+                        engine = await databases.project(project_id)
                     async with engine.connect() as conn:
                         if after_seq > 0:
                             exists = (
@@ -112,10 +118,11 @@ class EventHub:
                             if exists is None:
                                 needs_resync = True
 
-                        if not needs_resync:
-                            current_after = after_seq
-                            last_yielded = after_seq
-                            while True:
+                    if not needs_resync:
+                        current_after = after_seq
+                        last_yielded = after_seq
+                        while True:
+                            async with engine.connect() as conn:
                                 rows = (
                                     await conn.execute(
                                         select(events)
@@ -124,15 +131,15 @@ class EventHub:
                                         .limit(_REPLAY_PAGE_SIZE)
                                     )
                                 ).all()
-                                if not rows:
-                                    break
-                                for r in rows:
-                                    ev = row_to_event(r)
-                                    yield ev
-                                    current_after = ev.seq
-                                    last_yielded = ev.seq
-                        else:
-                            last_yielded = baseline_seq
+                            if not rows:
+                                break
+                            chunk = [row_to_event(r) for r in rows]
+                            for ev in chunk:
+                                yield ev
+                                current_after = ev.seq
+                                last_yielded = ev.seq
+                    else:
+                        last_yielded = baseline_seq
 
             if needs_resync:
                 yield Resync(seq=baseline_seq, type="resync", data=ResyncData())
