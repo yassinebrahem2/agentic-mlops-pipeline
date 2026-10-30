@@ -50,8 +50,10 @@ def _marker(proposal_id: str) -> str:
 def kickoff_text(agent: str, proposal_id: str, payload: HandoffPayload) -> str:
     """The marker, then the handoff summary with the agent's own sections first, then its brief.
 
-    Past the cap, the summary keeps the agent's own sections and as many of the rest, in order,
-    as fit, and ends with the cut line.
+    The cap is hard: past it, the summary keeps whole sections in that order up to the first one
+    that does not fit, and ends with the cut line. The own sections come first so a cut keeps
+    them whenever they fit; at worst the summary is only the cut line, and the brief points at
+    ReadHandoff.
     """
     parts = sections(payload)
     own = list(BRIEF_SECTIONS[agent])
@@ -67,8 +69,8 @@ def kickoff_text(agent: str, proposal_id: str, payload: HandoffPayload) -> str:
     whole = compose(order, cut=False)
     if len(whole) <= KICKOFF_MESSAGE_CAP:
         return whole
-    kept = list(own)
-    for key in order[len(own) :]:
+    kept: list[str] = []
+    for key in order:
         if len(compose([*kept, key], cut=True)) > KICKOFF_MESSAGE_CAP:
             break
         kept.append(key)

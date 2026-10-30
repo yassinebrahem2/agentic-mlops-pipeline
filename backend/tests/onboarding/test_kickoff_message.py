@@ -18,6 +18,7 @@ from mlops_agents.onboarding.handoff_preview import sections
 from mlops_agents.onboarding.kickoff import kickoff_text
 from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS
 from tests.onboarding.kickoff_env import PROPOSAL, marker, sample_payload
+from tests.proposals.samples import model
 
 # The message
 
@@ -60,6 +61,22 @@ def test_a_summary_past_the_cap_is_cut_at_a_section_boundary_keeping_the_agents_
         kept = summary.removeprefix(marker(PROPOSAL)).strip()
         assert kept == "\n\n".join(parts[key] for key in kept_keys)
     assert any("cut" in r.getMessage() for r in caplog.records)
+
+
+def test_the_cap_is_hard_even_when_an_agents_own_section_does_not_fit() -> None:
+    payload = sample_payload(models=[model(f"model_{i}") for i in range(60)])
+    parts = sections(payload)
+    assert len(parts["models"]) > KICKOFF_MESSAGE_CAP
+
+    text = kickoff_text("model-performance", PROPOSAL, payload)
+    assert len(text) <= KICKOFF_MESSAGE_CAP
+    assert text == "\n\n".join([marker(PROPOSAL), CUT_LINE, AUDIT_BRIEFS["model-performance"]])
+
+    # Data Quality's own sections fit; the cut stops at the first section that does not.
+    text = kickoff_text("data-quality", PROPOSAL, payload)
+    assert len(text) <= KICKOFF_MESSAGE_CAP
+    summary = text.split(CUT_LINE)[0].removeprefix(marker(PROPOSAL)).strip()
+    assert summary == "\n\n".join([parts["data_roles"], parts["operations"]])
 
 
 def test_own_sections_lead_the_summary() -> None:
