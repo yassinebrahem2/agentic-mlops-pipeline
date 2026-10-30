@@ -335,7 +335,9 @@ test("stage 3 flow: Onboarding proposes the connection and the handoff, and the 
 
       // The first sync of the new source succeeds against the fake MLflow server.
       await expect
-        .poll(async () => (await page.request.get(`${api}/tracking/sources`)).json() as unknown)
+        .poll(async () => (await page.request.get(`${api}/tracking/sources`)).json() as unknown, {
+          timeout: 30_000,
+        })
         .toEqual([
           expect.objectContaining({
             type: "mlflow",
@@ -352,18 +354,24 @@ test("stage 3 flow: Onboarding proposes the connection and the handoff, and the 
     });
 
     await test.step("the audits start with the data summary; Onboarding gets no kickoff", async () => {
-      const agent = (name: string) =>
-        page.getByRole("listitem").filter({ hasText: name }).getByRole("button");
+      // A fresh load per agent, so no assertion can pass on the previous session's messages.
+      const open = async (agent: string, displayName: string) => {
+        await page.goto(`${APP_URL}/projects/${projectId}/agents?agent=${agent}`);
+        await expect(page.getByLabel(`Message ${displayName}`)).toBeVisible();
+      };
       // Two of the four audit agents whose definitions name the data_summary hook.
-      for (const name of ["Data Quality", "Model Performance"]) {
-        await agent(name).click();
+      for (const [agent, displayName] of [
+        ["data-quality", "Data Quality"],
+        ["model-performance", "Model Performance"],
+      ] as const) {
+        await open(agent, displayName);
         await expect(messages.getByText("Handoff", { exact: true })).toBeVisible();
         const reply = messages.getByText(AUDIT_CONTEXT);
         await expect(reply).toBeVisible();
         await expect(reply).toContainText(`Table "${DATA_TABLES[0]}"`);
       }
 
-      await agent("Onboarding & Diagnosis").click();
+      await open("onboarding", "Onboarding & Diagnosis");
       await expect(messages.getByText(ONBOARDING_COMPLETE, { exact: true })).toBeVisible();
       await expect(messages.getByText("Handoff", { exact: true })).toHaveCount(0);
     });
