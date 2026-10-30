@@ -137,6 +137,16 @@ def test_source_id_round_trip() -> None:
     assert conn3 is None
     assert source_id(kind3, ref3) == s3
 
+    # Refusals
+    with pytest.raises(ValueError, match="connection is required for file source_id"):
+        source_id("file", "pattern/*.csv")
+
+    with pytest.raises(ValueError, match="connection is not allowed"):
+        source_id("ci", "ci_workflow.yml", connection="my_conn")
+
+    with pytest.raises(ValueError, match="connection is not allowed"):
+        source_id("mlflow", "val_accuracy", connection="my_conn")
+
 
 def test_diagnoser_mapping() -> None:
     from mlops_agents.monitoring.incidents.contract import diagnoser
@@ -205,10 +215,21 @@ def test_job_order_and_monitoring_settings() -> None:
     assert tuple(JobKind) == JOB_ORDER
 
     settings = MonitoringSettings()
-    assert settings.collection_interval_s == 60
-    assert settings.grouping_window_minutes == 60
-    assert settings.reopen_window_hours == 24
-    assert settings.timezone is None
+    expected_defaults = {
+        "collection_interval_s": 60,
+        "grouping_window_minutes": 60,
+        "reopen_window_hours": 24,
+        "recent_change_window_hours": 24,
+        "escalation_timeout_minutes": 15,
+        "check_grace_minutes": 30,
+        "second_deadline_minutes": 60,
+        "parser_disable_after": 3,
+        "evaluation_max_age_hours": 72,
+        "circuit_breaker_fixes": 3,
+        "circuit_breaker_window_days": 30,
+        "timezone": None,
+    }
+    assert settings.model_dump() == expected_defaults
 
     with pytest.raises(ValidationError):
         MonitoringSettings(collection_interval_s=5)

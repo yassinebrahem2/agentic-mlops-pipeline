@@ -17,11 +17,10 @@ from langgraph.types import Command, interrupt
 
 from mlops_agents.agents.runtime import waiting
 from mlops_agents.agents.runtime.agent import Agent, resume_command
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.graph import turn_checkpointer
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.sqlite import connect_checkpointer
-from tests.agents.runtime.graph_env import make_agent
+from tests.agents.runtime.graph_env import make_agent, prompt_messages
 from tests.conftest import make_repo
 
 TURN = "trn_1"
@@ -95,7 +94,7 @@ def agent(tmp_path: Path, paths: DataPaths, git_env: dict[str, str]) -> Agent:
 async def _start(db_path: Path, agent: Agent) -> list[BaseMessage]:
     """A turn interrupted while waiting, started as the executor starts one; its checkpoint's
     messages."""
-    first = build_messages(
+    first = prompt_messages(
         agent.definition,
         agent.project,
         agent.layout,

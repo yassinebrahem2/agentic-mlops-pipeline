@@ -132,9 +132,7 @@ class KeyFailover:
         wait: bool = True,
     ) -> T:
         if not provider.keys:
-            result = await attempt(None)
-            await self._report_success(provider)
-            return result
+            return await self._call_keyless(provider, attempt)
         cooldown = timedelta(minutes=cooldown_minutes)
         transient_retries = 0
         pick: _Pick | None = None
@@ -151,8 +149,7 @@ class KeyFailover:
                 result = await attempt(pick.index)
             except Exception as exc:
                 error = classify(exc)
-                if error.kind in _SAME_KEY_RETRY and transient_retries < len(TRANSIENT_BACKOFFS):
-                    await self._clock.sleep(TRANSIENT_BACKOFFS[transient_retries])
+                if await self._backoff(error, transient_retries):
                     transient_retries += 1
                     continue
                 if error.kind not in _NEXT_KEY:
@@ -163,6 +160,31 @@ class KeyFailover:
             self._succeed(provider, model, pick.index)
             await self._report_success(provider)
             return result
+
+    async def _call_keyless[T](
+        self, provider: Provider, attempt: Callable[[int | None], Awaitable[T]]
+    ) -> T:
+        """No key means nothing to mark or rotate (Decision #384), but a transient error still
+        deserves the retries a keyed call gives its key."""
+        transient_retries = 0
+        while True:
+            try:
+                result = await attempt(None)
+            except Exception as exc:
+                if await self._backoff(classify(exc), transient_retries):
+                    transient_retries += 1
+                    continue
+                raise
+            await self._report_success(provider)
+            return result
+
+    async def _backoff(self, error: ProviderCallError, retries: int) -> bool:
+        """Sleep before retrying the same call when the error is transient and the retries are
+        not spent; the one rule for the keyed and the keyless path."""
+        if error.kind not in _SAME_KEY_RETRY or retries >= len(TRANSIENT_BACKOFFS):
+            return False
+        await self._clock.sleep(TRANSIENT_BACKOFFS[retries])
+        return True
 
     def states(self, provider: Provider, model: str) -> list[KeyState]:
         now = self._clock.now()

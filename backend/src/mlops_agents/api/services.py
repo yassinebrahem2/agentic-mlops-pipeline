@@ -14,6 +14,7 @@ from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.data_summary import DataSummaryHook
+from mlops_agents.agents.hooks.knowledge import KnowledgeHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.hooks.tracking_summary import TrackingSummaryHook
@@ -47,6 +48,9 @@ from mlops_agents.events.observer import EventTurnObserver
 from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.knowledge.contract import Knowledge
+from mlops_agents.knowledge.service import KnowledgeService
+from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.paths import DataPaths
@@ -95,6 +99,7 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    knowledge: Knowledge
     tracking: TrackingService
     tracking_loop: TrackingLoop
     proposals: ProposalsService
@@ -174,6 +179,9 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    vectors = SqliteVectorStore(databases)
+    knowledge = KnowledgeService(databases, embedders, vectors, events, secret_source)
+    stack.push_async_callback(knowledge.close)
     messaging_settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, messaging_settings)
     # The one approval store: it holds the approval observers, so every transition reaches them.
@@ -230,6 +238,7 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        knowledge=knowledge,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         tracking=tracking,
@@ -239,6 +248,7 @@ async def build_services(
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    hooks.register(KnowledgeHook(knowledge))
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     hooks.register(DataSummaryHook(connections, data_summaries))
@@ -340,6 +350,7 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        knowledge=knowledge,
         tracking=tracking,
         tracking_loop=tracking_loop,
         proposals=proposals,

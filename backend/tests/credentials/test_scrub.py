@@ -1,8 +1,12 @@
+import sqlite3
+
 import httpx2
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from mlops_agents.credentials.scrub import (
     base_url_problem,
+    db_error_text,
     error_text,
     mask_key,
     scrub_url_secrets,
@@ -63,3 +67,16 @@ def test_error_text_withholds_url_parse_errors() -> None:
         assert "withheld" in error_text(exc)
     else:
         pytest.fail("the URL should not parse")
+
+
+def test_db_error_text_unwraps_dbapi_error() -> None:
+    orig = sqlite3.OperationalError("no such table: fake_table")
+    exc = OperationalError("SELECT * FROM fake_table", {}, orig)
+    msg = db_error_text(exc)
+    assert "[SQL:" not in msg
+    assert "no such table: fake_table" in msg
+
+
+def test_db_error_text_passes_through_non_dbapi_error() -> None:
+    exc = ValueError("regular failure")
+    assert db_error_text(exc) == "regular failure"
