@@ -57,8 +57,9 @@ from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
-from mlops_agents.promotion.contract import EvaluationReader
+from mlops_agents.promotion.contract import EvaluationReader, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -113,6 +114,7 @@ class Services:
     query_providers: QueryProviders
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
+    reports: Reports
 
 
 async def _app_secrets(
@@ -234,6 +236,7 @@ async def build_services(
     )
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
+    reports = SqliteReports(databases, evaluation_reader, events)
 
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
@@ -251,6 +254,7 @@ async def build_services(
         proposal_kinds=proposal_kinds,
         tracking=tracking,
         handoffs=handoffs,
+        reports=reports,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -387,4 +391,5 @@ async def build_services(
         query_providers=query_providers,
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
+        reports=reports,
     )
