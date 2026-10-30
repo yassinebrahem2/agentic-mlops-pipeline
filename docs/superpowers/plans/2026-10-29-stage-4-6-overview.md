@@ -340,6 +340,8 @@ class Hooks(Protocol):                  # hooks
 
 ### I30: the gate's second input (`agents/approvals/authority.py`, `agents/policy/actions.py`; contracts task 3)
 
+> The cells, including the two settled on 2026-10-30 (a suspended hook takes the `deploy` column whatever its kind; an unknown fact never selects the more permissive row), are in `docs/roadmap.md`, Permission risk classes: the one source.
+
 ```python
 ActionKind = Literal["train", "evaluate", "deploy", "rollback", "rerun", "hold", "fall_back", "merge_pr"]   # CommandSpec.kind plus merge_pr; parity-tested
 class ActionCall(BaseModel):            # built by a tool's `action_call(args, ctx)`; None for every other tool
