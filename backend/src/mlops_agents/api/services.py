@@ -53,6 +53,8 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -125,6 +127,8 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    action_hooks: HooksService
+    hooks: HooksService
 
 
 async def _app_secrets(
@@ -239,6 +243,14 @@ async def build_services(
     )
 
     handoffs = SqliteHandoffs(databases)
+    action_hooks = HooksService(
+        databases=databases,
+        secrets=project_secrets,
+        events=events,
+        clock=clock,
+    )
+    handoff_hooks = HandoffHooks(action_hooks, handoffs)
+    handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
@@ -279,15 +291,17 @@ async def build_services(
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
-    hooks = HookRegistry()
+    turn_hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
-    hooks.register(status_board_hook)
-    hooks.register(KnowledgeHook(knowledge))
+    turn_hooks.register(status_board_hook)
+    turn_hooks.register(KnowledgeHook(knowledge))
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
-    hooks.register(DataSummaryHook(connections, data_summaries))
-    hooks.register(TrackingSummaryHook(tracking))
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
+    turn_hooks.register(DataSummaryHook(connections, data_summaries))
+    turn_hooks.register(TrackingSummaryHook(tracking))
+    catalog = await asyncio.to_thread(
+        AgentCatalog.load, tools.names(), hook_names=turn_hooks.names()
+    )
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
@@ -317,7 +331,7 @@ async def build_services(
         approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
-        hooks=hooks,
+        hooks=turn_hooks,
         audit_log=audit,
         event_log=events,
     )
@@ -398,6 +412,9 @@ async def build_services(
     for project in await workspace.list_projects():
         await results.deliver_undelivered(project.id, startup_now)
 
+    # Reconcile handoff hooks across existing projects
+    await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
+
     return Services(
         settings=settings,
         paths=paths,
@@ -436,4 +453,6 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        action_hooks=action_hooks,
+        hooks=action_hooks,
     )
