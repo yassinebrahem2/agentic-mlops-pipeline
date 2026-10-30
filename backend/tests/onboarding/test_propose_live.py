@@ -3,7 +3,6 @@ hand with `uv run pytest -m live`; it does not gate CI)."""
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import cast
@@ -67,4 +66,5 @@ async def test_a_real_provider_accepts_the_propose_schema(tmp_path: Path) -> Non
         )
 
     # A rejected tool definition is a 400; the reply's own text is not checked.
-    assert response.status_code == 200, json.dumps(response.json())[:2000]
+    # The body as text: an error page need not be JSON.
+    assert response.status_code == 200, f"{response.status_code}: {response.text[:2000]}"
