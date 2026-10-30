@@ -53,6 +53,7 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
@@ -63,7 +64,7 @@ from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.observer import ProposalApprovalObserver
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
-from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.failover import Clock, KeyFailover, SystemClock
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
@@ -109,6 +110,8 @@ class Services:
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
     query_providers: QueryProviders
+    clock: Clock
+    scheduler: AppScheduler
     kickoff: Kickoff
 
 
@@ -145,9 +148,13 @@ async def build_services(
     keystore: KeyStore | None,
     gh: GhLike | None,
     docker_runner: DockerRunner | None = None,
+    clock: Clock | None = None,
 ) -> Services:
     """Each service registers its cleanup on `stack` where it is built; closing the stack
     undoes them in reverse order."""
+    if clock is None:
+        clock = SystemClock()
+
     paths = DataPaths(settings.data_dir)
     await asyncio.to_thread(paths.ensure)
 
@@ -174,7 +181,7 @@ async def build_services(
     async def clear_attention(provider: Provider) -> None:
         await providers.clear_attention(provider.id)
 
-    failover = KeyFailover(on_success=clear_attention)
+    failover = KeyFailover(clock=clock, on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
 
@@ -338,6 +345,12 @@ async def build_services(
     stack.push_async_callback(tracking_loop.close)
     await tracking_loop.start()
 
+    scheduler = AppScheduler(
+        databases=databases,
+        projects=_list_project_ids,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -348,6 +361,11 @@ async def build_services(
     # Like a due wake-up, a lost kickoff starts turns, so it is finished after everything else
     # exists, and before the app serves.
     await kickoff.resume()
+
+    # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
+    # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    await scheduler.start()
+    stack.push_async_callback(scheduler.stop)
 
     return Services(
         settings=settings,
@@ -381,5 +399,7 @@ async def build_services(
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
         query_providers=query_providers,
+        clock=clock,
+        scheduler=scheduler,
         kickoff=kickoff,
     )
