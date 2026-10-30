@@ -16,6 +16,8 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.data.summary_env import SummaryEnv, build_summary_env, csv_rows
 
+pytestmark = pytest.mark.serial
+
 BUDGET_S = 0.5
 # Windows CI is slow to start threads and scan folders; the bound only has to be far below
 # the full profile timeout to show the budget cut the render.
