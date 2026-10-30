@@ -33,6 +33,7 @@ class FakeJob:
         self._dues_to_return = dues_to_return
         self._should_raise = should_raise
         self.runs: list[tuple[str, JobDue]] = []
+        self.attempts: int = 0
 
     async def due(self, project_id: str, after: datetime, now: datetime) -> list[JobDue]:
         if self._dues_to_return is not None:
@@ -41,6 +42,7 @@ class FakeJob:
         return [JobDue(kind=self.kind, due=p, subject="") for p in points]
 
     async def run(self, project_id: str, job: JobDue) -> None:
+        self.attempts += 1
         if self._should_raise is not None:
             raise self._should_raise
         self.runs.append((project_id, job))
@@ -102,7 +104,7 @@ async def test_jobs_run_in_job_order_then_due_time(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(job_a)
     scheduler.register(job_b)
@@ -133,7 +135,7 @@ async def test_missed_batch_after_gap_runs_each_interval_once(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(job1)
     scheduler.register(job2)
@@ -172,7 +174,7 @@ async def test_raising_job_is_recorded_and_next_still_runs(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(failing_job)
     scheduler.register(succeeding_job)
@@ -200,6 +202,10 @@ async def test_raising_job_is_recorded_and_next_still_runs(
 
     assert row_map[JobKind.COLLECT_RESULTS.value].finished is not None
     assert row_map[JobKind.COLLECT_RESULTS.value].error is None
+
+    # Re-run run_due with a later now: the errored job must NOT be retried
+    await scheduler.run_due(project_id, clock.now() + timedelta(seconds=60))
+    assert failing_job.attempts == 1
 
 
 async def test_row_left_started_is_run_again_finished_is_not(
@@ -236,7 +242,7 @@ async def test_row_left_started_is_run_again_finished_is_not(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(job)
 
@@ -266,7 +272,7 @@ async def test_two_run_due_calls_in_a_row_run_nothing_twice(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(job)
 
@@ -286,7 +292,7 @@ async def test_scheduler_sync_observers_registration_order(
         databases=databases,
         projects=_empty_projects,
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     obs1 = FakeSyncObserver("first")
     obs2 = FakeSyncObserver("second")
@@ -299,20 +305,87 @@ async def test_scheduler_sync_observers_registration_order(
 async def test_scheduler_start_and_stop(
     databases: Databases, project_id: str, clock: FakeClock
 ) -> None:
+    clock.hold = asyncio.Event()  # Park in a sleep that never ends
     job = FakeJob(JobKind.SYNC_TRACKING, interval_s=5)
     scheduler = AppScheduler(
         databases=databases,
         projects=lambda: _async_projects(project_id),
         clock=clock,
-        sleep=asyncio.sleep,
+        sleep=clock.sleep,
     )
     scheduler.register(job)
 
     await scheduler.start()
-    # Advance clock to trigger ticks
-    clock.advance(10)
-    # Give task a moment to execute
-    await asyncio.sleep(0.01)
 
+    # Wait until the loop has finished the pass and parked in sleep
+    await clock.sleeping.wait()
+    assert len(job.runs) == 1
+
+    # stop() must cancel the loop and return cleanly while parked in sleep that never ends
     await scheduler.stop()
     assert scheduler.task is None
+
+
+async def test_duplicate_due_runs_once(
+    databases: Databases, project_id: str, clock: FakeClock
+) -> None:
+    due_time = clock.now() + timedelta(seconds=10)
+    job = FakeJob(
+        JobKind.SYNC_TRACKING,
+        dues_to_return=[
+            JobDue(kind=JobKind.SYNC_TRACKING, due=due_time, subject="dup"),
+            JobDue(kind=JobKind.SYNC_TRACKING, due=due_time, subject="dup"),
+        ],
+    )
+    scheduler = AppScheduler(
+        databases=databases,
+        projects=lambda: _async_projects(project_id),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    scheduler.register(job)
+
+    await scheduler.run_due(project_id, clock.now() + timedelta(seconds=20))
+    assert len(job.runs) == 1
+
+    # Calling insert_dues twice directly also stores one row (on_conflict_do_nothing)
+    store = scheduler._store  # type: ignore[attr-defined]
+    await store.insert_dues(
+        project_id,
+        [JobDue(kind=JobKind.SYNC_TRACKING, due=due_time, subject="dup2")],
+    )
+    await store.insert_dues(
+        project_id,
+        [JobDue(kind=JobKind.SYNC_TRACKING, due=due_time, subject="dup2")],
+    )
+    unfinished = await store.unfinished_jobs(project_id)
+    assert len([u for u in unfinished if u.subject == "dup2"]) == 1
+
+
+async def test_latest_due_keyed_by_kind_and_subject(
+    databases: Databases, project_id: str, clock: FakeClock
+) -> None:
+    scheduler = AppScheduler(
+        databases=databases,
+        projects=_empty_projects,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    store = scheduler._store  # type: ignore[attr-defined]
+
+    t1 = clock.now() + timedelta(seconds=10)
+    t2 = clock.now() + timedelta(seconds=20)
+
+    await store.insert_dues(
+        project_id,
+        [
+            JobDue(kind=JobKind.MORNING_REPORT, due=t1, subject="alice"),
+            JobDue(kind=JobKind.MORNING_REPORT, due=t2, subject="bob"),
+        ],
+    )
+
+    alice_due = await store.latest_due(project_id, JobKind.MORNING_REPORT, subject="alice")
+    bob_due = await store.latest_due(project_id, JobKind.MORNING_REPORT, subject="bob")
+
+    assert alice_due == t1
+    assert bob_due == t2

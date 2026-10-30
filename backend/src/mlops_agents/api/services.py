@@ -353,7 +353,6 @@ async def build_services(
         clock=clock,
         sleep=clock.sleep,
     )
-    stack.push_async_callback(scheduler.stop)
     await scheduler.start()
 
     results = ResultsService(
@@ -376,6 +375,9 @@ async def build_services(
     # Like a due wake-up, a lost kickoff starts turns, so it is finished after everything else
     # exists, and before the app serves.
     await kickoff.resume()
+
+    # Stop scheduler first on close so no jobs run while services shut down (LIFO).
+    stack.push_async_callback(scheduler.stop)
 
     return Services(
         settings=settings,
