@@ -2811,6 +2811,79 @@
         "title": "ModelVersionRow",
         "type": "object"
       },
+      "MonitoringSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "check_grace_minutes": {
+            "default": 30,
+            "title": "Check Grace Minutes",
+            "type": "integer"
+          },
+          "circuit_breaker_fixes": {
+            "default": 3,
+            "title": "Circuit Breaker Fixes",
+            "type": "integer"
+          },
+          "circuit_breaker_window_days": {
+            "default": 30,
+            "title": "Circuit Breaker Window Days",
+            "type": "integer"
+          },
+          "collection_interval_s": {
+            "default": 60,
+            "title": "Collection Interval S",
+            "type": "integer"
+          },
+          "escalation_timeout_minutes": {
+            "default": 15,
+            "title": "Escalation Timeout Minutes",
+            "type": "integer"
+          },
+          "evaluation_max_age_hours": {
+            "default": 72,
+            "title": "Evaluation Max Age Hours",
+            "type": "integer"
+          },
+          "grouping_window_minutes": {
+            "default": 60,
+            "title": "Grouping Window Minutes",
+            "type": "integer"
+          },
+          "parser_disable_after": {
+            "default": 3,
+            "title": "Parser Disable After",
+            "type": "integer"
+          },
+          "recent_change_window_hours": {
+            "default": 24,
+            "title": "Recent Change Window Hours",
+            "type": "integer"
+          },
+          "reopen_window_hours": {
+            "default": 24,
+            "title": "Reopen Window Hours",
+            "type": "integer"
+          },
+          "second_deadline_minutes": {
+            "default": 60,
+            "title": "Second Deadline Minutes",
+            "type": "integer"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "MonitoringSettings",
+        "type": "object"
+      },
       "NoteDraft": {
         "properties": {
           "source": {
@@ -7038,6 +7111,98 @@
         "summary": "Get Current Handoff",
         "tags": [
           "proposals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/monitoring-settings": {
+      "get": {
+        "operationId": "get_project_monitoring_settings_api_projects__project_id__monitoring_settings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitoringSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Monitoring Settings",
+        "tags": [
+          "monitoring_settings"
+        ]
+      },
+      "put": {
+        "operationId": "update_project_monitoring_settings_api_projects__project_id__monitoring_settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitoringSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitoringSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Monitoring Settings",
+        "tags": [
+          "monitoring_settings"
         ]
       }
     },
