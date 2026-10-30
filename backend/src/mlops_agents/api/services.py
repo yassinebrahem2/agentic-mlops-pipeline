@@ -58,6 +58,8 @@ from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
+from mlops_agents.promotion.contract import EvaluationReader
+from mlops_agents.promotion.evaluation import SqliteEvaluationReader
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -113,6 +115,7 @@ class Services:
     clock: Clock
     scheduler: AppScheduler
     kickoff: Kickoff
+    evaluation_reader: EvaluationReader
 
 
 async def _app_secrets(
@@ -237,6 +240,7 @@ async def build_services(
         handoffs=handoffs,
     )
     stack.push_async_callback(tracking.close)
+    evaluation_reader = SqliteEvaluationReader(tracking, tasks)
 
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
@@ -402,4 +406,5 @@ async def build_services(
         clock=clock,
         scheduler=scheduler,
         kickoff=kickoff,
+        evaluation_reader=evaluation_reader,
     )
