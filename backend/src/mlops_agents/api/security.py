@@ -21,8 +21,14 @@ CSRF_COOKIE = "csrf_token"
 CSRF_HEADER = "X-CSRF-Token"
 
 # The sign-in routes: there is no session yet (the Origin check and SameSite=Strict protect them).
+# Heartbeat is unauthenticated.
 _OPEN = frozenset(
-    {("GET", "/api/auth/status"), ("POST", "/api/auth/token"), ("POST", "/api/auth/login")}
+    {
+        ("GET", "/api/auth/status"),
+        ("POST", "/api/auth/token"),
+        ("POST", "/api/auth/login"),
+        ("GET", "/api/health/heartbeat"),
+    }
 )
 _STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
