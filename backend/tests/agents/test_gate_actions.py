@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypedDict, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 import pytest
@@ -552,8 +552,8 @@ async def test_tool_step_passes_authority_to_context(
     )
 
     workspaces = MagicMock()
-    workspaces.current = MagicMock(return_value=None)
-    workspaces.files = MagicMock(return_value=FakeFileAccess())
+    workspaces.current = AsyncMock(return_value=None)
+    workspaces.files = AsyncMock(return_value=FakeFileAccess())
     sink = MagicMock()
 
     async def _update_parts() -> None:
