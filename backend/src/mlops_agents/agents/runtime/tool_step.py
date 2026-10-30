@@ -174,7 +174,10 @@ class ToolStep:
         call_id = str(call["id"])
         match decision.outcome:
             case "allow":
-                return await tool.invoke(await self.context(call_id), call["args"])
+                ctx = await self.context(call_id)
+                if decision.authority is not None:
+                    ctx = replace(ctx, authority=decision.authority)
+                return await tool.invoke(ctx, call["args"])
             case "approved":
                 ctx = await self.context(call_id)
                 current_task_id = ctx.task.id if ctx.task is not None else None
@@ -187,6 +190,8 @@ class ToolStep:
                             "Action rejected: the task was changed since this action was approved.",
                             is_error=True,
                         )
+                if decision.authority is not None:
+                    ctx = replace(ctx, authority=decision.authority)
                 return await tool.invoke(ctx, call["args"])
             case "deny":
                 return ToolOutput(decision.message or DENIED_TEXT, is_error=True)
