@@ -1,9 +1,9 @@
 name: Frontend
 
+# Push only, as in backend.yml: a pull_request trigger as well would run CI twice per commit.
 on:
   push:
     branches: ["main", "plan/**"]
-  pull_request:
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"

@@ -303,6 +303,7 @@ async def test_scheduler_sync_observers_registration_order(
     assert scheduler.sync_observers == (obs1, obs2)
 
 
+@pytest.mark.serial
 async def test_scheduler_start_and_stop(
     databases: Databases, project_id: str, clock: FakeClock
 ) -> None:
