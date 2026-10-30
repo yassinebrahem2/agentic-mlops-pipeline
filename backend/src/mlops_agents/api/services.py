@@ -53,6 +53,8 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.onboarding.connections_kind import ConnectionsKind
+from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
@@ -295,6 +297,21 @@ async def build_services(
     wakeups.bind(sessions)
     stack.push_async_callback(sessions.close)
     kickoff = Kickoff(databases, sessions, handoffs)
+    # Before recovery: it re-applies an approved proposal that has no result yet.
+    proposal_kinds.register(ConnectionsKind(connections, secret_source))
+    proposal_kinds.register(
+        HandoffKind(
+            databases=databases,
+            connections=connections,
+            tracking=tracking,
+            handoffs=handoffs,
+            sandbox=sandbox,
+            events=events,
+            kickoff=kickoff,
+            secrets=project_secrets,
+            secret_values=secret_source,
+        )
+    )
 
     approvals = ApprovalsService(
         databases=databases,
