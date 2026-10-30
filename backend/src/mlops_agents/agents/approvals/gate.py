@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from langgraph.types import interrupt
@@ -18,6 +19,8 @@ from mlops_agents.agents.runtime.tool_step import REJECTED_TEXT
 from mlops_agents.agents.tools.base import RiskClass
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
+
+logger = logging.getLogger(__name__)
 
 
 def format_rejection_message(note: str | None) -> str:
@@ -107,11 +110,18 @@ class ApprovalGate(Gate):
                     policy_dec = policy_decide(risk, level)
                 auth: Authority | None = None
             else:
-                # Action call:
-                # 1. Overwrite facts from GateFacts
-                deploys, has_prod, team_gate = await self._authorities.facts.facts(
-                    project_id, action.hook_id
-                )
+                failed_closed = False
+                try:
+                    deploys, has_prod, team_gate = await self._authorities.facts.facts(
+                        project_id, action.hook_id
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Gate facts provider raised for hook %r: %s", action.hook_id, exc
+                    )
+                    deploys, has_prod, team_gate = None, None, None
+                    failed_closed = True
+
                 action = action.model_copy(
                     update={
                         "deploys": deploys,
@@ -124,7 +134,18 @@ class ApprovalGate(Gate):
                     if action.rule_id:
                         rule_auth = self._authorities.get_authority("rule")
                         if rule_auth is not None:
-                            auth = await rule_auth.authorize(action)
+                            try:
+                                auth = await rule_auth.authorize(action)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Rule authority raised for rule %r: %s", action.rule_id, exc
+                                )
+                                auth = Authority(
+                                    basis="none",
+                                    reason=f"authority error: {exc}",
+                                    evidence=[],
+                                )
+                                failed_closed = True
                         else:
                             auth = Authority(
                                 basis="none",
@@ -141,7 +162,20 @@ class ApprovalGate(Gate):
                     if action.policy_id:
                         pol_auth = self._authorities.get_authority("policy")
                         if pol_auth is not None:
-                            auth = await pol_auth.authorize(action)
+                            try:
+                                auth = await pol_auth.authorize(action)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Policy authority raised for policy %r: %s",
+                                    action.policy_id,
+                                    exc,
+                                )
+                                auth = Authority(
+                                    basis="none",
+                                    reason=f"authority error: {exc}",
+                                    evidence=[],
+                                )
+                                failed_closed = True
                         else:
                             auth = Authority(
                                 basis="none",
@@ -161,7 +195,10 @@ class ApprovalGate(Gate):
                         evidence=[],
                     )
 
-                policy_dec = decide_action(level, action, auth)
+                if failed_closed:
+                    policy_dec = "deny" if level == "suggest" else "ask"
+                else:
+                    policy_dec = decide_action(level, action, auth)
 
             target = _extract_target(call.tool.name, call.args)
             detail = call.args.model_dump()
