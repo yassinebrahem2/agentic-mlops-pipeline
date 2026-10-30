@@ -27,7 +27,7 @@ def make_definition(
     name: str = "orchestrator",
     display_name: str = "Orchestrator",
     chat: bool = True,
-    status_board: bool = False,
+    context_hooks: tuple[str, ...] = (),
 ) -> AgentDefinition:
     return AgentDefinition(
         name=name,
@@ -37,8 +37,7 @@ def make_definition(
         chat=chat,
         schedules=False,
         can_message=(),
-        context_hooks=(),
-        status_board=status_board,
+        context_hooks=context_hooks,
         prompt="Test prompt",
     )
 
@@ -329,10 +328,14 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     hub = EventHub()
     events = SqliteEventLog(databases, hub=hub)
 
-    # Orchestrator has status_board=True; retraining has status_board=False
-    d_orch = make_definition("orchestrator", "Orchestrator", chat=True, status_board=True)
-    d_retrain = make_definition("retraining", "Retraining", chat=True, status_board=False)
-    catalog = AgentCatalog([d_orch, d_retrain], tool_names=frozenset())
+    # Orchestrator has status_board hook; retraining has none
+    d_orch = make_definition(
+        "orchestrator", "Orchestrator", chat=True, context_hooks=("status_board",)
+    )
+    d_retrain = make_definition("retraining", "Retraining", chat=True)
+    catalog = AgentCatalog(
+        [d_orch, d_retrain], tool_names=frozenset(), hook_names=frozenset({"status_board"})
+    )
 
     fake_sessions = FakeSessions(turn_state_by_agent={"retraining": "running"})
     board = SqliteStatusBoard(

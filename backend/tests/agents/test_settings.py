@@ -18,7 +18,7 @@ from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import agent_model_defaults
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.providers.fake_clock import FakeClock
 
@@ -45,7 +45,7 @@ You help.
 """,
         encoding="utf-8",
     )
-    return AgentCatalog.load(TOOLS, extra_dirs=[extra])
+    return AgentCatalog.load(TOOLS, extra_dirs=[extra], hook_names=STAGE_3_HOOKS)
 
 
 @pytest.fixture

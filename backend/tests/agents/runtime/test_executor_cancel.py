@@ -37,7 +37,13 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+    memory_project_secrets,
+)
 from tests.fakes import fake_openai as fake_openai_module
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
@@ -126,7 +132,9 @@ async def test_executor_cancellation_during_slow_tool(
     slow_tool = SlowDummyTool()
     tools = default_registry()
     tools.register(slow_tool)
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(
+        tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS, extra_dirs=[def_dir]
+    )
 
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
@@ -225,7 +233,7 @@ async def test_executor_cancellation_during_streaming_preserves_partial_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)

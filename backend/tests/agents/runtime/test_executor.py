@@ -30,7 +30,13 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.graph_env import RecordingSink, stage1_hooks
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+    memory_project_secrets,
+)
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -92,7 +98,9 @@ async def _setup_executor_env(
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
 
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=extra_dirs or ())
+    catalog = AgentCatalog.load(
+        tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS, extra_dirs=extra_dirs or ()
+    )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)

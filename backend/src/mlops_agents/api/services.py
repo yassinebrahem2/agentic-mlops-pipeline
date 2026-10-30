@@ -235,6 +235,7 @@ async def build_services(
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         tracking=tracking,
+        handoffs=handoffs,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.

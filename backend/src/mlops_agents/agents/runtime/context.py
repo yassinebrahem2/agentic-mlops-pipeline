@@ -19,6 +19,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.tools.base import FileAccess
+from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.workspace.models import Project
 
 if TYPE_CHECKING:
@@ -73,6 +74,7 @@ def _system_message(
     hook_context: str | None,
 ) -> SystemMessage:
     sections = [definition.prompt.strip()]
+    sections.append(working_rules(definition))
 
     project_lines = [
         "Project:",
