@@ -30,7 +30,12 @@ from tests.agents.runtime.builder_env import (
     workspace_service,
 )
 from tests.agents.runtime.graph_env import prompt_messages
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+)
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.providers.fake_clock import FakeClock
@@ -166,7 +171,7 @@ async def test_agent_builder_keystore_error_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
@@ -250,7 +255,11 @@ async def test_agent_builder_custom_agent_in_extra_dir(
     )
 
     tools = default_registry()
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[def_dir])
+    catalog = AgentCatalog.load(
+        tools.names() | STAGE_2_TOOLS,
+        extra_dirs=[def_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
@@ -333,8 +342,7 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         chat=True,
         schedules=False,
         can_message=(),
-        context_hooks=(),
-        status_board=True,
+        context_hooks=("status_board",),
         prompt="You are the orchestrator.",
     )
     d_other = AgentDefinition(
@@ -346,12 +354,13 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
         schedules=False,
         can_message=(),
         context_hooks=(),
-        status_board=False,
         prompt="You are the other agent.",
     )
 
     tools = default_registry()
-    catalog = AgentCatalog([d_orch, d_other], tool_names=tools.names())
+    catalog = AgentCatalog(
+        [d_orch, d_other], tool_names=tools.names(), hook_names=frozenset({"status_board"})
+    )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)

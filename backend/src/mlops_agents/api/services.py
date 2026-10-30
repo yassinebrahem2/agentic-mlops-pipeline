@@ -54,6 +54,9 @@ from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
+from mlops_agents.onboarding.connections_kind import ConnectionsKind
+from mlops_agents.onboarding.handoff_kind import HandoffKind
+from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
@@ -109,6 +112,7 @@ class Services:
     query_providers: QueryProviders
     clock: Clock
     scheduler: AppScheduler
+    kickoff: Kickoff
 
 
 async def _app_secrets(
@@ -249,6 +253,7 @@ async def build_services(
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         tracking=tracking,
+        handoffs=handoffs,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -298,6 +303,22 @@ async def build_services(
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
     stack.push_async_callback(sessions.close)
+    kickoff = Kickoff(databases, sessions, handoffs)
+    # Before recovery: it re-applies an approved proposal that has no result yet.
+    proposal_kinds.register(ConnectionsKind(connections, secret_source))
+    proposal_kinds.register(
+        HandoffKind(
+            databases=databases,
+            connections=connections,
+            tracking=tracking,
+            handoffs=handoffs,
+            sandbox=sandbox,
+            events=events,
+            kickoff=kickoff,
+            secrets=project_secrets,
+            secret_values=secret_source,
+        )
+    )
 
     approvals = ApprovalsService(
         databases=databases,
@@ -340,6 +361,9 @@ async def build_services(
     # failed start still stops the timer.
     stack.push_async_callback(wakeups.close)
     await wakeups.start()
+    # Like a due wake-up, a lost kickoff starts turns, so it is finished after everything else
+    # exists, and before the app serves.
+    await kickoff.resume()
 
     return Services(
         settings=settings,
@@ -375,4 +399,5 @@ async def build_services(
         query_providers=query_providers,
         clock=clock,
         scheduler=scheduler,
+        kickoff=kickoff,
     )

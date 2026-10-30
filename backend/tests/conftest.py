@@ -30,6 +30,20 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         "ListAgents",
         "SendMessage",
         "ScheduleWakeup",
+        "SaveNote",
+        "SearchNotes",
+        "TrackingHistory",
+        "Propose",
+        "ReadHandoff",
+    }
+)
+
+STAGE_3_HOOKS: frozenset[str] = frozenset(
+    {
+        "status_board",
+        "data_summary",
+        "tracking_summary",
+        "knowledge",
     }
 )
 

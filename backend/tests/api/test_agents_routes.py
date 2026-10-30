@@ -45,7 +45,7 @@ async def test_agents_listing_and_default_model(
     assert orchestrator is not None
     assert orchestrator["display_name"] == "Orchestrator"
     assert orchestrator["chat"] is True
-    assert set(orchestrator["tools"]) == STAGE_2_TOOLS
+    assert set(orchestrator["tools"]) == STAGE_2_TOOLS - {"Propose"}
     assert orchestrator["settings"]["default_model"] is None
     assert orchestrator["settings"]["effective_model"] is None
     assert orchestrator["settings"]["model_problem"] is not None

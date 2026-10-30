@@ -37,7 +37,13 @@ from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_project_secrets
+from tests.conftest import (
+    STAGE_2_TOOLS,
+    STAGE_3_HOOKS,
+    MemoryKeyStore,
+    make_repo,
+    memory_project_secrets,
+)
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
@@ -184,12 +190,13 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     )
 
     tools = default_registry(tasks=tasks_svc)
-    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+    catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     base_def = catalog.get("orchestrator")
     custom_def = base_def.model_copy(update={"tools": ("StartTask", "Write", "Read")})
     catalog = AgentCatalog(
         [custom_def if d.name == "orchestrator" else d for d in catalog.all()],
         tool_names=tools.names() | STAGE_2_TOOLS,
+        hook_names=STAGE_3_HOOKS,
     )
     failover = KeyFailover(FakeClock())
     providers_svc = ProvidersService(databases, keystore, model_http, failover)

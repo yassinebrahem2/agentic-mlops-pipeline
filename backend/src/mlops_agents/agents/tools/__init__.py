@@ -17,6 +17,7 @@ from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
+from mlops_agents.agents.tools.read_handoff import ReadHandoffTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
 from mlops_agents.agents.tools.search_notes import SearchNotes
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
+    from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.proposals.kinds import ProposalKinds
     from mlops_agents.proposals.service import ProposalsService
     from mlops_agents.sandbox.contract import Sandbox
@@ -52,6 +54,7 @@ __all__ = [
     "OpenIssueTool",
     "OpenPullRequestTool",
     "ProposeTool",
+    "ReadHandoffTool",
     "ReadTool",
     "ResumeTaskTool",
     "SaveNote",
@@ -88,6 +91,7 @@ def default_registry(
     proposals: ProposalsService | None = None,
     proposal_kinds: ProposalKinds | None = None,
     tracking: Tracking | None = None,
+    handoffs: Handoffs | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -152,4 +156,6 @@ def default_registry(
     if knowledge is not None:
         registry.register(SaveNote(knowledge))
         registry.register(SearchNotes(knowledge))
+    if handoffs is not None:
+        registry.register(ReadHandoffTool(handoffs))
     return registry

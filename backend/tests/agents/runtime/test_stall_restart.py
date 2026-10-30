@@ -53,7 +53,7 @@ from tests.agents.runtime.test_resuming_turns import (
 )
 from tests.agents.runtime.test_stall_prepare import add_long_history
 from tests.agents.test_approvals_service import FakeSessionsForApproval
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
@@ -77,7 +77,7 @@ def _restarted(
     catalog = AgentCatalog.load(
         tools.names() | STAGE_2_TOOLS,
         extra_dirs=extra_dirs or (),
-        hook_names=hooks.names() if hooks is not None else frozenset(),
+        hook_names=(hooks.names() | STAGE_3_HOOKS) if hooks is not None else STAGE_3_HOOKS,
     )
     failover = KeyFailover(FakeClock())
     providers = ProvidersService(databases, keystore, model_http, failover)

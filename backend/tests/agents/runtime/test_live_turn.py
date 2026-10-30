@@ -24,7 +24,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.hook_fakes import NoInbound
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, memory_project_secrets
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore, memory_project_secrets
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
@@ -69,7 +69,7 @@ async def test_live_turn_orchestrator_readme(
             settings, paths, databases, git, github, http, memory_project_secrets(databases)
         )
         tools = default_registry()
-        catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS)
+        catalog = AgentCatalog.load(tools.names() | STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
         failover = KeyFailover()  # a real provider: its rate limits clear in real time
         providers_svc = ProvidersService(databases, keystore, http, failover)
         settings_svc = AgentSettingsService(databases, providers_svc, catalog)
