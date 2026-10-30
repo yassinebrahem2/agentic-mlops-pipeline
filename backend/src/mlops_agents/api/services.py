@@ -57,6 +57,7 @@ from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
+from mlops_agents.monitoring.incidents.suspects import SuspectLinker
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -393,11 +394,22 @@ async def build_services(
         severity=severity,
         maintenance=maintenance,
         clock=clock,
+        handoffs=handoffs,
     )
-    signals_from_results = SignalsFromResults(incidents, maintenance)
+    signals_from_results = SignalsFromResults(incidents, maintenance, results)
     results.add_observer(signals_from_results)
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
+
+    suspect_linker = SuspectLinker(
+        databases=databases,
+        incidents=incidents,
+        tracking=tracking,
+        events=events,
+        clock=clock,
+    )
+    scheduler.add_sync_observer(suspect_linker)
+    pr_sync.add_observer(suspect_linker)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a

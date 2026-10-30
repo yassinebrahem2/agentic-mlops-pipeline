@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import RowMapping, case, func, or_, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.monitoring.expectations.contract import ExpectationKey
 from mlops_agents.monitoring.incidents.contract import (
@@ -19,7 +20,7 @@ from mlops_agents.monitoring.incidents.contract import (
 )
 from mlops_agents.monitoring.verdicts.contract import VerdictView
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import incidents, signals
+from mlops_agents.storage.tables import events, incidents, recent_changes, signals
 
 
 def parse_dt(raw: str) -> datetime:
@@ -250,6 +251,94 @@ class IncidentStore:
                 .order_by(incidents.c.detected_at.asc(), incidents.c.started_at.asc())
             )
             return res.mappings().first()
+
+    async def get_active_incidents(self, project_id: str) -> Sequence[RowMapping]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(incidents)
+                .where(incidents.c.status.in_(ACTIVE_STATUSES))
+                .order_by(incidents.c.started_at.asc(), incidents.c.id.asc())
+            )
+            return res.mappings().all()
+
+    async def get_latest_signal_ran_at(self, project_id: str, incident_id: str) -> datetime | None:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(signals.c.ran_at)
+                .where(signals.c.incident_id == incident_id)
+                .order_by(signals.c.ran_at.desc(), signals.c.id.desc())
+                .limit(1)
+            )
+            val = res.scalar()
+            return parse_dt(str(val)) if val is not None else None
+
+    async def get_latest_incident_by_cause_key(
+        self, project_id: str, cause_key: str
+    ) -> RowMapping | None:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(incidents)
+                .where(incidents.c.cause_key == cause_key)
+                .order_by(incidents.c.detected_at.desc(), incidents.c.started_at.desc())
+                .limit(1)
+            )
+            return res.mappings().first()
+
+    async def insert_recent_change(
+        self,
+        project_id: str,
+        kind: str,
+        ref: str,
+        at: datetime,
+        detail: dict[str, Any],
+    ) -> None:
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            stmt = (
+                sqlite_insert(recent_changes)
+                .values(
+                    kind=kind,
+                    ref=ref,
+                    at=at.isoformat(),
+                    detail=json.dumps(detail),
+                )
+                .on_conflict_do_nothing(index_elements=["kind", "ref"])
+            )
+            await conn.execute(stmt)
+
+    async def list_recent_changes(self, project_id: str) -> Sequence[RowMapping]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(select(recent_changes).order_by(recent_changes.c.at.asc()))
+            return res.mappings().all()
+
+    async def get_linked_suspects(self, project_id: str, incident_id: str) -> set[tuple[str, str]]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                select(events.c.payload).where(
+                    events.c.subject_id == incident_id,
+                    events.c.type == "incident.suspect_linked",
+                )
+            )
+            linked: set[tuple[str, str]] = set()
+            for raw in res.scalars():
+                data = json.loads(str(raw))
+                kind = data.get("kind")
+                ref = data.get("ref")
+                if kind is not None and ref is not None:
+                    linked.add((str(kind), str(ref)))
+            return linked
+
+    async def update_incident_prs(self, project_id: str, incident_id: str, prs: list[int]) -> None:
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(incidents).where(incidents.c.id == incident_id).values(prs=json.dumps(prs))
+            )
 
     async def update_incident(
         self, project_id: str, incident_id: str, values: dict[str, Any]
