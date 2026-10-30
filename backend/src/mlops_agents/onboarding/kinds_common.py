@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Final
 
-from mlops_agents.credentials.scrub import scrub_values
+from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.proposals.contract import ApplyResult
 
@@ -48,12 +48,17 @@ class Parts:
         return True
 
     async def fail(self, part: str, reason: str) -> None:
-        """Records `reason` with every known secret masked."""
+        """Records `reason` with every known secret masked. Without the secret values, the
+        reason is still kept, with the secrets a URL can carry masked."""
         try:
             secrets = await self._secret_values()
         except Exception:
-            logger.exception("The secrets to mask in the reason of part %s are unknown", part)
-            self.failed[part] = UNEXPECTED_REASON
+            logger.exception(
+                "The secret values are unknown; the reason of part %s is kept with only its URL "
+                "secrets masked",
+                part,
+            )
+            self.failed[part] = scrub_url_secrets(reason)
             return
         self.failed[part] = scrub_values(reason, secrets)
 
