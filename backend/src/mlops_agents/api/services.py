@@ -53,6 +53,7 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
@@ -106,6 +107,7 @@ class Services:
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
     query_providers: QueryProviders
+    kickoff: Kickoff
 
 
 async def _app_secrets(
@@ -292,6 +294,7 @@ async def build_services(
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
     stack.push_async_callback(sessions.close)
+    kickoff = Kickoff(databases, sessions, handoffs)
 
     approvals = ApprovalsService(
         databases=databases,
@@ -325,6 +328,9 @@ async def build_services(
     # failed start still stops the timer.
     stack.push_async_callback(wakeups.close)
     await wakeups.start()
+    # Like a due wake-up, a lost kickoff starts turns, so it is finished after everything else
+    # exists, and before the app serves.
+    await kickoff.resume()
 
     return Services(
         settings=settings,
@@ -358,4 +364,5 @@ async def build_services(
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
         query_providers=query_providers,
+        kickoff=kickoff,
     )
