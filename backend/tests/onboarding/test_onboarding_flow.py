@@ -159,18 +159,28 @@ def _onboarding_requests(fake: RunningFake) -> dict[int, list[dict[str, Any]]]:
     return found
 
 
-async def _audits(http: httpx2.AsyncClient, services: Services, project_id: str) -> None:
-    """Each audit agent got its kickoff and replied; the data summary's table line reached the
-    turns of exactly the agents whose definitions name the hook (the others found the table
-    only in the kickoff message)."""
+async def _audits(
+    http: httpx2.AsyncClient, services: Services, project_id: str, rounds: int
+) -> None:
+    """Each audit agent got one kickoff per approved handoff and answered each before the next
+    one came, the last kickoff being the current handoff's; the data summary's table line
+    reached the turns of exactly the agents whose definitions name the hook (the others found
+    the table only in the kickoff message)."""
     await all_idle(services.sessions, project_id)
+    current = await _get(http, f"/api/projects/{project_id}/handoff")
+    marker = f"[handoff {current['proposal_id']}]"
     for agent in KICKOFF_AGENTS:
         messages = (await _session(http, project_id, agent))["messages"]
-        assert any(m["author_name"] == HANDOFF_AUTHOR for m in messages), agent
-        replies = [_text(m) for m in messages if m["author_kind"] == "agent"]
-        assert replies and replies[-1].startswith(AUDIT_CONTEXT), (agent, replies)
+        story = [
+            m for m in messages if m["author_name"] == HANDOFF_AUTHOR or m["author_kind"] == "agent"
+        ]
+        kinds = ["kickoff" if m["author_name"] == HANDOFF_AUTHOR else "reply" for m in story]
+        assert kinds == ["kickoff", "reply"] * rounds, (agent, kinds)
+        assert _text(story[-2]).startswith(marker), (agent, _text(story[-2])[:80])
         has_hook = DATA_SUMMARY_HOOK in services.catalog.get(agent).hook_names
-        assert replies[-1].startswith(AUDIT_CONTEXT + TABLE_LINE) == has_hook, (agent, replies)
+        for reply in (_text(m) for m in story[1::2]):
+            assert reply.startswith(AUDIT_CONTEXT), (agent, reply)
+            assert reply.startswith(AUDIT_CONTEXT + TABLE_LINE) == has_hook, (agent, reply)
 
 
 async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kicks_off_again(
@@ -207,7 +217,7 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
         assert audit_reply(requests[0]) == AUDIT_NO_DATA
         assert audit_reply(requests[1]).startswith(AUDIT_CONTEXT + TABLE_LINE)
 
-        await _audits(http, services, project_id)
+        await _audits(http, services, project_id, rounds=1)
         onboarding = (await _session(http, project_id, ONBOARDING))["messages"]
         assert all(m["author_name"] != HANDOFF_AUTHOR for m in onboarding)
         first = await handoff_messages(services.databases, project_id)
@@ -220,7 +230,7 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
 
         await _onboard(http, project_id, folder, mlflow.base_url, approve=True)
         await _replies(http, project_id, ONBOARDING_COMPLETE, 2)
-        await _audits(http, services, project_id)
+        await _audits(http, services, project_id, rounds=2)
         found = await handoff_messages(services.databases, project_id)
 
     assert len(found) == 8
