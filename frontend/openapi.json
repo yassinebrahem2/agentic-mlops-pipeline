@@ -2566,6 +2566,21 @@
         "title": "HandoffView",
         "type": "object"
       },
+      "HeartbeatView": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "HeartbeatView",
+        "type": "object"
+      },
       "HookProposal": {
         "additionalProperties": false,
         "properties": {
@@ -7569,6 +7584,27 @@
         "summary": "Set Token",
         "tags": [
           "github"
+        ]
+      }
+    },
+    "/api/health/heartbeat": {
+      "get": {
+        "operationId": "heartbeat_api_health_heartbeat_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Heartbeat",
+        "tags": [
+          "health"
         ]
       }
     },
