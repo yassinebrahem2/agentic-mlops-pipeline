@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from mlops_agents.agents.runtime.contract import Resync, ResyncData
 from mlops_agents.events.contract import EventRecord
@@ -77,7 +78,7 @@ async def test_hub_replay_older_than_buffer_paged(databases: Databases) -> None:
 
 @pytest.mark.asyncio
 async def test_hub_live_subscriber_does_not_lose_event_during_subscribe(
-    databases: Databases, monkeypatch: pytest.MonkeyPatch
+    databases: Databases,
 ) -> None:
     project_id = "prj_window1"
     hub = EventHub()
@@ -86,23 +87,22 @@ async def test_hub_live_subscriber_does_not_lose_event_during_subscribe(
     # Record initial event 1
     await event_log.record(project_id, source="user", type="turn.started", payload={"n": 1})
 
-    # Hook databases.project to record an event inside it during the subscribe setup window
-    original_project = databases.project
+    # Hook EventHub to record an event inside the subscribe setup window
     recorded = False
 
-    async def recording_project(pid: str) -> AsyncEngine:
+    async def recording_hook(pid: str) -> None:
         nonlocal recorded
         if not recorded and pid == project_id:
             recorded = True
             await event_log.record(project_id, source="user", type="message.sent", payload={"n": 2})
-        return await original_project(pid)
 
-    monkeypatch.setattr(databases, "project", recording_project)
+    hub.setup_hook = recording_hook
 
     sub = event_log.subscribe(project_id, after_seq=None)
     ev = await asyncio.wait_for(anext(sub), timeout=2.0)
     assert isinstance(ev, EventRecord)
     assert ev.seq == 2
+    assert recorded
     await sub.aclose()
 
 
@@ -207,3 +207,112 @@ async def test_hub_resync_does_not_lower_last_yielded(databases: Databases) -> N
     assert next_ev.seq == 4
 
     await sub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hub_subscribe_live_does_not_acquire_project_database(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_nodb"
+    hub = EventHub()
+
+    called = False
+    original_project = databases.project
+
+    async def fake_project(pid: str) -> AsyncEngine:
+        nonlocal called
+        called = True
+        return await original_project(pid)
+
+    monkeypatch.setattr(databases, "project", fake_project)
+
+    ready = asyncio.Event()
+
+    async def on_setup(pid: str) -> None:
+        ready.set()
+
+    hub.setup_hook = on_setup
+    sub = hub.subscribe(databases, project_id, after_seq=None)
+    anext_task = asyncio.create_task(anext(sub))
+    await ready.wait()
+
+    ev = EventRecord(
+        id="evt_1",
+        seq=1,
+        ts="2026-10-24T00:00:00Z",
+        source="user",
+        type="turn.started",
+        payload={},
+        subject_id=None,
+    )
+    await hub.publish(project_id, ev)
+
+    received = await asyncio.wait_for(anext_task, timeout=1.0)
+    assert received == ev
+    assert not called
+    await sub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hub_replay_from_database_does_not_leak_connection_across_yield(
+    databases: Databases,
+) -> None:
+    project_id = "prj_poolleak"
+    event_log = SqliteEventLog(databases)
+
+    for i in range(1, 4):
+        await event_log.record(project_id, source="user", type="turn.started", payload={"i": i})
+
+    engine = await databases.project(project_id)
+    # A fresh hub instance has an empty in-memory buffer, forcing replay from SQLite
+    hub = EventHub()
+
+    sub = hub.subscribe(databases, project_id, after_seq=0)
+    pool = cast(AsyncAdaptedQueuePool, engine.pool)
+    ev = await anext(sub)
+    assert isinstance(ev, EventRecord)
+    assert ev.seq == 1
+    # Check that while waiting between yields, no connection is checked out from the pool
+    assert pool.checkedout() == 0
+
+    ev2 = await anext(sub)
+    assert isinstance(ev2, EventRecord)
+    assert ev2.seq == 2
+    assert pool.checkedout() == 0
+
+    await sub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hub_close_project_terminates_stream_promptly_under_slow_db(
+    databases: Databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "prj_slowdb"
+    hub = EventHub()
+
+    async def slow_project(pid: str) -> AsyncEngine:
+        await asyncio.sleep(2.0)
+        return await databases.project(pid)
+
+    monkeypatch.setattr(databases, "project", slow_project)
+
+    ready = asyncio.Event()
+
+    async def on_setup(pid: str) -> None:
+        ready.set()
+
+    hub.setup_hook = on_setup
+    sub = hub.subscribe(databases, project_id, after_seq=None)
+
+    async def consume(iterator: Any) -> list[object]:
+        items: list[object] = []
+        async for item in iterator:
+            items.append(item)
+        return items
+
+    consume_task = asyncio.create_task(consume(sub))
+    await ready.wait()
+
+    await hub.close_project(project_id)
+    result = await asyncio.wait_for(consume_task, timeout=1.0)
+    assert result == []
