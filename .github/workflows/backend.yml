@@ -1,9 +1,10 @@
 name: Backend
 
+# Push only: every PR comes from a plan/** branch of this repository, and the push run's checks
+# show on the PR's head commit. A pull_request trigger as well would run CI twice per commit.
 on:
   push:
     branches: ["main", "plan/**"]
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,15 +36,35 @@ jobs:
       - name: Install ripgrep (Windows)
         if: runner.os == 'Windows'
         run: choco install ripgrep -y
-      - run: uv lock --check
       - run: uv sync --locked
-      - run: uv run ruff check
-      - run: uv run ruff format --check
-      - run: uv run ruff check ../scripts
-      - run: uv run ruff format --check ../scripts
-      - run: uv run pyright
-      - run: uv run pytest
-      - run: uv run python -m mlops_agents.api.openapi_export --check
+      # Lint, types and the API schema do not depend on the OS: Linux checks them, Windows only
+      # runs the tests.
+      - if: runner.os == 'Linux'
+        run: uv lock --check
+      - if: runner.os == 'Linux'
+        run: uv run ruff check
+      - if: runner.os == 'Linux'
+        run: uv run ruff format --check
+      - if: runner.os == 'Linux'
+        run: uv run ruff check ../scripts
+      - if: runner.os == 'Linux'
+        run: uv run ruff format --check ../scripts
+      - if: runner.os == 'Linux'
+        run: uv run pyright
+      - if: runner.os == 'Linux'
+        run: uv run python -m mlops_agents.api.openapi_export --check
+      # A -m here replaces the one in addopts, so both steps repeat "not live and not docker";
+      # together they select exactly what a plain `uv run pytest` does. Tests marked serial are
+      # sensitive to CPU load and run afterwards, alone.
+      - name: Tests (parallel)
+        id: parallel
+        shell: bash
+        run: uv run pytest -n 4 -m "not live and not docker and not serial"
+      - name: Tests (serial)
+        # Also after a parallel failure, so one run reports every failing test.
+        if: ${{ !cancelled() && steps.parallel.outcome != 'skipped' }}
+        shell: bash
+        run: uv run pytest -m "serial and not live and not docker"
 
   docker:
     timeout-minutes: 30
