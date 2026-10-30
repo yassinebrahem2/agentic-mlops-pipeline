@@ -203,3 +203,36 @@ async def test_incident_routes_end_to_end(
     timeline_before = res_before.json()
     assert len(timeline_before) == 1
     assert timeline_before[0]["seq"] < before_seq
+
+
+async def test_acknowledge_and_close_routes_refuse_a_closed_incident(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services: Services = app.state.services
+    t0 = datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC)
+    out = await services.incidents.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="table_closed",
+            model=None,
+            ran_at=t0,
+            detail={},
+        ),
+        seen_at=t0,
+    )
+    base = f"/api/projects/{project_id}/incidents/{out.incident_id}"
+    assert (await client.post(f"{base}/close")).status_code == 200
+
+    for action in ("acknowledge", "close"):
+        res = await client.post(f"{base}/{action}")
+        assert res.status_code == 409
+        assert res.json()["code"] == "incident_not_live"
+
+    res_get = await client.get(base)
+    assert res_get.json()["status"] == "closed"

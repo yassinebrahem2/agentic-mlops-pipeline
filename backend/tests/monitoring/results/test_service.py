@@ -251,15 +251,10 @@ async def test_startup_delivery_real_wiring_order(
         )
     await databases.dispose()
 
-    # 1. Start the app with zero observers registered.
-    # deliver_undelivered at startup must NOT mark records delivered when there are no observers.
-    async with started_app(home) as app:
-        services: Services = app.state.services
-        undelivered = await services.results.store.fetch_undelivered(project_id)
-        assert len(undelivered) == 1
-        assert undelivered[0].id == "res_pending_1"
-
-    # 2. In real wiring order, a later plan registers its observer on results during service initialization
+    # The zero-observer case is covered by
+    # test_results_committed_not_delivered_are_delivered_at_next_start_once: the real wiring
+    # always registers the incidents observer.
+    # In real wiring order, a later plan registers its observer on results during service initialization
     # (before scheduler.start() and deliver_undelivered run at the end of build_services).
     delivered_batches: list[list[StoredResult]] = []
 
@@ -277,7 +272,7 @@ async def test_startup_delivery_real_wiring_order(
     monkeypatch.setattr(services_module, "ResultsService", WiringResultsService)
 
     async with started_app(home) as app:
-        services = app.state.services
+        services: Services = app.state.services
         # The observer registered during build_services received the crash-pending result on startup
         assert len(delivered_batches) == 1
         assert len(delivered_batches[0]) == 1

@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
 
 import httpx2
 
@@ -60,13 +57,6 @@ from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
-from mlops_agents.monitoring.results.contract import (
-    CollectionReport,
-    ResultQuery,
-    Results,
-    ResultsObserver,
-    StoredResult,
-)
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
@@ -95,34 +85,8 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
-from mlops_agents.tracking.contract import Page
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
-
-
-class _EmptyResults(Results):
-    def add_observer(self, observer: ResultsObserver) -> None:
-        pass
-
-    async def ingest(
-        self,
-        project_id: str,
-        source_id: str,
-        items: Sequence[tuple[str, Any]],
-        seen_at: datetime,
-    ) -> list[StoredResult]:
-        return []
-
-    async def collect(self, project_id: str, now: datetime) -> CollectionReport:
-        return CollectionReport(stored=0, by_source={}, failures={})
-
-    async def query(self, project_id: str, q: ResultQuery) -> Page[StoredResult]:
-        return Page(rows=[], total=0, truncated=False)
-
-    async def latest_per_check(
-        self, project_id: str, subject: str, model: str | None
-    ) -> list[StoredResult]:
-        return []
 
 
 @dataclass
@@ -201,7 +165,6 @@ async def build_services(
     gh: GhLike | None,
     docker_runner: DockerRunner | None = None,
     clock: Clock | None = None,
-    results: Results | None = None,
 ) -> Services:
     """Each service registers its cleanup on `stack` where it is built; closing the stack
     undoes them in reverse order."""
@@ -285,19 +248,6 @@ async def build_services(
 
     query_providers = QueryProviders()
     maintenance = NeverSuspended()
-    severity = MediumSeverity()
-    results_svc = results if results is not None else _EmptyResults()
-    incidents = IncidentsService(
-        databases=databases,
-        events=events,
-        results=results_svc,
-        severity=severity,
-        maintenance=maintenance,
-        clock=clock,
-    )
-    signals_from_results = SignalsFromResults(incidents, maintenance)
-    if results is not None:
-        results.add_observer(signals_from_results)
 
     tracking = TrackingService(
         databases=databases,
@@ -429,6 +379,17 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a

@@ -12,6 +12,7 @@ from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.expectations.contract import Maintenance
 from mlops_agents.monitoring.incidents.contract import (
+    ACTIVE_STATUSES,
     HoldScope,
     IncidentChange,
     IncidentObserver,
@@ -45,6 +46,17 @@ SEVERITY_RANKS: Final[dict[Severity, int]] = {
     "medium": 2,
     "low": 1,
 }
+
+# An incident in one of these is finished: no status change takes it, and it merges into nothing.
+DONE_STATUSES: Final[tuple[IncidentStatus, ...]] = ("closed", "merged")
+
+
+def _not_live(incident_id: str, status: str) -> DomainError:
+    return DomainError(
+        "incident_not_live",
+        f"Incident '{incident_id}' is {status}; that change no longer applies to it.",
+        status=409,
+    )
 
 
 class IncidentsService(Incidents):
@@ -299,6 +311,8 @@ class IncidentsService(Incidents):
                 f"Incident '{incident_id}' not found.",
                 status=404,
             )
+        if row["status"] not in ACTIVE_STATUSES:
+            raise _not_live(incident_id, row["status"])
         now = self._clock.now()
         await self._store.update_incident(
             project_id,
@@ -359,6 +373,8 @@ class IncidentsService(Incidents):
                 f"Incident '{incident_id}' not found.",
                 status=404,
             )
+        if row["status"] in DONE_STATUSES:
+            raise _not_live(incident_id, row["status"])
         now = self._clock.now()
         await self._store.update_incident(
             project_id,
@@ -488,6 +504,8 @@ class IncidentsService(Incidents):
                 f"Incident '{incident_id}' not found.",
                 status=404,
             )
+        if patch.status is not None and row["status"] in DONE_STATUSES:
+            raise _not_live(incident_id, row["status"])
 
         sigs = await self._store.list_signals_for_incident(project_id, incident_id)
 
@@ -622,6 +640,9 @@ class IncidentsService(Incidents):
                     status=404,
                 )
             fetched_rows.append(dict(r))
+        for r in fetched_rows:
+            if r["status"] in DONE_STATUSES:
+                raise _not_live(str(r["id"]), r["status"])
 
         # Sort: oldest started_at, then detected_at
         fetched_rows.sort(
