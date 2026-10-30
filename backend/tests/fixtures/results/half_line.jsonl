@@ -1,0 +1,2 @@
+{"check_id": "chk_valid_1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "value": 0.01, "threshold": 0.05, "category": "data_quality", "subject": "features.churn", "model": "churn_v1", "detail": {"note": "first"}, "source_ref": "checks/null_rate.py", "version": "1.0", "not_enough_data": false}
+{"check_id": "chk_half", "origin": "agent", "ran_at": "2026-10-30T10:05:00Z"
