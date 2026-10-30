@@ -56,7 +56,7 @@ class DiscordChannel(Channel):
                 json=payload,
                 timeout=SEND_TIMEOUT_S,
             )
-            if resp.is_error:
+            if not resp.is_success:
                 detail = resp.text
                 err_msg = f"Discord webhook returned HTTP {resp.status_code}: {detail}"
                 scrubbed = scrub_values(err_msg, secret_values)[:ERROR_MAX_CHARS]

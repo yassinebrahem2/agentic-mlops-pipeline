@@ -135,7 +135,6 @@ class SqliteNotifier(Notifier):
                 stmt = select(func.count(func.distinct(notification_log.c.person))).where(
                     notification_log.c.incident == incident_id,
                     notification_log.c.kind.in_(["incident", "escalation"]),
-                    notification_log.c.status == "sent",
                 )
                 escalation_step = int((await conn.scalar(stmt)) or 0)
 
@@ -373,6 +372,18 @@ class SqliteNotifier(Notifier):
                             last_error="Corrupt message payload.",
                         )
                     )
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="notification.failed",
+                    payload={
+                        "person": person_id,
+                        "channel": ch_name,
+                        "kind": kind,
+                        "attempt": attempts,
+                    },
+                    subject_id=incident_id,
+                )
                 continue
 
             try:

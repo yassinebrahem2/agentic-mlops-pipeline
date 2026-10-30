@@ -21,7 +21,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.payloads import Contact, OnCallHours
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import notification_log
+from mlops_agents.storage.tables import notification_log, on_call_people
 from tests.fakes.fake_discord import FakeDiscordState, RunningFakeDiscord, start_fake_discord
 from tests.fakes.fake_smtp import FakeSmtpState, RunningFakeSmtp, start_fake_smtp
 
@@ -501,5 +501,144 @@ async def test_escalation_step_numbering(tmp_path: Path, fake_discord: RunningFa
             assert rows[1]["person"] == "bob"
             assert rows[1]["kind"] == "escalation"
             assert rows[1]["escalation_step"] == 1
+    finally:
+        await databases.dispose()
+
+
+async def test_escalation_step_when_earlier_attempt_failed_or_retrying(
+    tmp_path: Path, fake_discord: RunningFakeDiscord
+) -> None:
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    try:
+        keystore = MemoryKeyStore()
+        settings = IntegrationSettings(databases, keystore)
+        events = SqliteEventLog(databases)
+        clock = FakeClock()
+
+        webhook_url = f"{fake_discord.base_url}/api/webhooks/123/token_abc"
+        await settings.set_discord(enabled=True, webhook_url=webhook_url)
+
+        # Make Discord fail on the first delivery to Alice so row goes 'retrying'
+        fake_discord.state.fail_next(500)
+
+        async with httpx2.AsyncClient() as http:
+            channels = default_channels(settings, http)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+
+            alice = make_person(
+                id="alice", contacts=[Contact(channel="discord", address="u_alice")]
+            )
+            bob = make_person(id="bob", contacts=[Contact(channel="discord", address="u_bob")])
+
+            msg = Message(title="Critical", severity="critical")
+            res_alice = await notifier.notify(
+                "prj_1", alice, msg, kind="incident", incident_id="inc_20"
+            )
+            assert res_alice == "retrying"
+
+            # Escalation to Bob: escalation_step MUST be 1 even though Alice's row is retrying
+            await notifier.notify("prj_1", bob, msg, kind="escalation", incident_id="inc_20")
+
+            engine = await databases.project("prj_1")
+            async with engine.connect() as conn:
+                rows = (
+                    (
+                        await conn.execute(
+                            select(notification_log).order_by(notification_log.c.created)
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+
+            assert len(rows) == 2
+            assert rows[0]["person"] == "alice"
+            assert rows[0]["status"] == "retrying"
+            assert rows[0]["escalation_step"] == 0
+
+            assert rows[1]["person"] == "bob"
+            assert rows[1]["escalation_step"] == 1
+    finally:
+        await databases.dispose()
+
+
+async def test_retry_pending_corrupt_message_emits_notification_failed(
+    tmp_path: Path, fake_discord: RunningFakeDiscord
+) -> None:
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    try:
+        keystore = MemoryKeyStore()
+        settings = IntegrationSettings(databases, keystore)
+        events = SqliteEventLog(databases)
+        clock = FakeClock()
+
+        webhook_url = f"{fake_discord.base_url}/api/webhooks/123/token_abc"
+        await settings.set_discord(enabled=True, webhook_url=webhook_url)
+
+        async with httpx2.AsyncClient() as http:
+            channels = default_channels(settings, http)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+            job = RetryJob(databases, notifier, clock)
+
+            # Insert an on-call person and a corrupt retrying row
+            person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            contacts_json = json.dumps([c.model_dump() for c in person.contacts])
+            hours_json = json.dumps(person.hours.model_dump())
+            now_iso = clock.now().isoformat()
+            engine = await databases.project("prj_1")
+            async with engine.begin() as conn:
+                await conn.execute(
+                    on_call_people.insert().values(
+                        id=person.id,
+                        name=person.name,
+                        contacts=contacts_json,
+                        hours=hours_json,
+                        timezone=person.timezone,
+                        escalation_order=person.escalation_order,
+                    )
+                )
+                await conn.execute(
+                    notification_log.insert().values(
+                        id="corrupt_row_1",
+                        incident="inc_corrupt",
+                        person=person.id,
+                        channel="discord",
+                        kind="incident",
+                        escalation_step=0,
+                        status="retrying",
+                        attempts=1,
+                        next_attempt=now_iso,
+                        last_error="Initial failure",
+                        message="not-valid-json{{{",
+                        created=now_iso,
+                        sent=None,
+                    )
+                )
+
+            # Run retry job
+            await job.run("prj_1", None)  # type: ignore
+
+            async with engine.connect() as conn:
+                row = (
+                    (
+                        await conn.execute(
+                            select(notification_log).where(notification_log.c.id == "corrupt_row_1")
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+
+            assert row["status"] == "failed"
+            assert "Corrupt message payload" in str(row["last_error"])
+
+            evts = await events.history("prj_1", types=["notification.failed"])
+            assert len(evts) == 1
+            assert evts[0].subject_id == "inc_corrupt"
+            assert evts[0].payload["person"] == person.id
     finally:
         await databases.dispose()
