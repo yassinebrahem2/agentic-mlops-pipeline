@@ -54,6 +54,7 @@ from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
+from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
@@ -64,6 +65,7 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.monitoring.waker import Waker
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
@@ -129,6 +131,7 @@ class Services:
     evaluation_reader: EvaluationReader
     reports: Reports
     incidents: IncidentsService
+    waker: Waker
 
 
 async def _app_secrets(
@@ -262,6 +265,7 @@ async def build_services(
     reports = SqliteReports(databases, evaluation_reader, events)
 
     wakeups = WakeupService(databases, events=events)
+    waker = Waker(databases, events, clock)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -326,6 +330,7 @@ async def build_services(
     inbound.bind(sessions)
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
+    waker.bind(sessions)
     stack.push_async_callback(sessions.close)
     kickoff = Kickoff(databases, sessions, handoffs)
     # Before recovery: it re-applies an approved proposal that has no result yet.
@@ -391,6 +396,8 @@ async def build_services(
     )
     signals_from_results = SignalsFromResults(incidents, maintenance)
     results.add_observer(signals_from_results)
+    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
+    incidents.add_observer(diagnosis_dispatch)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -412,6 +419,7 @@ async def build_services(
     startup_now = clock.now()
     for project in await workspace.list_projects():
         await results.deliver_undelivered(project.id, startup_now)
+        await waker.resume(project.id)
 
     return Services(
         settings=settings,
@@ -452,4 +460,5 @@ async def build_services(
         evaluation_reader=evaluation_reader,
         reports=reports,
         incidents=incidents,
+        waker=waker,
     )
