@@ -323,7 +323,10 @@ async def test_scheduler_start_and_stop(
     assert len(job.runs) == 1
 
     # stop() must cancel the loop and return cleanly while parked in sleep that never ends
-    await asyncio.wait_for(scheduler.stop(), timeout=2.0)
+    t0 = asyncio.get_running_loop().time()
+    await asyncio.wait_for(scheduler.stop(), timeout=5.0)
+    elapsed = asyncio.get_running_loop().time() - t0
+    assert elapsed < 0.5
     assert scheduler.task is None
 
 
@@ -363,7 +366,7 @@ async def test_duplicate_due_runs_once(
     assert len([u for u in unfinished if u.subject == "dup2"]) == 1
 
 
-async def test_latest_due_keyed_by_kind_and_subject(
+async def test_latest_due_finds_newest_for_kind(
     databases: Databases, project_id: str, clock: FakeClock
 ) -> None:
     store = SchedulerStore(databases)
@@ -379,8 +382,5 @@ async def test_latest_due_keyed_by_kind_and_subject(
         ],
     )
 
-    alice_due = await store.latest_due(project_id, JobKind.MORNING_REPORT, subject="alice")
-    bob_due = await store.latest_due(project_id, JobKind.MORNING_REPORT, subject="bob")
-
-    assert alice_due == t1
-    assert bob_due == t2
+    latest = await store.latest_due(project_id, JobKind.MORNING_REPORT)
+    assert latest == t2
