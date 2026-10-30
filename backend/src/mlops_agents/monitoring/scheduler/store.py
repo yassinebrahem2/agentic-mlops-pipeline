@@ -27,22 +27,15 @@ class SchedulerStore:
         self._databases = databases
 
     async def latest_due(
-        self, project_id: str, kind: JobKind, subject: str = ""
+        self, project_id: str, kind: JobKind, subject: str | None = None
     ) -> datetime | None:
-        """Find the latest due datetime already stored for this job kind and subject."""
+        """Find the latest due datetime already stored for this job kind (and optional subject)."""
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    select(scheduler_jobs.c.due)
-                    .where(
-                        scheduler_jobs.c.kind == kind.value,
-                        scheduler_jobs.c.subject == subject,
-                    )
-                    .order_by(scheduler_jobs.c.due.desc())
-                    .limit(1)
-                )
-            ).first()
+            stmt = select(scheduler_jobs.c.due).where(scheduler_jobs.c.kind == kind.value)
+            if subject is not None:
+                stmt = stmt.where(scheduler_jobs.c.subject == subject)
+            row = (await conn.execute(stmt.order_by(scheduler_jobs.c.due.desc()).limit(1))).first()
         if row is None or row.due is None:
             return None
         return _parse_due(row.due)

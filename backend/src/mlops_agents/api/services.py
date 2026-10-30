@@ -351,8 +351,6 @@ async def build_services(
         clock=clock,
         sleep=clock.sleep,
     )
-    await scheduler.start()
-
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -364,7 +362,9 @@ async def build_services(
     # exists, and before the app serves.
     await kickoff.resume()
 
-    # Stop scheduler first on close so no jobs run while services shut down (LIFO).
+    # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
+    # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
     return Services(
