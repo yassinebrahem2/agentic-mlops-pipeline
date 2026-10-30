@@ -82,6 +82,10 @@ async def test_collecting_twice_stores_nothing_twice(
     assert rep2.stored == 0
     assert len(observer.batches) == 1
 
+    # Verify results.collected event was recorded
+    evts = await events.page(project_id)
+    assert any(e.type == "results.collected" for e in evts)
+
 
 async def test_two_sources_interleaved_times_reach_observer_in_ran_at_order(
     databases: Databases,

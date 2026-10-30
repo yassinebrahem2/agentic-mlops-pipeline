@@ -276,3 +276,23 @@ async def test_latest_per_check(databases: Databases, project_id: str) -> None:
     latest = await store.latest_per_check(project_id, subject="sub1", model="m1")
     assert len(latest) == 2
     assert {r.source_key for r in latest} == {"k2", "k3"}
+
+    # For model=None: matches records where model IS NULL
+    items_none = [
+        ("k5", _make_record(check_id="c3", subject="sub1", model=None, ran_at=base_t)),
+    ]
+    await store.insert_items(project_id, s_id, items_none, seen_at=base_t)
+    latest_none = await store.latest_per_check(project_id, subject="sub1", model=None)
+    assert any(r.source_key == "k5" for r in latest_none)
+
+
+def test_cap_detail() -> None:
+    import json
+
+    from mlops_agents.monitoring.results.constants import DETAIL_MAX_BYTES
+    from mlops_agents.monitoring.results.store import cap_detail
+
+    huge = {"data": "x" * (DETAIL_MAX_BYTES + 5000)}
+    capped = cap_detail(huge)
+    assert capped.get("truncated") is True
+    assert len(json.dumps(capped)) <= DETAIL_MAX_BYTES
