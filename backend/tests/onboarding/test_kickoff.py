@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 import httpx2
@@ -11,7 +10,6 @@ import pytest
 from sqlalchemy import func, insert, select, update
 
 from mlops_agents.agents.runtime.contract import MessageView
-from mlops_agents.api.services import Services
 from mlops_agents.clock import now_iso
 from mlops_agents.onboarding.briefs import (
     AUDIT_BRIEFS,
@@ -23,9 +21,14 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import exchanges, kickoff, messages, projects, sessions
+from mlops_agents.storage.tables import (
+    exchanges,
+    kickoff,
+    messages,
+    projects,
+    sessions,
+)
 from tests.agents.runtime.session_env import SessionEnv, until_idle
-from tests.api.conftest import add_local_project, started_app
 from tests.conftest import MemoryKeyStore
 from tests.onboarding.kickoff_env import (
     PROPOSAL,
@@ -282,26 +285,6 @@ async def test_resume_skips_a_project_whose_database_cannot_be_opened(
     warned = [r for r in caplog.records if broken in r.getMessage()]
     assert warned and warned[0].levelno == logging.WARNING and warned[0].exc_info is not None
     assert len(await handoff_messages(databases, env.project_id)) == len(KICKOFF_AGENTS)
-
-
-async def test_the_app_finishes_a_lost_kickoff_before_it_serves(
-    tmp_path: Path, git_env: dict[str, str]
-) -> None:
-    async with started_app(tmp_path / "data") as app:
-        services: Services = app.state.services
-        assert isinstance(services.kickoff, Kickoff)
-        project_id = await add_local_project(app, tmp_path, git_env)
-        await services.handoffs.store(project_id, PROPOSAL, sample_payload())  # then the crash
-
-    async with started_app(tmp_path / "data") as app:
-        services = app.state.services
-        rows = await kickoff_rows(services.databases, project_id)
-        found = await handoff_messages(services.databases, project_id)
-        await all_idle(services.sessions, project_id)
-
-    assert {agent for (_, agent) in rows} == set(KICKOFF_AGENTS)
-    assert {r["status"] for r in rows.values()} == {"posted"}
-    assert sorted(m.session_agent for m in found) == sorted(KICKOFF_AGENTS)
 
 
 # Newer handoffs

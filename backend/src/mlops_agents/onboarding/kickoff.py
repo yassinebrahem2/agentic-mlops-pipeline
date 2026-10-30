@@ -13,6 +13,7 @@ import logging
 import sqlite3
 from typing import Final
 
+from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -38,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 HANDOFF_AUTHOR: Final = "Handoff"
 
-# What opening a project's database raises when it cannot be opened: a corrupt or unreadable
-# file, or a schema from a newer app.
-_OPEN_ERRORS: Final = (MigrationError, sqlite3.Error, SQLAlchemyError, OSError)
+# What one project's kickoff at startup raises when its data cannot be read: a corrupt or
+# unreadable database file, a schema from a newer app, a database error while reading or
+# writing the rows, or a stored handoff that no longer validates.
+_PROJECT_ERRORS: Final = (MigrationError, sqlite3.Error, SQLAlchemyError, OSError, ValidationError)
 
 
 def _marker(proposal_id: str) -> str:
@@ -107,21 +109,25 @@ class Kickoff:
             return await self._run(project_id, version, proposal_id, payload)
 
     async def resume(self) -> None:
-        """At startup: finish the kickoff of every project's current handoff."""
+        """At startup: finish the kickoff of every project's current handoff. One project's
+        failure is logged and skipped, so it never stops the app from starting."""
         for project_id in await self._project_ids():
             try:
-                current = await self._handoffs.current(project_id)
-            except _OPEN_ERRORS:
+                await self._resume_project(project_id)
+            except _PROJECT_ERRORS:
                 logger.warning(
-                    "Skipped the kickoff of project %s: its database cannot be opened",
+                    "Skipped the kickoff of project %s: its database or its stored handoff "
+                    "cannot be read",
                     project_id,
                     exc_info=True,
                 )
-                continue
-            if current is None:
-                continue
-            async with self._lock(project_id, current.version):
-                await self._run(project_id, current.version, current.proposal_id, current.payload)
+
+    async def _resume_project(self, project_id: str) -> None:
+        current = await self._handoffs.current(project_id)
+        if current is None:
+            return
+        async with self._lock(project_id, current.version):
+            await self._run(project_id, current.version, current.proposal_id, current.payload)
 
     async def _project_ids(self) -> list[str]:
         engine = await self._databases.app()
