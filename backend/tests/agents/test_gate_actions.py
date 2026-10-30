@@ -73,8 +73,11 @@ def test_decide_action_deploy_and_merge_pr(
         ("bypass", "allow"),
     ],
 )
-def test_decide_action_hold(level: PermissionLevel, expected: PolicyDecision) -> None:
-    call = ActionCall(project_id="p1", agent="a1", kind="hold")
+@pytest.mark.parametrize("deploys", [None, False])
+def test_decide_action_hold(
+    level: PermissionLevel, deploys: bool | None, expected: PolicyDecision
+) -> None:
+    call = ActionCall(project_id="p1", agent="a1", kind="hold", deploys=deploys)
     auth = Authority(basis="none", reason="none")
     assert decide_action(level, call, auth) == expected
 
@@ -550,6 +553,40 @@ async def test_gate_authority_or_facts_provider_raises_fails_closed(
     assert decisions2["c_err_auth"].outcome == "ask"
     assert decisions2["c_err_auth"].outcome != "allow"
 
+    # 3. Policy authority raises -> fails closed (never yields allow!)
+    authorities3 = AuthorityRegistry()
+    authorities3.set_facts(_StaticFacts(deploys=False, has_prod=True, team_gate=True))
+    authorities3.register("policy", _RaisingAuthority())
+    gate3 = ApprovalGate(databases, store=store, authorities=authorities3)
+
+    train_tool = _FakeActionTool(kind="train")
+    eval_tool = _FakeActionTool(kind="evaluate")
+    call_train = make_call(
+        train_tool, "c_err_train", project_id, args=_FakeActionArgs(policy_id="pol_1")
+    )
+    call_eval = make_call(
+        eval_tool, "c_err_eval", project_id, args=_FakeActionArgs(policy_id="pol_2")
+    )
+
+    await set_permission_level(databases, project_id, "bypass")
+    decisions3_bypass = await gate3.decide([call_train, call_eval])
+    assert decisions3_bypass["c_err_train"].outcome == "ask"
+    assert decisions3_bypass["c_err_train"].outcome != "allow"
+    assert decisions3_bypass["c_err_eval"].outcome == "ask"
+    assert decisions3_bypass["c_err_eval"].outcome != "allow"
+
+    await set_permission_level(databases, project_id, "ask")
+    decisions3_ask = await gate3.decide([call_train, call_eval])
+    assert decisions3_ask["c_err_train"].outcome == "ask"
+    assert decisions3_ask["c_err_train"].outcome != "allow"
+    assert decisions3_ask["c_err_eval"].outcome == "ask"
+    assert decisions3_ask["c_err_eval"].outcome != "allow"
+
+    await set_permission_level(databases, project_id, "suggest")
+    decisions3_sug = await gate3.decide([call_train, call_eval])
+    assert decisions3_sug["c_err_train"].outcome == "deny"
+    assert decisions3_sug["c_err_eval"].outcome == "deny"
+
 
 @pytest.mark.asyncio
 async def test_gate_suspended_hook_and_unknown_facts(
@@ -558,35 +595,54 @@ async def test_gate_suspended_hook_and_unknown_facts(
     project_id = "prj_susphook"
     paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
     await setup_session_and_turn(databases, project_id)
-    await set_permission_level(databases, project_id, "ask")
 
     store = ApprovalStore(databases)
 
-    # 1. Suspended hook (deploys=True) on hold: asks at ask, even though normal hold is allowed
-    authorities1 = AuthorityRegistry()
-    authorities1.set_facts(_StaticFacts(deploys=True, has_prod=True, team_gate=True))
-    gate1 = ApprovalGate(databases, store=store, authorities=authorities1)
+    # 1. Suspended hook (deploys=True) on hold: takes deploy column (deny at suggest, ask at ask/autonomous, allow at bypass)
+    authorities_susp = AuthorityRegistry()
+    authorities_susp.set_facts(_StaticFacts(deploys=True, has_prod=True, team_gate=True))
+    gate_susp = ApprovalGate(databases, store=store, authorities=authorities_susp)
 
     hold_tool = _FakeActionTool(kind="hold")
     call_hold = make_call(hold_tool, "c_hold", project_id)
-    dec_hold = await gate1.decide([call_hold])
-    assert dec_hold["c_hold"].outcome == "ask"
 
-    # Normal hold (deploys=False) at ask is allowed
+    await set_permission_level(databases, project_id, "suggest")
+    dec_hold_sug = await gate_susp.decide([call_hold])
+    assert dec_hold_sug["c_hold"].outcome == "deny"
+
+    await set_permission_level(databases, project_id, "ask")
+    dec_hold_ask = await gate_susp.decide([call_hold])
+    assert dec_hold_ask["c_hold"].outcome == "ask"
+
+    await set_permission_level(databases, project_id, "autonomous")
+    dec_hold_auto = await gate_susp.decide([call_hold])
+    assert dec_hold_auto["c_hold"].outcome == "ask"
+
+    await set_permission_level(databases, project_id, "bypass")
+    dec_hold_byp = await gate_susp.decide([call_hold])
+    assert dec_hold_byp["c_hold"].outcome == "allow"
+
+    # 2. Normal hold (deploys=False) at ask is allowed
     authorities_normal = AuthorityRegistry()
     authorities_normal.set_facts(_StaticFacts(deploys=False, has_prod=True, team_gate=True))
     gate_normal = ApprovalGate(databases, store=store, authorities=authorities_normal)
+    await set_permission_level(databases, project_id, "ask")
     dec_hold_norm = await gate_normal.decide([call_hold])
     assert dec_hold_norm["c_hold"].outcome == "allow"
 
-    # 2. Unknown facts (NoGateFacts, deploys=None): rule-cited rollback asks at ask
-    authorities2 = AuthorityRegistry()
-    authorities2.register("rule", _StaticAuthority("rule"))
-    gate2 = ApprovalGate(databases, store=store, authorities=authorities2)
+    # 3. Unknown facts (NoGateFacts, deploys=None):
+    # - hold keeps its own row: deploys=None gives allow at ask
+    # - rule-cited rollback asks at ask (an unknown fact never selects the more permissive row)
+    authorities_unknown = AuthorityRegistry()
+    authorities_unknown.register("rule", _StaticAuthority("rule"))
+    gate_unknown = ApprovalGate(databases, store=store, authorities=authorities_unknown)
+
+    dec_hold_unknown = await gate_unknown.decide([call_hold])
+    assert dec_hold_unknown["c_hold"].outcome == "allow"
 
     rollback_tool = _FakeActionTool(kind="rollback")
     call_rb = make_call(rollback_tool, "c_rb", project_id, args=_FakeActionArgs(rule_id="rul_1"))
-    dec_rb = await gate2.decide([call_rb])
+    dec_rb = await gate_unknown.decide([call_rb])
     assert dec_rb["c_rb"].outcome == "ask"
 
 
