@@ -55,6 +55,11 @@ from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
+from mlops_agents.monitoring.scheduler.sync_jobs import (
+    AfterSyncJob,
+    SyncPrsJob,
+    SyncTrackingJob,
+)
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
@@ -73,7 +78,6 @@ from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
-from mlops_agents.tracking.loop import TrackingLoop
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -106,7 +110,6 @@ class Services:
     embedders: EmbeddersService
     knowledge: Knowledge
     tracking: TrackingService
-    tracking_loop: TrackingLoop
     proposals: ProposalsService
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
@@ -340,19 +343,15 @@ async def build_services(
     async def _list_project_ids() -> list[str]:
         return [p.id for p in await workspace.list_projects()]
 
-    tracking_loop = TrackingLoop(
-        tracking=tracking,
-        projects=_list_project_ids,
-    )
-    stack.push_async_callback(tracking_loop.close)
-    await tracking_loop.start()
-
     scheduler = AppScheduler(
         databases=databases,
         projects=_list_project_ids,
         clock=clock,
         sleep=clock.sleep,
     )
+    scheduler.register(SyncTrackingJob(tracking))
+    scheduler.register(SyncPrsJob(databases, pr_sync))
+    scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
 
     results = ResultsService(
         databases=databases,
@@ -407,7 +406,6 @@ async def build_services(
         embedders=embedders,
         knowledge=knowledge,
         tracking=tracking,
-        tracking_loop=tracking_loop,
         proposals=proposals,
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
