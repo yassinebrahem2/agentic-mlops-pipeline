@@ -501,3 +501,96 @@ describe("models table", () => {
     ]);
   });
 });
+
+describe("model prices", () => {
+  const providerPrice = {
+    prompt_per_mtok: 3,
+    completion_per_mtok: 15,
+    source: "provider",
+  } as const;
+  const userPrice = { prompt_per_mtok: 1.5, completion_per_mtok: 6, source: "user" } as const;
+
+  it("shows a published price and where it came from", async () => {
+    stubApi({ "GET /api/models": () => json([{ ...verified, price: providerPrice }]) });
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    expect(within(row).getByText("$3.00 in / $15.00 out per 1M tokens")).toBeInTheDocument();
+    expect(within(row).getByText("From the provider")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /Clear price/ })).not.toBeInTheDocument();
+  });
+
+  it("says when a model has no price and sets one, sent for an address holding a slash", async () => {
+    const priced = { ...slashed, price: userPrice };
+    const sent = stubApi({
+      "GET /api/models": () => json([slashed]),
+      "PUT /api/models/price": () => json(priced),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("groq:openai/gpt-oss-120b");
+    expect(within(row).getByText("No price")).toBeInTheDocument();
+    await user.click(
+      within(row).getByRole("button", { name: "Set price for groq:openai/gpt-oss-120b" }),
+    );
+    await user.type(await screen.findByLabelText("Prompt, USD per 1M tokens"), "1.5");
+    await user.type(screen.getByLabelText("Completion, USD per 1M tokens"), "6");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await within(row).findByText("$1.50 in / $6.00 out per 1M tokens")).toBeInTheDocument();
+    expect(within(row).getByText("Your price")).toBeInTheDocument();
+    expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
+      [
+        "PUT",
+        "/api/models/price",
+        {
+          address: "groq:openai/gpt-oss-120b",
+          price: { prompt_per_mtok: 1.5, completion_per_mtok: 6 },
+        },
+      ],
+    ]);
+  });
+
+  it("shows the server's refusal as it is", async () => {
+    stubApi({
+      "GET /api/models": () => json([verified]),
+      "PUT /api/models/price": () =>
+        json({ code: "invalid_request", message: "A price cannot be negative.", detail: {} }, 422),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    await user.click(within(row).getByRole("button", { name: "Set price for fake:fake-tools" }));
+    await user.type(await screen.findByLabelText("Prompt, USD per 1M tokens"), "-1");
+    await user.type(screen.getByLabelText("Completion, USD per 1M tokens"), "1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("A price cannot be negative.")).toBeInTheDocument();
+  });
+
+  it("clears the user's price", async () => {
+    const sent = stubApi({
+      "GET /api/models": () => json([{ ...verified, price: userPrice }]),
+      "PUT /api/models/price": () => json(verified),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    await user.click(within(row).getByRole("button", { name: "Clear price for fake:fake-tools" }));
+
+    expect(await within(row).findByText("No price")).toBeInTheDocument();
+    expect(writes(sent).map((s) => s.body)).toEqual([{ address: "fake:fake-tools", price: null }]);
+  });
+
+  it("has no price for an embedder", async () => {
+    stubApi({ "GET /api/models": () => json([verifiedEmbedder]) });
+    renderPage("/providers");
+
+    const row = await findRow("fake:verified-embed");
+    expect(within(row).queryByText("No price")).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /price/i })).not.toBeInTheDocument();
+  });
+});
