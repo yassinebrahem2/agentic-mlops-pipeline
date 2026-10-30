@@ -12,6 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from mlops_agents.clock import to_iso
 from mlops_agents.monitoring.jobs import JobDue, JobKind
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
+from mlops_agents.monitoring.scheduler.store import SchedulerStore
 from mlops_agents.monitoring.scheduler.times import interval_dues
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import scheduler_jobs
@@ -322,7 +323,7 @@ async def test_scheduler_start_and_stop(
     assert len(job.runs) == 1
 
     # stop() must cancel the loop and return cleanly while parked in sleep that never ends
-    await scheduler.stop()
+    await asyncio.wait_for(scheduler.stop(), timeout=2.0)
     assert scheduler.task is None
 
 
@@ -349,7 +350,7 @@ async def test_duplicate_due_runs_once(
     assert len(job.runs) == 1
 
     # Calling insert_dues twice directly also stores one row (on_conflict_do_nothing)
-    store = scheduler._store  # type: ignore[attr-defined]
+    store = SchedulerStore(databases)
     await store.insert_dues(
         project_id,
         [JobDue(kind=JobKind.SYNC_TRACKING, due=due_time, subject="dup2")],
@@ -365,13 +366,7 @@ async def test_duplicate_due_runs_once(
 async def test_latest_due_keyed_by_kind_and_subject(
     databases: Databases, project_id: str, clock: FakeClock
 ) -> None:
-    scheduler = AppScheduler(
-        databases=databases,
-        projects=_empty_projects,
-        clock=clock,
-        sleep=clock.sleep,
-    )
-    store = scheduler._store  # type: ignore[attr-defined]
+    store = SchedulerStore(databases)
 
     t1 = clock.now() + timedelta(seconds=10)
     t2 = clock.now() + timedelta(seconds=20)

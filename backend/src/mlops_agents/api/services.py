@@ -353,7 +353,6 @@ async def build_services(
         clock=clock,
         sleep=clock.sleep,
     )
-    await scheduler.start()
 
     results = ResultsService(
         databases=databases,
@@ -376,7 +375,9 @@ async def build_services(
     # exists, and before the app serves.
     await kickoff.resume()
 
-    # Stop scheduler first on close so no jobs run while services shut down (LIFO).
+    # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
+    # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
     return Services(
