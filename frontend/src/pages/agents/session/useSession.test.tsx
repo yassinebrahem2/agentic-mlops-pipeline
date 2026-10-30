@@ -101,6 +101,96 @@ describe("useSession", () => {
     unmount();
   });
 
+  it("drops stale session snapshot responses arriving out of order", async () => {
+    const task1 = {
+      id: "tsk_1",
+      title: "Task 1",
+      branch: "task/1",
+      status: "active",
+      review_kind: "local",
+      pr_number: null,
+      pr_url: null,
+    };
+    const task2 = {
+      id: "tsk_2",
+      title: "Task 2",
+      branch: "task/2",
+      status: "active",
+      review_kind: "local",
+      pr_number: null,
+      pr_url: null,
+    };
+
+    type SessionPayload = typeof initialSession & { current_task?: typeof task1 | null };
+    type Resolver = (val: { data: SessionPayload; response: Response }) => void;
+    let resolveFirstRefresh!: Resolver;
+    let resolveSecondRefresh!: Resolver;
+
+    getSpy = vi
+      .spyOn(api, "GET")
+      .mockResolvedValueOnce({
+        data: initialSession,
+        response: new Response(null, { status: 200 }),
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstRefresh = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecondRefresh = resolve;
+          }),
+      );
+
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
+
+    await waitFor(() => {
+      expect(createdStreams).toHaveLength(1);
+    });
+    act(() => {
+      createdStreams[0]?.emitOpen();
+    });
+
+    // Trigger first refresh
+    act(() => {
+      createdStreams[0]?.emit("turn.ended", { turn_id: "trn_1" }, 5);
+    });
+
+    // Trigger second refresh
+    act(() => {
+      createdStreams[0]?.emit("turn.ended", { turn_id: "trn_2" }, 6);
+    });
+
+    // Second refresh resolves FIRST with task2
+    act(() => {
+      resolveSecondRefresh({
+        data: { ...initialSession, current_task: task2 },
+        response: new Response(null, { status: 200 }),
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.current_task?.id).toBe("tsk_2");
+    });
+
+    // First refresh resolves LATER with older task1
+    await act(async () => {
+      resolveFirstRefresh({
+        data: { ...initialSession, current_task: task1 },
+        response: new Response(null, { status: 200 }),
+      });
+      await Promise.resolve();
+    });
+
+    // Older response must be dropped: current_task remains task2
+    expect(result.current.state?.current_task?.id).toBe("tsk_2");
+
+    unmount();
+  });
+
   it("CONNECTING makes no request and sets connection to reconnecting", async () => {
     getSpy = vi.spyOn(api, "GET").mockResolvedValue({
       data: initialSession,

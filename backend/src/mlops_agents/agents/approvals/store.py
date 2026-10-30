@@ -3,10 +3,12 @@ observers: every approval asked and every move out of pending passes through thi
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, cast
+import asyncio
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
+from typing import Any, Literal, cast
 
-from sqlalchemy import ColumnElement, select, text, update
+from sqlalchemy import ColumnElement, TextClause, and_, select, text, update
 from sqlalchemy.dialects.sqlite import insert
 
 from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
@@ -27,13 +29,23 @@ _UNSET = object()
 # The WHERE of the partial unique index approvals_stall_step (0004_stage3.sql), as literal SQL:
 # SQLite matches an upsert's conflict target to a partial index only by its written terms.
 _PENDING_STALL = text("kind = 'stall' AND status = 'pending'")
+# The WHERE of the partial index approvals_unsettled (0006_approval_settling.sql), literal too.
+_UNSETTLED = text("status <> 'pending' AND settled_at IS NULL")
+_WAITING_TURNS = select(turns.c.id).where(turns.c.status == "waiting")
+
+# Who moved an approval out of pending: the user (approve, reject, Stop) or the system (a
+# superseded proposal, expiry). NULL on a row decided before it was stored: unknown.
+DecidedBy = Literal["user", "system"]
 
 
 class ApprovalRecord(ApprovalView):
-    """Database representation of an approval request, including its message_id."""
+    """Database representation of an approval request, including its message_id; `settled_at`
+    is set once its decision's records and card are written."""
 
     message_id: str
     task_id: str | None = None
+    decided_by: DecidedBy | None = None
+    settled_at: str | None = None
 
 
 def _row_to_record(row: Any) -> ApprovalRecord:
@@ -67,6 +79,8 @@ def _row_to_record(row: Any) -> ApprovalRecord:
         created_at=str(row["created_at"]),
         decided_at=row["decided_at"],
         task_id=task_id,
+        decided_by=row["decided_by"],
+        settled_at=row["settled_at"],
     )
 
 
@@ -77,9 +91,17 @@ class ApprovalStore:
     def __init__(self, databases: Databases) -> None:
         self._databases = databases
         self._observers = ApprovalObservers()
+        self._settle_locks: dict[str, asyncio.Lock] = {}
 
     def add_observer(self, observer: ApprovalObserver) -> None:
         self._observers.add(observer)
+
+    @asynccontextmanager
+    async def settling(self, project_id: str) -> AsyncGenerator[None]:
+        """The project's settle lock: one check-then-write of decision records at a time."""
+        lock = self._settle_locks.setdefault(project_id, asyncio.Lock())
+        async with lock:
+            yield
 
     async def create(
         self,
@@ -266,26 +288,29 @@ class ApprovalStore:
         note: str | None = None,
         decided_at: str | None = None,
         task_id: str | object | None = _UNSET,
+        decided_by: DecidedBy | None = None,
+        while_turn_waiting: bool = False,
     ) -> ApprovalRecord:
-        """Update an approval's status conditionally WHERE status = 'pending'."""
+        """Update an approval's status conditionally WHERE status = 'pending' (and, given
+        `while_turn_waiting`, its turn waits); a decision stores who made it in the same UPDATE."""
         engine = await self._databases.project(project_id)
         values: dict[str, Any] = {"status": status}
         if note is not None:
             values["note"] = note
         if status in ("approved", "rejected", "cancelled", "expired"):
             values["decided_at"] = decided_at or now_iso()
+            values["decided_by"] = decided_by
         elif status == "pending":
             values["decided_at"] = None
 
         if task_id is not _UNSET:
             values["task_id"] = task_id
 
+        where = [approvals.c.id == approval_id, approvals.c.status == "pending"]
+        if while_turn_waiting:
+            where.append(approvals.c.turn_id.in_(_WAITING_TURNS))
         async with engine.begin() as conn:
-            result = await conn.execute(
-                update(approvals)
-                .where(approvals.c.id == approval_id, approvals.c.status == "pending")
-                .values(**values)
-            )
+            result = await conn.execute(update(approvals).where(*where).values(**values))
             if result.rowcount == 0:
                 existing = await self.get(project_id, approval_id)
                 if existing is None:
@@ -294,9 +319,15 @@ class ApprovalStore:
                         f"Approval '{approval_id}' does not exist.",
                         status=404,
                     )
+                if existing.status != "pending":
+                    raise DomainError(
+                        "approval_not_pending",
+                        f"Approval '{approval_id}' is not pending (status: {existing.status}).",
+                        status=409,
+                    )
                 raise DomainError(
-                    "approval_not_pending",
-                    f"Approval '{approval_id}' is not pending (status: {existing.status}).",
+                    "approval_turn_not_waiting",
+                    "The turn of this approval is not waiting for it right now.",
                     status=409,
                 )
 
@@ -317,47 +348,83 @@ class ApprovalStore:
         approve: bool,
         note: str | None = None,
     ) -> ApprovalRecord:
-        """Approve or reject an approval with an optional note. Its task id is the one it was
-        asked under: a decision never changes it."""
+        """Approve or reject an approval with an optional note, only while its turn waits for
+        it. Its task id is the one it was asked under: a decision never changes it."""
         status: ApprovalStatus = "approved" if approve else "rejected"
-        return await self.update_status(project_id, approval_id, status, note=note)
+        return await self.update_status(
+            project_id, approval_id, status, note=note, decided_by="user", while_turn_waiting=True
+        )
 
-    async def cancel(self, project_id: str, approval_id: str) -> ApprovalRecord:
+    async def cancel(
+        self, project_id: str, approval_id: str, *, decided_by: DecidedBy = "system"
+    ) -> ApprovalRecord:
         """Cancel one pending approval (a superseded proposal)."""
-        return await self.update_status(project_id, approval_id, "cancelled")
+        return await self.update_status(project_id, approval_id, "cancelled", decided_by=decided_by)
+
+    async def mark_settled(self, project_id: str, approval_ids: Sequence[str]) -> None:
+        """Record that these approvals' decision records and cards are written; an approval
+        settled already keeps its first time."""
+        if not approval_ids:
+            return
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(approvals)
+                .where(approvals.c.id.in_(approval_ids), approvals.c.settled_at.is_(None))
+                .values(settled_at=now_iso())
+            )
 
     async def pending(self, project_id: str) -> list[ApprovalRecord]:
         """List all pending approvals for a project."""
+        return await self._listed(project_id, approvals.c.status == "pending")
+
+    async def decidable(self, project_id: str) -> list[ApprovalRecord]:
+        """The pending approvals the user can decide now: their turn waits."""
+        where = and_(approvals.c.status == "pending", approvals.c.turn_id.in_(_WAITING_TURNS))
+        return await self._listed(project_id, where)
+
+    async def unsettled(self, project_id: str) -> list[ApprovalRecord]:
+        """The decided approvals, of any turn, whose records and card are not both written."""
+        return await self._listed(project_id, _UNSETTLED)
+
+    async def of_waiting_turns(self, project_id: str) -> list[ApprovalRecord]:
+        """Every approval, whatever its status, of a turn that waits."""
+        return await self._listed(project_id, approvals.c.turn_id.in_(_WAITING_TURNS))
+
+    async def retell_decided(self, records: Sequence[ApprovalRecord]) -> None:
+        """Tell the observers again of decisions a crash may have cut while they were told."""
+        await self._observers.tell("decided", records)
+
+    async def _listed(
+        self, project_id: str, where: ColumnElement[bool] | TextClause
+    ) -> list[ApprovalRecord]:
+        """The matching approvals, oldest first."""
+        query = select(approvals).where(where)
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
-            rows = (
-                (
-                    await conn.execute(
-                        select(approvals)
-                        .where(approvals.c.status == "pending")
-                        .order_by(approvals.c.created_at.asc(), approvals.c.id.asc())
-                    )
-                )
-                .mappings()
-                .all()
+            rows = await conn.execute(
+                query.order_by(approvals.c.created_at.asc(), approvals.c.id.asc())
             )
-        return [_row_to_record(r) for r in rows]
+            return [_row_to_record(r) for r in rows.mappings().all()]
 
-    async def cancel_for_turn(self, project_id: str, turn_id: str) -> list[ApprovalRecord]:
+    async def cancel_for_turn(
+        self, project_id: str, turn_id: str, *, decided_by: DecidedBy
+    ) -> list[ApprovalRecord]:
         """Cancel all pending approvals for a turn. Returns the records it cancelled."""
         return await self._sweep(
             project_id,
             (approvals.c.turn_id == turn_id,),
             "cancelled",
+            decided_by,
         )
 
     async def expire_non_waiting(self, project_id: str) -> list[ApprovalRecord]:
         """Expire all pending approvals whose turn is not in 'waiting' status."""
-        waiting_turns = select(turns.c.id).where(turns.c.status == "waiting")
         return await self._sweep(
             project_id,
-            (approvals.c.turn_id.not_in(waiting_turns),),
+            (approvals.c.turn_id.not_in(_WAITING_TURNS),),
             "expired",
+            "system",
         )
 
     async def _sweep(
@@ -365,6 +432,7 @@ class ApprovalStore:
         project_id: str,
         where: tuple[ColumnElement[bool], ...],
         status: DecidedApprovalStatus,
+        decided_by: DecidedBy,
     ) -> list[ApprovalRecord]:
         """Move the matching pending approvals to `status` in one UPDATE, and report and tell
         the observers of exactly the rows it changed: an approval decided meanwhile is not."""
@@ -375,7 +443,7 @@ class ApprovalStore:
                     await conn.execute(
                         update(approvals)
                         .where(approvals.c.status == "pending", *where)
-                        .values(status=status, decided_at=now_iso())
+                        .values(status=status, decided_at=now_iso(), decided_by=decided_by)
                         .returning(*approvals.c)
                     )
                 )

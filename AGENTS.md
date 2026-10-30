@@ -57,7 +57,7 @@ Run from `frontend/`:
 
 ## Team workflow
 
-The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner, plans are small, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
+The team is six people, each working with their own coding agent. The work is split so that each person can work on their own, at the same time as the others: every plan has one owner and one area, plans depend on interfaces rather than on whole plans, and every task merges into `main` on its own.
 
 Roles:
 - Lead: GitHub `yassinebrahem2`. Decides what is built. Writes the specs, the stage overviews, every plan, every task and every issue; owns the interfaces between plans; does the final review of every PR, merges, closes plan issues. The only person who merges into `main`. Every Decision and Bug issue is assigned to the lead.
@@ -99,14 +99,14 @@ Rule 7 above makes every agent and person keep their own cards right; the automa
 - Answer Decision issues in the issue itself. If the answer changes a plan or an interface, update the plan or the overview on `main` first, then unblock the task.
 
 ### How plans are written
-- One spec per stage. The lead splits the stage into plans of at most 5 tasks each; each plan gets one owner, who claims it. A plan merges through one PR for its whole branch. A task that another plan consumes before this plan is done gets an early PR of its own: its task issue has a "PR" section saying so, and the agent follows the issue (prompts do not need to repeat it). A plan's last task never needs one.
+- One spec per stage. The lead splits the stage into few plans, each owning one area, of at most 8 tasks each; each plan gets one owner, who claims it. A plan merges through one PR for its whole branch. A task that another plan consumes before this plan is done gets an early PR of its own: its task issue has a "PR" section saying so, and the agent follows the issue (prompts do not need to repeat it). A plan's last task never needs one.
 - A stage overview (`docs/superpowers/plans/<date>-<stage>-overview.md`, on `main`) holds what the plans share: goal, global constraints, review focus, file structure, and the list of plans with branch, Consumes and Produces. Each plan links to it instead of repeating it.
 - Plans depend on interfaces, not on whole plans. A plan's first tasks produce what other plans consume, so those interfaces reach `main` early; a task can start as soon as everything it consumes is on `main`, and its issue says which interfaces those are. Plans whose interfaces are on `main` run in parallel.
 - Files that several plans edit (routers, service registries, the frontend route table) are set up once so that each plan only adds its own lines or its own file, never edits someone else's.
-- Plans are moderately detailed, not a second copy of the code:
-  - every task names its exact files and the interfaces it consumes and produces (exact names and types);
-  - tests are written as code, or as a precise list of behaviors and failure cases to verify;
-  - full implementation code only where a mistake is costly or subtle (security, data loss, platform quirks, tricky concurrency); elsewhere, precise implementation notes.
+- Plans are short, not a second copy of the code:
+  - every task names its exact files and the interfaces it consumes and produces (exact names and types), and where each shared rule, type or constant lives (DRY and separation of concerns are settled here, not mid-work);
+  - tests are a list of the behaviours to verify: the main path and the failures that really happen;
+  - implementation notes or code only where a mistake is costly (security, secrets, data loss, the hard limits, platform quirks); elsewhere the owner decides.
 - A task's tests are its stop condition: the task is done when they pass, together with lint, type checks and CI.
 - Unfinished plans are committed to `docs/superpowers/plans/drafts/` on `main`, each with a banner listing what is still missing (see that folder's README), never kept in local scratch files or unpushed branches. A draft is never implemented.
 
@@ -127,14 +127,16 @@ Four types, each with its template and label. Blank issues are disabled.
 ## Code quality
 - Follow the conventions in this file, the roadmap contracts and the surrounding code. No exceptions without the lead's approval.
 - No silent deferred work. Anything not done, partly done, or done differently from the plan is stated explicitly in the plan issue and the PR description. No `TODO`/`FIXME` left in code as a substitute for saying it.
-- No workarounds and no technical debt. Fix the cause, not the symptom. If the right fix is out of reach (blocked, out of scope, needs a decision), stop and raise it in the plan issue instead of patching around it.
+- No workarounds. Fix the cause, not the symptom. If the right fix is out of reach (blocked, out of scope, needs a decision), stop and raise it in the plan issue instead of patching around it.
+- Technical debt is allowed when it is known and written down: the PR lists it under "Known debt added" and the lead records it in `docs/known-debt.md` (where, why accepted, what fixing it takes). Unrecorded debt is not allowed.
+- Test the main path and the failures that really happen (a service down, bad input, a restart); not conditions that cannot occur in practice.
 - Python: ruff (lint and format) and pyright in strict mode must pass. Type hints everywhere; pydantic models at boundaries (API, config, files). No bare `except`, no swallowed errors.
 - TypeScript: `strict` mode, ESLint and Prettier must pass. No `any`.
 - Inline lint suppressions only at a third-party boundary, naming the rule and the reason; test-only exceptions go in the linter's per-file config.
 - Test-first for logic: write the failing test, then the code. Test at the cheapest level that proves the behavior.
 - Before saying a task is done, run the tests and checks and report their real output.
-- Never repeat yourself: every rule, type, message and constant has one source, which everything else uses (across backend and frontend too: generate or serve it, never copy it; logic that must run on both sides is specified once, by a shared fixture both test against). Separation of concerns: each module, class and function owns one concern; a component that needs another concern calls its owner.
-- Small focused files; a file past about 400 lines is doing too much. Comments explain why, not what. No commented-out or dead code.
+- Never repeat yourself (designed into the plans, so it is settled before code is written): every rule, type, message and constant has one source, which everything else uses (across backend and frontend too: generate or serve it, never copy it; logic that must run on both sides is specified once, by a shared fixture both test against). Separation of concerns: each module, class and function owns one concern; a component that needs another concern calls its owner.
+- Small focused files; a file well past about 400 lines is doing too much (a guideline, not a merge blocker). Comments explain why, not what. No commented-out or dead code.
 - Match the surrounding code's naming and idioms.
 
 ## Documents

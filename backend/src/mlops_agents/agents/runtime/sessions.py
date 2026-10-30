@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 from typing import Literal
 
 import httpx2
 
+from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
@@ -26,7 +25,9 @@ from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.repair import ProjectRecovery
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import stop_waiting_turn
 from mlops_agents.agents.runtime.worker import TurnWorkers
@@ -35,11 +36,10 @@ from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["SessionManager"]
 
@@ -57,6 +57,7 @@ class SessionManager(AgentSessions):
         settings: AgentSettingsService,
         providers: ProvidersService,
         http: httpx2.AsyncClient,
+        failover: KeyFailover,
         gate: Gate,
         inbound: InboundSource,
         turn_end: TurnEndCheck,
@@ -82,7 +83,8 @@ class SessionManager(AgentSessions):
         self._approval_store = approval_store
 
         self._store = SessionStore(databases, audit_log=self._audit_log, event_log=self._event_log)
-        self._caller = ModelCaller(providers=providers, http=http)
+        self._caller = ModelCaller(providers=providers, http=http, failover=failover)
+        self._approvals = LateApprovals()
         self._builder = AgentBuilder(
             workspace=workspace,
             catalog=catalog,
@@ -102,35 +104,43 @@ class SessionManager(AgentSessions):
                 turn_end=turn_end,
                 workspaces=workspaces,
                 approval_store=approval_store,
+                approvals=self._approvals,
+                events=event_log,
             ),
             observers=observers,
         )
-        self._workers = TurnWorkers(store=self._store, executor=self._executor, observers=observers)
+        self._workers = TurnWorkers(
+            store=self._store,
+            executor=self._executor,
+            observers=observers,
+            approval_store=approval_store,
+            audit_log=audit_log,
+            event_log=event_log,
+        )
 
         self._registry = SessionRegistry(self._store)
-        self._recovered_projects: set[str] = set()
-        self._recovery_lock = asyncio.Lock()
+        self._recovery = ProjectRecovery(
+            store=self._store,
+            approval_store=approval_store,
+            databases=databases,
+            audit_log=audit_log,
+            event_log=event_log,
+            rewrite_part=self._rewrite_part,
+            stop_turn=self.stop_turn,
+            resume_turn=self.resume_turn,
+        )
 
         if bus is not None:
             bus.bind(self)
 
+    def bind_approvals(self, approvals: Approvals) -> None:
+        """The approvals service, which takes this manager and so is built after it; a turn's
+        stall goes through it. A second call raises RuntimeError."""
+        self._approvals.bind(approvals)
+
     async def ensure_recovered(self, project_id: str) -> None:
         """Public method to ensure a project's state is recovered before use."""
-        await self._ensure_recovered(project_id)
-
-    async def _ensure_recovered(self, project_id: str) -> None:
-        if project_id in self._recovered_projects:
-            return
-        async with self._recovery_lock:
-            if project_id in self._recovered_projects:
-                return
-            await self._store.recover(
-                project_id,
-                approval_store=self._approval_store,
-                audit_log=self._audit_log,
-                event_log=self._event_log,
-            )
-            self._recovered_projects.add(project_id)
+        await self._recovery.ensure(project_id)
 
     def _check_agent(self, agent: str) -> None:
         if not self._catalog.get(agent).chat:
@@ -140,7 +150,7 @@ class SessionManager(AgentSessions):
 
     async def get(self, project_id: str, agent: str) -> SessionView:
         await self._workspace.get(project_id)
-        await self._ensure_recovered(project_id)
+        await self._recovery.ensure(project_id)
         self._check_agent(agent)
 
         session_id = await self._registry.session_id(project_id, agent)
@@ -223,7 +233,7 @@ class SessionManager(AgentSessions):
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
 
-        await self._ensure_recovered(project_id)
+        await self._recovery.ensure(project_id)
         self._check_agent(agent)
 
         session_id = await self._registry.session_id(project_id, agent)
@@ -273,27 +283,28 @@ class SessionManager(AgentSessions):
         await self._workspace.get(project_id)
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
-        await self._message(project_id, session_id, message_id)
-        lock = self._registry.lock(project_id, session_id)
-        hub = self._registry.hub(project_id, session_id)
-
-        async with lock:
-            current = await self._message(project_id, session_id, message_id)
-            updated = await self._store.update_message(
-                project_id, message_id, parts=transform(list(current.parts))
-            )
-            await hub.message(updated, created=False)
+        updated = await self._rewrite_part(project_id, session_id, message_id, transform)
+        if updated is None:
+            raise DomainError("message_not_found", "This message does not exist.", status=404)
         return updated
 
-    async def _message(self, project_id: str, session_id: str, message_id: str) -> MessageView:
-        message = await self._store.message(project_id, session_id, message_id)
-        if message is None:
-            raise DomainError("message_not_found", "This message does not exist.", status=404)
-        return message
+    async def _rewrite_part(
+        self,
+        project_id: str,
+        session_id: str,
+        message_id: str,
+        transform: Callable[[list[Part]], list[Part]],
+    ) -> MessageView | None:
+        """Store and publish the message's parts, transformed, under the session lock; None if gone."""
+        async with self._registry.lock(project_id, session_id):
+            updated = await self._store.rewrite_parts(project_id, session_id, message_id, transform)
+            if updated is not None:
+                await self._registry.hub(project_id, session_id).message(updated, created=False)
+        return updated
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         await self._workspace.get(project_id)
-        await self._ensure_recovered(project_id)
+        await self._recovery.ensure(project_id)
         if not await self._store.has_session(project_id, session_id):
             raise DomainError("session_not_found", "This session does not exist.", status=404)
 
@@ -319,12 +330,25 @@ class SessionManager(AgentSessions):
     async def stop(self, project_id: str, agent: str) -> None:
         await self._workspace.get(project_id)
         self._check_agent(agent)
-        session_id = await self._registry.session_id(project_id, agent)
+        await self._recovery.ensure(project_id)
+        await self._stop(project_id, agent, None)
 
-        self._workers.stop((project_id, session_id))
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        await self._workspace.get(project_id)
+        agent = await self._store.session_agent(project_id, session_id)
+        if agent is None:
+            raise DomainError("session_not_found", "This session does not exist.", status=404)
+        await self._recovery.ensure(project_id)
+        await self._stop(project_id, agent, turn_id)
+
+    async def _stop(self, project_id: str, agent: str, turn_id: str | None) -> None:
+        """Stop the agent's turn, running or waiting; given `turn_id`, only that one if it waits."""
+        session_id = await self._registry.session_id(project_id, agent)
+        if turn_id is None:
+            self._workers.stop((project_id, session_id))
 
         waiting = await self._store.waiting_turn(project_id, session_id)
-        if waiting is not None:
+        if waiting is not None and turn_id in (None, waiting[0]):
             worker = self._workers.get((project_id, session_id))
             if worker is not None and not worker.done():
                 await worker
@@ -332,7 +356,7 @@ class SessionManager(AgentSessions):
             lock = self._registry.lock(project_id, session_id)
             async with lock:
                 waiting = await self._store.waiting_turn(project_id, session_id)
-                if waiting is not None:
+                if waiting is not None and turn_id in (None, waiting[0]):
                     hub = self._registry.hub(project_id, session_id)
                     await stop_waiting_turn(
                         project_id=project_id,
@@ -364,28 +388,23 @@ class SessionManager(AgentSessions):
     async def _recover_and_clear_project(self, project_id: str) -> None:
         self._registry.forget(project_id)
         self._workers.forget(project_id)
-        self._recovered_projects.discard(project_id)
-        try:
-            await self._store.recover(
-                project_id,
-                approval_store=self._approval_store,
-                audit_log=self._audit_log,
-                event_log=self._event_log,
-            )
-        except Exception as exc:
-            logger.exception("Failed to recover project %s: %s", project_id, exc)
+        self._recovery.forget(project_id)
+        await self._recovery.recover_only(project_id)
 
     async def close_project(self, project_id: str) -> None:
         await self._workspace.get(project_id)
+        # The repair first: one about to resume a turn would start a worker after the cancel.
+        await self._recovery.cancel(project_id)
         await self._workers.cancel(project_id)
         await self._recover_and_clear_project(project_id)
         await self._databases.close_project(project_id)
 
     async def close(self) -> None:
-        projects = self._workers.projects() | set(self._recovered_projects)
+        projects = self._workers.projects() | self._recovery.recovered()
+        await self._recovery.cancel()
         await self._workers.cancel()
         for p in projects:
             await self._recover_and_clear_project(p)
         self._registry.clear()
         self._workers.forget()
-        self._recovered_projects.clear()
+        self._recovery.forget()

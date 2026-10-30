@@ -1,8 +1,10 @@
 """Key failover: exhausted keys, cooldown probes, Try again, the wording and the one instance."""
 
 import asyncio
-from collections.abc import Callable
+import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any, get_args
 
 import pytest
 
@@ -10,11 +12,14 @@ from mlops_agents.api import services as services_module
 from mlops_agents.api.services import Services
 from mlops_agents.providers.failover import (
     AllKeysExhausted,
+    Clock,
     KeyFailover,
     KeyState,
     KeyStatus,
     RateLimited,
+    no_usable_key,
 )
+from mlops_agents.providers.models import Provider
 from tests.api.conftest import started_app
 from tests.providers.fake_clock import (
     KEY_VALUES,
@@ -242,6 +247,10 @@ def test_describe_keys_names_keys_by_position_never_by_value(failover: KeyFailov
     assert not any(value in text for value in KEY_VALUES)
 
 
+def test_no_usable_key_names_the_provider_and_the_model() -> None:
+    assert no_usable_key("groq", "llama-3.3-70b") == "groq: no usable key for llama-3.3-70b"
+
+
 async def test_all_keys_exhausted_names_no_key_value(failover: KeyFailover) -> None:
     with pytest.raises(AllKeysExhausted) as raised:
         await failover.call(provider(1), MODEL, Script(unauthorized()), cooldown_minutes=15)
@@ -256,8 +265,12 @@ async def test_build_services_builds_exactly_one_key_failover(
     built: list[KeyFailover] = []
 
     class RecordedKeyFailover(KeyFailover):
-        def __init__(self) -> None:
-            super().__init__()
+        def __init__(
+            self,
+            clock: Clock | None = None,
+            on_success: Callable[[Provider], Awaitable[None]] | None = None,
+        ) -> None:
+            super().__init__(clock, on_success)
             built.append(self)
 
     monkeypatch.setattr(services_module, "KeyFailover", RecordedKeyFailover)
@@ -267,3 +280,27 @@ async def test_build_services_builds_exactly_one_key_failover(
         assert len(built) == 1
         assert services.failover is built[0]
         assert services.failover is services.failover
+
+
+def _describe_keys_cases() -> list[dict[str, Any]]:
+    path = Path(__file__).parents[3] / "shared" / "fixtures" / "describe-keys.json"
+    doc: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    cases: list[dict[str, Any]] = doc["cases"]
+    return cases
+
+
+@pytest.mark.parametrize("case", _describe_keys_cases(), ids=lambda case: case["name"])
+def test_describe_keys_matches_the_shared_fixture(
+    failover: KeyFailover, case: dict[str, Any]
+) -> None:
+    states = [KeyState.model_validate(state) for state in case["states"]]
+
+    assert failover.describe_keys(states) == case["text"]
+
+
+def test_the_describe_keys_fixture_covers_every_status_and_one_to_three_keys() -> None:
+    cases = _describe_keys_cases()
+    seen = {state["status"] for case in cases for state in case["states"]}
+
+    assert seen == set(get_args(KeyStatus))
+    assert {len(case["states"]) for case in cases} == {1, 2, 3}

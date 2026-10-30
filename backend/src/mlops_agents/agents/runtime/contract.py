@@ -35,8 +35,6 @@ ApprovalStatus = Literal["pending", DecidedApprovalStatus]
 # A tool call to allow, or a turn stalled for want of a usable key (Try again or Stop).
 ApprovalKind = Literal["tool", "stall"]
 TurnEnd = Literal["done", "stopped", "interrupted", "failed"]
-# Why a turn failed, when the UI offers a remedy for it (Try again after keys_exhausted).
-ErrorKind = Literal["keys_exhausted"]
 
 
 class TextPart(BaseModel):
@@ -85,7 +83,6 @@ class MessageView(BaseModel):
     parts: list[Part]
     status: MessageStatus
     created_at: str
-    error_kind: ErrorKind | None = None  # set on a failed turn's agent message
 
 
 class TaskView(BaseModel):
@@ -135,7 +132,6 @@ class TurnEndedData(BaseModel):
     turn_id: str
     status: TurnEnd
     error: str | None
-    error_kind: ErrorKind | None = None
 
 
 class ResyncData(BaseModel):
@@ -250,6 +246,11 @@ class AgentSessions(Protocol):
 
     async def stop(self, project_id: str, agent: str) -> None: ...
 
+    async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
+        """Stops that turn if it waits, without the agent's chat check (a rejected stall ends its
+        turn, whatever the agent); does nothing when it does not wait."""
+        ...
+
     async def ensure_recovered(self, project_id: str) -> None: ...
 
     async def resume_turn(self, project_id: str, session_id: str, turn_id: str) -> None: ...
@@ -271,7 +272,6 @@ __all__ = [
     "ApprovalStatus",
     "AuthorKind",
     "DecidedApprovalStatus",
-    "ErrorKind",
     "MessageCreated",
     "MessageData",
     "MessageStatus",

@@ -4,6 +4,7 @@ model, and the call loop that moves between keys (stage 3 spec, section 2)."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,8 @@ from pydantic import BaseModel
 
 from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind, classify
 from mlops_agents.providers.models import Provider
+
+logger = logging.getLogger(__name__)
 
 TRANSIENT_BACKOFFS = (1.0, 2.0)
 # A per-minute limit has cleared a minute after it was hit: a key limited again after that
@@ -36,6 +39,12 @@ class KeyState(BaseModel):
     since: datetime | None  # when the key became exhausted, or was last limited; None when ok
 
 
+def no_usable_key(provider_name: str, model: str) -> str:
+    """The one wording of the headline when no key of a provider works for a model: the failed
+    turn's text, the stall card's title and the embedder's error (Decision #398)."""
+    return f"{provider_name}: no usable key for {model}"
+
+
 class AllKeysExhausted(Exception):
     def __init__(self, keys: list[KeyState]) -> None:
         super().__init__("Every key of the provider is exhausted for this model.")
@@ -48,14 +57,6 @@ class RateLimited(Exception):
     def __init__(self, retry_after_s: float) -> None:
         super().__init__(f"Every usable key is rate limited; one clears in {retry_after_s:.0f} s.")
         self.retry_after_s = retry_after_s
-
-
-class StreamedTextFailure(Exception):
-    """Raised by an attempt that failed after text streamed: it is never failed over."""
-
-    def __init__(self, cause: BaseException) -> None:
-        super().__init__("The model call failed after its text had started to stream.")
-        self.cause = cause
 
 
 class Clock(Protocol):
@@ -107,10 +108,17 @@ _LINES: dict[KeyStatus, str] = {
 
 class KeyFailover:
     """One per app, shared by every call. Each read-then-write of the state is one block with
-    no `await` inside, so concurrent calls need no lock."""
+    no `await` inside, so concurrent calls need no lock. The failover owns the success rule: after a
+    successful call of a provider marked needs attention it awaits `on_success` (the app
+    clears the mark, Decision #384)."""
 
-    def __init__(self, clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        clock: Clock | None = None,
+        on_success: Callable[[Provider], Awaitable[None]] | None = None,
+    ) -> None:
         self._clock: Clock = clock if clock is not None else SystemClock()
+        self._on_success = on_success
         self._entries: dict[tuple[str, int, str], _Entry] = {}
         self._cursors: dict[tuple[str, str], int] = {}
 
@@ -124,7 +132,7 @@ class KeyFailover:
         wait: bool = True,
     ) -> T:
         if not provider.keys:
-            return await attempt(None)
+            return await self._call_keyless(provider, attempt)
         cooldown = timedelta(minutes=cooldown_minutes)
         transient_retries = 0
         pick: _Pick | None = None
@@ -139,13 +147,9 @@ class KeyFailover:
                     continue
             try:
                 result = await attempt(pick.index)
-            except StreamedTextFailure as failure:
-                self._record(provider, model, pick, classify(failure.cause))
-                raise
             except Exception as exc:
                 error = classify(exc)
-                if error.kind in _SAME_KEY_RETRY and transient_retries < len(TRANSIENT_BACKOFFS):
-                    await self._clock.sleep(TRANSIENT_BACKOFFS[transient_retries])
+                if await self._backoff(error, transient_retries):
                     transient_retries += 1
                     continue
                 if error.kind not in _NEXT_KEY:
@@ -154,7 +158,33 @@ class KeyFailover:
                 pick = None
                 continue
             self._succeed(provider, model, pick.index)
+            await self._report_success(provider)
             return result
+
+    async def _call_keyless[T](
+        self, provider: Provider, attempt: Callable[[int | None], Awaitable[T]]
+    ) -> T:
+        """No key means nothing to mark or rotate (Decision #384), but a transient error still
+        deserves the retries a keyed call gives its key."""
+        transient_retries = 0
+        while True:
+            try:
+                result = await attempt(None)
+            except Exception as exc:
+                if await self._backoff(classify(exc), transient_retries):
+                    transient_retries += 1
+                    continue
+                raise
+            await self._report_success(provider)
+            return result
+
+    async def _backoff(self, error: ProviderCallError, retries: int) -> bool:
+        """Sleep before retrying the same call when the error is transient and the retries are
+        not spent; the one rule for the keyed and the keyless path."""
+        if error.kind not in _SAME_KEY_RETRY or retries >= len(TRANSIENT_BACKOFFS):
+            return False
+        await self._clock.sleep(TRANSIENT_BACKOFFS[retries])
+        return True
 
     def states(self, provider: Provider, model: str) -> list[KeyState]:
         now = self._clock.now()
@@ -176,6 +206,15 @@ class KeyFailover:
             line = _LINES[state.status].format(since=since)
             lines.append(f"Key {state.key_index + 1}: {line}.")
         return " ".join(lines)
+
+    async def _report_success(self, provider: Provider) -> None:
+        """The call already succeeded: a failing `on_success` is logged, never raised."""
+        if self._on_success is None or provider.status != "needs_attention":
+            return
+        try:
+            await self._on_success(provider)
+        except Exception:
+            logger.exception("The success hook of provider %s failed.", provider.id)
 
     def _entry(self, provider: Provider, index: int, model: str) -> _Entry:
         return self._entries.setdefault((provider.id, index, model), _Entry())

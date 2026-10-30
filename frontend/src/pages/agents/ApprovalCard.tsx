@@ -2,6 +2,9 @@ import type { ComponentType } from "react";
 import { useParams } from "react-router";
 import type { components } from "@/api/schema";
 import { GenericApprovalCard } from "./GenericApprovalCard";
+import { ConnectionsProposalCard } from "./proposals/ConnectionsProposalCard";
+import { HandoffProposalCard } from "./proposals/HandoffProposalCard";
+import { StallCard } from "./StallCard";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
 export type ApprovalStatus = ApprovalPart["status"];
@@ -20,8 +23,13 @@ export type ApprovalCardComponent = ComponentType<
 
 // The card each approval kind and each proposal kind gets; one without an entry gets the
 // generic card. Each plan that adds a card adds its line here, next to its component file.
-export const CARD_FOR_KIND: Partial<Record<ApprovalPart["kind"], ApprovalCardComponent>> = {};
-export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {};
+export const CARD_FOR_KIND: Partial<Record<ApprovalPart["kind"], ApprovalCardComponent>> = {
+  stall: StallCard,
+};
+export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {
+  connections: ConnectionsProposalCard,
+  handoff: HandoffProposalCard,
+};
 
 /** The card an approval gets, chosen from the part alone: its kind's card, else its proposal
  * kind's card, else the generic card. */

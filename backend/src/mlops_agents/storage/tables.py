@@ -113,7 +113,6 @@ turns = Table(
     Column("created_at", Text, nullable=False),
     Column("started_at", Text),
     Column("ended_at", Text),
-    Column("error_kind", Text),
 )
 
 messages = Table(
@@ -208,6 +207,8 @@ approvals = Table(
     Column("kind", Text, nullable=False),
     Column("step", Integer),
     Column("proposal_kind", Text),
+    Column("decided_by", Text),
+    Column("settled_at", Text),
 )
 
 events = Table(

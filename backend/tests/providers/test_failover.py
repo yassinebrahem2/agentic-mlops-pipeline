@@ -11,7 +11,6 @@ from mlops_agents.providers.failover import (
     KeyFailover,
     KeyState,
     RateLimited,
-    StreamedTextFailure,
 )
 from tests.providers.fake_clock import (
     FakeClock,
@@ -19,6 +18,7 @@ from tests.providers.fake_clock import (
     at,
     bad_generation,
     bad_request,
+    billing,
     overloaded,
     provider,
     rate_limit,
@@ -55,6 +55,29 @@ async def test_a_rate_limit_moves_to_the_next_key_without_sleeping(
         KeyState(key_index=0, status="limited", since=at(0)),
         KeyState(key_index=1, status="ok", since=None),
     ]
+
+
+async def test_a_non_finite_retry_after_is_absent_and_the_call_moves_to_key_2(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    script = Script(rate_limit("inf"), "ok")
+    result = await failover.call(provider(2), MODEL, script, cooldown_minutes=COOLDOWN)
+    assert result == "ok"
+    assert script.keys == [0, 1]
+    assert clock.sleeps == []
+
+
+async def test_a_wait_round_ends_at_the_probe_time_when_it_is_the_earliest_wake(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    two = provider(2)
+    await failover.call(two, MODEL, Script(billing(), "ok"), cooldown_minutes=1)
+    clock.advance(10)
+    # Key 2 is limited until 70 s (the 60 s cap); key 1 is due for a probe at 60 s.
+    script = Script(rate_limit("600"), "ok")
+    assert await failover.call(two, MODEL, script, cooldown_minutes=1) == "ok"
+    assert clock.sleeps == [50.0]
+    assert script.keys == [1, 0]
 
 
 async def test_a_success_clears_the_limit_time(clock: FakeClock, failover: KeyFailover) -> None:
@@ -209,21 +232,6 @@ async def test_other_errors_re_raise_at_once(
     assert clock.sleeps == []
 
 
-async def test_a_streamed_text_failure_records_the_limit_and_never_fails_over(
-    failover: KeyFailover,
-) -> None:
-    two = provider(2)
-    failure = StreamedTextFailure(rate_limit())
-    attempt = Script(failure)
-
-    with pytest.raises(StreamedTextFailure) as raised:
-        await failover.call(two, MODEL, attempt, cooldown_minutes=COOLDOWN)
-
-    assert raised.value is failure
-    assert attempt.keys == [0]
-    assert statuses(failover.states(two, MODEL)) == ["limited", "ok"]
-
-
 async def test_a_provider_without_keys_is_called_once_with_none(
     clock: FakeClock, failover: KeyFailover
 ) -> None:
@@ -239,6 +247,32 @@ async def test_a_provider_without_keys_is_called_once_with_none(
     assert attempt.keys == [None]
     assert clock.sleeps == []
     assert failover.states(keyless, MODEL) == []
+
+
+async def test_a_keyless_provider_retries_a_transient_error_after_a_backoff(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    attempt = Script(overloaded(), "reply")
+
+    assert await failover.call(provider(0), MODEL, attempt, cooldown_minutes=COOLDOWN) == "reply"
+    assert attempt.keys == [None, None]
+    assert clock.sleeps == [TRANSIENT_BACKOFFS[0]]
+
+
+@pytest.mark.parametrize("make_error", [overloaded, unreachable])
+async def test_a_keyless_provider_failing_every_attempt_raises_the_last_error(
+    clock: FakeClock, failover: KeyFailover, make_error: Callable[[], Exception]
+) -> None:
+    keyless = provider(0)
+    last = make_error()
+    attempt = Script(*(make_error() for _ in TRANSIENT_BACKOFFS), last)
+
+    with pytest.raises(type(last)) as raised:
+        await failover.call(keyless, MODEL, attempt, cooldown_minutes=COOLDOWN)
+
+    assert raised.value is last
+    assert attempt.keys == [None] * (len(TRANSIENT_BACKOFFS) + 1)
+    assert clock.sleeps == list(TRANSIENT_BACKOFFS)
 
 
 async def test_two_concurrent_calls_limited_on_one_key_do_not_exhaust_it(

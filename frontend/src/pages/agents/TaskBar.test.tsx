@@ -98,6 +98,17 @@ describe("TaskBar", () => {
     expect(onDiscard).toHaveBeenCalledTimes(1);
   });
 
+  it("closes the discard dialog on Escape when nothing is pending", async () => {
+    const user = userEvent.setup();
+    render(<TaskBar task={baseTask} projectId="prj_1" />);
+
+    await user.click(screen.getByRole("button", { name: "Discard task" }));
+    expect(screen.getByRole("dialog", { name: "Discard task" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("keeps the dialog open on Escape and an outside click while the discard request is pending", async () => {
     // The open modal sets pointer-events: none on the page behind it; click it anyway.
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });

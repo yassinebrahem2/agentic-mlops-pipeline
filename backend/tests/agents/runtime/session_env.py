@@ -26,11 +26,12 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import ToolRegistry, default_registry
 from mlops_agents.config import RunMode, Settings, load_settings
-from mlops_agents.events.contract import AuditLog
+from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
-from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.providers.failover import Clock, KeyFailover
+from mlops_agents.providers.models import ModelCreate, Provider, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
@@ -40,6 +41,7 @@ from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class SessionEnv:
     project_id: str
     provider: str
     approval_store: ApprovalStore  # the one the manager (and the default gate) were given
+    providers: ProvidersService  # the one the manager was given, on the same key failover
 
 
 def _settings(paths: DataPaths) -> Settings:
@@ -77,6 +80,8 @@ async def build_session_env(
     audit_log: AuditLog | None = None,
     approval_store: ApprovalStore | None = None,
     hooks: HookRegistry | None = None,
+    event_log: EventLog | None = None,
+    clock: Clock | None = None,
 ) -> SessionEnv:
     repo_files = files if files is not None else {"README.md": "Line 1 of readme\nLine 2\n"}
     repo_dir = make_repo(tmp_path / "repo", repo_files, git_env)
@@ -87,7 +92,12 @@ async def build_session_env(
         extra_dirs=extra_dirs or (),
         hook_names=hooks.names() if hooks is not None else frozenset(),
     )
-    providers_svc = ProvidersService(databases, keystore, model_http)
+
+    async def clear_attention(provider: Provider) -> None:  # wired as `build_services` does
+        await providers_svc.clear_attention(provider.id)
+
+    failover = KeyFailover(clock if clock is not None else FakeClock(), on_success=clear_attention)
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     settings_svc = AgentSettingsService(databases, providers_svc, catalog)
     http = httpx2.AsyncClient()
     github = GitHubAuth(databases, keystore, http, FakeGh(None))
@@ -110,6 +120,7 @@ async def build_session_env(
         settings=settings_svc,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=gate if gate is not None else ApprovalGate(databases, store=approvals),
         inbound=inbound if inbound is not None else NoInbound(),
         turn_end=NoTurnEndCheck(),
@@ -119,6 +130,7 @@ async def build_session_env(
         bus=bus,
         hooks=hooks,
         audit_log=audit_log,
+        event_log=event_log,
     )
 
     prov = await providers_svc.create_provider(
@@ -139,6 +151,7 @@ async def build_session_env(
         project_id=project.id,
         provider=prov.name,
         approval_store=approvals,
+        providers=providers_svc,
     )
 
 
@@ -185,3 +198,13 @@ async def agent_message_statuses(env: SessionEnv, agent: str = "orchestrator") -
         for m in await env.store.messages(env.project_id, session_id)
         if m.author_kind == "agent"
     ]
+
+
+async def until_idle(manager: SessionManager, project_id: str, agent: str) -> None:
+    """Until the agent's session is not busy: a worker finishes a turn's end (its approvals
+    sweep, its observers) after the stream's turn.ended, then leaves."""
+    async with asyncio.timeout(5):
+        while True:
+            if not (await manager.get(project_id, agent)).busy:
+                return
+            await asyncio.sleep(0.01)

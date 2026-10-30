@@ -37,6 +37,14 @@ def tracking_ref(project_id: str, source_id: str) -> str:
     return f"{project_prefix(project_id)}tracking/{source_id}"
 
 
+def hook_prefix(project_id: str) -> str:
+    return f"{project_prefix(project_id)}hook/"
+
+
+def hook_ref(project_id: str, hook_id: str) -> str:
+    return f"{project_prefix(project_id)}hook/{hook_id}"
+
+
 def _project_of(ref: str) -> str:
     match = _PROJECT_REF.match(ref)
     if match is None:

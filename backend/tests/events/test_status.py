@@ -8,8 +8,6 @@ import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.hooks.contract import HookContext
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.events.contract import EventRecord, EventType
 from mlops_agents.events.hub import EventHub
@@ -20,6 +18,7 @@ from mlops_agents.events.status import (
     format_agent_status_line,
 )
 from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.builder_env import status_board_hooks
 from tests.api.fake_sessions import FakeSessions
 from tests.fakes.fake_tasks import FakeTasks
 
@@ -323,8 +322,8 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     databases: Databases,
     tmp_path: Path,
 ) -> None:
-    from mlops_agents.agents.runtime.context import build_messages
     from mlops_agents.workspace.models import Project
+    from tests.agents.runtime.graph_env import prompt_messages
 
     project_id = "prj_statustest"
     hub = EventHub()
@@ -359,10 +358,7 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
         last_opened_at=None,
     )
 
-    hook = StatusBoardHook()
-    hook.bind(board)
-    hooks = HookRegistry()
-    hooks.register(hook)
+    hooks = status_board_hooks(board)
 
     async def hook_context(definition: AgentDefinition) -> str:
         ctx = HookContext(project_id=project_id, agent=definition.name, trigger_text="")
@@ -374,8 +370,8 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     assert orch_context.startswith('<data source="hook:status_board">\nStatus board:\n')
     assert retrain_context == ""
 
-    orch_msgs = build_messages(d_orch, project, "README.md", None, [], hook_context=orch_context)
-    retrain_msgs = build_messages(
+    orch_msgs = prompt_messages(d_orch, project, "README.md", None, [], hook_context=orch_context)
+    retrain_msgs = prompt_messages(
         d_retrain, project, "README.md", None, [], hook_context=retrain_context
     )
 

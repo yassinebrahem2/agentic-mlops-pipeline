@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import BaseMessage
+
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.store import ApprovalStore
-from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.agent import Agent
+from mlops_agents.agents.runtime.context import history_messages, system_message
 from mlops_agents.agents.runtime.contract import (
     MessageView,
     TaskView,
@@ -16,6 +19,7 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.graph import TurnHooks
+from mlops_agents.agents.runtime.stall import LateApprovals
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, TaskRef
@@ -55,6 +59,8 @@ def stage1_hooks(workspaces: TaskWorkspaces, databases: Databases) -> TurnHooks:
         turn_end=NoTurnEndCheck(),
         workspaces=workspaces,
         approval_store=store,
+        approvals=LateApprovals(),  # unbound: these graphs never stall
+        events=None,
     )
 
 
@@ -135,3 +141,34 @@ def make_agent(
         tools=tuple(agent_tools),
         files=repo_files,
     )
+
+
+def prompt_messages(
+    definition: AgentDefinition,
+    project: Project,
+    layout: str,
+    summary: str | None,
+    history: list[MessageView],
+    hook_context: str | None = None,
+) -> list[BaseMessage]:
+    """The messages a turn sends the model, built the way the runtime does: `system_message`
+    of the agent, then `history_messages`."""
+    agent = Agent(
+        definition=definition,
+        project=project,
+        layout=layout,
+        model=ResolvedModel(
+            address="fake:fake-tools",
+            provider_id="fake",
+            provider_name="fake",
+            base_url="http://fake",
+            wire_model_id="fake-tools",
+            context_window=32768,
+            keys=(),
+        ),
+        max_steps=None,
+        tools=(),
+        files=RepoFiles(Path(project.local_path or "."), GitRunner(Path())),
+        hook_context=hook_context,
+    )
+    return [system_message(agent, summary), *history_messages(history)]

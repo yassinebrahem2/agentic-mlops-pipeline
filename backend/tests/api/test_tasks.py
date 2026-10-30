@@ -15,8 +15,6 @@ from sqlalchemy import select
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
-from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.hooks.status_board import StatusBoardHook
 from mlops_agents.agents.runtime.contract import ToolFinished
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
@@ -29,11 +27,13 @@ from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import tasks
 from mlops_agents.workspace.service import WorkspaceService
+from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound, ScriptedGate
 from tests.agents.runtime.session_env import collect_until_turn_ended
 from tests.api.conftest import add_local_project
@@ -41,6 +41,7 @@ from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore, make_repo, memory_proj
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
+from tests.providers.fake_clock import FakeClock
 
 
 @pytest.fixture(autouse=True)
@@ -190,7 +191,8 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         [custom_def if d.name == "orchestrator" else d for d in catalog.all()],
         tool_names=tools.names() | STAGE_2_TOOLS,
     )
-    providers_svc = ProvidersService(databases, keystore, model_http)
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
     agent_settings = AgentSettingsService(databases, providers_svc, catalog)
 
     prov = await providers_svc.create_provider(
@@ -201,10 +203,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
     await agent_settings.set_default_model("orchestrator", f"{prov.name}:fake-tools")
 
     status_board = SqliteStatusBoard(catalog, events)
-    status_board_hook = StatusBoardHook()
-    status_board_hook.bind(status_board)
-    hooks = HookRegistry()
-    hooks.register(status_board_hook)
+    hooks = status_board_hooks(status_board)
     session_mgr = SessionManager(
         databases=databases,
         workspace=workspace,
@@ -213,6 +212,7 @@ async def test_wired_session_start_task_write_and_read_later_turn(
         settings=agent_settings,
         providers=providers_svc,
         http=model_http,
+        failover=failover,
         gate=ScriptedGate(),
         inbound=NoInbound(),
         turn_end=NoTurnEndCheck(),

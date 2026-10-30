@@ -412,3 +412,164 @@ async def test_pr_sync_refreshes_the_next_issue_after_a_transport_error(
         assert [u.payload["number"] for u in updates] == [10]
     finally:
         await http.aclose()
+
+
+async def test_pr_sync_observers_and_files(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    from mlops_agents.agents.pr_sync import PrChange
+    from mlops_agents.integrations.github.pulls import list_pull_files
+
+    bare = make_bare_remote(tmp_path, git_env)
+    with git_instead_of(tmp_path, bare):
+        observer, tasks, project_id, _, http = await setup_sync_test(tmp_path, git_env)
+        changes: list[PrChange] = []
+
+        class RecordingPrObserver:
+            async def changed(self, project_id: str, pr: PrChange) -> None:
+                changes.append(pr)
+
+        observer.add_observer(RecordingPrObserver())
+
+        try:
+            session_id = "ses_obs1"
+            paths = DataPaths(tmp_path / "home")
+            databases = Databases(paths)
+            await create_session(databases, project_id, session_id, agent="coder")
+
+            # 1. Merged PR with rename
+            task1 = await tasks.start(project_id, session_id, "coder", "Task Merged")
+            await tasks.set_review(
+                project_id,
+                task1.id,
+                kind="github",
+                pr_number=20,
+                pr_url="https://github.com/test-owner/test-repo/pull/20",
+            )
+            repo_slug = "test-owner/test-repo"
+            fake_github.state.prs[(repo_slug, 20)] = {
+                "number": 20,
+                "title": "Task Merged",
+                "body": "body",
+                "html_url": "https://github.com/test-owner/test-repo/pull/20",
+                "state": "open",
+                "merged": False,
+                "changed_files": 2,
+            }
+            fake_github.state.pr_files[(repo_slug, 20)] = [
+                {"filename": "new_name.py", "previous_filename": "old_name.py"},
+                {"filename": "added.py", "previous_filename": None},
+            ]
+
+            # Merge PR
+            fake_github.state.merge_pull(repo_slug, 20)
+            await observer.sync_now(project_id)
+
+            assert len(changes) == 1
+            c1 = changes[0]
+            assert c1.number == 20
+            assert c1.state == "merged"
+            assert c1.merged_at is not None
+            assert c1.head_branch == task1.branch
+            assert c1.agent == "coder"
+            # rename gives both paths
+            assert c1.files == ["old_name.py", "new_name.py", "added.py"]
+
+            # 2. Second sync gives nothing
+            await observer.sync_now(project_id)
+            assert len(changes) == 1
+
+            # 3. Closed PR
+            task2 = await tasks.start(project_id, session_id, "coder", "Task Closed")
+            await tasks.set_review(
+                project_id,
+                task2.id,
+                kind="github",
+                pr_number=21,
+                pr_url="https://github.com/test-owner/test-repo/pull/21",
+            )
+            fake_github.state.prs[(repo_slug, 21)] = {
+                "number": 21,
+                "title": "Task Closed",
+                "body": "body",
+                "html_url": "https://github.com/test-owner/test-repo/pull/21",
+                "state": "open",
+                "merged": False,
+                "changed_files": 1,
+            }
+            fake_github.state.pr_files[(repo_slug, 21)] = [
+                {"filename": "file.py", "previous_filename": None}
+            ]
+            fake_github.state.close_pull(repo_slug, 21)
+            await observer.sync_now(project_id)
+
+            assert len(changes) == 2
+            assert changes[1].number == 21
+            assert changes[1].state == "closed"
+
+            # 4. Files-listing failure leaves the task open and calls no observer
+            task3 = await tasks.start(project_id, session_id, "coder", "Task Fail")
+            await tasks.set_review(
+                project_id,
+                task3.id,
+                kind="github",
+                pr_number=22,
+                pr_url="https://github.com/test-owner/test-repo/pull/22",
+            )
+            fake_github.state.prs[(repo_slug, 22)] = {
+                "number": 22,
+                "title": "Task Fail",
+                "body": "body",
+                "html_url": "https://github.com/test-owner/test-repo/pull/22",
+                "state": "open",
+                "merged": False,
+            }
+            fake_github.state.merge_pull(repo_slug, 22)
+
+            # Mock list_pull_files to fail on first attempt
+            original_send = http.send
+
+            async def fail_send(request: httpx2.Request, **kwargs: Any) -> httpx2.Response:
+                if request.url.path.endswith("/pulls/22/files"):
+                    return httpx2.Response(500, request=request, json={"message": "internal error"})
+                return await original_send(request, **kwargs)
+
+            with patch.object(http, "send", fail_send):
+                await observer.sync_now(project_id)
+
+            # Task stays open (in_review) and no observer called for PR 22
+            view_fail = await tasks.view(project_id, task3.id)
+            assert view_fail.status == "in_review"
+            assert len(changes) == 2
+
+            # Next sync delivers it
+            await observer.sync_now(project_id)
+            view_done = await tasks.view(project_id, task3.id)
+            assert view_done.status == "merged"
+            assert len(changes) == 3
+            assert changes[2].number == 22
+
+            # 5. list_pull_files reads every page
+            # Populate 150 files on fake github for PR 30
+            fake_github.state.prs[(repo_slug, 30)] = {
+                "number": 30,
+                "title": "Many Files",
+                "body": "body",
+                "html_url": "https://github.com/test-owner/test-repo/pull/30",
+                "state": "open",
+                "merged": False,
+            }
+            fake_github.state.pr_files[(repo_slug, 30)] = [
+                {"filename": f"f_{i}.py", "previous_filename": None} for i in range(150)
+            ]
+            token = await observer._github.token()  # pyright: ignore[reportPrivateUsage]
+            assert token is not None
+            all_pull_files = await list_pull_files(http, token, repo_slug, 30)
+            assert len(all_pull_files) == 150
+            assert all_pull_files[0].filename == "f_0.py"
+            assert all_pull_files[-1].filename == "f_149.py"
+
+        finally:
+            await http.aclose()

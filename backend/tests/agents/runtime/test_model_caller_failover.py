@@ -1,0 +1,270 @@
+"""The model caller on a real `KeyFailover`: the fake server answers per key, time is a
+`FakeClock`, so no test waits."""
+
+from __future__ import annotations
+
+import asyncio
+
+import httpx2
+import pytest
+from langchain_core.messages import BaseMessage, HumanMessage
+
+from mlops_agents.agents.runtime.model_caller import (
+    ModelKeysExhausted,
+    TurnFailed,
+    _Call,  # pyright: ignore[reportPrivateUsage]  # the record whose repr is checked
+)
+from mlops_agents.providers.bridge import KEYLESS
+from mlops_agents.storage.databases import Databases
+from tests.agents.runtime.caller_env import (
+    CallerEnv,
+    build_caller_env,
+    keys_used,
+    resolve,
+)
+from tests.conftest import MemoryKeyStore
+from tests.fakes.fake_openai import KeyOutcome, RunningFake
+
+KEYS = ("gsk_first_secret_value", "gsk_second_secret_value")
+HI: list[BaseMessage] = [HumanMessage(content="hi")]
+
+
+async def _noop(_: str) -> None:
+    pass
+
+
+@pytest.fixture
+async def env(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> CallerEnv:
+    return await build_caller_env(
+        databases,
+        keystore,
+        fake_openai,
+        model_http,
+        name="groq",
+        wire_model_ids=["fake-no-tools", "fake-tools"],
+        keys=KEYS,
+    )
+
+
+async def _statuses(env: CallerEnv, model: str = "fake-no-tools") -> list[str]:
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    return [state.status for state in env.failover.states(provider, model)]
+
+
+async def test_a_429_on_key_one_is_answered_by_key_two_in_the_same_call(
+    env: CallerEnv, fake_openai: RunningFake
+) -> None:
+    fake_openai.state.script_for_key(KEYS[0], [("429", None)])
+
+    reply = await env.caller.call(env.model, HI, [], _noop)
+
+    assert reply.message.content == "Hello from the fake model."
+    assert keys_used(fake_openai) == list(KEYS)
+    assert env.clock.sleeps == []
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [pytest.param(("429", 5.0), id="per-minute"), pytest.param("429-quota-wording", id="quota")],
+)
+async def test_a_limit_on_every_key_waits_once_then_succeeds(
+    env: CallerEnv, fake_openai: RunningFake, limit: KeyOutcome
+) -> None:
+    for key in KEYS:
+        fake_openai.state.script_for_key(key, [limit])
+
+    reply = await env.caller.call(env.model, HI, [], _noop)
+
+    assert reply.message.content == "Hello from the fake model."
+    assert len(env.clock.sleeps) == 1
+    assert keys_used(fake_openai) == [KEYS[0], KEYS[1], KEYS[0]]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status"),
+    [("402", "billing"), ("insufficient_quota", "billing"), ("401", "rejected")],
+)
+async def test_billing_and_rejected_keys_are_exhausted_at_once(
+    env: CallerEnv, fake_openai: RunningFake, outcome: KeyOutcome, status: str
+) -> None:
+    fake_openai.state.script_for_key(KEYS[0], [outcome])
+
+    reply = await env.caller.call(env.model, HI, [], _noop)
+
+    assert reply.message.content == "Hello from the fake model."
+    assert env.clock.sleeps == []
+    assert await _statuses(env) == [status, "ok"]
+    await env.caller.call(env.model, HI, [], _noop)
+    assert keys_used(fake_openai) == [KEYS[0], KEYS[1], KEYS[1]]
+
+
+async def test_every_key_exhausted_before_text_raises_model_keys_exhausted(
+    env: CallerEnv, fake_openai: RunningFake
+) -> None:
+    fake_openai.state.script_for_key(KEYS[0], ["401"])
+    fake_openai.state.script_for_key(KEYS[1], ["402"])
+
+    with pytest.raises(ModelKeysExhausted) as raised:
+        await env.caller.call(env.model, HI, [], _noop)
+
+    exhausted = raised.value
+    # Caught only to stall the turn, never failing it (the user's rule, 2026-10-28).
+    assert not isinstance(exhausted, TurnFailed)
+    assert exhausted.provider_id == env.model.provider_id
+    assert exhausted.model == "fake-no-tools"
+    assert [key.status for key in exhausted.keys] == ["rejected", "billing"]
+    assert exhausted.description == (
+        "Key 1: rejected by the provider. Key 2: billing, out of credit."
+    )
+    assert exhausted.headline == "groq: no usable key for fake-no-tools"
+    assert str(exhausted) == ("groq: no usable key for fake-no-tools. " + exhausted.description)
+    for key in KEYS:
+        assert key not in str(exhausted)
+    # No key can work until someone fixes it: the provider is flagged, as before.
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    assert provider.status == "needs_attention"
+    assert provider.status_detail == str(exhausted)
+
+
+async def test_daily_limits_exhaust_the_keys_without_flagging_the_provider(
+    env: CallerEnv, fake_openai: RunningFake
+) -> None:
+    for key in KEYS:
+        fake_openai.state.script_for_key(key, [("429", None), ("429", None)])
+
+    with pytest.raises(ModelKeysExhausted) as raised:
+        await env.caller.call(env.model, HI, [], _noop)
+
+    assert [key.status for key in raised.value.keys] == ["exhausted_daily", "exhausted_daily"]
+    assert "Key 1: daily limit reached (since 14:04 UTC)." in str(raised.value)
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    assert provider.status == "ok"
+
+
+async def test_parallel_calls_on_one_failover_share_its_state(
+    env: CallerEnv, fake_openai: RunningFake
+) -> None:
+    fake_openai.state.script_for_key(KEYS[0], ["401", "401"])
+
+    replies = await asyncio.gather(
+        env.caller.call(env.model, HI, [], _noop), env.caller.call(env.model, HI, [], _noop)
+    )
+
+    assert [reply.message.content for reply in replies] == ["Hello from the fake model."] * 2
+    assert await _statuses(env) == ["rejected", "ok"]
+    fake_openai.state.request_headers.clear()
+    await env.caller.call(env.model, HI, [], _noop)
+    assert keys_used(fake_openai) == [KEYS[1]]
+
+
+async def test_key_state_is_per_model(env: CallerEnv, fake_openai: RunningFake) -> None:
+    fake_openai.state.script_for_key(KEYS[0], ["401"])
+    await env.caller.call(env.model, HI, [], _noop)
+    other = await resolve(env.providers, "groq:fake-tools")
+    fake_openai.state.request_headers.clear()
+
+    await env.caller.call(other, HI, [], _noop)
+
+    assert keys_used(fake_openai) == [KEYS[0]]
+    assert await _statuses(env, "fake-tools") == ["ok", "ok"]
+
+
+async def test_reset_keys_forgets_the_exhausted_keys(
+    env: CallerEnv, fake_openai: RunningFake
+) -> None:
+    fake_openai.state.script_for_key(KEYS[0], ["401"])
+    fake_openai.state.script_for_key(KEYS[1], ["402"])
+    with pytest.raises(ModelKeysExhausted):
+        await env.caller.call(env.model, HI, [], _noop)
+
+    await env.caller.reset_keys(env.model.provider_id)
+
+    reply = await env.caller.call(env.model, HI, [], _noop)
+    assert reply.message.content == "Hello from the fake model."
+    assert await _statuses(env) == ["ok", "ok"]
+
+
+async def test_keys_changed_during_the_call_restart_it_once(
+    env: CallerEnv, fake_openai: RunningFake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_keys_for = env.providers.keys_for
+    reads: list[int] = []
+
+    async def keys_for(provider_id: str) -> list[str]:
+        # The first read misses the second key, as if it was added after the provider was read.
+        keys = await real_keys_for(provider_id)
+        reads.append(len(keys))
+        return keys[:1] if len(reads) == 1 else keys
+
+    monkeypatch.setattr(env.providers, "keys_for", keys_for)
+    fake_openai.state.script_for_key(KEYS[0], ["401"])
+
+    reply = await env.caller.call(env.model, HI, [], _noop)
+
+    assert reply.message.content == "Hello from the fake model."
+    assert len(reads) == 2
+    assert keys_used(fake_openai) == list(KEYS)
+
+
+async def test_keys_changed_twice_fail_the_call_unexpectedly(
+    env: CallerEnv, fake_openai: RunningFake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_keys_for = env.providers.keys_for
+
+    async def keys_for(provider_id: str) -> list[str]:
+        return (await real_keys_for(provider_id))[:1]
+
+    monkeypatch.setattr(env.providers, "keys_for", keys_for)
+    fake_openai.state.script_for_key(KEYS[0], ["401"])
+
+    with pytest.raises(Exception, match="keys changed") as raised:
+        await env.caller.call(env.model, HI, [], _noop)
+
+    # Not a TurnFailed: the turn ends with the unexpected-failure text.
+    assert not isinstance(raised.value, TurnFailed)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "provider_message"),
+    [
+        ("401", "Invalid API key"),
+        ("402", "Payment required"),
+        (("429", None), "Rate limit reached"),
+    ],
+)
+async def test_a_keyless_provider_refusing_the_call_fails_it_without_flagging_the_provider(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    outcome: KeyOutcome,
+    provider_message: str,
+) -> None:
+    # No key to fix or rotate: the turn fails plainly and the user can send again (#384).
+    env = await build_caller_env(
+        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
+    )
+    fake_openai.state.script_for_key(KEYLESS, [outcome])
+
+    with pytest.raises(TurnFailed) as raised:
+        await env.caller.call(env.model, HI, [], _noop)
+
+    assert not isinstance(raised.value, ModelKeysExhausted)
+    assert provider_message in raised.value.message
+    assert keys_used(fake_openai) == [KEYLESS]
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    assert provider.status == "ok"
+
+
+async def test_a_calls_record_shows_no_key_value_in_its_repr(env: CallerEnv) -> None:
+    # Secrets never go in a repr (AGENTS.md): the record of one failover call holds the keys.
+    provider = await env.providers.get_provider_by_id(env.model.provider_id)
+    record = _Call(env.model, provider, KEYS)
+
+    for key in KEYS:
+        assert key not in repr(record)

@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
-from mlops_agents.agents.runtime.compaction import compact_if_needed
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
     MessageStatus,
@@ -18,12 +16,13 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     TurnEnd,
 )
-from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink, TurnState
+from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink
 from mlops_agents.agents.runtime.graph_run import run_turn_graph
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
+from mlops_agents.credentials.scrub import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -123,78 +122,25 @@ class TurnExecutor:
             parts: list[Part],
             status: MessageStatus,
         ) -> MessageView:
-            # The stored write and its publish are one step under the session lock, so a
-            # concurrent get() never returns a message whose event the subscriber gets again.
-            async with lock:
-                stored = await self._store.add_message(
-                    project_id,
-                    session_id,
-                    turn_id=turn_id,
-                    author_kind=author_kind,
-                    author_name=author_name,
-                    parts=parts,
-                    status=status,
-                )
-                await sink.message(stored, created=True)
-            return stored
+            return await self._add_message(
+                project_id, session_id, turn_id, sink, lock, author_kind, author_name, parts, status
+            )
 
         async def body() -> TurnOutcome:
             try:
                 built_agent = await self._builder.build(
                     project_id, agent, session_id=session_id, turn_id=turn_id
                 )
-            except TurnRefused as exc:
-                text_part: list[Part] = [TextPart(type="text", text=exc.text)]
-                if exc.end == "done":
-                    await add_message("agent", agent, text_part, "complete")
-                    return ("done", None)
-                await add_message("system", "system", text_part, "complete")
-                return ("failed", exc.text)
+            except TurnRefused as refused:
+                return await self._end_refused(
+                    project_id, session_id, turn_id, agent, sink, lock, message, refused
+                )
 
             agent_msg = await add_message("agent", built_agent.definition.name, [], "streaming")
             message.id = agent_msg.id
 
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            history = await self._store.messages(project_id, session_id)
-            history_for_compaction = [m for m in history if m.id != message.id]
-            system_msg = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                [],
-                hook_context=built_agent.hook_context,
-            )[0]
-            await compact_if_needed(
-                self._store,
-                self._caller,
-                built_agent.model,
-                project_id,
-                session_id,
-                history_for_compaction,
-                str(system_msg.content),
-                turn_id=turn_id,
-                agent_name=built_agent.definition.name,
-            )
-
-            summary, compacted_through = await self._store.summary(project_id, session_id)
-            active_history = await self._store.messages(
-                project_id, session_id, after=compacted_through
-            )
-            active_history = [m for m in active_history if m.id != message.id]
-            initial_messages = build_messages(
-                built_agent.definition,
-                built_agent.project,
-                built_agent.layout,
-                summary,
-                active_history,
-                hook_context=built_agent.hook_context,
-            )
-            initial_state: TurnState = {
-                "messages": initial_messages,
-                "step_count": 0,
-                "stopped_reason": None,
-            }
+            # The graph's `prepare` node compacts the session and builds the messages.
+            initial_state: dict[str, Any] = {"step_count": 0, "stopped_reason": None}
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -221,23 +167,48 @@ class TurnExecutor:
         message = _AgentMessage()
 
         async def body() -> TurnOutcome:
-            agent_msg = await self._store.turn_agent_message(project_id, session_id, turn_id)
-            if agent_msg is None:
-                raise RuntimeError(f"No agent message found for turn {turn_id}")
-            message.id = agent_msg.id
-            message.parts.extend(agent_msg.parts)
+            try:
+                try:
+                    agent_msg = await self._store.turn_agent_message(
+                        project_id, session_id, turn_id
+                    )
+                    if agent_msg is None:
+                        raise RuntimeError(f"No agent message found for turn {turn_id}")
+                    message.id = agent_msg.id
+                    message.parts.extend(agent_msg.parts)
 
-            async with lock:
-                updated_msg = await self._store.update_message(
-                    project_id, agent_msg.id, parts=message.parts, status="streaming"
+                    async with lock:
+                        updated_msg = await self._store.update_message(
+                            project_id, agent_msg.id, parts=message.parts, status="streaming"
+                        )
+                        await sink.message(updated_msg, created=False)
+                    await self._store.set_turn(project_id, turn_id, "running")
+
+                    built_agent = await self._builder.build(
+                        project_id, agent, session_id=session_id, turn_id=turn_id
+                    )
+                    summary, _ = await self._store.summary(project_id, session_id)
+                    command = await resume_command(
+                        built_agent, summary, self._store.db_path(project_id), turn_id
+                    )
+                except BaseException:
+                    # The graph owns the thread once it runs; a failure or a Stop before that ends
+                    # the turn, and would leave its checkpoint behind. A failing cleanup never
+                    # replaces what ended the turn: a Stop stays a Stop.
+                    try:
+                        await self.delete_checkpoint(project_id, turn_id)
+                    except Exception as exc:
+                        logger.error(
+                            "Could not delete the checkpoint thread of turn %s: %s: %s",
+                            turn_id,
+                            type(exc).__name__,
+                            error_text(exc),
+                        )
+                    raise
+            except TurnRefused as refused:
+                return await self._end_refused(
+                    project_id, session_id, turn_id, agent, sink, lock, message, refused
                 )
-                await sink.message(updated_msg, created=False)
-            await self._store.set_turn(project_id, turn_id, "running")
-
-            built_agent = await self._builder.build(
-                project_id, agent, session_id=session_id, turn_id=turn_id
-            )
-            summary, _ = await self._store.summary(project_id, session_id)
             return await self._execute_graph(
                 built_agent,
                 project_id,
@@ -245,14 +216,86 @@ class TurnExecutor:
                 turn_id,
                 agent_msg.id,
                 message.parts,
-                await resume_command(
-                    built_agent, summary, self._store.db_path(project_id), turn_id
-                ),
+                command,
                 sink,
                 lock,
             )
 
         return await self._guarded(project_id, session_id, turn_id, sink, lock, message, body)
+
+    async def _add_message(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+        author_kind: AuthorKind,
+        author_name: str,
+        parts: list[Part],
+        status: MessageStatus,
+    ) -> MessageView:
+        # The stored write and its publish are one step under the session lock, so a
+        # concurrent get() never returns a message whose event the subscriber gets again.
+        async with lock:
+            stored = await self._store.add_message(
+                project_id,
+                session_id,
+                turn_id=turn_id,
+                author_kind=author_kind,
+                author_name=author_name,
+                parts=parts,
+                status=status,
+            )
+            await sink.message(stored, created=True)
+        return stored
+
+    async def _end_refused(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str,
+        agent: str,
+        sink: TurnSink,
+        lock: AbstractAsyncContextManager[Any],
+        message: _AgentMessage,
+        refused: TurnRefused,
+    ) -> TurnOutcome:
+        """How a turn ends when its agent cannot be built, for a new turn and a resumed one:
+        a "done" refusal is the agent's answer and ends the turn done; any other fails it with
+        the refusal's own text. A resumed turn already has its agent message (`message.id`): it is
+        completed instead of added, and the failure goes through `record_failure`, which also
+        completes it."""
+        if refused.end == "done":
+            answer = TextPart(type="text", text=refused.text)
+            if message.id is None:
+                await self._add_message(
+                    project_id,
+                    session_id,
+                    turn_id,
+                    sink,
+                    lock,
+                    "agent",
+                    agent,
+                    [answer],
+                    "complete",
+                )
+            else:
+                message.parts.append(answer)
+                await self._finish_message(
+                    project_id, sink, lock, message.id, message.parts, "complete"
+                )
+            return ("done", None)
+        if message.id is None:
+            notice: list[Part] = [TextPart(type="text", text=refused.text)]
+            await self._add_message(
+                project_id, session_id, turn_id, sink, lock, "system", "system", notice, "complete"
+            )
+        else:
+            await self.record_failure(
+                project_id, session_id, turn_id, sink, lock, refused.text, parts=message.parts
+            )
+        return ("failed", refused.text)
 
     async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
         """Delete a turn's checkpoint thread from the SQLite checkpointer."""

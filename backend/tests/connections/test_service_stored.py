@@ -176,7 +176,7 @@ async def test_mounts_scrub_an_os_error_of_the_kind(
     assert "https://***@host/x?token=***" in err.value.message
 
 
-async def test_mounts_hand_the_kind_only_validated_settings(
+async def test_mounts_hand_the_kind_only_parsed_settings(
     service_env: ServiceEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = service_env[0]
@@ -201,7 +201,6 @@ async def test_mounts_hand_the_kind_only_validated_settings(
     mounts = await service.mounts("prj_val")
 
     assert [m.container_path for m in mounts] == ["/data/bad", "/data/good"]
-    assert [step for step, _ in calls] == ["validate", "mount", "validate", "mount"]
-    for i in (0, 2):
-        assert isinstance(calls[i][1], LocalFolderSettings)
-        assert calls[i][1] is calls[i + 1][1]
+    assert [step for step, _ in calls] == ["mount", "mount"]
+    for _, settings in calls:
+        assert isinstance(settings, LocalFolderSettings)

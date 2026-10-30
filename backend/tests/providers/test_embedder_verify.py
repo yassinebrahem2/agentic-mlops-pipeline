@@ -5,6 +5,7 @@ import pytest
 
 from mlops_agents.errors import DomainError
 from mlops_agents.providers.bridge import EMBED_BATCH, build_embeddings
+from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.providers.verification import EmbedderProbe, probe_embedder
@@ -19,7 +20,7 @@ async def _service(
     fake: RunningFake,
     http: httpx2.AsyncClient,
 ) -> ProvidersService:
-    svc = ProvidersService(databases, keystore, http)
+    svc = ProvidersService(databases, keystore, http, KeyFailover())
     await svc.create_provider(
         ProviderCreate(name="fake", kind="self_hosted", base_url=fake.base_url)
     )
@@ -87,7 +88,7 @@ async def test_embedder_auth_fail_scrubs_key(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
 ) -> None:
-    svc = ProvidersService(databases, keystore, model_http)
+    svc = ProvidersService(databases, keystore, model_http, KeyFailover())
     await svc.create_provider(
         ProviderCreate(name="fake-hosted", kind="hosted", base_url=fake_openai.base_url)
     )

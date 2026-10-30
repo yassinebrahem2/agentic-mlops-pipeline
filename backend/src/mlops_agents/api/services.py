@@ -13,8 +13,11 @@ from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
+from mlops_agents.agents.hooks.data_summary import DataSummaryHook
+from mlops_agents.agents.hooks.knowledge import KnowledgeHook
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.hooks.status_board import StatusBoardHook
+from mlops_agents.agents.hooks.tracking_summary import TrackingSummaryHook
 from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
@@ -35,6 +38,8 @@ from mlops_agents.connections.registry import KindRegistry
 from mlops_agents.connections.service import ConnectionsService
 from mlops_agents.credentials import KeyStore, open_keystore
 from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.data.cache import ProfileCache
+from mlops_agents.data.summaries import DataSummaries
 from mlops_agents.errors import DomainError
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.contract import StatusBoard
@@ -43,14 +48,28 @@ from mlops_agents.events.observer import EventTurnObserver
 from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GhCli, GhLike, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.knowledge.contract import Knowledge
+from mlops_agents.knowledge.service import KnowledgeService
+from mlops_agents.knowledge.vectors import SqliteVectorStore
+from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.paths import DataPaths
+from mlops_agents.proposals.contract import Handoffs
+from mlops_agents.proposals.handoffs import SqliteHandoffs
+from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.observer import ProposalApprovalObserver
+from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import KeyFailover
+from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.tracking.adapters import default_adapters
+from mlops_agents.tracking.loop import TrackingLoop
+from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
 
 
@@ -70,6 +89,7 @@ class Services:
     sessions: AgentSessions
     messaging_settings: MessagingSettings
     connections: Connections
+    data_summaries: DataSummaries
     sandbox: SandboxService
     events: SqliteEventLog
     audit: SqliteAuditLog
@@ -79,6 +99,13 @@ class Services:
     wakeups: WakeupService
     failover: KeyFailover
     embedders: EmbeddersService
+    knowledge: Knowledge
+    tracking: TrackingService
+    tracking_loop: TrackingLoop
+    proposals: ProposalsService
+    proposal_kinds: ProposalKinds
+    handoffs: Handoffs
+    query_providers: QueryProviders
 
 
 async def _app_secrets(
@@ -136,8 +163,15 @@ async def build_services(
     # The one instance: every consumer of project secrets gets it through its constructor.
     project_secrets = ProjectSecrets(keystore, databases)
     workspace = WorkspaceService(settings, paths, databases, git, github, http, project_secrets)
-    providers = ProvidersService(databases, keystore, http)
-    failover = KeyFailover()
+
+    # The one key failover: every model and embedder call shares its key states. It is built
+    # before the providers service that holds it, so its success hook looks the service up
+    # when it runs.
+    async def clear_attention(provider: Provider) -> None:
+        await providers.clear_attention(provider.id)
+
+    failover = KeyFailover(on_success=clear_attention)
+    providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
 
     async def secret_source() -> list[str]:
@@ -145,6 +179,9 @@ async def build_services(
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
+    vectors = SqliteVectorStore(databases)
+    knowledge = KnowledgeService(databases, embedders, vectors, events, secret_source)
+    stack.push_async_callback(knowledge.close)
     messaging_settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, messaging_settings)
     # The one approval store: it holds the approval observers, so every transition reaches them.
@@ -171,6 +208,25 @@ async def build_services(
         sandbox=sandbox,
     )
 
+    handoffs = SqliteHandoffs(databases)
+    proposal_kinds = ProposalKinds()
+    proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
+
+    query_providers = QueryProviders()
+    maintenance = NeverSuspended()
+    _ = maintenance
+
+    tracking = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=project_secrets,
+        events=events,
+        adapters=default_adapters(http),
+        github_token=github.token,
+        handoffs=handoffs,
+    )
+    stack.push_async_callback(tracking.close)
+
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
         tasks=tasks,
@@ -182,12 +238,21 @@ async def build_services(
         events=events,
         http=http,
         databases=databases,
+        knowledge=knowledge,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
+        tracking=tracking,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
     hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
     hooks.register(status_board_hook)
+    hooks.register(KnowledgeHook(knowledge))
+    # One instance for the hook and the table-detail route: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
+    hooks.register(DataSummaryHook(connections, data_summaries))
+    hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
@@ -210,6 +275,7 @@ async def build_services(
         settings=agent_settings,
         providers=providers,
         http=http,
+        failover=failover,
         gate=gate,
         inbound=inbound,
         turn_end=PrReminder(tasks),
@@ -233,11 +299,29 @@ async def build_services(
         audit_log=audit,
         event_log=events,
     )
+    sessions.bind_approvals(approvals)
+
+    proposal_observer = ProposalApprovalObserver(proposals, approvals, workspace)
+    approvals.add_observer(proposal_observer)
+
+    for project in await workspace.list_projects():
+        await proposals.recover(project.id)
+
+    async def _list_project_ids() -> list[str]:
+        return [p.id for p in await workspace.list_projects()]
+
+    tracking_loop = TrackingLoop(
+        tracking=tracking,
+        projects=_list_project_ids,
+    )
+    stack.push_async_callback(tracking_loop.close)
+    await tracking_loop.start()
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
-    # transition. Later plans register their observers above this line. Close is registered
-    # first so a failed start still stops the timer.
+    # transition. Later plans register their observers on the store
+    # (`approval_store.observers.add(...)`) above this line. Close is registered first so a
+    # failed start still stops the timer.
     stack.push_async_callback(wakeups.close)
     await wakeups.start()
 
@@ -256,6 +340,7 @@ async def build_services(
         sessions=sessions,
         messaging_settings=messaging_settings,
         connections=connections,
+        data_summaries=data_summaries,
         sandbox=sandbox,
         events=events,
         audit=audit,
@@ -265,4 +350,11 @@ async def build_services(
         wakeups=wakeups,
         failover=failover,
         embedders=embedders,
+        knowledge=knowledge,
+        tracking=tracking,
+        tracking_loop=tracking_loop,
+        proposals=proposals,
+        proposal_kinds=proposal_kinds,
+        handoffs=handoffs,
+        query_providers=query_providers,
     )

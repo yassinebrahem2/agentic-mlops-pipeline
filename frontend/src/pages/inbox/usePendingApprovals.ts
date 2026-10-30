@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { components } from "@/api/schema";
 import { api, unwrap } from "@/lib/api";
-import { useProjectEvents } from "@/lib/useProjectEvents";
+import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
+import type { ProjectEventType } from "@/lib/useProjectEvents";
 
 export type ApprovalView = components["schemas"]["ApprovalView"];
 export type LocalReview = components["schemas"]["LocalReview"];
@@ -20,11 +20,17 @@ export function activityQueryKey(projectId: string | undefined) {
   return ["projects", projectId, "github-activity"] as const;
 }
 
-export function usePendingApprovals(projectId: string | undefined) {
-  const queryClient = useQueryClient();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+const APPROVAL_EVENTS: readonly ProjectEventType[] = [
+  "approval.requested",
+  "approval.decided",
+  "turn.ended",
+  "turn.waiting",
+];
 
-  const query = useQuery({
+export function usePendingApprovals(projectId: string | undefined) {
+  useInvalidateOnEvents(projectId, approvalsQueryKey(projectId), APPROVAL_EVENTS);
+
+  return useQuery({
     queryKey: approvalsQueryKey(projectId),
     queryFn: async () => {
       if (!projectId) throw new Error("No projectId");
@@ -35,44 +41,19 @@ export function usePendingApprovals(projectId: string | undefined) {
     },
     enabled: Boolean(projectId),
   });
-
-  const triggerDebouncedRefetch = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      void queryClient.invalidateQueries({ queryKey: approvalsQueryKey(projectId) });
-    }, 150);
-  };
-
-  useProjectEvents(projectId, {
-    onEvent: (event) => {
-      if (
-        event.type === "approval.requested" ||
-        event.type === "approval.decided" ||
-        event.type === "turn.ended" ||
-        event.type === "turn.waiting"
-      ) {
-        triggerDebouncedRefetch();
-      }
-    },
-    onResync: triggerDebouncedRefetch,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-
-  return query;
 }
 
-export function useLocalReviews(projectId: string | undefined) {
-  const queryClient = useQueryClient();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+const REVIEW_EVENTS: readonly ProjectEventType[] = [
+  "task.started",
+  "task.ended",
+  "turn.ended",
+  "turn.waiting",
+];
 
-  const query = useQuery({
+export function useLocalReviews(projectId: string | undefined) {
+  useInvalidateOnEvents(projectId, reviewsQueryKey(projectId), REVIEW_EVENTS);
+
+  return useQuery({
     queryKey: reviewsQueryKey(projectId),
     queryFn: async () => {
       if (!projectId) throw new Error("No projectId");
@@ -83,44 +64,20 @@ export function useLocalReviews(projectId: string | undefined) {
     },
     enabled: Boolean(projectId),
   });
-
-  const triggerDebouncedRefetch = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      void queryClient.invalidateQueries({ queryKey: reviewsQueryKey(projectId) });
-    }, 150);
-  };
-
-  useProjectEvents(projectId, {
-    onEvent: (event) => {
-      if (
-        event.type === "task.started" ||
-        event.type === "task.ended" ||
-        event.type === "turn.ended" ||
-        event.type === "turn.waiting"
-      ) {
-        triggerDebouncedRefetch();
-      }
-    },
-    onResync: triggerDebouncedRefetch,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-
-  return query;
 }
 
-export function useGithubActivity(projectId: string | undefined) {
-  const queryClient = useQueryClient();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+const ACTIVITY_EVENTS: readonly ProjectEventType[] = [
+  "pr.opened",
+  "pr.updated",
+  "issue.opened",
+  "issue.commented",
+  "turn.ended",
+];
 
-  const query = useQuery({
+export function useGithubActivity(projectId: string | undefined) {
+  useInvalidateOnEvents(projectId, activityQueryKey(projectId), ACTIVITY_EVENTS);
+
+  return useQuery({
     queryKey: activityQueryKey(projectId),
     queryFn: async () => {
       if (!projectId) throw new Error("No projectId");
@@ -131,38 +88,6 @@ export function useGithubActivity(projectId: string | undefined) {
     },
     enabled: Boolean(projectId),
   });
-
-  const triggerDebouncedRefetch = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      void queryClient.invalidateQueries({ queryKey: activityQueryKey(projectId) });
-    }, 150);
-  };
-
-  useProjectEvents(projectId, {
-    onEvent: (event) => {
-      if (
-        event.type === "pr.opened" ||
-        event.type === "pr.updated" ||
-        event.type === "issue.opened" ||
-        event.type === "issue.commented" ||
-        event.type === "turn.ended"
-      ) {
-        triggerDebouncedRefetch();
-      }
-    },
-    onResync: triggerDebouncedRefetch,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-
-  return query;
 }
 
 export function useInboxBadge(projectId: string | undefined): number | undefined {

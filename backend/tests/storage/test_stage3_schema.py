@@ -31,7 +31,7 @@ def _migrated_to(tmp_path: Path, kind: DbKind, names: list[str]) -> Path:
 @pytest.fixture
 def project_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6]
     conn = connect_sync(db)
     _seed_turn(conn)
     yield conn
@@ -49,9 +49,55 @@ def _seed_turn(conn: sqlite3.Connection) -> None:
     )
 
 
+def _turn_columns(conn: sqlite3.Connection) -> list[str]:
+    return [str(r[1]) for r in conn.execute("PRAGMA table_info(turns)")]
+
+
 def _count(conn: sqlite3.Connection, table: str) -> int:
     row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608 -- test table names
     return int(row[0])
+
+
+# project.db: migration from version 4 (0005 drops turns.error_kind, which nothing writes)
+
+
+def test_version_4_database_drops_the_turn_error_kind_keeping_its_rows(tmp_path: Path) -> None:
+    db = _migrated_to(
+        tmp_path,
+        "project",
+        [
+            "0001_init.sql",
+            "0002_stage2.sql",
+            "0003_approvals_tool_call.sql",
+            "0004_stage3.sql",
+        ],
+    )
+    conn = connect_sync(db)
+    try:
+        _seed_turn(conn)
+        conn.execute("UPDATE turns SET status = 'failed', error = 'boom', error_kind = NULL")
+        conn.execute(
+            "INSERT INTO turns (id, session_id, trigger_message_id, status, created_at, "
+            "error_kind) VALUES ('trn_2', 'ses_1', 'msg_2', 'failed', ?, 'keys_exhausted')",
+            (_TS,),
+        )
+    finally:
+        conn.close()
+
+    assert migrate(db, "project", tmp_path / "bk") == [5, 6]
+
+    conn = connect_sync(db)
+    try:
+        assert "error_kind" not in _turn_columns(conn)
+        rows = conn.execute("SELECT id, status, error FROM turns ORDER BY id").fetchall()
+        assert rows == [("trn_1", "failed", "boom"), ("trn_2", "failed", None)]
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        conn.close()
+
+
+def test_fresh_project_database_has_no_turn_error_kind(project_db: sqlite3.Connection) -> None:
+    assert "error_kind" not in _turn_columns(project_db)
 
 
 # project.db: migration from version 3
@@ -76,7 +122,7 @@ def test_version_3_database_migrates_with_its_approvals(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [4]
+    assert migrate(db, "project", tmp_path / "bk") == [4, 5, 6]
     backups = list((tmp_path / "bk").glob("*.db"))
     assert len(backups) == 1
     backup = sqlite3.connect(backups[0])
@@ -111,7 +157,7 @@ def test_version_3_database_migrates_with_its_approvals(tmp_path: Path) -> None:
         indexes = {str(r[1]) for r in conn.execute("PRAGMA index_list(approvals)")}
         assert {"approvals_status", "approvals_turn_id", "approvals_stall_step"} <= indexes
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert conn.execute("SELECT error_kind FROM turns").fetchall() == [(None,)]
+        assert "error_kind" not in _turn_columns(conn)
     finally:
         conn.close()
 
@@ -262,7 +308,6 @@ _BAD_VALUES = [
     "INSERT INTO proposals (id, kind, key, payload, status, agent, turn_id, tool_call_id, "
     "created_at) VALUES ('prp_1', 'handoff', 'k', '{}', 'maybe', 'a', 'trn_1', 'call_1', 't')",
     "INSERT INTO kickoff (handoff_version, agent, status) VALUES (1, 'coder', 'sent')",
-    "UPDATE turns SET error_kind = 'quota' WHERE id = 'trn_1'",
 ]
 
 
@@ -284,10 +329,6 @@ def test_model_version_evaluation_defaults_to_absent(project_db: sqlite3.Connect
         "VALUES ('trk_1', 'm', '1', '[]', 't')"
     )
     assert project_db.execute("SELECT evaluation FROM model_versions").fetchone() == ("absent",)
-
-
-def test_turn_error_kind_accepts_keys_exhausted(project_db: sqlite3.Connection) -> None:
-    project_db.execute("UPDATE turns SET error_kind = 'keys_exhausted' WHERE id = 'trn_1'")
 
 
 def test_draft_proposal_is_unique_by_turn_and_tool_call(project_db: sqlite3.Connection) -> None:

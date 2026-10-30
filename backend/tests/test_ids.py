@@ -21,6 +21,14 @@ def test_stage_3_prefixes_are_registered(prefix: str) -> None:
     assert re.fullmatch(prefix + r"_[0-9A-HJKMNP-TV-Z]{26}", new_id(prefix))
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    ["res", "sig", "inc", "rul", "hok", "win", "chk", "fix", "trq", "pol", "rep", "prm"],
+)
+def test_stage_4_6_prefixes_are_registered(prefix: str) -> None:
+    assert re.fullmatch(prefix + r"_[0-9A-HJKMNP-TV-Z]{26}", new_id(prefix))
+
+
 def test_unknown_prefix_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown id prefix"):
         new_id("xyz")
