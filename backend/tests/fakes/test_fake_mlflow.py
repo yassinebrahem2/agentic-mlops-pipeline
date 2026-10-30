@@ -84,7 +84,7 @@ async def test_fake_mlflow_paging() -> None:
 
         # Paging model versions
         for v in range(5):
-            state.register_version("paged_model", str(v + 1))
+            state.register_version("paged_model", str(v + 1), creation_timestamp=1000 + v)
 
         seen_versions: list[str] = []
         page_token = None
@@ -100,7 +100,7 @@ async def test_fake_mlflow_paging() -> None:
             page_token = data.get("next_page_token")
             if not page_token:
                 break
-        assert seen_versions == [str(v + 1) for v in range(5)]
+        assert seen_versions == ["5", "4", "3", "2", "1"]
 
         # Paging metric history
         for step in range(5):

@@ -153,24 +153,35 @@ def test_the_lockdown_refuses(team: TeamFolder, monkeypatch: pytest.MonkeyPatch,
     assert folder_state(outside) == before
 
 
-async def test_hostile_file_and_column_names_change_nothing(team: TeamFolder) -> None:
+async def test_hostile_file_and_column_names_change_nothing(
+    team: TeamFolder, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A file name cannot hold a path separator, so its payload's target stays relative.
     file_name = "a'); COPY (SELECT 1) TO 'pwned.csv'; --.csv"
     # The headers aim inside the allowed folder, the one place the lock-down still lets
-    # DuckDB write. The first one closes the aggregate query into a valid statement, so
-    # with broken quoting it really writes, and the folder check below is what fails.
+    # DuckDB write. The aggregate and top-values payloads close their respective queries
+    # into valid statements, so with broken quoting they really write, and the folder
+    # check below is what fails.
     inside = team.folder.resolve().as_posix()
     headers = [
         f'a") FROM range(1) t("a"); COPY (SELECT 1) TO \'{inside}/pwned_by_header.csv\'; --',
+        f"v\" AS v; COPY (SELECT 1) TO '{inside}/pwned_by_top_values.csv'; --",
         f"x\"); ATTACH '{inside}/evil.db' AS e; CREATE TABLE e.t AS SELECT 1; --",
         'say "hi"',
         "it's",
         f"\"); COPY (SELECT 1) TO '{inside}/pwned2.csv'; --",
     ]
+    rows = [
+        ["1", "alpha", "10", 'say "hi"', "apple", "100"],
+        ["2", "alpha", "20", 'say "hi"', "apple", "200"],
+        ["3", "beta", "30", "dog", "banana", "300"],
+        ["4", "beta", "40", "dog", "banana", "400"],
+    ]
     with (team.folder / file_name).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(headers)
-        writer.writerows([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
+        writer.writerows(rows)
+    monkeypatch.chdir(team.folder)
     before = folder_state(team.folder.parent)
     source = team.source(file_name.removesuffix(".csv"))
 
@@ -178,11 +189,12 @@ async def test_hostile_file_and_column_names_change_nothing(team: TeamFolder) ->
 
     assert folder_state(team.folder.parent) == before
     assert isinstance(outcome, TableProfile)
+    assert any(column.top_values for column in outcome.columns)
     assert not outcome.timed_out
-    assert outcome.row_count == 2
+    assert outcome.row_count == len(rows)
     assert [c.name for c in outcome.columns] == headers
     assert outcome.sample_columns == headers
-    assert outcome.sample == [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "10"]]
+    assert outcome.sample == rows
 
 
 def test_quote_identifier_doubles_double_quotes() -> None:
