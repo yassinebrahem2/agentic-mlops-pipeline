@@ -177,6 +177,8 @@ async def test_type_filter_returns_only_events_of_that_type(
 async def test_unknown_project_is_404(client: httpx2.AsyncClient) -> None:
     res = await client.get("/api/projects/prj_missing/activity")
     assert res.status_code == 404
+    # The code tells ProjectDep's answer from a bare 404 on a path that has no route.
+    assert res.json()["code"] == "project_not_found"
 
 
 @pytest.mark.asyncio
