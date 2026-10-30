@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +22,14 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import audit
 from tests.agents.runtime.session_env import SessionEnv
 from tests.conftest import MemoryKeyStore
-from tests.fakes.fake_mlflow import FakeMlflowState, RunningFakeMlflow, start_fake_mlflow
+from tests.fakes.fake_mlflow import RunningFakeMlflow
 from tests.onboarding.handoff_env import (
+    PROJECT,
     PROPOSAL,
     UNRESOLVED_REFERENCES,
     FailingTracking,
     HandoffEnv,
     RecordingKickoff,
-    add_project,
     build_handoff_env,
     full_payload,
     payload,
@@ -37,32 +37,7 @@ from tests.onboarding.handoff_env import (
 from tests.onboarding.kickoff_env import all_idle, handoff_messages
 from tests.tracking.conftest import FakeHandoffs
 
-PROJECT = "prj_handoff"
 ALL_PARTS = ["handoff", "tracking:0", "tracking:1", "network", "level", "sync", "event", "kickoff"]
-
-
-@pytest.fixture
-def mlflow() -> Iterator[RunningFakeMlflow]:
-    running = start_fake_mlflow(FakeMlflowState())
-    yield running
-    running.stop()
-
-
-@pytest.fixture
-async def henv(
-    tmp_path: Path, paths: DataPaths, databases: Databases, keystore: MemoryKeyStore
-) -> AsyncIterator[HandoffEnv]:
-    await add_project(databases, PROJECT)
-    built = await build_handoff_env(
-        tmp_path=tmp_path,
-        paths=paths,
-        databases=databases,
-        keystore=keystore,
-        project_id=PROJECT,
-        kickoff=RecordingKickoff(),
-    )
-    yield built
-    await built.close()
 
 
 def _recorded(henv: HandoffEnv) -> RecordingKickoff:

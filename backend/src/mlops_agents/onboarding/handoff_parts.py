@@ -68,11 +68,20 @@ async def add_tracking_source(
     index: int,
     spec: TrackingSourceSpec,
 ) -> None:
-    """Idempotent: a source of the same type and settings is reused. A filled slot moves to the
-    source; an empty one leaves the source without a credential."""
+    """Idempotent: a source of the same type, settings and auth is reused. One whose auth differs
+    (an open source, now asked for with a credential) is not, so the credential never lands on
+    a source that does not read it (Decision #538). A filled slot moves to the source; an empty
+    one leaves the source without a credential."""
     settings = spec.settings.model_dump(mode="json")
     existing = await tracking.sources(project_id)
-    source = next((s for s in existing if s.type == spec.type and s.settings == settings), None)
+    source = next(
+        (
+            s
+            for s in existing
+            if s.type == spec.type and s.settings == settings and s.auth == spec.auth
+        ),
+        None,
+    )
     if source is None:
         source = await tracking.create_source(project_id, spec.type, settings, spec.auth)
     if spec.auth == "credential":

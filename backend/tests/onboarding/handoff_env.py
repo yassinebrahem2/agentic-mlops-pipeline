@@ -39,6 +39,7 @@ from tests.conftest import MemoryKeyStore
 from tests.proposals.samples import command, data_feed, handoff, job_feed, model
 from tests.tracking.conftest import FakeTrackingAdapter
 
+PROJECT = "prj_handoff"
 PROPOSAL = "prp_handoff"
 TABLES = ("predictions", "labels", "bookings")
 
