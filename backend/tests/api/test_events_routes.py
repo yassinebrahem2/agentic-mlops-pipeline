@@ -16,6 +16,8 @@ from mlops_agents.storage.tables import provider_keys, providers
 from tests.api.conftest import add_local_project
 from tests.api.fake_sessions import SseMessage, parse_sse_events
 
+pytestmark = pytest.mark.serial
+
 
 @pytest.mark.asyncio
 async def test_events_stream_arrives_in_order(

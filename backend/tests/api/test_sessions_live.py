@@ -33,6 +33,8 @@ from tests.api.fake_sessions import parse_sse_events
 from tests.fakes.fake_openai import SLOW_TEXT, RunningFake
 from tests.stream_helpers import through_first_delta
 
+pytestmark = pytest.mark.serial
+
 EVENT = TypeAdapter(StreamEvent)
 README = "# Test"
 
