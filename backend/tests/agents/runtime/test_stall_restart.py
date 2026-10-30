@@ -14,7 +14,6 @@ from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
-from mlops_agents.agents.runtime.agent import TurnRefused
 from mlops_agents.agents.runtime.contract import TurnEnded
 from mlops_agents.agents.runtime.model_caller import ModelKeysExhausted
 from mlops_agents.agents.runtime.sessions import SessionManager
@@ -25,6 +24,7 @@ from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import ToolRegistry
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
@@ -252,11 +252,16 @@ async def test_try_again_after_the_provider_was_deleted_fails_the_turn(
     events = await collect_until_turn_ended(stream, timeout=10)
 
     ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert (ended.data.status, ended.data.error) == ("failed", UNEXPECTED_FAILURE_TEXT)
-    # The resume builds the agent before its graph runs: the deleted provider fails it there.
-    [logged] = [r for r in caplog.records if r.exc_info and "failed unexpectedly" in r.message]
-    assert logged.exc_info is not None
-    assert isinstance(logged.exc_info[1], TurnRefused)
+    # The resume builds the agent before its graph runs: the deleted provider's model fails it there,
+    # with the lookup's own message, not the generic failure text.
+    with pytest.raises(DomainError) as lookup:
+        await env.session.settings.resolve(env.project_id, "orchestrator")
+    # Deleting the provider deleted its models, so the lookup that fails is the model's, not
+    # `provider_not_found` (reported on the task).
+    assert lookup.value.code == "model_missing"
+    assert (ended.data.status, ended.data.error) == ("failed", lookup.value.message)
+    assert ended.data.error != UNEXPECTED_FAILURE_TEXT
+    assert not [r for r in caplog.records if "failed unexpectedly" in r.message]
     assert await env.event_payloads("turn.resumed") == []
     await env.session.manager.close()
 

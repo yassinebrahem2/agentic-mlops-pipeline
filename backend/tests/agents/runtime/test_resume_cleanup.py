@@ -13,6 +13,7 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from sqlalchemy import update
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
@@ -20,12 +21,13 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.runtime import executor, waiting
-from mlops_agents.agents.runtime.agent import TurnRefused
-from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
+from mlops_agents.agents.runtime.contract import StreamEvent, TextPart, TurnEnded, TurnWaiting
 from mlops_agents.agents.runtime.graph import turn_checkpointer
+from mlops_agents.errors import DomainError
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.sqlite import connect_checkpointer
+from mlops_agents.storage.tables import projects
 from tests.agents.runtime.session_env import SessionEnv, build_session_env
 from tests.agents.runtime.test_resuming_turns import (
     DummyWriteTool,
@@ -166,6 +168,31 @@ async def test_a_build_failing_on_resume_deletes_the_thread(turn: Waiting) -> No
     assert await turn.thread() is None
 
 
+async def test_a_refused_done_end_on_resume_ends_the_turn_done(
+    turn: Waiting, databases: Databases
+) -> None:
+    engine = await databases.app()
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(projects).where(projects.c.id == turn.env.project_id).values(status="empty")
+        )
+
+    await turn.approve()
+    ended = (await turn.ended()).data
+
+    assert (ended.status, ended.error) == ("done", None)
+    assert await turn.thread() is None
+    session_id = await turn.env.store.session_id(turn.env.project_id, AGENT)
+    agent_message = await turn.env.store.turn_agent_message(
+        turn.env.project_id, session_id, turn.turn_id
+    )
+    assert agent_message is not None
+    assert agent_message.status == "complete"
+    assert "no committed files" in "".join(
+        p.text for p in agent_message.parts if isinstance(p, TextPart)
+    )
+
+
 async def test_a_checkpoint_read_failing_on_resume_deletes_the_thread(
     turn: Waiting, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -208,14 +235,16 @@ async def test_a_failing_cleanup_keeps_the_resume_failure(
 ) -> None:
     monkeypatch.setattr(executor, "delete_checkpoint_thread", _failing_delete)
     await turn.env.settings.set_default_model(AGENT, None)
+    with pytest.raises(DomainError) as refusal:
+        await turn.env.settings.resolve(turn.env.project_id, AGENT)
 
     with caplog.at_level(logging.ERROR):
         await turn.approve()
-        assert (await turn.ended()).data.status == "failed"
+        ended = (await turn.ended()).data
 
-    failed = next(r for r in caplog.records if "failed unexpectedly" in r.getMessage())
-    assert failed.exc_info is not None
-    assert isinstance(failed.exc_info[1], TurnRefused)
+    # The refusal is the turn's failure, with its own text, not an unexpected one.
+    assert (ended.status, ended.error) == ("failed", refusal.value.message)
+    assert not [r for r in caplog.records if "failed unexpectedly" in r.getMessage()]
     cleanup = next(r for r in caplog.records if "checkpoint thread" in r.getMessage())
     assert "s3cret" not in cleanup.getMessage()
     assert cleanup.exc_info is None

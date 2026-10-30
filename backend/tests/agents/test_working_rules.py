@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 
 from mlops_agents.agents.catalog import parse_definition
-from mlops_agents.agents.runtime.context import build_messages
 from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.workspace.models import Project
+from tests.agents.runtime.graph_env import prompt_messages
 
 PROJ = Project(
     id="prj_test",
@@ -127,7 +127,7 @@ limits:
 You help.
 """
     defn = parse_definition(defn_text, "helper.md")
-    messages = build_messages(defn, PROJ, layout="README.md", summary=None, history=[])
+    messages = prompt_messages(defn, PROJ, layout="README.md", summary=None, history=[])
     sys_content = str(messages[0].content)
     rules = working_rules(defn)
     assert rules in sys_content

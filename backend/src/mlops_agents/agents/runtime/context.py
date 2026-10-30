@@ -45,19 +45,6 @@ async def top_level_layout(files: FileAccess) -> str:
     return "\n".join(sorted_entries)
 
 
-def build_messages(
-    definition: AgentDefinition,
-    project: Project,
-    layout: str,
-    summary: str | None,
-    history: list[MessageView],
-    hook_context: str | None = None,
-) -> list[BaseMessage]:
-    """Assemble the langchain BaseMessage list for an agent run."""
-    system = _system_message(definition, project, layout, summary, hook_context)
-    return [system, *history_messages(history)]
-
-
 def system_message(agent: Agent, summary: str | None) -> SystemMessage:
     """The turn's system message, with this build's hook context: the one place it is built for
     a turn (the graph's `prepare` node and a resume)."""

@@ -58,7 +58,9 @@ class FakeHandoffs:
             self._current_view = None
         else:
             self._views_by_project[project_id] = view
-            self._current_view = view
+
+    def add_observer(self, observer: Any) -> None:
+        pass
 
 
 class FakeTrackingAdapter:

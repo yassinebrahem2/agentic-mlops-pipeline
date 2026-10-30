@@ -321,8 +321,8 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     databases: Databases,
     tmp_path: Path,
 ) -> None:
-    from mlops_agents.agents.runtime.context import build_messages
     from mlops_agents.workspace.models import Project
+    from tests.agents.runtime.graph_env import prompt_messages
 
     project_id = "prj_statustest"
     hub = EventHub()
@@ -373,8 +373,8 @@ async def test_orchestrator_system_message_contains_summary_and_another_agent_do
     assert orch_context.startswith('<data source="hook:status_board">\nStatus board:\n')
     assert retrain_context == ""
 
-    orch_msgs = build_messages(d_orch, project, "README.md", None, [], hook_context=orch_context)
-    retrain_msgs = build_messages(
+    orch_msgs = prompt_messages(d_orch, project, "README.md", None, [], hook_context=orch_context)
+    retrain_msgs = prompt_messages(
         d_retrain, project, "README.md", None, [], hook_context=retrain_context
     )
 

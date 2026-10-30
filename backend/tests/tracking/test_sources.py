@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mlops_agents.errors import DomainError
+from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
 from tests.tracking.conftest import TrackingEnv
 
 
@@ -47,6 +50,21 @@ async def test_create_sources_round_trip(tracking_env: TrackingEnv) -> None:
 async def test_create_mlflow_bad_settings(tracking_env: TrackingEnv) -> None:
     env = tracking_env
     # Userinfo in URL
+    with pytest.raises(DomainError) as exc_info:
+        await env.service.create_source(
+            project_id=env.project_id,
+            type="mlflow",
+            settings={"url": "https://secretuser:secretpass@mlflow.example.com"},
+            auth="credential",
+        )
+    assert exc_info.value.status == 422
+    assert "secretuser" not in exc_info.value.message
+    assert "secretpass" not in exc_info.value.message
+    assert "secretuser:secretpass" not in exc_info.value.message
+    if exc_info.value.detail:
+        assert "secretuser" not in str(exc_info.value.detail)
+        assert "secretpass" not in str(exc_info.value.detail)
+
     with pytest.raises(DomainError) as exc_info:
         await env.service.create_source(
             project_id=env.project_id,
@@ -114,3 +132,24 @@ async def test_create_unknown_project(tracking_env: TrackingEnv) -> None:
         )
     assert exc_info.value.status == 404
     assert exc_info.value.code == "project_not_found"
+
+
+async def test_create_source_url_credential_not_in_response_body(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    async with (
+        started_app(tmp_path / "data") as app,
+        signed_in(app, LOCAL_URL) as client,
+    ):
+        prj = await add_local_project(app, tmp_path, git_env)
+        res = await client.post(
+            f"/api/projects/{prj}/tracking/sources",
+            json={
+                "type": "mlflow",
+                "settings": {"url": "https://secretuser:secretpass123@mlflow.example.com"},
+                "auth": "credential",
+            },
+        )
+        assert res.status_code == 422
+        assert "secretuser" not in res.text
+        assert "secretpass123" not in res.text

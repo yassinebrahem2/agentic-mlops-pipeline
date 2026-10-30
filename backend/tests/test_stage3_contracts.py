@@ -267,7 +267,7 @@ def test_proposal_protocols() -> None:
         "pending",
         "latest_for_turn",
     }
-    assert _methods(Handoffs) == {"current", "store"}
+    assert _methods(Handoffs) == {"current", "store", "add_observer"}
     assert (CONNECTIONS_KIND, HANDOFF_KIND) == ("connections", "handoff")
 
 

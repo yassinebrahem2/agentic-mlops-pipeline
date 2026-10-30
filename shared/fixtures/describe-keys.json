@@ -1,0 +1,212 @@
+{
+  "_about": "The keys' wording of KeyFailover.describe_keys and the rows the stall card shows for it. The single source for the backend's describe_keys test and the frontend's stall card test.",
+  "cases": [
+    {
+      "name": "one key ok",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "ok",
+          "since": null
+        }
+      ],
+      "text": "Key 1: ok.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "ok"
+        }
+      ]
+    },
+    {
+      "name": "one key limited with since",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "limited",
+          "since": "2026-10-28T14:03:00Z"
+        }
+      ],
+      "text": "Key 1: rate limited (since 14:03 UTC).",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "rate limited (since 14:03 UTC)"
+        }
+      ]
+    },
+    {
+      "name": "one key daily limit with since",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "exhausted_daily",
+          "since": "2026-10-28T09:07:00Z"
+        }
+      ],
+      "text": "Key 1: daily limit reached (since 09:07 UTC).",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "daily limit reached (since 09:07 UTC)"
+        }
+      ]
+    },
+    {
+      "name": "one key billing",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "billing",
+          "since": "2026-10-28T14:03:00Z"
+        }
+      ],
+      "text": "Key 1: billing, out of credit.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "billing, out of credit"
+        }
+      ]
+    },
+    {
+      "name": "one key rejected",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "rejected",
+          "since": "2026-10-28T14:03:00Z"
+        }
+      ],
+      "text": "Key 1: rejected by the provider.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "rejected by the provider"
+        }
+      ]
+    },
+    {
+      "name": "two keys limited and rejected",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "limited",
+          "since": "2026-10-28T14:03:00Z"
+        },
+        {
+          "key_index": 1,
+          "status": "rejected",
+          "since": "2026-10-28T09:07:00Z"
+        }
+      ],
+      "text": "Key 1: rate limited (since 14:03 UTC). Key 2: rejected by the provider.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "rate limited (since 14:03 UTC)"
+        },
+        {
+          "label": "Key 2",
+          "detail": "rejected by the provider"
+        }
+      ]
+    },
+    {
+      "name": "two keys ok and billing",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "ok",
+          "since": null
+        },
+        {
+          "key_index": 1,
+          "status": "billing",
+          "since": "2026-10-28T14:03:00Z"
+        }
+      ],
+      "text": "Key 1: ok. Key 2: billing, out of credit.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "ok"
+        },
+        {
+          "label": "Key 2",
+          "detail": "billing, out of credit"
+        }
+      ]
+    },
+    {
+      "name": "three keys of every kind",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "exhausted_daily",
+          "since": "2026-10-28T09:07:00Z"
+        },
+        {
+          "key_index": 1,
+          "status": "limited",
+          "since": "2026-10-28T14:03:00Z"
+        },
+        {
+          "key_index": 2,
+          "status": "billing",
+          "since": "2026-10-28T14:03:00Z"
+        }
+      ],
+      "text": "Key 1: daily limit reached (since 09:07 UTC). Key 2: rate limited (since 14:03 UTC). Key 3: billing, out of credit.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "daily limit reached (since 09:07 UTC)"
+        },
+        {
+          "label": "Key 2",
+          "detail": "rate limited (since 14:03 UTC)"
+        },
+        {
+          "label": "Key 3",
+          "detail": "billing, out of credit"
+        }
+      ]
+    },
+    {
+      "name": "three keys rejected ok and billing",
+      "states": [
+        {
+          "key_index": 0,
+          "status": "rejected",
+          "since": "2026-10-28T14:03:00Z"
+        },
+        {
+          "key_index": 1,
+          "status": "ok",
+          "since": null
+        },
+        {
+          "key_index": 2,
+          "status": "billing",
+          "since": "2026-10-28T09:07:00Z"
+        }
+      ],
+      "text": "Key 1: rejected by the provider. Key 2: ok. Key 3: billing, out of credit.",
+      "rows": [
+        {
+          "label": "Key 1",
+          "detail": "rejected by the provider"
+        },
+        {
+          "label": "Key 2",
+          "detail": "ok"
+        },
+        {
+          "label": "Key 3",
+          "detail": "billing, out of credit"
+        }
+      ]
+    }
+  ]
+}
