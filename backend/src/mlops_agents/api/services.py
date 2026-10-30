@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx2
 
+from mlops_agents.agents.approvals.authority import AuthorityRegistry
 from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.service import ApprovalsService
@@ -117,6 +118,7 @@ class Services:
     proposal_kinds: ProposalKinds
     handoffs: Handoffs
     query_providers: QueryProviders
+    authorities: AuthorityRegistry
     clock: Clock
     scheduler: AppScheduler
     results: ResultsService
@@ -207,7 +209,14 @@ async def build_services(
     bus = SqliteMessageBus(databases, events, messaging_settings)
     # The one approval store: it holds the approval observers, so every transition reaches them.
     approval_store = ApprovalStore(databases)
-    gate = ApprovalGate(databases, store=approval_store, audit_log=audit, event_log=events)
+    authorities = AuthorityRegistry()
+    gate = ApprovalGate(
+        databases,
+        store=approval_store,
+        audit_log=audit,
+        event_log=events,
+        authorities=authorities,
+    )
 
     kind_registry = KindRegistry([LocalFolderKind(paths.root)])
     connections = ConnectionsService(databases, events, kind_registry)
@@ -420,6 +429,7 @@ async def build_services(
         proposal_kinds=proposal_kinds,
         handoffs=handoffs,
         query_providers=query_providers,
+        authorities=authorities,
         clock=clock,
         scheduler=scheduler,
         results=results,

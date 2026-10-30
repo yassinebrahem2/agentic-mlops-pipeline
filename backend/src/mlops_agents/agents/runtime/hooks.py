@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 
+from mlops_agents.agents.approvals.authority import ActionCall, Authority
 from mlops_agents.agents.runtime.contract import TurnEnd
 from mlops_agents.agents.tools.base import AgentTool, Preview, ToolContext
 
@@ -24,6 +25,9 @@ class GateCall:
     args: BaseModel
     ctx: ToolContext
 
+    async def action(self) -> ActionCall | None:
+        return await self.tool.action_call(self.args, self.ctx)
+
 
 @dataclass(frozen=True)
 class GateDecision:
@@ -32,6 +36,7 @@ class GateDecision:
     approval_id: str | None = None  # set for an ask
     preview: Preview | None = None  # set for an ask
     proposal_kind: str | None = None  # set for an ask of a tool of class propose
+    authority: Authority | None = None
 
 
 class Gate(Protocol):
