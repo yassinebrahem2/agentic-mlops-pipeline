@@ -244,6 +244,16 @@ describe("OnboardingStepPage", () => {
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
   });
 
+  it("a failed session lookup shows its text and keeps Start disabled", async () => {
+    const { posted } = setup({ failPath: "/api/projects/prj_1/agents/onboarding/session" });
+    expect(
+      await screen.findByText("Lookup of /api/projects/prj_1/agents/onboarding/session failed."),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/Ready/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    expect(posted).toHaveLength(0);
+  });
+
   it("a failed agents lookup shows its text, not a ready model", async () => {
     setup({ failPath: "/api/projects/prj_1/agents" });
     expect(
