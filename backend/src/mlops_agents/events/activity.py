@@ -16,9 +16,12 @@ from mlops_agents.events.contract import AuditLog, AuditRecord, EventLog, EventR
 ACTIVITY_LIMIT_DEFAULT: Final[int] = 50
 ACTIVITY_LIMIT_MAX: Final[int] = 200
 INCIDENT_ID_PREFIX: Final[str] = "inc_"
+# Sorts after any ID, so a position (ts, _ID_CEILING) still includes every row of that ts.
+_ID_CEILING: Final[str] = "\U0010ffff"
 
 
 class EventEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["event"]
     ts: str
     event: EventRecord
@@ -27,6 +30,7 @@ class EventEntry(BaseModel):
 
 
 class AuditEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["audit"]
     ts: str
     audit: AuditRecord
@@ -36,6 +40,7 @@ ActivityEntry = Annotated[EventEntry | AuditEntry, Field(discriminator="kind")]
 
 
 class ActivityPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     entries: list[ActivityEntry]
     next_before: str | None  # opaque; pass it back as `before` for the next page
 
@@ -44,7 +49,9 @@ class _Cursor(BaseModel):
     """Where each stream stands: None means that stream has not been read yet."""
 
     model_config = ConfigDict(extra="forbid")
-    e: int | None = None
+    # Bounded to what SQLite can bind (a larger value would overflow into a 500); strict so
+    # `true` or `1.5` are refused instead of coerced.
+    e: Annotated[int, Field(ge=0, le=2**63 - 1, strict=True)] | None = None
     a: tuple[str, str] | None = None
 
 
@@ -119,6 +126,13 @@ async def activity_page(
             next_cursor.e = entry.event.seq
         else:
             next_cursor.a = (entry.audit.ts, entry.audit.id)
+    # A stream that was read but put nothing on this page must not restart from the top next
+    # time: what arrives in it meanwhile is newer than this page and would show up below older
+    # entries. Pin it at the newest row it had (or at nothing if it was empty).
+    if not any(isinstance(e, EventEntry) for e in shown) and cursor.e is None:
+        next_cursor.e = events[0].seq + 1 if events else 0
+    if type is None and not any(isinstance(e, AuditEntry) for e in shown) and cursor.a is None:
+        next_cursor.a = (audits[0].ts, _ID_CEILING) if audits else ("", "")
     return ActivityPage(
         entries=shown, next_before=_encode_cursor(next_cursor) if has_more else None
     )

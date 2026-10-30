@@ -2,6 +2,7 @@
   "components": {
     "schemas": {
       "ActivityPage": {
+        "additionalProperties": false,
         "properties": {
           "entries": {
             "items": {
@@ -590,6 +591,7 @@
         "type": "object"
       },
       "AuditEntry": {
+        "additionalProperties": false,
         "properties": {
           "audit": {
             "$ref": "#/components/schemas/AuditRecord"
@@ -1809,6 +1811,7 @@
         "type": "object"
       },
       "EventEntry": {
+        "additionalProperties": false,
         "properties": {
           "event": {
             "$ref": "#/components/schemas/EventRecord"
