@@ -266,6 +266,7 @@ def test_proposal_protocols() -> None:
         "get_by_approval",
         "pending",
         "latest_for_turn",
+        "apply_allowed",
     }
     assert _methods(Handoffs) == {"current", "store", "add_observer"}
     assert (CONNECTIONS_KIND, HANDOFF_KIND) == ("connections", "handoff")
@@ -274,6 +275,7 @@ def test_proposal_protocols() -> None:
 def test_proposal_models_have_the_overview_fields() -> None:
     from mlops_agents.proposals.contract import (
         ApplyResult,
+        BaseProposalView,
         CredentialSlot,
         HandoffView,
         ProposalStatus,
@@ -285,11 +287,9 @@ def test_proposal_models_have_the_overview_fields() -> None:
     assert list(CredentialSlot.model_fields) == ["index", "label", "source_type"]
     assert list(SlotState.model_fields) == ["index", "label", "set"]
     assert list(ApplyResult.model_fields) == ["applied", "failed"]
-    assert list(ProposalView.model_fields) == [
+    assert list(BaseProposalView.model_fields) == [
         "id",
-        "kind",
         "key",
-        "payload",
         "warnings",
         "status",
         "agent",
@@ -300,6 +300,7 @@ def test_proposal_models_have_the_overview_fields() -> None:
         "slots",
         "created",
     ]
+    assert list(ProposalView.model_fields) == ["root"]
     assert list(HandoffView.model_fields) == ["proposal_id", "version", "approved", "payload"]
 
 
