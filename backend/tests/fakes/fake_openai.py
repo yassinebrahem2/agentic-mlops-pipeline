@@ -294,18 +294,31 @@ async def _stream(
                 if num_calls > 1
                 else f"call_{len(state.requests)}"
             )
-            first = {
+            extra_deltas: list[dict[str, Any]] | None = tc.get("extra_content_deltas")
+            extra_content = tc.get("extra_content")
+            first: dict[str, Any] = {
                 "index": idx,
                 "id": call_id,
                 "type": "function",
                 "function": {"name": tool, "arguments": args[:half]},
             }
+            if extra_deltas and len(extra_deltas) > 0:
+                first["extra_content"] = extra_deltas[0]
+            elif extra_content is not None:
+                first["extra_content"] = extra_content
+
             maybe_drop()
             yield _chunk(model, {"tool_calls": [first]})
             maybe_drop()
+            second: dict[str, Any] = {
+                "index": idx,
+                "function": {"arguments": args[half:]},
+            }
+            if extra_deltas and len(extra_deltas) > 1:
+                second["extra_content"] = extra_deltas[1]
             yield _chunk(
                 model,
-                {"tool_calls": [{"index": idx, "function": {"arguments": args[half:]}}]},
+                {"tool_calls": [second]},
             )
         finish = "tool_calls"
     else:

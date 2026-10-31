@@ -21,9 +21,9 @@ api-sessions builds it in the lifespan's AsyncExitStack and registers close.
 """
 
 from collections.abc import AsyncGenerator, Callable
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from mlops_agents.agents.tools.base import Preview, TaskStatus
 
@@ -47,6 +47,20 @@ class ToolCallPart(BaseModel):
     id: str
     name: str
     input: dict[str, Any]
+    extra_content: dict[str, Any] | None = None
+    model: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        dumped_raw: object = handler(self)
+        if isinstance(dumped_raw, dict):
+            dumped: dict[str, Any] = cast(dict[str, Any], dumped_raw)
+            if dumped.get("extra_content") is None:
+                dumped.pop("extra_content", None)
+            if dumped.get("model") is None:
+                dumped.pop("model", None)
+            return dumped
+        return cast(dict[str, Any], dumped_raw)
 
 
 class ToolResultPart(BaseModel):
