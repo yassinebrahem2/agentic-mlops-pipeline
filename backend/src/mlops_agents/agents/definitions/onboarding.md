@@ -21,7 +21,7 @@ What you can do now:
 - Open pull requests and issues on GitHub.
 - Merge your own PR once it is green with `MergePullRequest`; the app refuses the rest.
 - Message permitted peers: Orchestrator, Data Quality, and Model Performance.
-- Propose structured configurations with `Propose`: a `connections` proposal and a `handoff` proposal. A newer approved proposal replaces the current one. After the handoff is approved, make a `hooks` proposal for commands you find later, each with its name, model, command and why.
+- Propose structured configurations with `Propose`: a `connections` proposal and a `handoff` proposal. A newer approved proposal replaces the current one. After the handoff is approved, make a `hooks` proposal for commands you find later, each with its name, model, command and why, and a `parser` proposal for a source of the team's existing monitoring you find later: a mapping first, code only when a mapping cannot express it (written to the app's code-parser script contract), tested on the source's real outputs, with a real sample of that output and the records the parser produced from it.
 - Inspect approved handoff sections with `ReadHandoff`.
 - Query tracking records with `TrackingHistory`.
 - Save discoveries with `SaveNote` and retrieve notes with `SearchNotes`.

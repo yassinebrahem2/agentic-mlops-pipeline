@@ -37,6 +37,7 @@ from mlops_agents.agents.tools.names import (
     MERGE_PULL_REQUEST,
     MONITORING_QUERY,
     RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
     REQUEST_FIX,
     RUN_HOOK,
     SAVE_REPORT,
@@ -53,6 +54,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.monitoring.hooks.constants import HOOK_CREDENTIAL_ENV
 from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
 from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
@@ -425,9 +427,11 @@ TASK_2_COLUMN: dict[str, tuple[str, ...]] = {
     "deployment": (REQUEST_FIX, ProposeTool.name),
     "orchestrator": (REQUEST_FIX,),
 }
-# Every holder of `OpenPullRequest` gains `MergePullRequest`.
+# Every holder of `OpenPullRequest` gains `MergePullRequest`; the four agents that write
+# checks (S4 §4) gain `RegisterCheck`.
+CHECK_WRITERS: tuple[str, ...] = ("data-quality", "model-performance", "retraining", "deployment")
 TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
-    row["name"]: (MERGE_PULL_REQUEST,)
+    row["name"]: (MERGE_PULL_REQUEST,) + ((REGISTER_CHECK,) if row["name"] in CHECK_WRITERS else ())
     for row in STAGE_3_TABLE
     if OpenPullRequestTool.name in row["tools"]
 }
@@ -532,6 +536,7 @@ def test_all_seven_definitions_load_with_real_registries() -> None:
         connections=cast(Any, dummy),
         surfaces=cast(Any, dummy),
         pr_sync=cast(Any, dummy),
+        checks=cast(Any, dummy),
     )
     hook_reg = HookRegistry()
     hook_reg.register(StatusBoardHook())
@@ -731,7 +736,6 @@ def test_merge_pull_request_holders_are_the_open_pull_request_holders() -> None:
 
 
 # The matrix's last column: the prompts that name each kind as `` `<kind>` proposal ``.
-# `parser` waits for the results plan (#609), so no prompt names it yet.
 KIND_PROMPTS: dict[str, frozenset[str]] = {
     CONNECTIONS_KIND: frozenset({"onboarding"}),
     HANDOFF_KIND: frozenset({"onboarding"}),
@@ -740,7 +744,7 @@ KIND_PROMPTS: dict[str, frozenset[str]] = {
     RULE_KIND: frozenset({"model-performance", "deployment"}),
     HOOKS_KIND: frozenset({"deployment", "onboarding"}),
     TRAINING_POLICY_KIND: frozenset({"retraining"}),
-    PARSER_KIND: frozenset(),
+    PARSER_KIND: frozenset({"data-quality", "onboarding"}),
 }
 
 
@@ -763,6 +767,89 @@ def test_diagnosing_prompt_cites_rules_and_never_certifies_them(name: str) -> No
     assert "`rule_id`" in prompt, f"{name} prompt does not cite a rule with `rule_id`"
     assert "never certify" in prompt.lower(), f"{name} prompt lets the agent certify a rule"
     assert STALE_GATE_WORDING not in prompt.lower(), f"{name} prompt keeps the stale gate line"
+
+
+@pytest.mark.parametrize("name", ["data-quality", "model-performance"])
+def test_check_prompts_name_not_enough_data(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    assert "not enough data" in prompt.lower(), f"{name} prompt lacks the minimum sample line"
+    assert "`not_enough_data`" in prompt
+
+
+def test_check_writers_describe_the_check_record() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    holders = {d.name for d in catalog.all() if REGISTER_CHECK in d.tools}
+    assert holders == set(CHECK_WRITERS)
+    for name in CHECK_WRITERS:
+        prompt = catalog.get(name).prompt
+        for words in (
+            "`check_id`",
+            '`origin: "agent"`',
+            "`version`",
+            "scheduler",
+            "minimum sample",
+        ):
+            assert words in prompt, f"{name} check line lacks {words}"
+
+
+def test_model_performance_first_audit_adds_the_label_based_checks() -> None:
+    low = _load_definition("model-performance").prompt.lower()
+    assert "label-based checks" in low and "first audit" in low
+
+
+# Lines that said the stage 4 checks and evaluation runs were still to come.
+STALE_LATER_WORDING: tuple[str, ...] = ("arrive in stage 4", "arrive in a later stage")
+
+
+def test_no_prompt_says_checks_arrive_later() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        for words in STALE_LATER_WORDING:
+            assert words not in defn.prompt.lower(), f"{defn.name} prompt still says '{words}'"
+
+
+def _words(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+# CODE_PARSER_CONTRACT has one source (parser_kind.py). Every run of six words of each of its
+# sentences and list items, read from the constant, so a prompt that retypes part of one is
+# caught.
+CONTRACT_FRAGMENT_WORDS = 6
+
+
+def _contract_fragments() -> tuple[str, ...]:
+    fragments: list[str] = []
+    for line in CODE_PARSER_CONTRACT.splitlines():
+        for piece in line.removeprefix("- ").split(". "):
+            words = _words(piece).split()
+            fragments.extend(
+                " ".join(words[at : at + CONTRACT_FRAGMENT_WORDS])
+                for at in range(len(words) - CONTRACT_FRAGMENT_WORDS + 1)
+            )
+    return tuple(dict.fromkeys(fragments))
+
+
+CONTRACT_FRAGMENTS = _contract_fragments()
+
+
+def _retyped_contract_fragments(prompt: str) -> list[str]:
+    text = _words(prompt)
+    return [fragment for fragment in CONTRACT_FRAGMENTS if fragment in text]
+
+
+def test_no_prompt_retypes_the_code_parser_contract() -> None:
+    assert len(CONTRACT_FRAGMENTS) >= 100
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        found = _retyped_contract_fragments(defn.prompt)
+        assert not found, f"{defn.name} prompt retypes the code-parser contract: {found}"
+
+
+def test_retyped_contract_fragment_is_detected() -> None:
+    prompt = _load_definition("data-quality").prompt
+    tampered = f"{prompt}\n- {CONTRACT_FRAGMENTS[-1]}"
+    assert _retyped_contract_fragments(tampered) == [CONTRACT_FRAGMENTS[-1]]
 
 
 def test_retraining_cites_an_approved_training_policy() -> None:
