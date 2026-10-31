@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from mlops_agents.monitoring.expr import Compare
@@ -172,3 +174,74 @@ async def test_set_enabled(databases: Databases) -> None:
     # KeyError on missing
     with pytest.raises(KeyError):
         await store.set_enabled(project_id, "rul_unknown", False)
+
+
+@pytest.mark.parametrize(
+    "invalid_kwargs,expected_substr",
+    [
+        ({"terms": []}, "terms"),
+        (
+            {
+                "terms": [
+                    RuleTerm(
+                        check_id="chk",
+                        when=Compare(op="gt", field="value", value=0.5),
+                        window_minutes=60,
+                        quantifier="latest",
+                        min_records=0,
+                    )
+                ]
+            },
+            "min_records",
+        ),
+        (
+            {
+                "terms": [
+                    RuleTerm(
+                        check_id="chk",
+                        when=Compare(op="gt", field="value", value=0.5),
+                        window_minutes=0,
+                        quantifier="latest",
+                        min_records=1,
+                    )
+                ]
+            },
+            "window_minutes",
+        ),
+        ({"limits": RuleLimits(per_incident=0, per_day=1)}, "per_incident"),
+        ({"limits": RuleLimits(per_incident=1, per_day=0)}, "per_day"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_store_rejects_invalid_specs(
+    databases: Databases,
+    invalid_kwargs: dict[str, Any],
+    expected_substr: str,
+) -> None:
+    clock = FakeClock()
+    store = SqliteRules(databases, clock=clock)
+    project_id = "prj_test1"
+
+    spec_dict: dict[str, Any] = {
+        "name": "rb",
+        "why": "test",
+        "model": "churn",
+        "terms": [
+            RuleTerm(
+                check_id="drift_check",
+                model="churn",
+                when=Compare(op="gt", field="value", value=0.5),
+                window_minutes=60,
+                quantifier="latest",
+                min_records=1,
+            )
+        ],
+        "hook_id": "hok_test1",
+        "hook_kind": "rollback",
+        "limits": RuleLimits(per_incident=1, per_day=1),
+    }
+    spec_dict.update(invalid_kwargs)
+    spec = RuleSpec(**spec_dict)
+
+    with pytest.raises(ValueError, match=rf"(?i){expected_substr}"):
+        await store.store(project_id, spec, proposal_id="prp_invalid")

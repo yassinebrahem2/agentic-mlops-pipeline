@@ -366,3 +366,54 @@ async def test_rule_limits_allow(databases: Databases) -> None:
     )
     assert allowed is True
     assert reason is None
+
+
+@pytest.mark.asyncio
+async def test_evaluator_empty_terms_returns_false(databases: Databases) -> None:
+    store = ResultsStore(databases)
+    results = ResultsAdapter(store)
+    project_id = new_id("prj")
+    now = datetime(2026, 10, 31, 7, 0, 0, tzinfo=UTC)
+
+    rule = _make_rule([])
+    passed, evidence = await evaluate_rule(results, project_id, rule, now)
+    assert passed is False
+    assert evidence == []
+
+
+@pytest.mark.asyncio
+async def test_evaluator_pages_through_results(databases: Databases) -> None:
+    store = ResultsStore(databases)
+    results = ResultsAdapter(store)
+    project_id = new_id("prj")
+    s_id = source_id("file", "*.jsonl", "data_conn")
+    now = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+
+    # Ingest 550 records within a 600-minute window
+    # When sorted by ran_at desc, index 0 is newest, index 549 is oldest.
+    # Record at index 520 (an older record) fails the condition.
+    # Without paging (limit=500), only indices 0..499 are fetched, all passing, so it would erroneously pass.
+    # With paging, all 550 records are fetched, record 520 fails 'all', so it correctly returns False.
+    total_records = 550
+    failing_index = 520
+    items: list[tuple[str, ResultRecord]] = []
+    for idx in range(total_records):
+        ran_at = now - timedelta(minutes=idx + 1)
+        val = 0.1 if idx == failing_index else 0.9
+        rec = _make_record(ran_at=ran_at, value=val)
+        items.append((f"k_{idx}", rec))
+
+    await store.insert_items(project_id, s_id, items, seen_at=now)
+
+    term = RuleTerm(
+        check_id="chk_drift",
+        model="churn",
+        when=Compare(op="gt", field="value", value=0.5),
+        window_minutes=600,
+        quantifier="all",
+        min_records=1,
+    )
+    rule = _make_rule([term])
+    passed, evidence = await evaluate_rule(results, project_id, rule, now)
+    assert passed is False
+    assert evidence == []

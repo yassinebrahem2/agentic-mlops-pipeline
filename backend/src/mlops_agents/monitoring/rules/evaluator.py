@@ -15,7 +15,7 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import hook_runs
 
 if TYPE_CHECKING:
-    from mlops_agents.monitoring.results.contract import Results
+    from mlops_agents.monitoring.results.contract import Results, StoredResult
 
 
 async def evaluate_rule(
@@ -28,27 +28,38 @@ async def evaluate_rule(
 
     Returns (passed, evidence_record_ids).
     """
+    if not rule.spec.terms:
+        return False, []
+
     evidence: list[str] = []
 
     for term in rule.spec.terms:
         since = now - timedelta(minutes=term.window_minutes)
-        page = await results.query(
-            project_id,
-            ResultQuery(
-                check_id=term.check_id,
-                model=term.model,
-                since=since,
-                limit=500,
-            ),
-        )
+        all_rows: list[StoredResult] = []
+        offset = 0
+        while True:
+            page = await results.query(
+                project_id,
+                ResultQuery(
+                    check_id=term.check_id,
+                    model=term.model,
+                    since=since,
+                    limit=500,
+                    offset=offset,
+                ),
+            )
+            all_rows.extend(page.rows)
+            if not page.truncated or not page.rows:
+                break
+            offset += len(page.rows)
 
         # Filter strictly by term.model:
         # if term.model is None: records with model is None
         # if string: records with model == term.model
         if term.model is None:
-            records = [r for r in page.rows if r.model is None]
+            records = [r for r in all_rows if r.model is None]
         else:
-            records = [r for r in page.rows if r.model == term.model]
+            records = [r for r in all_rows if r.model == term.model]
 
         if len(records) < term.min_records:
             return False, []

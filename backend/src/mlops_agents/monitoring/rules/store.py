@@ -16,6 +16,7 @@ from mlops_agents.ids import new_id
 from mlops_agents.monitoring.rules.contract import (
     RuleSpec,
     RuleView,
+    validate_rule_spec,
 )
 from mlops_agents.providers.failover import Clock, SystemClock
 from mlops_agents.storage.databases import Databases
@@ -72,6 +73,7 @@ class SqliteRules:
             return _row_to_rule_view(dict(row))
 
     async def store(self, project_id: str, spec: RuleSpec, proposal_id: str) -> RuleView:
+        validate_rule_spec(spec)
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
             existing = (

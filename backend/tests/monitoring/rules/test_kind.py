@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -235,4 +236,81 @@ async def test_apply_fails_wrong_model() -> None:
     assert result.applied == []
     assert "rule:churn:rb" in result.failed
     assert "model" in result.failed["rule:churn:rb"]
+    rules.store.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "invalid_kwargs,expected_substr",
+    [
+        ({"terms": []}, "terms"),
+        (
+            {
+                "terms": [
+                    RuleTerm(
+                        check_id="chk",
+                        when=Compare(op="gt", field="value", value=0.5),
+                        window_minutes=60,
+                        quantifier="latest",
+                        min_records=0,
+                    )
+                ]
+            },
+            "min_records",
+        ),
+        (
+            {
+                "terms": [
+                    RuleTerm(
+                        check_id="chk",
+                        when=Compare(op="gt", field="value", value=0.5),
+                        window_minutes=0,
+                        quantifier="latest",
+                        min_records=1,
+                    )
+                ]
+            },
+            "window_minutes",
+        ),
+        ({"limits": RuleLimits(per_incident=0, per_day=1)}, "per_incident"),
+        ({"limits": RuleLimits(per_incident=1, per_day=0)}, "per_day"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_apply_rejects_invalid_specs(
+    invalid_kwargs: dict[str, Any],
+    expected_substr: str,
+) -> None:
+    rules = AsyncMock()
+    hooks = AsyncMock()
+    hook_view = _sample_hook_view(hook_id="hok_1", model="churn", kind="rollback")
+    hooks.get.return_value = hook_view
+
+    spec_dict: dict[str, Any] = {
+        "name": "rb",
+        "why": "test",
+        "model": "churn",
+        "terms": [
+            RuleTerm(
+                check_id="drift_check",
+                model="churn",
+                when=Compare(op="gt", field="value", value=0.5),
+                window_minutes=60,
+                quantifier="latest",
+                min_records=1,
+            )
+        ],
+        "hook_id": "hok_1",
+        "hook_kind": "rollback",
+        "limits": RuleLimits(per_incident=1, per_day=1),
+    }
+    spec_dict.update(invalid_kwargs)
+    spec = RuleSpec(**spec_dict)
+    payload = RulePayload(spec=spec)
+
+    kind = RuleKind(rules=rules, hooks=hooks)
+    result = await kind.apply("prj_1", "prp_1", payload)
+
+    assert result.applied == []
+    assert "rule:churn:rb" in result.failed
+    assert expected_substr.lower() in result.failed["rule:churn:rb"].lower()
     rules.store.assert_not_awaited()

@@ -11,7 +11,11 @@ from pydantic import BaseModel
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.errors import DomainError
 from mlops_agents.monitoring.hooks.contract import Hooks
-from mlops_agents.monitoring.rules.contract import RulePayload, Rules
+from mlops_agents.monitoring.rules.contract import (
+    RulePayload,
+    Rules,
+    validate_rule_spec,
+)
 from mlops_agents.proposals.contract import (
     RULE_KIND,
     ApplyResult,
@@ -99,6 +103,11 @@ class RuleKind:
         rp = _payload(payload)
         spec = rp.spec
         part = f"rule:{spec.model}:{spec.name}" if spec.model else f"rule:{spec.name}"
+
+        try:
+            validate_rule_spec(spec)
+        except ValueError as exc:
+            return ApplyResult(applied=[], failed={part: str(exc)})
 
         hook = await self._hooks.get(project_id, spec.hook_id)
         if hook is None:
