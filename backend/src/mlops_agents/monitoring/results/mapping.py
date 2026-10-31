@@ -35,13 +35,16 @@ class CsvSplit:
     records: list[CsvRecord]
     # Text index just past the last complete record; an unfinished final record starts here.
     end: int
+    # Byte offset of a final record the text ends inside of (an open quoted field), if any.
+    unfinished_offset: int | None = None
 
 
 def split_csv_records(text: str, start_offset: int) -> CsvSplit:
     """Splits CSV text into complete records, a quoted field may span lines.
 
     Lines are cut on "\\n" only, the reader's newline rule. A final record still inside a
-    quoted field when the text ends is left out, so it can be read again once complete."""
+    quoted field when the text ends is left out, so it can be read again once complete; its
+    offset is kept in `unfinished_offset`."""
     pieces = text.split("\n")
     lines = [p + "\n" for p in pieces[:-1]]
     if pieces[-1]:
@@ -64,6 +67,7 @@ def split_csv_records(text: str, start_offset: int) -> CsvSplit:
     reader = csv.reader(_feed())
     records: list[CsvRecord] = []
     end = 0
+    unfinished_offset: int | None = None
     while True:
         record_offset = next_offset
         try:
@@ -76,11 +80,12 @@ def split_csv_records(text: str, start_offset: int) -> CsvSplit:
             continue
         if exhausted:
             # The text ended inside a quoted field: the reader returned a partial record
+            unfinished_offset = record_offset
             break
         end = next_index
         if row and not (len(row) == 1 and not row[0].strip()):
             records.append(CsvRecord(offset=record_offset, fields=row))
-    return CsvSplit(records=records, end=end)
+    return CsvSplit(records=records, end=end, unfinished_offset=unfinished_offset)
 
 
 def _get_path_val(data: Mapping[str, Any], path: str) -> object | None:
@@ -232,7 +237,8 @@ def evaluate_mapping(
             errors.append(f"Invalid JSON: {exc}")
 
     elif fmt == "csv":
-        csv_records = split_csv_records(raw, start_offset).records
+        split = split_csv_records(raw, start_offset)
+        csv_records = split.records
         if start_offset == 0 and csv_records:
             header_record, *csv_records = csv_records
             csv_header = header_record.fields
@@ -252,6 +258,12 @@ def evaluate_mapping(
                 records.append((k, rec))
             except Exception as exc:
                 errors.append(f"Offset {csv_record.offset}: {exc}")
+        # The reader passes an unfinished record only once the file has stopped changing,
+        # so it is broken, not still being written
+        if split.unfinished_offset is not None:
+            errors.append(
+                f"Offset {split.unfinished_offset}: record ends inside an unclosed quoted field"
+            )
 
     elif fmt == "log":
         pattern: re.Pattern[str] | None = None

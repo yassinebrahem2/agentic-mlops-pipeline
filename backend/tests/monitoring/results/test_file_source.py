@@ -387,3 +387,37 @@ async def test_csv_raw_read_cuts_at_true_byte_offset_with_invalid_utf8(
     assert chunk.content == content[:cut_offset].decode("utf-8", errors="replace")
     assert chunk.csv_header == ["id", "note", "time"]
     assert outcome.cursor["files"]["feed.csv"]["offset"] == cut_offset
+
+
+async def test_last_line_without_newline_is_read_once_the_file_stops_changing(
+    tmp_path: Path, project_id: str
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "results.jsonl"
+    line1 = b'{"check_id": "chk_1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    line2 = b'{"check_id": "chk_2", "origin": "agent", "ran_at": "2026-10-30T10:05:00Z", "fired": true, "category": "drift", "subject": "s", "detail": {}, "source_ref": "r"}'
+    target.write_bytes(line1)
+
+    connections = FakeConnections()
+    connections.add_local_folder("data_conn", data_dir)
+    reader = FileSourceReader(connections)
+    s_id = source_id("file", "*.jsonl", "data_conn")
+
+    out1 = await reader.read(project_id, s_id, cursor={})
+    assert [r.check_id for _k, r in out1.records] == ["chk_1"]
+
+    # The writer stops after a last line with no newline: held while it may still be writing
+    with target.open("ab") as f:
+        f.write(line2)
+    out2 = await reader.read(project_id, s_id, cursor=out1.cursor)
+    assert out2.records == []
+
+    # Unchanged since the previous read: the line is complete and is read once
+    out3 = await reader.read(project_id, s_id, cursor=out2.cursor)
+    assert out3.last_error is None
+    assert [(k, r.check_id) for k, r in out3.records] == [(f"results.jsonl:{len(line1)}", "chk_2")]
+    assert out3.cursor["files"]["results.jsonl"]["offset"] == len(line1) + len(line2)
+
+    out4 = await reader.read(project_id, s_id, cursor=out3.cursor)
+    assert out4.records == []

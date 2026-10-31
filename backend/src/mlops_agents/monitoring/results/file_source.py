@@ -46,6 +46,26 @@ class RawReadOutcome:
     last_error: str | None = None
 
 
+def _unchanged(
+    files_cursor: dict[str, dict[str, Any]], rel_posix: str, size: int, mtime: float
+) -> bool:
+    """Whether the file has the size and mtime of the previous read. A file seen for the
+    first time has no previous read, so it is not unchanged."""
+    prev = files_cursor.get(rel_posix)
+    return prev is not None and prev.get("size") == size and prev.get("mtime") == mtime
+
+
+def _consumable_length(chunk: bytes, unchanged: bool) -> int:
+    """How many bytes of a chunk read from the cursor can be consumed now.
+
+    Up to the last newline: bytes after it may be a record the writer is still writing. Once
+    the file is unchanged since the previous read the writer has stopped, so that tail is a
+    complete record (or a broken one, which the parser reports) and is consumed too."""
+    if unchanged:
+        return len(chunk)
+    return chunk.rfind(b"\n") + 1
+
+
 def _read_files_sync(
     root: Path,
     pattern: str,
@@ -133,8 +153,10 @@ def _read_files_sync(
             last_error = scrub_url_secrets(str(exc))
             continue
 
-        last_nl = chunk.rfind(b"\n")
-        if last_nl == -1:
+        consumable = _consumable_length(
+            chunk, _unchanged(files_cursor, rel_posix, cur_size, cur_mtime)
+        )
+        if consumable == 0:
             files_cursor[rel_posix] = {
                 "size": cur_size,
                 "mtime": cur_mtime,
@@ -142,8 +164,8 @@ def _read_files_sync(
             }
             continue
 
-        chunk_to_consume = chunk[: last_nl + 1]
-        new_offset = offset + last_nl + 1
+        chunk_to_consume = chunk[:consumable]
+        new_offset = offset + consumable
 
         current_line_start = offset
         lines = chunk_to_consume.splitlines(keepends=True)
@@ -502,14 +524,9 @@ def _read_raw_files_sync(
             last_error = scrub_url_secrets(str(exc))
             continue
 
-        last_nl = chunk.rfind(b"\n")
-        if last_nl != -1:
-            chunk_to_consume = chunk[: last_nl + 1]
-            new_offset = offset + last_nl + 1
-        elif offset == 0 and len(chunk) == cur_size:
-            chunk_to_consume = chunk
-            new_offset = cur_size
-        else:
+        unchanged = _unchanged(files_cursor, rel_posix, cur_size, cur_mtime)
+        consumable = _consumable_length(chunk, unchanged)
+        if consumable == 0:
             files_cursor[rel_posix] = {
                 "size": cur_size,
                 "mtime": cur_mtime,
@@ -518,22 +535,26 @@ def _read_raw_files_sync(
             }
             continue
 
+        chunk_to_consume = chunk[:consumable]
+        new_offset = offset + consumable
         raw_text = chunk_to_consume.decode("utf-8", errors="replace")
 
         if format == "csv":
             split = split_csv_records(raw_text, offset)
-            if split.end == 0:
-                # Only an unfinished quoted record so far: wait for the rest of it
-                files_cursor[rel_posix] = {
-                    "size": cur_size,
-                    "mtime": cur_mtime,
-                    "offset": offset,
-                    "csv_header": saved_header,
-                }
-                continue
-            if split.end < len(raw_text):
-                new_offset = offset + _byte_end(chunk_to_consume, raw_text, split.end)
-                raw_text = raw_text[: split.end]
+            # An unfinished quoted record may still be completed while the file changes; once
+            # it is unchanged the record goes to the parser whole, which reports it as broken.
+            if not unchanged:
+                if split.end == 0:
+                    files_cursor[rel_posix] = {
+                        "size": cur_size,
+                        "mtime": cur_mtime,
+                        "offset": offset,
+                        "csv_header": saved_header,
+                    }
+                    continue
+                if split.end < len(raw_text):
+                    new_offset = offset + _byte_end(chunk_to_consume, raw_text, split.end)
+                    raw_text = raw_text[: split.end]
             if offset == 0 and saved_header is None and split.records:
                 saved_header = split.records[0].fields
 

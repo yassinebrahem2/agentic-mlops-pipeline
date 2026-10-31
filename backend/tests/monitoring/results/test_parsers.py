@@ -1471,3 +1471,167 @@ async def test_code_parser_without_connection_fails_before_running(project_id: s
     with pytest.raises(RuntimeError, match="no connection"):
         await runner.run(project_id, ParserCode(script="pass"), raw="x\n", origin_ref="feed.raw")
     assert docker_runner.calls == []
+
+
+def _mapping_feed_service(
+    databases: Databases,
+    events: SqliteEventLog,
+    data_dir: Path,
+    pattern: str,
+    parsers: SqliteParsers,
+    incidents: FakeIncidents | None = None,
+) -> ResultsService:
+    connections = FakeConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    return ResultsService(
+        databases,
+        FakeHandoffs(_build_feed_handoff("conn_feed", pattern)),
+        connections,
+        events,
+        parsers=parsers,
+        incidents=incidents,
+    )
+
+
+_HELD_TAIL_DEFAULTS: dict[str, Any] = {"category": "data_quality", "subject": "tbl"}
+_NEVER_FIRES = Compare(op="eq", field="fired", value=True)
+
+# Per format: its mapping, a first complete record (csv: with its header), and a last record
+# the writer leaves without a newline.
+_HELD_TAIL_CASES: dict[str, tuple[ParserMapping, bytes, bytes]] = {
+    "csv": (
+        ParserMapping(
+            format="csv",
+            fields={"check_id": "id", "ran_at": "time"},
+            fired_when=_NEVER_FIRES,
+            defaults=_HELD_TAIL_DEFAULTS,
+        ),
+        b"id,time\nc1,2026-10-30T10:00:00Z\n",
+        b"c2,2026-10-30T10:05:00Z",
+    ),
+    "jsonl": (
+        ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "time"},
+            fired_when=_NEVER_FIRES,
+            defaults=_HELD_TAIL_DEFAULTS,
+        ),
+        b'{"id": "c1", "time": "2026-10-30T10:00:00Z"}\n',
+        b'{"id": "c2", "time": "2026-10-30T10:05:00Z"}',
+    ),
+    "log": (
+        ParserMapping(
+            format="log",
+            pattern=r"^(?P<time>\S+) \[CHECK:(?P<id>\w+)\]",
+            fields={"check_id": "id", "ran_at": "time"},
+            fired_when=_NEVER_FIRES,
+            defaults=_HELD_TAIL_DEFAULTS,
+        ),
+        b"2026-10-30T10:00:00Z [CHECK:c1] value=1.0\n",
+        b"2026-10-30T10:05:00Z [CHECK:c2] value=2.0",
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", sorted(_HELD_TAIL_CASES))
+async def test_last_record_without_newline_arrives_once_the_writer_stops(
+    fmt: str,
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    mapping, first, last = _HELD_TAIL_CASES[fmt]
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / f"feed.{fmt}"
+    target.write_bytes(first)
+
+    parsers = SqliteParsers(databases)
+    source = f"file:conn_feed:feed.{fmt}"
+    await parsers.store(
+        project_id, ParserSpec(source_id=source, mapping=mapping), proposal_id="prop_tail"
+    )
+    service = _mapping_feed_service(databases, events, data_dir, f"feed.{fmt}", parsers)
+    observer = FakeObserver()
+    service.add_observer(observer)
+
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.failures == {}
+    assert rep1.stored == 1
+
+    with target.open("ab") as f:
+        f.write(last)
+
+    # The file just changed: the writer may still be writing its last record
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.failures == {}
+    assert rep2.stored == 0
+
+    # Unchanged since the previous read: the last record is complete and arrives once
+    rep3 = await service.collect(project_id, clock.now())
+    assert rep3.failures == {}
+    assert rep3.stored == 1
+    rep4 = await service.collect(project_id, clock.now())
+    assert rep4.stored == 0
+
+    delivered = [(r.check_id, r.source_key) for batch in observer.batches for r in batch]
+    assert [check_id for check_id, _key in delivered] == ["c1", "c2"]
+    assert delivered[1] == ("c2", f"feed.{fmt}:{len(first)}")
+
+
+@pytest.mark.parametrize("ending", [b"", b"\n"], ids=["no_newline", "newline"])
+async def test_unclosed_quote_at_the_end_raises_parser_failure_with_its_offset(
+    ending: bytes,
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "feed.csv"
+    first = b"id,note,time\nc1,ok,2026-10-30T10:00:00Z\n"
+    target.write_bytes(first)
+
+    parsers = SqliteParsers(databases)
+    source = "file:conn_feed:feed.csv"
+    await parsers.store(
+        project_id, ParserSpec(source_id=source, mapping=_csv_mapping()), proposal_id="prop_csv"
+    )
+    incidents = FakeIncidents()
+    service = _mapping_feed_service(databases, events, data_dir, "feed.csv", parsers, incidents)
+
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.stored == 1
+
+    with target.open("ab") as f:
+        f.write(b'x,"unclosed' + ending)
+
+    # Still changing: the quote may yet be closed
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.failures == {}
+    assert rep2.stored == 0
+    assert incidents.signals == []
+
+    # Unchanged since the previous read: the record is broken, not unfinished
+    rep3 = await service.collect(project_id, clock.now())
+    assert rep3.stored == 0
+    assert f"Offset {len(first)}" in rep3.failures[source]
+    failures = [d for _p, d, _t in incidents.signals if d.kind == "parser_failure"]
+    assert len(failures) == 1
+    assert f"Offset {len(first)}" in str(failures[0].detail["error"])
+
+    # The cursor moved past the broken record: a later good one is stored
+    with target.open("ab") as f:
+        f.write(b"\nc3,ok,2026-10-30T10:10:00Z\n")
+    rep4 = await service.collect(project_id, clock.now())
+    assert rep4.failures == {}
+    assert rep4.stored == 1
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (await conn.execute(select(results))).mappings().all()
+    assert sorted(r["check_id"] for r in rows) == ["c1", "c3"]

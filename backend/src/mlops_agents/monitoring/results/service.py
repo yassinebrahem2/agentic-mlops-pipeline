@@ -347,6 +347,16 @@ class ResultsService(Results):
                                 )
                                 await self._incidents.raise_signal(project_id, draft, seen_at=now)
 
+                    # A file the reader held (no chunk this cycle) takes the reader's entry, so
+                    # its new size and mtime are stored and the next read can see it unchanged.
+                    # A file with a chunk advances only once its chunk parses.
+                    chunk_files = {c.rel_posix for c in raw_read.chunks}
+                    held_files_cur = dict(current_cursor.get("files", {}))
+                    for rel_posix, entry in raw_read.cursor.get("files", {}).items():
+                        if rel_posix not in chunk_files:
+                            held_files_cur[rel_posix] = entry
+                    current_cursor = {"files": held_files_cur}
+
                     cycle_has_errors = False
                     failed_files: set[str] = set()
 
