@@ -5,12 +5,18 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import RowMapping, func, insert, select, update
 
 from mlops_agents.clock import to_iso
 from mlops_agents.monitoring.expectations.contract import ExpectationKey, ExpectationSpec
+from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import expectations
+
+# spec, active, last_seen, last_signalled_first, last_signalled_second, registered_at
+ExpectationRecord = tuple[
+    ExpectationSpec, bool, datetime | None, datetime | None, datetime | None, datetime
+]
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -19,11 +25,23 @@ def _parse_iso(s: str | None) -> datetime | None:
     return datetime.fromisoformat(s).astimezone(UTC)
 
 
+def _record(row: RowMapping) -> ExpectationRecord:
+    return (
+        ExpectationSpec.model_validate_json(row["spec"]),
+        bool(row["active"]),
+        _parse_iso(row["last_seen"]),
+        _parse_iso(row["last_signalled_first"]),
+        _parse_iso(row["last_signalled_second"]),
+        datetime.fromisoformat(row["registered_at"]).astimezone(UTC),
+    )
+
+
 class SqliteExpectationsStore:
     """Manages the expectations table in project databases."""
 
-    def __init__(self, databases: Databases) -> None:
+    def __init__(self, databases: Databases, clock: Clock) -> None:
         self._databases = databases
+        self._clock = clock
 
     async def register(
         self,
@@ -31,7 +49,11 @@ class SqliteExpectationsStore:
         spec: ExpectationSpec,
         active: bool | None = None,
     ) -> None:
-        """Registers an expectation. Replaces spec if key exists."""
+        """Registers an expectation. Replaces spec if key exists.
+
+        registered_at is set on the first insert only: a re-seed, a reconcile or a re-register
+        after a retire keeps it, so a slot missed before a restart is still judged.
+        """
         if active is None:
             active = spec.activates_on_pr is None
 
@@ -74,6 +96,7 @@ class SqliteExpectationsStore:
                         last_seen=None,
                         last_signalled_first=None,
                         last_signalled_second=None,
+                        registered_at=to_iso(self._clock.now()),
                     )
                 )
 
@@ -169,9 +192,7 @@ class SqliteExpectationsStore:
 
         return activated
 
-    async def get(
-        self, project_id: str, key: ExpectationKey
-    ) -> tuple[ExpectationSpec, bool, datetime | None, datetime | None, datetime | None] | None:
+    async def get(self, project_id: str, key: ExpectationKey) -> ExpectationRecord | None:
         """Gets a single expectation record by key."""
         engine = await self._databases.project(project_id)
         model_str = key.model or ""
@@ -189,19 +210,9 @@ class SqliteExpectationsStore:
                 .mappings()
                 .one_or_none()
             )
-            if row is None:
-                return None
+            return None if row is None else _record(row)
 
-            spec = ExpectationSpec.model_validate_json(row["spec"])
-            active = bool(row["active"])
-            last_seen = _parse_iso(row["last_seen"])
-            first_sig = _parse_iso(row["last_signalled_first"])
-            second_sig = _parse_iso(row["last_signalled_second"])
-            return spec, active, last_seen, first_sig, second_sig
-
-    async def list_all(
-        self, project_id: str, active_only: bool = False
-    ) -> list[tuple[ExpectationSpec, bool, datetime | None, datetime | None, datetime | None]]:
+    async def list_all(self, project_id: str, active_only: bool = False) -> list[ExpectationRecord]:
         """Lists all expectation records."""
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
@@ -209,18 +220,7 @@ class SqliteExpectationsStore:
             if active_only:
                 stmt = stmt.where(expectations.c.active == 1)
             rows = (await conn.execute(stmt)).mappings().all()
-
-            results: list[
-                tuple[ExpectationSpec, bool, datetime | None, datetime | None, datetime | None]
-            ] = []
-            for row in rows:
-                spec = ExpectationSpec.model_validate_json(row["spec"])
-                active = bool(row["active"])
-                last_seen = _parse_iso(row["last_seen"])
-                first_sig = _parse_iso(row["last_signalled_first"])
-                second_sig = _parse_iso(row["last_signalled_second"])
-                results.append((spec, active, last_seen, first_sig, second_sig))
-            return results
+            return [_record(row) for row in rows]
 
     async def retire_handoff_keys_not_in(
         self, project_id: str, current_handoff_keys: set[tuple[str, str, str]]

@@ -114,7 +114,7 @@ class ExpectationsService(Expectations):
         self._tracking = tracking
         self._maintenance = maintenance or NeverSuspended()
         self._clock = clock or SystemClock()
-        self._store = store or SqliteExpectationsStore(databases)
+        self._store = store or SqliteExpectationsStore(databases, self._clock)
         self._seeder = seeder or HandoffExpectationsSeeder(self._store)
 
         self._handoff_observer = _HandoffObserverWrapper(self)
@@ -164,7 +164,7 @@ class ExpectationsService(Expectations):
         ops = handoff.payload.operations
         # 1. Active data feeds
         active_expectations = await self._store.list_all(project_id, active_only=True)
-        feed_specs = [spec for spec, _, _, _, _ in active_expectations if spec.key.kind == "feed"]
+        feed_specs = [spec for spec, *_ in active_expectations if spec.key.kind == "feed"]
 
         if feed_specs:
             try:
@@ -201,7 +201,7 @@ class ExpectationsService(Expectations):
 
         # 2. Active CI job feeds
         if self._tracking is not None:
-            job_specs = [spec for spec, _, _, _, _ in active_expectations if spec.key.kind == "job"]
+            job_specs = [spec for spec, *_ in active_expectations if spec.key.kind == "job"]
             if job_specs:
                 try:
                     ci_page = await self._tracking.query(
@@ -268,6 +268,7 @@ class ExpectationsService(Expectations):
             last_seen,
             last_signalled_first,
             last_signalled_second,
+            registered_at,
         ) in active_expectations:
             grace_mins = (
                 spec.grace_minutes
@@ -283,6 +284,8 @@ class ExpectationsService(Expectations):
                     if spec.due_at.tzinfo is None
                     else spec.due_at.astimezone(UTC)
                 )
+                if t < registered_at:
+                    continue
                 first_deadline = t + grace
                 met = bool(last_seen is not None and last_seen <= first_deadline)
 
@@ -388,7 +391,8 @@ class ExpectationsService(Expectations):
             )
 
             for i, t in enumerate(full_occurrences):
-                if t <= earliest_anchor:
+                # A slot from before the expectation existed is never judged (#586).
+                if t <= earliest_anchor or t < registered_at:
                     continue
 
                 prev_occ = full_occurrences[i - 1] if i > 0 else (t - timedelta(hours=1))
@@ -470,7 +474,7 @@ class ExpectationsService(Expectations):
 
         states_list: list[ExpectationState] = []
 
-        for spec, active, last_seen, last_sig_first, _ in all_records:
+        for spec, active, last_seen, last_sig_first, _, _ in all_records:
             grace_mins = (
                 spec.grace_minutes
                 if spec.grace_minutes is not None

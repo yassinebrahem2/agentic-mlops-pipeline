@@ -5,20 +5,26 @@ loses a kickoff, and a second handoff starts its own."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx2
 import pytest
+from fastapi import FastAPI
 
 from mlops_agents.agents.hooks.names import DATA_SUMMARY_HOOK
+from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
+from mlops_agents.config import RunMode, load_settings
 from mlops_agents.onboarding.briefs import KICKOFF_AGENTS
 from mlops_agents.onboarding.kickoff import HANDOFF_AUTHOR
 from mlops_agents.proposals.contract import CONNECTIONS_KIND, HANDOFF_KIND
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
-from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
+from tests.api.conftest import LOCAL_URL, NoGh, add_local_project, signed_in, started_app
+from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_mlflow import FakeMlflowState, RunningFakeMlflow, start_fake_mlflow
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.onboarding_script import (
@@ -35,6 +41,7 @@ from tests.fakes.onboarding_script import (
     write_data_folder,
 )
 from tests.onboarding.kickoff_env import all_idle, handoff_messages
+from tests.sandbox.fakes import FakeDockerRunner
 
 ONBOARDING = "onboarding"
 ONBOARDING_MODEL = "fake-onboarding"
@@ -42,6 +49,43 @@ AUDIT_MODEL = "fake-audit"
 # Only the data_summary hook writes a table's header line.
 TABLE_LINE = f'Table "{BOOKINGS}"'
 WAIT_S = 30
+# 07:10 UTC: the handoff's 06:30 UTC check has passed its 30 minute grace, and the look-back
+# before #586's fix still held it, so a fresh onboarding was judged for a slot before it existed.
+PINNED_TIME = (7, 10)
+
+
+class _PinnedClock:
+    """Real time moved to today's PINNED_TIME (UTC): it runs at real speed, and `advance`
+    jumps it forward."""
+
+    def __init__(self) -> None:
+        hour, minute = PINNED_TIME
+        now = datetime.now(UTC)
+        self._offset = now.replace(hour=hour, minute=minute, second=0, microsecond=0) - now
+
+    def now(self) -> datetime:
+        return datetime.now(UTC) + self._offset
+
+    def advance(self, seconds: float) -> None:
+        self._offset += timedelta(seconds=seconds)
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+
+@asynccontextmanager
+async def _started_app(home: Path, clock: _PinnedClock) -> AsyncGenerator[FastAPI]:
+    """`tests.api.conftest.started_app` on `clock`."""
+    settings = load_settings(RunMode.LOCAL, env={"MLOPS_AGENTS_HOME": str(home)})
+    app = create_app(
+        settings,
+        keystore=MemoryKeyStore(),
+        gh=NoGh(),
+        docker_runner=FakeDockerRunner(),
+        clock=clock,
+    )
+    async with app.router.lifespan_context(app):
+        yield app
 
 
 @pytest.fixture
@@ -192,8 +236,9 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
     folder = tmp_path / "exports"
     write_data_folder(folder)
     home = tmp_path / "data"
+    clock = _PinnedClock()
 
-    async with started_app(home) as app, signed_in(app, LOCAL_URL) as http:
+    async with _started_app(home, clock) as app, signed_in(app, LOCAL_URL) as http:
         services: Services = app.state.services
         await _use_fake_models(services, fake_openai)
         project_id = await add_local_project(app, tmp_path, git_env)
@@ -223,7 +268,10 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
         first = await handoff_messages(services.databases, project_id)
         assert sorted(m.session_agent for m in first) == sorted(KICKOFF_AGENTS)
 
-    async with started_app(home) as app, signed_in(app, LOCAL_URL) as http:
+    # The restart comes a minute later, so its first scheduler pass checks the expectations
+    # the first handoff registered.
+    clock.advance(60)
+    async with _started_app(home, clock) as app, signed_in(app, LOCAL_URL) as http:
         services = app.state.services
         await all_idle(services.sessions, project_id)
         assert await handoff_messages(services.databases, project_id) == first
