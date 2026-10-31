@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import ColumnElement, func, insert, select, update
 
@@ -13,7 +13,9 @@ from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog, EventType
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.incidents.contract import AgentWaker, Incidents
+from mlops_agents.monitoring.settings import get_monitoring_settings
 from mlops_agents.monitoring.untrusted import untrusted
+from mlops_agents.notifications.contract import Message, Notifier, OnCallPeople
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import fix_requests
 from mlops_agents.tracking.contract import Page
@@ -24,6 +26,7 @@ from mlops_agents.training.constants import (
     WHY_NOT_MAX_CHARS,
 )
 from mlops_agents.training.contract import (
+    CircuitState,
     FixChoice,
     FixRequestView,
     FixStatus,
@@ -55,6 +58,8 @@ class SqliteFixes:
         events: EventLog,
         clock: Clock,
         handoffs: Handoffs,
+        notifier: Notifier | None = None,
+        on_call: OnCallPeople | None = None,
     ) -> None:
         self._databases = databases
         self._incidents = incidents
@@ -62,6 +67,19 @@ class SqliteFixes:
         self._events = events
         self._clock = clock
         self._handoffs = handoffs
+        self._notifier = notifier
+        self._on_call = on_call
+
+    async def circuit(self, project_id: str, model: str) -> CircuitState:
+        settings = await get_monitoring_settings(self._databases, project_id)
+        cutoff = self._clock.now() - timedelta(days=settings.circuit_breaker_window_days)
+        failed = await self.list_not_cleared(project_id, model, since=cutoff)
+        count = len(failed)
+        return CircuitState(
+            open=count >= settings.circuit_breaker_fixes,
+            failed_fixes=count,
+            window_days=settings.circuit_breaker_window_days,
+        )
 
     async def guards(
         self,
@@ -99,6 +117,20 @@ class SqliteFixes:
         immature_refusal = check_labels_immature(model_spec, window, now, model_name=model)
         if immature_refusal is not None:
             refusals.append(immature_refusal)
+
+        # 4. circuit_open
+        circuit_state = await self.circuit(project_id, model)
+        if circuit_state.open:
+            refusals.append(
+                GuardRefusal(
+                    code="circuit_open",
+                    detail=(
+                        f"Circuit breaker is open for model '{model}': "
+                        f"{circuit_state.failed_fixes} not-cleared fixes in last "
+                        f"{circuit_state.window_days} days."
+                    ),
+                )
+            )
 
         return GuardResult(ok=len(refusals) == 0, refusals=refusals)
 
@@ -149,7 +181,82 @@ class SqliteFixes:
         capped_evidence = evidence[:EVIDENCE_MAX_CHARS]
         fix_id = new_id("fix")
         now_dt = self._clock.now()
-        created_iso = now_dt.isoformat()
+        created_iso = to_iso(now_dt)
+
+        circuit_state = await self.circuit(project_id, incident.model)
+        if circuit_state.open:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    insert(fix_requests).values(
+                        id=fix_id,
+                        incident_id=incident_id,
+                        model=incident.model,
+                        requested_by=agent,
+                        evidence=capped_evidence,
+                        choice=None,
+                        why=None,
+                        why_not="{}",
+                        status="escalated",
+                        outcome="pending",
+                        created=created_iso,
+                    )
+                )
+
+            # Do NOT wake Retraining!
+            settings = await get_monitoring_settings(self._databases, project_id)
+            cutoff = self._clock.now() - timedelta(days=settings.circuit_breaker_window_days)
+            tried = await self.list_not_cleared(project_id, incident.model, since=cutoff)
+            tried_payload = [{"id": f.id, "choice": f.choice, "why": f.why} for f in tried]
+
+            await self._events.record(
+                project_id,
+                source=agent,
+                type="fix.escalated",
+                payload={
+                    "fix_id": fix_id,
+                    "incident_id": incident_id,
+                    "model": incident.model,
+                    "tried": tried_payload,
+                },
+                subject_id=incident_id,
+            )
+
+            if self._on_call is not None and self._notifier is not None:
+                people = await self._on_call.list(project_id)
+                if people:
+                    first_person = people[0]
+                    message = Message(
+                        title=f"Fix escalated: circuit breaker open for model '{incident.model}'",
+                        severity=incident.severity,
+                        cause=incident.cause,
+                        urgent=False,
+                        lines=[
+                            f"Fix request {fix_id} for incident {incident_id} (model: {incident.model}) escalated.",
+                            f"Circuit breaker is open: {circuit_state.failed_fixes} not-cleared fixes in last {circuit_state.window_days} days.",
+                        ],
+                    )
+                    await self._notifier.notify(
+                        project_id,
+                        first_person,
+                        message,
+                        kind="escalation",
+                        incident_id=incident_id,
+                    )
+
+            created_view_dt = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
+            return FixRequestView(
+                id=fix_id,
+                incident_id=incident_id,
+                model=incident.model,
+                requested_by=agent,
+                evidence=capped_evidence,
+                choice=None,
+                why=None,
+                why_not={},
+                status="escalated",
+                outcome="pending",
+                created=created_view_dt,
+            )
 
         async with engine.begin() as conn:
             await conn.execute(
@@ -193,6 +300,7 @@ class SqliteFixes:
             key=fix_id,
         )
 
+        created_view_dt = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
         return FixRequestView(
             id=fix_id,
             incident_id=incident_id,
@@ -204,7 +312,7 @@ class SqliteFixes:
             why_not={},
             status="requested",
             outcome="pending",
-            created=now_dt,
+            created=created_view_dt,
         )
 
     async def choose(
@@ -292,6 +400,20 @@ class SqliteFixes:
             subject_id=row["incident_id"],
         )
 
+        if choice == "decline":
+            wake_text = (
+                f"Fix request {fix_id} was declined for incident {row['incident_id']}:\n"
+                f"{untrusted(capped_why, source='fix_choice')}"
+            )
+            await self._waker.wake(
+                project_id=project_id,
+                agent=row["requested_by"],
+                label="incident",
+                subject_id=row["incident_id"],
+                text=wake_text,
+                key=fix_id,
+            )
+
         created_raw = row["created"]
         created_dt = (
             datetime.fromisoformat(created_raw) if isinstance(created_raw, str) else created_raw
@@ -328,6 +450,79 @@ class SqliteFixes:
             await conn.execute(
                 update(fix_requests).where(fix_requests.c.id == fix_id).values(status="done")
             )
+
+    async def set_outcome(
+        self,
+        project_id: str,
+        fix_id: str,
+        outcome: Literal["pending", "cleared", "not_cleared"],
+    ) -> None:
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(fix_requests).where(fix_requests.c.id == fix_id).values(outcome=outcome)
+            )
+
+    async def resolve_incident_fixes(self, project_id: str, incident_id: str) -> None:
+        """Mark eligible pending fixes as cleared upon incident resolution."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(fix_requests)
+                .where(
+                    fix_requests.c.incident_id == incident_id,
+                    fix_requests.c.outcome == "pending",
+                    (fix_requests.c.status == "done")
+                    | (
+                        (fix_requests.c.status == "chosen")
+                        & (fix_requests.c.choice == "re_threshold")
+                    ),
+                )
+                .values(outcome="cleared")
+            )
+
+    async def reopen_incident_fixes(self, project_id: str, incident_id: str) -> None:
+        """Mark eligible fixes as not_cleared upon incident reopening."""
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(fix_requests)
+                .where(
+                    fix_requests.c.incident_id == incident_id,
+                    (fix_requests.c.status == "done")
+                    | (
+                        (fix_requests.c.status == "chosen")
+                        & (fix_requests.c.choice == "re_threshold")
+                    ),
+                )
+                .values(outcome="not_cleared")
+            )
+
+    async def list_not_cleared(
+        self,
+        project_id: str,
+        model: str,
+        since: datetime | None = None,
+    ) -> list[FixRequestView]:
+        engine = await self._databases.project(project_id)
+        stmt = select(fix_requests).where(
+            fix_requests.c.model == model,
+            fix_requests.c.outcome == "not_cleared",
+        )
+        if since is not None:
+            stmt = stmt.where(fix_requests.c.created >= to_iso(since))
+        stmt = stmt.order_by(fix_requests.c.created.desc())
+
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+
+        views: list[FixRequestView] = []
+        for r in rows:
+            v = self._row_to_view(r)
+            if since is not None and v.created < since:
+                continue
+            views.append(v)
+        return views
 
     async def list_fixes(
         self,

@@ -201,8 +201,16 @@ class TrainingLifecycle(HookLifecycle):
         if hook.spec.kind not in ("train", "evaluate"):
             return
         request_id = result.request_id or call.params.get("request_id")
-        if not result.ok and request_id is not None:
-            await self._training.set_status(project_id, request_id, "failed")
+        if not result.ok:
+            if request_id is not None:
+                await self._training.set_status(project_id, request_id, "failed")
+            fix_id = call.fix_id
+            if fix_id is None and request_id is not None:
+                trq = await self._training.request(project_id, request_id)
+                if trq is not None:
+                    fix_id = trq.fix_id
+            if fix_id is not None:
+                await self._fixes.set_outcome(project_id, fix_id, "not_cleared")
         elif result.ok and request_id is not None and self._expectations is not None:
             started = self._clock.now()
             due_at = started + timedelta(minutes=TRAINING_REQUEST_DEADLINE_MINUTES)

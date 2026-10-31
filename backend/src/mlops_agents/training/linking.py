@@ -53,6 +53,8 @@ class RequestLinker(SyncObserver):
         for req in started_reqs:
             if req.id in silent_refs:
                 await self._training.mark_silent(project_id, req.id)
+                if req.fix_id is not None:
+                    await self._fixes.set_outcome(project_id, req.fix_id, "not_cleared")
 
         active_reqs = [r for r in started_reqs if r.id not in silent_refs]
         if not active_reqs:

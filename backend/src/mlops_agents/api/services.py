@@ -121,6 +121,7 @@ from mlops_agents.tracking.service import TrackingService
 from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.training.lifecycle import TrainingLifecycle
 from mlops_agents.training.linking import RequestLinker
+from mlops_agents.training.outcomes import FixOutcomeObserver
 from mlops_agents.training.queries import FixesQueryProvider, TrainingRequestsQueryProvider
 from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
@@ -301,6 +302,14 @@ async def build_services(
     on_call = SqliteOnCallPeople(databases)
     on_call_seeder = OnCallSeeder(on_call, handoffs, databases)
     handoffs.add_observer(on_call_seeder)
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
     hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
@@ -374,7 +383,18 @@ async def build_services(
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
-    fixes = SqliteFixes(databases, incidents, waker, events, clock, handoffs=handoffs)
+    fixes = SqliteFixes(
+        databases,
+        incidents,
+        waker,
+        events,
+        clock,
+        handoffs=handoffs,
+        notifier=notifier,
+        on_call=on_call,
+    )
+    outcome_observer = FixOutcomeObserver(fixes, incidents)
+    incidents.add_observer(outcome_observer)
     training = SqliteTraining(databases, events, clock)
     resolver = TrackerPlaceholderResolver(tracking)
     training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
@@ -544,14 +564,6 @@ async def build_services(
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
-    notification_channels = default_channels(integration_settings, http)
-    notifier = SqliteNotifier(
-        databases=databases,
-        settings=integration_settings,
-        channels=notification_channels,
-        events=events,
-        clock=clock,
-    )
     retry_notifications_job = RetryJob(databases, notifier, clock)
     scheduler.register(retry_notifications_job)
 
