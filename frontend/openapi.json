@@ -4574,6 +4574,17 @@
             "title": "Provider Name",
             "type": "string"
           },
+          "request_token_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Token Limit"
+          },
           "streaming": {
             "title": "Streaming",
             "type": "boolean"
@@ -7496,6 +7507,31 @@
         "title": "SetPrice",
         "type": "object"
       },
+      "SetRequestLimit": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "SetRequestLimit",
+        "type": "object"
+      },
       "SignalView": {
         "additionalProperties": false,
         "properties": {
@@ -10071,6 +10107,47 @@
           }
         },
         "summary": "Set Price",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/models/request-limit": {
+      "put": {
+        "operationId": "set_request_limit_api_models_request_limit_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRequestLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Request Limit",
         "tags": [
           "models"
         ]

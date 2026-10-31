@@ -52,6 +52,45 @@ async def test_errors_are_results(ctx: ToolContext) -> None:
     assert (await ReadTool().invoke(ctx, {"path": "README.md"})).is_error
 
 
+async def test_whole_file_read_exceeding_budget_refused(ctx: ToolContext) -> None:
+    # Set cap to 100 characters on ToolContext
+    limited_ctx = ToolContext(
+        project_id=ctx.project_id,
+        agent=ctx.agent,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
+        files=ctx.files,
+        task=ctx.task,
+        tool_call_id=ctx.tool_call_id,
+        tool_result_max_chars=100,
+    )
+    # big.txt has 2000 lines, > 100 bytes
+    res = await ReadTool().invoke(limited_ctx, {"file_path": "big.txt"})
+    assert res.is_error
+    assert "too large to read whole" in res.content
+    assert "bytes" in res.content
+    assert "lines" in res.content
+    assert "offset and limit" in res.content
+    assert "Grep" in res.content
+
+
+async def test_read_with_range_larger_than_budget_cut_with_notice(ctx: ToolContext) -> None:
+    limited_ctx = ToolContext(
+        project_id=ctx.project_id,
+        agent=ctx.agent,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
+        files=ctx.files,
+        task=ctx.task,
+        tool_call_id=ctx.tool_call_id,
+        tool_result_max_chars=100,
+    )
+    # Read with range (offset=1, limit=50) on big.txt
+    res = await ReadTool().invoke(limited_ctx, {"file_path": "big.txt", "offset": 1, "limit": 50})
+    assert not res.is_error
+    assert "characters cut to fit context budget" in res.content
+
+
 @pytest.mark.serial
 async def test_oversized_single_line_file_reads_bounded(
     tmp_path: Path, git_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
