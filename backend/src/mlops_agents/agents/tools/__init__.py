@@ -27,6 +27,13 @@ from mlops_agents.agents.tools.search_notes import SearchNotes
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.tracking_history import TrackingHistory
 from mlops_agents.agents.tools.write import WriteTool
+from mlops_agents.monitoring.incidents.query import MonitoringQueryTool
+from mlops_agents.monitoring.incidents.tools import (
+    IncidentFollowUp,
+    IncidentMerge,
+    IncidentSplit,
+    IncidentUpdate,
+)
 
 if TYPE_CHECKING:
     import httpx2
@@ -35,15 +42,19 @@ if TYPE_CHECKING:
     from mlops_agents.agents.messaging.bus import SqliteMessageBus
     from mlops_agents.agents.messaging.wakeups import WakeupService
     from mlops_agents.agents.tasks.contract import Tasks
+    from mlops_agents.connections.contract import Connections
+    from mlops_agents.data.summaries import DataSummaries
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
     from mlops_agents.monitoring.hooks.contract import Hooks
     from mlops_agents.monitoring.incidents.contract import Incidents
+    from mlops_agents.monitoring.query import QueryProviders
     from mlops_agents.promotion.contract import Reports
     from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.proposals.kinds import ProposalKinds
     from mlops_agents.proposals.service import ProposalsService
+    from mlops_agents.providers.failover import Clock
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
     from mlops_agents.tracking.contract import Tracking
@@ -57,7 +68,12 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "HoldTool",
+    "IncidentFollowUp",
+    "IncidentMerge",
+    "IncidentSplit",
+    "IncidentUpdate",
     "ListAgentsTool",
+    "MonitoringQueryTool",
     "OpenIssueTool",
     "OpenPullRequestTool",
     "ProposeTool",
@@ -104,6 +120,10 @@ def default_registry(
     reports: Reports | None = None,
     hooks: Hooks | None = None,
     incidents: Incidents | None = None,
+    query_providers: QueryProviders | None = None,
+    data_summaries: DataSummaries | None = None,
+    connections: Connections | None = None,
+    clock: Clock | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -176,4 +196,26 @@ def default_registry(
         registry.register(RunHookTool(hooks))
         if incidents is not None:
             registry.register(HoldTool(hooks, incidents))
+    if incidents is not None:
+        registry.register(IncidentUpdate(incidents))
+        registry.register(IncidentMerge(incidents))
+        registry.register(IncidentSplit(incidents))
+        if (
+            databases is not None
+            and handoffs is not None
+            and data_summaries is not None
+            and connections is not None
+        ):
+            registry.register(
+                IncidentFollowUp(
+                    incidents=incidents,
+                    databases=databases,
+                    handoffs=handoffs,
+                    data_summaries=data_summaries,
+                    connections=connections,
+                    clock=clock,
+                )
+            )
+    if query_providers is not None:
+        registry.register(MonitoringQueryTool(query_providers))
     return registry

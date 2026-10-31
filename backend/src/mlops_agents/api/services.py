@@ -59,7 +59,9 @@ from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
+from mlops_agents.monitoring.incidents.follow_ups import FollowUpsJob
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.query import IncidentsQueryProvider, SignalsQueryProvider
 from mlops_agents.monitoring.incidents.reactor import Reactor
 from mlops_agents.monitoring.incidents.routing import OnCallRouter
 from mlops_agents.monitoring.incidents.service import IncidentsService
@@ -295,7 +297,17 @@ async def build_services(
 
     query_providers = QueryProviders()
     query_providers.register(HooksQueryProvider(hooks))
-    maintenance = NeverSuspended()
+    query_providers.register(SignalsQueryProvider(databases))
+    query_providers.register(IncidentsQueryProvider(databases))
+
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
 
     results = ResultsService(
         databases=databases,
@@ -303,17 +315,23 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    maintenance = NeverSuspended()
+    severity = RuleSeverity(handoffs=handoffs)
     incidents = IncidentsService(
         databases=databases,
         events=events,
         results=results,
-        severity=MediumSeverity(),
+        severity=severity,
         maintenance=maintenance,
         clock=clock,
+        handoffs=handoffs,
     )
+    severity.bind_incidents(incidents)
+
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
-    results.add_observer(SignalsFromResults(incidents, maintenance))
+    signals_from_results = SignalsFromResults(incidents, maintenance, results)
+    results.add_observer(signals_from_results)
 
     tracking = TrackingService(
         databases=databases,
@@ -330,6 +348,26 @@ async def build_services(
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
+    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
+
+    router = OnCallRouter(on_call=on_call, databases=databases)
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=on_call,
+        notifier=notifier,
+        dispatch=diagnosis_dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=events,
+        clock=clock,
+    )
+    incidents.add_observer(reactor)
+
+    # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
+
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -348,6 +386,10 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        query_providers=query_providers,
+        data_summaries=data_summaries,
+        connections=connections,
+        clock=clock,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -355,8 +397,6 @@ async def build_services(
     status_board_hook = StatusBoardHook()
     turn_hooks.register(status_board_hook)
     turn_hooks.register(KnowledgeHook(knowledge))
-    # One instance for the hook and the table-detail route: they share one cache lock.
-    data_summaries = DataSummaries(connections, ProfileCache(paths))
     turn_hooks.register(DataSummaryHook(connections, data_summaries))
     turn_hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(
@@ -445,56 +485,17 @@ async def build_services(
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
 
-    results = ResultsService(
-        databases=databases,
-        handoffs=handoffs,
-        connections=connections,
-        events=events,
-    )
-    notification_channels = default_channels(integration_settings, http)
-    notifier = SqliteNotifier(
-        databases=databases,
-        settings=integration_settings,
-        channels=notification_channels,
-        events=events,
-        clock=clock,
-    )
     retry_notifications_job = RetryJob(databases, notifier, clock)
     scheduler.register(retry_notifications_job)
-
-    maintenance = NeverSuspended()
-    severity = RuleSeverity(handoffs=handoffs)
-    incidents = IncidentsService(
+    follow_ups_job = FollowUpsJob(
         databases=databases,
-        events=events,
-        results=results,
-        severity=severity,
-        maintenance=maintenance,
-        clock=clock,
+        waker=waker,
         handoffs=handoffs,
-    )
-    severity.bind_incidents(incidents)
-
-    # Registered before the startup `deliver_undelivered` below, so a result stored before a
-    # restart still opens its incident.
-    signals_from_results = SignalsFromResults(incidents, maintenance, results)
-    results.add_observer(signals_from_results)
-    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
-
-    router = OnCallRouter(on_call=on_call, databases=databases)
-    reactor = Reactor(
-        incidents=incidents,
-        router=router,
-        on_call=on_call,
-        notifier=notifier,
-        dispatch=diagnosis_dispatch,
-        tasks=tasks,
-        github=github,
-        http=http,
-        events=events,
+        data_summaries=data_summaries,
+        connections=connections,
         clock=clock,
     )
-    incidents.add_observer(reactor)
+    scheduler.register(follow_ups_job)
 
     suspect_linker = SuspectLinker(
         databases=databases,
