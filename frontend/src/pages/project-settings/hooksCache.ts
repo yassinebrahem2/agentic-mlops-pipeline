@@ -23,3 +23,14 @@ export const hooksQuery = (projectId: string) => ({
       }),
     ),
 });
+
+// Exhaustive over the generated union, so a kind the backend adds fails to compile here.
+export const KIND_LABELS: Record<Hook["spec"]["kind"], string> = {
+  train: "Train",
+  evaluate: "Evaluate",
+  deploy: "Deploy",
+  rollback: "Roll back",
+  rerun: "Re-run",
+  hold: "Hold",
+  fall_back: "Fall back",
+};

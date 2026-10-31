@@ -7,7 +7,7 @@ import { api, unwrap } from "@/lib/api";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { ActionError } from "@/pages/incidents/ActionError";
 import { RuleTermItem } from "@/pages/agents/proposals/RuleProposalCard";
-import { hooksQuery } from "./hooksCache";
+import { hooksQuery, KIND_LABELS } from "./hooksCache";
 import { enableLabel } from "./lifecycleActions";
 import { LifecycleBadge } from "./LifecycleBadge";
 import { rulesKey } from "./rulesKey";
@@ -121,7 +121,7 @@ function RuleRow({
             <span className={hookName ? undefined : "break-all font-mono text-xs"}>
               {hookName ?? spec.hook_id}
             </span>
-            <Badge variant="outline">{spec.hook_kind}</Badge>
+            <Badge variant="outline">{KIND_LABELS[spec.hook_kind]}</Badge>
           </dd>
         </div>
         <div>

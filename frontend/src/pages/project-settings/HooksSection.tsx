@@ -6,23 +6,12 @@ import { api, unwrap } from "@/lib/api";
 import { ActionError } from "@/pages/incidents/ActionError";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { HookCredential } from "./HookCredential";
-import { hooksKey, hooksQuery, replaceHook, type Hook } from "./hooksCache";
+import { hooksKey, hooksQuery, KIND_LABELS, replaceHook, type Hook } from "./hooksCache";
 import { enableLabel } from "./lifecycleActions";
 import { LifecycleBadge } from "./LifecycleBadge";
 import { policiesKey } from "./policiesKey";
 
 const SHORT_SHA = 12;
-
-// Exhaustive over the generated union, so a kind the backend adds fails to compile here.
-const KIND_LABELS: Record<Hook["spec"]["kind"], string> = {
-  train: "Train",
-  evaluate: "Evaluate",
-  deploy: "Deploy",
-  rollback: "Roll back",
-  rerun: "Re-run",
-  hold: "Hold",
-  fall_back: "Fall back",
-};
 
 function verifiedText(verified: boolean | null | undefined): string {
   if (verified === null || verified === undefined) return "Not verified";

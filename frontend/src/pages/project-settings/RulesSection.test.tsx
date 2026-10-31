@@ -80,6 +80,7 @@ describe("RulesSection", () => {
     expect(first.getByText("Drift above 0.5 hurts <b>revenue</b>.")).toBeInTheDocument();
     expect(await first.findByText("Rollback churn")).toBeInTheDocument();
     expect(first.getByText(/1 per incident, 2 per day/)).toBeInTheDocument();
+    expect(first.getByText("Roll back")).toBeInTheDocument();
     expect(first.getByText("drift_check")).toBeInTheDocument();
     expect(first.getByText("value gt 0.5")).toBeInTheDocument();
     const second = within(screen.getByRole("listitem", { name: "Re-run nightly" }));
