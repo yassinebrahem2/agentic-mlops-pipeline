@@ -103,24 +103,31 @@ def build_one_shot_run_args(
     network: bool = True,
     mounts: Sequence[Mount] = (),
     env_file: Path | None = None,
+    name: str | None = None,
 ) -> list[str]:
     """Builds docker run arguments for a one-shot container execution."""
     args = [
         "run",
         "--rm",
-        "--cpus",
-        "2",
-        "--memory",
-        "4g",
-        "--pids-limit",
-        "512",
-        "--workdir",
-        "/workspace",
-        "--label",
-        f"{APP_NAME}=true",
-        "--label",
-        f"{APP_NAME}.project={project_id}",
     ]
+    if name is not None:
+        args.extend(["--name", name])
+    args.extend(
+        [
+            "--cpus",
+            "2",
+            "--memory",
+            "4g",
+            "--pids-limit",
+            "512",
+            "--workdir",
+            "/workspace",
+            "--label",
+            f"{APP_NAME}=true",
+            "--label",
+            f"{APP_NAME}.project={project_id}",
+        ]
+    )
     for m in sorted(mounts, key=lambda x: x.container_path):
         args.extend(
             [

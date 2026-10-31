@@ -111,6 +111,7 @@ class CommandRunner(HookRunner):
                     env_file_path.chmod(0o600)
 
         command = ["bash", "-lc", filled_cmd]
+        container_name = f"hook-{hook.id}"
         run_args = build_one_shot_run_args(
             project_id,
             image_tag,
@@ -118,6 +119,7 @@ class CommandRunner(HookRunner):
             network=True,
             mounts=mounts,
             env_file=env_file_path,
+            name=container_name,
         )
 
         secrets = [credential] if credential else []
@@ -134,8 +136,14 @@ class CommandRunner(HookRunner):
                 output, _ = res.command_output()
                 raw_detail = output
             except DockerTimeoutError as err:
+                with contextlib.suppress(Exception):
+                    await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
                 ok = False
                 raw_detail = err.output or f"{err.stdout}{err.stderr}" or str(err)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
+                raise
             except SandboxUnavailable as err:
                 return HookResult(ok=False, detail=str(err), request_id=request_id)
 

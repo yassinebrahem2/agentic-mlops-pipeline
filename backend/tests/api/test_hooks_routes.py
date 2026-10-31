@@ -149,3 +149,107 @@ async def test_hooks_routes_unknown_hook_404(
         json={"enabled": False},
     )
     assert resp3.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_hooks_routes_credential_refuses_control_characters(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+
+    spec = CommandSpec(
+        kind="train",
+        type="command",
+        template="python train.py",
+        workflow=None,
+        inputs={},
+        placeholders=[],
+        deploys=False,
+        entry_files=[],
+    )
+    hook = await services.hooks.register(
+        project_id,
+        spec=spec,
+        name="test-hook-cred-ctrl",
+        model="iris",
+        source="proposal",
+    )
+
+    # Newline in credential
+    resp_nl = await client.put(
+        f"/api/projects/{project_id}/hooks/{hook.id}/credential",
+        json={"credential": "my-secret\nEXTRA_VAR=1"},
+    )
+    assert resp_nl.status_code == 422
+
+    # Carriage return in credential
+    resp_cr = await client.put(
+        f"/api/projects/{project_id}/hooks/{hook.id}/credential",
+        json={"credential": "my-secret\rEXTRA_VAR=1"},
+    )
+    assert resp_cr.status_code == 422
+
+    # Null byte in credential
+    resp_null = await client.put(
+        f"/api/projects/{project_id}/hooks/{hook.id}/credential",
+        json={"credential": "my-secret\x00extra"},
+    )
+    assert resp_null.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_hooks_routes_suspension_kept_on_enable(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services = app.state.services
+
+    spec = CommandSpec(
+        kind="train",
+        type="command",
+        template="python train.py",
+        workflow=None,
+        inputs={},
+        placeholders=[],
+        deploys=False,
+        entry_files=[],
+    )
+    hook = await services.hooks.register(
+        project_id,
+        spec=spec,
+        name="test-hook-suspended",
+        model="iris",
+        source="proposal",
+    )
+
+    # Suspend the hook directly
+    await services.hooks.suspend(project_id, hook.id, "changed files on branch")
+    hook_view = await services.hooks.get(project_id, hook.id)
+    assert hook_view is not None
+    assert hook_view.status == "suspended"
+    assert hook_view.suspended_reason == "changed files on branch"
+
+    # PUT enabled: false through route
+    res_dis = await client.put(
+        f"/api/projects/{project_id}/hooks/{hook.id}/enabled",
+        json={"enabled": False},
+    )
+    assert res_dis.status_code == 200
+    assert res_dis.json()["status"] == "disabled"
+    assert res_dis.json()["suspended_reason"] == "changed files on branch"
+
+    # PUT enabled: true through route -> must remain suspended with reason
+    res_en = await client.put(
+        f"/api/projects/{project_id}/hooks/{hook.id}/enabled",
+        json={"enabled": True},
+    )
+    assert res_en.status_code == 200
+    assert res_en.json()["status"] == "suspended"
+    assert res_en.json()["suspended_reason"] == "changed files on branch"

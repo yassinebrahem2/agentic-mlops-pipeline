@@ -39,7 +39,7 @@ class HookFakeDockerRunner(FakeDockerRunner):
         self.env_file_checked_exists: bool | None = None
         self.env_file_contents: str | None = None
         self.custom_run_result: DockerResult | None = None
-        self.run_raises: Exception | None = None
+        self.run_raises: BaseException | None = None
 
     async def run(
         self,
@@ -406,3 +406,54 @@ async def test_command_runner_docker_unavailable(tmp_path: Path) -> None:
 
     assert res.ok is False
     assert "Docker is not available" in res.detail
+
+
+@pytest.mark.asyncio
+async def test_command_runner_removes_container_on_timeout(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    projects = MemorySandboxProjects(roots={"prj_1": repo_root})
+    docker_runner = HookFakeDockerRunner()
+    docker_runner.run_raises = DockerTimeoutError("Command timed out", output="timed out")
+    sandbox = FakeSandbox()
+
+    runner = CommandRunner(
+        sandbox=sandbox,
+        projects=projects,
+        docker_runner=docker_runner,
+        keystore=MemoryKeyStore(),
+    )
+
+    hook = make_command_hook(hook_id="hok_timeout", template="sleep 100")
+    res = await runner.run("prj_1", hook, {}, Authority(basis="none", reason="test"))
+
+    assert res.ok is False
+    assert "timed out" in res.detail
+    # Check that docker rm -f hook-hok_timeout was called
+    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", "hook-hok_timeout"]]
+    assert len(rm_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_command_runner_removes_container_on_cancel(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    projects = MemorySandboxProjects(roots={"prj_1": repo_root})
+    docker_runner = HookFakeDockerRunner()
+    docker_runner.run_raises = asyncio.CancelledError()
+    sandbox = FakeSandbox()
+
+    runner = CommandRunner(
+        sandbox=sandbox,
+        projects=projects,
+        docker_runner=docker_runner,
+        keystore=MemoryKeyStore(),
+    )
+
+    hook = make_command_hook(hook_id="hok_cancel", template="sleep 100")
+    with pytest.raises(asyncio.CancelledError):
+        await runner.run("prj_1", hook, {}, Authority(basis="none", reason="test"))
+
+    # Check that docker rm -f hook-hok_cancel was called
+    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", "hook-hok_cancel"]]
+    assert len(rm_calls) == 1

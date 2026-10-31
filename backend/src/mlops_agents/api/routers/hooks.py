@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.errors import DomainError
@@ -16,6 +18,13 @@ class SetHookCredentialBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     credential: str = Field(min_length=1)
+
+    @field_validator("credential")
+    @classmethod
+    def _no_control_characters(cls, v: str) -> str:
+        if any(ord(c) < 32 or ord(c) == 127 or unicodedata.category(c).startswith("C") for c in v):
+            raise ValueError("Credential must not contain control characters or newlines")
+        return v
 
 
 class SetEnabledBody(BaseModel):
