@@ -23,7 +23,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultsObserver,
     StoredResult,
 )
-from mlops_agents.monitoring.verdicts.contract import VerdictDraft, VerdictView
+from mlops_agents.monitoring.verdicts.contract import MissReport, VerdictDraft, VerdictView
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.contract import Page
 from tests.providers.fake_clock import FakeClock
@@ -117,6 +117,9 @@ class FakeVerdicts:
 
     async def list(self, project_id: str, since: datetime | None = None) -> list[VerdictView]:
         return list(self.verdicts.values())
+
+    async def list_misses(self, project_id: str, since: datetime | None = None) -> list[MissReport]:
+        return []
 
 
 @pytest.fixture

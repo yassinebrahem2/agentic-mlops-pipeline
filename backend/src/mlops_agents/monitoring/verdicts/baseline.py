@@ -13,7 +13,8 @@ from __future__ import annotations
 import builtins
 import logging
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from contextlib import aclosing
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -190,21 +191,32 @@ class SqliteBaseline(Baseline):
 
     async def silent_alerts(self, project_id: str) -> builtins.list[SilentTeamAlert]:
         """Team fires no incident matches, newest first, at most SILENT_ALERTS_MAX."""
-        matcher = await self._matcher(project_id)
         silent: builtins.list[StoredResult] = []
-        offset = 0
-        while len(silent) < SILENT_ALERTS_MAX:
-            page = await self._results.query(
-                project_id,
-                ResultQuery(origin="team", fired=True, limit=QUERY_LIMIT_MAX, offset=offset),
-            )
-            silent.extend(r for r in page.rows if is_team_fire(r) and not matcher.targets(r))
-            if not page.truncated or not page.rows:
-                break
-            offset += len(page.rows)
-        silent = silent[:SILENT_ALERTS_MAX]
+        async with aclosing(self._fire_targets(project_id)) as fires:
+            async for fire, targets in fires:
+                if not targets:
+                    silent.append(fire)
+                    if len(silent) == SILENT_ALERTS_MAX:
+                        break
         verdicts = await self._stored_verdicts(project_id, [r.id for r in silent])
         return [_alert(r, verdicts.get(r.id)) for r in silent]
+
+    async def matched_incidents(self, project_id: str) -> set[str]:
+        """Incidents at least one team fire matches now; a merged one counts for its survivor."""
+        return {
+            target.id async for _, targets in self._fire_targets(project_id) for target in targets
+        }
+
+    async def judged_silent_alerts(self, project_id: str) -> builtins.list[SilentTeamAlert]:
+        """Every judged team alert still silent now, newest first, uncapped."""
+        judged = await self._all_stored_verdicts(project_id)
+        if not judged:
+            return []
+        return [
+            _alert(fire, judged[fire.id])
+            async for fire, targets in self._fire_targets(project_id)
+            if not targets and fire.id in judged
+        ]
 
     async def judge_silent(
         self, project_id: str, result_id: str, value: SilentVerdict, by: str
@@ -286,6 +298,25 @@ class SqliteBaseline(Baseline):
             status=404,
         )
 
+    async def _fire_targets(
+        self, project_id: str
+    ) -> AsyncGenerator[tuple[StoredResult, builtins.list[IncidentView]]]:
+        """Every stored team fire, newest first, with the incidents it matches now (each
+        merged one replaced by its survivor); an empty list is a silent alert."""
+        matcher = await self._matcher(project_id)
+        offset = 0
+        while True:
+            page = await self._results.query(
+                project_id,
+                ResultQuery(origin="team", fired=True, limit=QUERY_LIMIT_MAX, offset=offset),
+            )
+            for result in page.rows:
+                if is_team_fire(result):
+                    yield result, matcher.targets(result)
+            if not page.truncated or not page.rows:
+                return
+            offset += len(page.rows)
+
     async def _matcher(self, project_id: str) -> _Matcher:
         window = await self._window_minutes(project_id)
         now = self._clock.now()
@@ -329,6 +360,13 @@ class SqliteBaseline(Baseline):
                     where=stmt.excluded.first_fired_at < baseline_links.c.first_fired_at,
                 )
                 await conn.execute(stmt)
+
+    async def _all_stored_verdicts(self, project_id: str) -> dict[str, SilentVerdict]:
+        stmt = select(silent_alert_verdicts.c.result_id, silent_alert_verdicts.c.value)
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return {str(row.result_id): row.value for row in rows}
 
     async def _stored_verdicts(
         self, project_id: str, result_ids: Sequence[str]

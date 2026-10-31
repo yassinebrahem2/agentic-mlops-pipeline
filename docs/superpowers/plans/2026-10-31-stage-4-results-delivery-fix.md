@@ -4,7 +4,7 @@
 
 **Goal:** bug #577. A stored result is delivered to the results observers once, never twice. Today `deliver_undelivered` reads the undelivered rows, calls the observers, then marks them delivered, and two calls for one project can overlap: the startup delivery in `build_services` runs after `scheduler.start()`, and `collect` calls it at the start of every tick. On a slow runner both read the same rows and every observer gets the batch twice (Windows CI shard 3 fails on it).
 
-**Branch:** `plan/stage-4-results-delivery-fix`. **Consumes:** merged code. **Produces:** nothing other plans use; I22 keeps its signatures. The plan PR says `Closes` the plan issue, its task issue and #577.
+**Branch:** `plan/stage-4-results-delivery-fix`. **Consumes:** merged code. **Produces:** nothing other plans use; I22 keeps its signatures. The plan PR says `Closes` the plan issue, its task issues, #577 and #586.
 
 **Read first:** bug #577; `backend/src/mlops_agents/monitoring/results/service.py` (`deliver_undelivered`, `collect`); `backend/src/mlops_agents/api/services.py` (the startup delivery loop and `scheduler.start()`; `waker.resume` is already placed before the start); the results observers on `main` (`SignalsFromResults`, the two baseline observers, expectations).
 
@@ -13,6 +13,8 @@
 | Task | Title | Consumes |
 |---|---|---|
 | 1 | One delivery at a time per project | merged code |
+| 2 | An expectation never judges a slot from before it existed (bug #586) | task 1 |
+| 3 | `registered_at` follows activation | task 2 (merged) |
 
 ---
 
@@ -32,6 +34,44 @@
 - Results tests stay green. Full backend suite, ruff, pyright; CI green (Windows shard 3 included).
 
 When this merges, the lead removes the two known-debt rows it closes (#542's "no test pins the startup-delivery order" and the `api/services.py` startup-delivery row from #542 and #545).
+
+---
+
+### Task 2: An expectation never judges a slot from before it existed (bug #586)
+
+Added 2026-10-31: `main` went red on `tests/onboarding/test_onboarding_flow.py::test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kicks_off_again`, depending on the time of day. Bisected to #558: `monitoring/expectations/service.py` `evaluate` (recurring-schedule branch) anchors a never-seen, never-signalled expectation at `now - grace - check_grace_minutes`, before the expectation existed, so the first `check_expectations` can flag a slot missed before onboarding: a false silence alarm that opens an incident and wakes an agent. It was accepted as known debt at #558's merge; a false alarm on a normal path blocks.
+
+**Files:** `monitoring/expectations/store.py` and `service.py`; one new project migration in `backend/src/mlops_agents/storage/migrations/project/` (append-only, the next number) and `storage/tables.py`; tests under `backend/tests/monitoring/expectations/`.
+
+**Notes:**
+- **`registered_at`** (lead's decision): a new column on the expectations table, set on the first insert only. A re-seed, the startup reconcile or a handoff upsert never resets it; resetting it would hide a real silence for a slot missed just before a restart.
+- `evaluate` never judges a slot before `registered_at`. A slot missed after registration still raises silence.
+- **The migration backfills existing rows** with the migration's time, so a project that upgrades raises no false alarm either.
+- The column stays inside the store; I25 is unchanged.
+
+**Tests (stop condition)**, with a fixed clock:
+- First, one that fails on `main`: a new expectation, and a slot inside the old look-back window: no silence.
+- The same across a restart (state persisted).
+- A slot missed after registration still raises silence.
+- A re-seed keeps `registered_at`.
+- The onboarding restart test passes at any time of day (fix the clock, or run it at a time that failed before).
+- Full backend suite, ruff, pyright; CI green.
+
+When this merges, the lead removes #558's known-debt item "a freshly seeded, never-seen expectation can raise silence for an occurrence just before seeding". The plan PR also says `Closes #586`.
+
+---
+
+### Task 3: `registered_at` follows activation
+
+Added 2026-10-31 after #585's review (both gaps its owner reported): an expectation must never judge a slot from a time it was not active. Today `registered_at` is the first insert, so (1) an expectation registered inactive and activated later (results task 7's activation on a PR's merge; no producer yet) would judge the slots before its activation, and (2) a handoff key retired and re-added later (`retire_handoff_keys_not_in`, then a newer handoff registering it again) keeps its old `registered_at`, and with a `last_seen` the next evaluation judges the slots missed while it was retired: a false silence alarm.
+
+**Files:** `monitoring/expectations/store.py` (the write paths), `service.py` if the anchor needs it; tests under `backend/tests/monitoring/expectations/`. No new migration (the column exists).
+
+**Notes:**
+- `registered_at` means "when this expectation last became active": set on an insert that is active, and reset when an inactive one becomes active (`activate_for_pr`, or a re-registration of a retired key). It is never reset while it stays active (a re-seed, the reconcile, an upsert of an active key).
+- After a re-activation, `evaluate` anchors at `registered_at`, not at an older `last_seen`, so slots from the retired time are never judged.
+
+**Tests (stop condition):** retire a key, let slots pass, re-add it: no silence for those slots, and a slot missed after the re-add still raises it; an inactive expectation activated later is not judged before its activation; a re-seed of an active key keeps `registered_at`; backend suite, ruff, pyright; CI green. No early PR: the plan PR for this task is its own (the plan branch after #585 merges).
 
 ## Known debt added
 

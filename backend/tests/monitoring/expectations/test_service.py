@@ -280,8 +280,9 @@ async def test_ten_hour_gap_raises_each_miss_oldest_first_and_arrived_feed_raise
         grace_minutes=30,
         second_deadline=True,
     )
-    # Initial seen at 00:00
+    # Registered and seen at 00:00
     t0 = datetime(2026, 10, 31, 0, 0, tzinfo=UTC)
+    clock.current = t0
     await service.register(project_id, chk_spec)
     await service.register(project_id, feed_spec)
     await service.note_seen(project_id, chk_spec.key, t0)
@@ -460,8 +461,9 @@ async def test_cadence_across_dst_change_misses_only_real_misses(
         grace_minutes=30,
         source="check",
     )
+    # Registered and seen on 2026-03-28 at 02:30 Paris (01:30 UTC)
+    clock.current = datetime(2026, 3, 28, 1, 30, tzinfo=UTC)
     await service.register(project_id, spec, active=True)
-    # Seen on 2026-03-28 at 02:30 Paris (01:30 UTC)
     await service.note_seen(project_id, spec.key, datetime(2026, 3, 28, 1, 30, tzinfo=UTC))
 
     # Advance to 2026-03-29 05:00 UTC (after non-existent 02:30)

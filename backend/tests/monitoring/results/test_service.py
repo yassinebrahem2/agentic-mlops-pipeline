@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Awaitable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from mlops_agents.monitoring.results.contract import (
     source_id,
 )
 from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import (
@@ -33,9 +35,18 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.storage.tables import results as results_table
 from tests.api.conftest import started_app
-from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs, FakeObserver
+from tests.monitoring.results.conftest import (
+    FakeConnections,
+    FakeHandoffs,
+    FakeObserver,
+    HoldingObserver,
+    InMemoryResultsStore,
+)
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
+
+# Only stops a broken test from hanging; no assertion depends on it.
+_HANG_GUARD_S = 10.0
 
 
 def _build_handoff(
@@ -205,7 +216,113 @@ async def test_results_committed_not_delivered_are_delivered_at_next_start_once(
     assert len(obs.batches) == 1
 
 
-async def test_startup_delivery_real_wiring_order(
+def _stored(result_id: str) -> StoredResult:
+    ran_at = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+    return StoredResult(
+        id=result_id,
+        source_id=source_id("file", "*.jsonl", "conn_a"),
+        source_key=f"{result_id}:0",
+        seen_at=ran_at,
+        check_id="c1",
+        origin="agent",
+        ran_at=ran_at,
+        fired=False,
+        category="data_quality",
+        subject="s",
+        detail={},
+        source_ref="r",
+    )
+
+
+async def _signal_then(started: asyncio.Event, work: Awaitable[object]) -> None:
+    started.set()
+    await work
+
+
+async def test_second_delivery_during_a_held_one_delivers_nothing_twice(
+    databases: Databases, events: SqliteEventLog, clock: FakeClock
+) -> None:
+    store = InMemoryResultsStore(databases)
+    store.undelivered["prj_a"] = [_stored("res_1")]
+    service = ResultsService(databases, FakeHandoffs(None), FakeConnections(), events, store=store)
+    observer = HoldingObserver("prj_a")
+    service.add_observer(observer)
+
+    first = asyncio.create_task(service.deliver_undelivered("prj_a", clock.now()))
+    await observer.entered.wait()
+    second_started = asyncio.Event()
+    second = asyncio.create_task(
+        _signal_then(second_started, service.deliver_undelivered("prj_a", clock.now()))
+    )
+    # Nothing in the store suspends: the second delivery has now run until it waits for the
+    # first, or, unguarded, to its end.
+    await second_started.wait()
+    observer.release.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=_HANG_GUARD_S)
+
+    assert observer.batches == [("prj_a", ["res_1"])]
+    assert store.mark_calls == [("prj_a", ["res_1"])]
+
+
+async def test_delivery_during_a_held_collect_delivers_nothing_twice(
+    databases: Databases, events: SqliteEventLog, tmp_path: Path, clock: FakeClock
+) -> None:
+    data_dir = tmp_path / "results_folder"
+    data_dir.mkdir()
+    (data_dir / "results.jsonl").write_bytes(
+        b'{"check_id": "c1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+    connections = FakeConnections()
+    connections.add_local_folder("conn_a", data_dir)
+    handoffs = FakeHandoffs(
+        _build_handoff(results_loc=FileResults(connection="conn_a", path_pattern="*.jsonl"))
+    )
+    store = InMemoryResultsStore(databases)
+    service = ResultsService(databases, handoffs, connections, events, store=store)
+    observer = HoldingObserver("prj_a")
+    service.add_observer(observer)
+
+    # Nothing is undelivered at collect's start, so the observer's first call is collect's own
+    # delivery of the rows it has just stored, still undelivered in the store.
+    collecting = asyncio.create_task(service.collect("prj_a", clock.now()))
+    await observer.entered.wait()
+    (stored_id,) = observer.batches[0][1]
+    delivery_started = asyncio.Event()
+    delivery = asyncio.create_task(
+        _signal_then(delivery_started, service.deliver_undelivered("prj_a", clock.now()))
+    )
+    await delivery_started.wait()
+    observer.release.set()
+    await asyncio.wait_for(asyncio.gather(collecting, delivery), timeout=_HANG_GUARD_S)
+
+    assert observer.batches == [("prj_a", [stored_id])]
+    assert store.mark_calls == [("prj_a", [stored_id])]
+
+
+async def test_delivery_for_another_project_is_not_held_up(
+    databases: Databases, events: SqliteEventLog, clock: FakeClock
+) -> None:
+    store = InMemoryResultsStore(databases)
+    store.undelivered["prj_a"] = [_stored("res_a")]
+    store.undelivered["prj_b"] = [_stored("res_b")]
+    service = ResultsService(databases, FakeHandoffs(None), FakeConnections(), events, store=store)
+    observer = HoldingObserver("prj_a")
+    service.add_observer(observer)
+
+    held = asyncio.create_task(service.deliver_undelivered("prj_a", clock.now()))
+    await observer.entered.wait()
+
+    # Completes while project A's delivery is held; the timeout only guards against a hang.
+    await asyncio.wait_for(service.deliver_undelivered("prj_b", clock.now()), timeout=_HANG_GUARD_S)
+    assert observer.batches == [("prj_a", ["res_a"]), ("prj_b", ["res_b"])]
+    assert store.mark_calls == [("prj_b", ["res_b"])]
+
+    observer.release.set()
+    await asyncio.wait_for(held, timeout=_HANG_GUARD_S)
+    assert store.mark_calls == [("prj_b", ["res_b"]), ("prj_a", ["res_a"])]
+
+
+async def test_startup_delivers_a_pending_result_once_before_the_scheduler_starts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
@@ -254,12 +371,13 @@ async def test_startup_delivery_real_wiring_order(
     # The zero-observer case is covered by
     # test_results_committed_not_delivered_are_delivered_at_next_start_once: the real wiring
     # always registers the incidents observer.
-    # In real wiring order, a later plan registers its observer on results during service initialization
-    # (before scheduler.start() and deliver_undelivered run at the end of build_services).
+    # A later plan's observer is registered on results while build_services wires the services.
+    order: list[str] = []
     delivered_batches: list[list[StoredResult]] = []
 
     class RealPlanObserver:
         async def stored(self, project_id: str, results: Sequence[StoredResult]) -> None:
+            order.append("delivered")
             delivered_batches.append(list(results))
 
     real_results_service_cls = services_module.ResultsService
@@ -271,9 +389,20 @@ async def test_startup_delivery_real_wiring_order(
 
     monkeypatch.setattr(services_module, "ResultsService", WiringResultsService)
 
+    # The scheduler's first collection can only come after its start.
+    real_start = AppScheduler.start
+
+    async def recording_start(self: AppScheduler) -> None:
+        order.append("scheduler.start")
+        await real_start(self)
+
+    monkeypatch.setattr(AppScheduler, "start", recording_start)
+
     async with started_app(home) as app:
         services: Services = app.state.services
-        # The observer registered during build_services received the crash-pending result on startup
+        # The observer registered during build_services received the pending result once, at
+        # startup, before the scheduler started.
+        assert order == ["delivered", "scheduler.start"]
         assert len(delivered_batches) == 1
         assert len(delivered_batches[0]) == 1
         assert delivered_batches[0][0].id == "res_pending_1"

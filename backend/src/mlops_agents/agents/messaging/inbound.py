@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -15,8 +14,17 @@ from mlops_agents.storage.databases import Databases
 
 
 class QueuedTurns(Protocol):
-    """What the inbound source needs of the session manager: the one owner that starts a
-    worker for a session's queued turns."""
+    """What the inbound source needs of the session manager: each session's lock and hub (their
+    one owner is the session registry), and the one owner that starts a worker for a session's
+    queued turns."""
+
+    def session_lock(self, project_id: str, session_id: str) -> AsyncRLock:
+        """The session's lock, shared with Send, `get`, Stop and the worker."""
+        ...
+
+    def session_hub(self, project_id: str, session_id: str) -> SessionHub:
+        """The session's hub, whose events reach the session's live stream."""
+        ...
 
     async def start_queued_turns(self, project_id: str, session_id: str, agent: str) -> None:
         """Start a worker for the session's queued turns when it has some and none is running.
@@ -32,8 +40,6 @@ class SqliteInboundSource(InboundSource, TurnObserver):
         self._databases = databases
         self._store = store or SessionStore(databases)
         self._sessions: QueuedTurns | None = None
-        self._locks: dict[tuple[str, str], AsyncRLock] = {}
-        self._hubs: dict[tuple[str, str], SessionHub] = {}
 
     def bind(self, sessions: QueuedTurns) -> None:
         """The session manager binds itself; a second call raises RuntimeError."""
@@ -41,39 +47,19 @@ class SqliteInboundSource(InboundSource, TurnObserver):
             raise RuntimeError("The inbound source is already bound.")
         self._sessions = sessions
 
-    def _get_lock(self, project_id: str, session_id: str) -> AsyncRLock:
-        if self._sessions is not None:
-            fn = cast(
-                "Callable[[str, str], AsyncRLock] | None",
-                getattr(self._sessions, "_get_lock", None),
-            )
-            if fn is not None:
-                return fn(project_id, session_id)
-        key = (project_id, session_id)
-        if key not in self._locks:
-            self._locks[key] = AsyncRLock()
-        return self._locks[key]
-
-    def _get_hub(self, project_id: str, session_id: str) -> SessionHub:
-        if self._sessions is not None:
-            fn = cast(
-                "Callable[[str, str], SessionHub] | None",
-                getattr(self._sessions, "_get_hub", None),
-            )
-            if fn is not None:
-                return fn(project_id, session_id)
-        key = (project_id, session_id)
-        if key not in self._hubs:
-            self._hubs[key] = SessionHub(session_id, lock=self._get_lock(project_id, session_id))
-        return self._hubs[key]
+    def _bound(self) -> QueuedTurns:
+        """The session manager; an unbound source has no lock or hub, so it raises."""
+        if self._sessions is None:
+            raise RuntimeError("The inbound source is not bound to the session manager.")
+        return self._sessions
 
     async def take(self, project_id: str, session_id: str, turn_id: str) -> list[BaseMessage]:
         """Select queued messages with from_agent set, mark each complete with read_by_turn
         set to current turn, delete their queued turns, publish message.updated, and return
         as HumanMessages with 'Message from <name>:' prefix."""
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
-        async with lock:
+        sessions = self._bound()
+        hub = sessions.session_hub(project_id, session_id)
+        async with sessions.session_lock(project_id, session_id):
             updated = await self._store.take_inbound(project_id, session_id, turn_id)
             for msg in updated:
                 await hub.message(msg, created=False)
@@ -102,16 +88,16 @@ class SqliteInboundSource(InboundSource, TurnObserver):
     ) -> None:
         """When a turn does not end done (failed, stopped, interrupted), re-deliver messages
         taken mid-turn by creating new queued turns for them."""
+        sessions = self._bound()
         if status == "done":
             return
 
         session_id = await self._store.session_id(project_id, agent)
-        lock = self._get_lock(project_id, session_id)
-        hub = self._get_hub(project_id, session_id)
-        async with lock:
+        hub = sessions.session_hub(project_id, session_id)
+        async with sessions.session_lock(project_id, session_id):
             redelivered = await self._store.redeliver_inbound(project_id, session_id, turn_id)
             for msg in redelivered:
                 await hub.message(msg, created=False)
 
-            if self._sessions is not None and redelivered:
-                await self._sessions.start_queued_turns(project_id, session_id, agent)
+            if redelivered:
+                await sessions.start_queued_turns(project_id, session_id, agent)
