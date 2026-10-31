@@ -18,7 +18,7 @@
 
 ### Task 1: The inbound source uses the session's lock and hub
 
-**Files:** `backend/src/mlops_agents/agents/messaging/inbound.py`; the narrow protocol it depends on (beside `QueuedTurns`); `backend/src/mlops_agents/api/services.py` (its binding lines); tests under `backend/tests/agents/`.
+**Files:** `backend/src/mlops_agents/agents/messaging/inbound.py`; the narrow protocol it depends on (beside `QueuedTurns`); `backend/src/mlops_agents/agents/runtime/sessions.py` (two one-line delegates to its private registry, `session_lock` and `session_hub`, added 2026-10-31 at the implementer's request: the registry is built inside the manager, so this is its one public way out); `backend/src/mlops_agents/api/services.py` (its binding lines); tests under `backend/tests/agents/`.
 
 **Notes:**
 - **One owner.** Each session's lock and hub have one owner, the session registry. The inbound source reads both from it, through a narrow protocol bound as today (extend `QueuedTurns` or add a sibling; the owner's choice). The private `_locks`/`_hubs` fallback and both `getattr` calls go away. An unbound source fails loudly, never silently making a lock of its own; binding happens in `build_services` before anything that can run a turn (restart repair, startup delivery, the scheduler, `get`), with a `build_services` test that it is bound.
