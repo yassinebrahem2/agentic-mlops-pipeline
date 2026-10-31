@@ -53,7 +53,7 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.monitoring.hooks.constants import HOOK_CREDENTIAL_ENV
 from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
-from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.contract import ResultCategory, ResultOrigin, ResultRecord
 from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
@@ -769,11 +769,26 @@ def test_diagnosing_prompt_cites_rules_and_never_certifies_them(name: str) -> No
     assert STALE_GATE_WORDING not in prompt.lower(), f"{name} prompt keeps the stale gate line"
 
 
+# The record fields and values the check lines name, each pinned to the result record model
+# (monitoring/results/contract.py), so a rename there fails here.
+CHECK_RECORD_FIELDS: tuple[str, ...] = ("check_id", "version", "not_enough_data")
+AGENT_ORIGIN: ResultOrigin = "agent"
+# The category confirmation by labels reads as label evidence (monitoring/verdicts/store.py).
+LABEL_EVIDENCE_CATEGORY: ResultCategory = "model_performance"
+LABEL_EVIDENCE_WORDS = "label evidence"
+
+
+def test_check_record_names_are_the_record_model_s() -> None:
+    assert set(CHECK_RECORD_FIELDS) | {"origin", "category"} <= set(ResultRecord.model_fields)
+    assert AGENT_ORIGIN in get_args(ResultOrigin)
+    assert LABEL_EVIDENCE_CATEGORY in get_args(ResultCategory)
+
+
 @pytest.mark.parametrize("name", ["data-quality", "model-performance"])
 def test_check_prompts_name_not_enough_data(name: str) -> None:
     prompt = _load_definition(name).prompt
     assert "not enough data" in prompt.lower(), f"{name} prompt lacks the minimum sample line"
-    assert "`not_enough_data`" in prompt
+    assert f"`{CHECK_RECORD_FIELDS[-1]}`" in prompt
 
 
 def test_check_writers_describe_the_check_record() -> None:
@@ -783,13 +798,26 @@ def test_check_writers_describe_the_check_record() -> None:
     for name in CHECK_WRITERS:
         prompt = catalog.get(name).prompt
         for words in (
-            "`check_id`",
-            '`origin: "agent"`',
-            "`version`",
+            *(f"`{field}`" for field in CHECK_RECORD_FIELDS[:-1]),
+            f'`origin: "{AGENT_ORIGIN}"`',
             "scheduler",
             "minimum sample",
         ):
             assert words in prompt, f"{name} check line lacks {words}"
+
+
+@pytest.mark.parametrize("name", CHECK_WRITERS)
+def test_check_writers_category_rule(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    named = [c for c in get_args(ResultCategory) if f"`{c}`" in prompt]
+    assert set(named) - {LABEL_EVIDENCE_CATEGORY}, f"{name} check line names no category"
+    assert LABEL_EVIDENCE_WORDS in prompt, f"{name} check line does not explain label evidence"
+    if name == "model-performance":
+        assert f"`{LABEL_EVIDENCE_CATEGORY}`, with the model it judges, only for a label-based" in (
+            prompt
+        )
+    else:
+        assert f"never `{LABEL_EVIDENCE_CATEGORY}`" in prompt, f"{name} may file label evidence"
 
 
 def test_model_performance_first_audit_adds_the_label_based_checks() -> None:
