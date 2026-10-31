@@ -119,7 +119,22 @@ function setup(
           environment: { state: "ready", tag: "env:1", detail: null },
           network: false,
         });
-      if (path.endsWith("/connections")) return json([]);
+      if (path.endsWith("/connections") || path.endsWith("/on-call")) return json([]);
+      if (path.endsWith("/monitoring-settings"))
+        return json({
+          collection_interval_s: 60,
+          grouping_window_minutes: 60,
+          reopen_window_hours: 24,
+          recent_change_window_hours: 24,
+          escalation_timeout_minutes: 15,
+          check_grace_minutes: 30,
+          second_deadline_minutes: 60,
+          parser_disable_after: 3,
+          evaluation_max_age_hours: 72,
+          circuit_breaker_fixes: 3,
+          circuit_breaker_window_days: 30,
+          timezone: null,
+        });
       if (method !== "GET" && options.failure)
         return json({ code: options.failure, message: "Action failed", detail: null }, 409);
       if (path.endsWith("/refresh") || path.endsWith("/relink")) {

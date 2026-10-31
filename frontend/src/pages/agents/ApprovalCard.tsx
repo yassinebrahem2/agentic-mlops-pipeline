@@ -4,9 +4,11 @@ import type { components } from "@/api/schema";
 import { GenericApprovalCard } from "./GenericApprovalCard";
 import { ConnectionsProposalCard } from "./proposals/ConnectionsProposalCard";
 import { HandoffProposalCard } from "./proposals/HandoffProposalCard";
-import { ParserProposalCard } from "./proposals/ParserProposalCard";
-import { TrainingPolicyProposalCard } from "./proposals/TrainingPolicyProposalCard";
+import { HooksProposalCard } from "./proposals/HooksProposalCard";
 import { MaintenanceProposalCard } from "./proposals/MaintenanceProposalCard";
+import { ParserProposalCard } from "./proposals/ParserProposalCard";
+import { RuleProposalCard } from "./proposals/RuleProposalCard";
+import { TrainingPolicyProposalCard } from "./proposals/TrainingPolicyProposalCard";
 import { StallCard } from "./StallCard";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
@@ -32,7 +34,9 @@ export const CARD_FOR_KIND: Partial<Record<ApprovalPart["kind"], ApprovalCardCom
 export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {
   connections: ConnectionsProposalCard,
   handoff: HandoffProposalCard,
+  hooks: HooksProposalCard,
   parser: ParserProposalCard,
+  rule: RuleProposalCard,
   training_policy: TrainingPolicyProposalCard,
   maintenance: MaintenanceProposalCard,
 };

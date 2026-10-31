@@ -1,6 +1,49 @@
 {
   "components": {
     "schemas": {
+      "ActivityPage": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "audit": "#/components/schemas/AuditEntry",
+                  "event": "#/components/schemas/EventEntry"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EventEntry"
+                },
+                {
+                  "$ref": "#/components/schemas/AuditEntry"
+                }
+              ]
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "entries",
+          "next_before"
+        ],
+        "title": "ActivityPage",
+        "type": "object"
+      },
       "AddGitHubProject": {
         "additionalProperties": false,
         "properties": {
@@ -58,6 +101,43 @@
           "key"
         ],
         "title": "AddProviderKey",
+        "type": "object"
+      },
+      "AgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_approval",
+              "waiting_reply",
+              "inactive"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "state"
+        ],
+        "title": "AgentActivity",
         "type": "object"
       },
       "AgentInfo": {
@@ -606,6 +686,98 @@
           "decided_at"
         ],
         "title": "ApprovalView",
+        "type": "object"
+      },
+      "AuditEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "audit": {
+            "$ref": "#/components/schemas/AuditRecord"
+          },
+          "kind": {
+            "const": "audit",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ts",
+          "audit"
+        ],
+        "title": "AuditEntry",
+        "type": "object"
+      },
+      "AuditRecord": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "allowed",
+              "asked",
+              "denied",
+              "approved",
+              "rejected",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "permission_level": {
+            "enum": [
+              "suggest",
+              "ask",
+              "autonomous",
+              "bypass"
+            ],
+            "title": "Permission Level",
+            "type": "string"
+          },
+          "risk_class": {
+            "$ref": "#/components/schemas/RiskClass"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ts",
+          "actor",
+          "action",
+          "risk_class",
+          "permission_level",
+          "decision",
+          "target",
+          "detail"
+        ],
+        "title": "AuditRecord",
         "type": "object"
       },
       "AuthStatus": {
@@ -1437,6 +1609,81 @@
         "title": "CredentialBody",
         "type": "object"
       },
+      "DashboardView": {
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "at_risk": {
+            "items": {
+              "$ref": "#/components/schemas/ExpectationState"
+            },
+            "title": "At Risk",
+            "type": "array"
+          },
+          "baseline_available": {
+            "title": "Baseline Available",
+            "type": "boolean"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "heartbeat_reachable": {
+            "title": "Heartbeat Reachable",
+            "type": "boolean"
+          },
+          "incidents_by_severity": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "title": "Incidents By Severity",
+            "type": "object"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCard"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageStatus"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages",
+          "edges",
+          "models",
+          "incidents_by_severity",
+          "at_risk",
+          "agents",
+          "heartbeat_reachable",
+          "baseline_available"
+        ],
+        "title": "DashboardView",
+        "type": "object"
+      },
       "DataFeedRef": {
         "additionalProperties": false,
         "properties": {
@@ -2179,6 +2426,42 @@
           "not_computed"
         ],
         "title": "EvaluationView",
+        "type": "object"
+      },
+      "EventEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventRecord"
+          },
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id"
+          },
+          "kind": {
+            "const": "event",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ts",
+          "event",
+          "incident_id"
+        ],
+        "title": "EventEntry",
         "type": "object"
       },
       "EventRecord": {
@@ -4206,6 +4489,44 @@
           "url"
         ],
         "title": "MlflowSettings",
+        "type": "object"
+      },
+      "ModelCard": {
+        "additionalProperties": false,
+        "properties": {
+          "latest_metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Latest Metrics",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "open_incidents": {
+            "default": 0,
+            "title": "Open Incidents",
+            "type": "integer"
+          },
+          "production_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Version"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelCard",
         "type": "object"
       },
       "ModelCreate": {
@@ -6842,6 +7163,40 @@
         "title": "RuleTerm",
         "type": "object"
       },
+      "RuleView": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "format": "date-time",
+            "title": "Approved",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "title": "Proposal Id",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuleSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "enabled",
+          "proposal_id",
+          "approved"
+        ],
+        "title": "RuleView",
+        "type": "object"
+      },
       "RunRow": {
         "properties": {
           "datasets": {
@@ -7442,6 +7797,39 @@
           "until"
         ],
         "title": "SnoozeIncidentBody",
+        "type": "object"
+      },
+      "StageStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "incident_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Ids",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "late",
+              "incident",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "StageStatus",
         "type": "object"
       },
       "StatValue": {
@@ -9965,6 +10353,175 @@
         ]
       }
     },
+    "/api/projects/{project_id}/activity": {
+      "get": {
+        "operationId": "get_activity_api_projects__project_id__activity_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "turn.started",
+                    "turn.waiting",
+                    "turn.ended",
+                    "task.started",
+                    "task.ended",
+                    "pr.opened",
+                    "pr.updated",
+                    "issue.opened",
+                    "issue.commented",
+                    "issue.updated",
+                    "approval.requested",
+                    "approval.decided",
+                    "message.sent",
+                    "wakeup.scheduled",
+                    "sandbox.build.started",
+                    "sandbox.build.finished",
+                    "sandbox.build.failed",
+                    "connection.created",
+                    "connection.updated",
+                    "connection.deleted",
+                    "tracking.synced",
+                    "proposal.created",
+                    "proposal.decided",
+                    "handoff.approved",
+                    "turn.stalled",
+                    "turn.resumed",
+                    "note.saved",
+                    "note.deleted",
+                    "results.collected",
+                    "signal.raised",
+                    "incident.opened",
+                    "incident.updated",
+                    "incident.acknowledged",
+                    "incident.snoozed",
+                    "incident.severity_changed",
+                    "incident.reopened",
+                    "incident.merged",
+                    "incident.split",
+                    "incident.suspect_linked",
+                    "incident.hold_recorded",
+                    "incident.wake_skipped",
+                    "incident.closed",
+                    "check.registered",
+                    "parser.disabled",
+                    "notification.sent",
+                    "notification.failed",
+                    "escalation.sent",
+                    "report.sent",
+                    "hook.ran",
+                    "hook.failed",
+                    "hook.suspended",
+                    "rule.satisfied",
+                    "verdict.recorded",
+                    "miss.reported",
+                    "fix.requested",
+                    "fix.chosen",
+                    "fix.declined",
+                    "fix.escalated",
+                    "training.requested",
+                    "training.linked",
+                    "policy.suspended",
+                    "report.saved",
+                    "promotion.applied",
+                    "promotion.refused",
+                    "pr.merged_by_agent"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Activity",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
     "/api/projects/{project_id}/agents": {
       "get": {
         "operationId": "list_project_agents_api_projects__project_id__agents_get",
@@ -11081,6 +11638,48 @@
         "summary": "Get Table Detail",
         "tags": [
           "data"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/dashboard": {
+      "get": {
+        "operationId": "get_dashboard_api_projects__project_id__dashboard_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Dashboard",
+        "tags": [
+          "dashboard"
         ]
       }
     },
@@ -13256,6 +13855,129 @@
         "summary": "Decide Review",
         "tags": [
           "github-work"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/rules": {
+      "get": {
+        "operationId": "list_rules_api_projects__project_id__rules_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RuleView"
+                  },
+                  "title": "Response List Rules Api Projects  Project Id  Rules Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Rules",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/rules/{rule_id}/enabled": {
+      "put": {
+        "operationId": "set_rule_enabled_api_projects__project_id__rules__rule_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Rule Enabled",
+        "tags": [
+          "rules"
         ]
       }
     },
