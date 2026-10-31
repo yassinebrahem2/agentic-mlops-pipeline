@@ -742,6 +742,10 @@ async def test_removed_person_not_recreated_by_retry(
             await on_call.replace("prj_1", [])
             assert await on_call.list("prj_1") == []
 
+            # Subsequent notify (e.g. escalation re-page) must not re-create the removed person
+            await notifier.notify("prj_1", person, msg, kind="escalation", incident_id="inc_1")
+            assert await on_call.list("prj_1") == []
+
             # Advance clock and run retry
             clock.advance(timedelta(seconds=RETRY_BACKOFFS_S[0] + 5))
             await job.run("prj_1", None)  # type: ignore
@@ -749,12 +753,23 @@ async def test_removed_person_not_recreated_by_retry(
             # Retry fails because contact address is not available
             engine = await databases.project("prj_1")
             async with engine.connect() as conn:
-                rows = (await conn.execute(select(notification_log))).mappings().all()
-            assert rows[0]["status"] == "failed"
-            assert rows[0]["attempts"] == 2
-            assert "not available" in str(rows[0]["last_error"]).lower()
+                rows = (
+                    (
+                        await conn.execute(
+                            select(notification_log).order_by(notification_log.c.created)
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                people_rows = (await conn.execute(select(on_call_people))).mappings().all()
+            incident_row = next(r for r in rows if r["kind"] == "incident")
+            assert incident_row["status"] == "failed"
+            assert incident_row["attempts"] == 2
+            assert "not available" in str(incident_row["last_error"]).lower()
 
             # Crucial: verify removed person was NOT re-created in on_call_people
+            assert len(people_rows) == 0
             assert await on_call.list("prj_1") == []
     finally:
         await databases.dispose()
