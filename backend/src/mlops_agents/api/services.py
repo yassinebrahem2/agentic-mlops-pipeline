@@ -85,9 +85,11 @@ from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
-from mlops_agents.promotion.contract import EvaluationReader, Reports
+from mlops_agents.promotion.contract import EvaluationReader, Promotions, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.kind import PromotionKind
 from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
+from mlops_agents.promotion.promotions import PromotionRejectObserver, SqlitePromotions
 from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.promotion.surfaces import GithubProtectionSurfaces
 from mlops_agents.proposals.contract import Handoffs
@@ -152,6 +154,7 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    promotions: Promotions
     hooks: HooksService
     incidents: IncidentsService
     verdicts: SqliteVerdicts
@@ -339,6 +342,16 @@ async def build_services(
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
+    promotions = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=handoffs,
+        reader=evaluation_reader,
+        reports=reports,
+        hooks=hooks,
+        events=events,
+        clock=clock,
+    )
 
     surfaces = GithubProtectionSurfaces(hooks, http, github, tasks)
     pr_sync = PrSyncObserver(tasks, github, http, events)
@@ -440,6 +453,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(PromotionKind(promotions))
 
     approvals = ApprovalsService(
         databases=databases,
@@ -472,6 +486,7 @@ async def build_services(
 
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
+    approval_store.add_observer(PromotionRejectObserver(promotions, proposals, workspace))
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -554,6 +569,7 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        promotions=promotions,
         hooks=hooks,
         incidents=incidents,
         verdicts=verdicts,
