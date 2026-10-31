@@ -13,7 +13,10 @@ from typing import Any, cast
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
-from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
+from mlops_agents.monitoring.results.constants import (
+    CODE_PARSER_CHUNK_BYTES,
+    HELD_TAIL_QUIET_SECONDS,
+)
 from mlops_agents.monitoring.results.contract import ParserMapping, ResultRecord, parse_source_id
 from mlops_agents.monitoring.results.mapping import (
     LineFormat,
@@ -451,6 +454,26 @@ def _byte_end(data: bytes, text: str, end: int) -> int:
     return position
 
 
+def _line_pieces(data: bytes, bound: int) -> list[tuple[int, int]]:
+    """`data` split in order into (start, end) byte ranges of at most `bound` bytes, each
+    ending just past a newline: a line longer than `bound` is a range of its own, and the
+    last range ends where `data` does."""
+    pieces: list[tuple[int, int]] = []
+    start = 0
+    while start < len(data):
+        end = len(data)
+        if end - start > bound:
+            cut = data.rfind(b"\n", start, start + bound)
+            if cut != -1:
+                end = cut + 1
+            else:
+                newline = data.find(b"\n", start)
+                end = newline + 1 if newline != -1 else len(data)
+        pieces.append((start, end))
+        start = end
+    return pieces
+
+
 def _cut_chunk(
     chunk: bytes,
     offset: int,
@@ -620,6 +643,22 @@ def _read_raw_files_sync(
             "csv_header": csv_header,
         }
         if cut.consume == 0:
+            continue
+
+        if mapping is None:
+            # A code parser's run keeps a bounded output, so it is given the file in pieces.
+            # Surrogate escapes keep each piece's byte length exact for its run to read.
+            chunks.extend(
+                RawChunk(
+                    rel_posix=rel_posix,
+                    content=chunk[start:end].decode("utf-8", errors="surrogateescape"),
+                    start_offset=offset + start,
+                    new_offset=offset + end,
+                    size=cur_size,
+                    mtime=cur_mtime,
+                )
+                for start, end in _line_pieces(chunk[: cut.deliver], CODE_PARSER_CHUNK_BYTES)
+            )
             continue
 
         chunks.append(

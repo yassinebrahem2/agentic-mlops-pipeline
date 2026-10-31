@@ -47,7 +47,7 @@ from mlops_agents.proposals.payloads import (
     Operations,
 )
 from mlops_agents.sandbox.contract import EnvironmentStatus
-from mlops_agents.sandbox.docker import DockerResult
+from mlops_agents.sandbox.docker import DockerResult, StreamCapture
 from mlops_agents.storage.databases import Databases
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
@@ -314,7 +314,9 @@ def mapping_feed_service(
 class LocalExecDockerRunner:
     """Runs the parser container's command on the host, so a code parser really executes.
 
-    Container paths under a mount are translated back to the mount's host folder."""
+    Container paths under a mount are translated back to the mount's host folder. Output is
+    bounded by the production capture, so a run that prints too much is truncated as it is
+    in a real container."""
 
     def __init__(self, image_tag: str, mounts: list[Mount]) -> None:
         self._image_tag = image_tag
@@ -349,7 +351,18 @@ class LocalExecDockerRunner:
             timeout=timeout_s,
             check=False,
         )
-        return DockerResult(stdout=proc.stdout, stderr=proc.stderr, exit_code=proc.returncode)
+        stdout, stderr, combined = StreamCapture(), StreamCapture(), StreamCapture()
+        stdout.feed(proc.stdout)
+        stderr.feed(proc.stderr)
+        combined.feed(proc.stdout)
+        combined.feed(proc.stderr)
+        return DockerResult(
+            stdout=stdout.get_output(),
+            stderr=stderr.get_output(),
+            exit_code=proc.returncode,
+            output=combined.get_output(),
+            truncated=combined.truncated,
+        )
 
 
 # Reads only its stdin and emits one record per non-empty line, its subject the origin_ref argv.
@@ -375,6 +388,7 @@ async def code_feed_service(
     data_dir: Path,
     filename: str,
     script: str,
+    incidents: FakeIncidents | None = None,
 ) -> tuple[ResultsService, LocalExecDockerRunner]:
     mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
 
@@ -405,6 +419,7 @@ async def code_feed_service(
         connections,
         events,
         parsers=parsers,
+        incidents=incidents,
     )
     return service, docker_runner
 

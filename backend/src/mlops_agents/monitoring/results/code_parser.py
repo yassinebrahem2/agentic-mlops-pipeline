@@ -87,8 +87,9 @@ class CodeParserRunner:
 
         container_name = f"parser-{new_id('res')}"
         container_path = f"{DATA_MOUNT_ROOT}/{connection_name}/{origin_ref}"
-        # The chunk's byte length: exact while the file is valid UTF-8, which the reader decoded.
-        byte_length = len(raw.encode("utf-8"))
+        # The chunk's byte length: exact, since the reader decodes a code parser's chunk with
+        # surrogate escapes, so bytes that are not UTF-8 encode back to themselves.
+        byte_length = len(raw.encode("utf-8", errors="surrogateescape"))
         command = [
             "python",
             "-c",

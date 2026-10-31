@@ -359,8 +359,13 @@ class ResultsService(Results):
                     current_cursor = {"files": held_files_cur}
 
                     cycle_has_errors = False
+                    # A file whose chunk raised keeps its cursor at that chunk's start, so its
+                    # later chunks wait for the next cycle
+                    failed_files: set[str] = set()
 
                     for chunk in raw_read.chunks:
+                        if chunk.rel_posix in failed_files:
+                            continue
                         try:
                             # A chunk can be only an incomplete last record, with nothing to parse
                             outcome = (
@@ -377,6 +382,7 @@ class ResultsService(Results):
                             )
                         except Exception as exc:
                             cycle_has_errors = True
+                            failed_files.add(chunk.rel_posix)
                             last_err = scrub_url_secrets(str(exc))
                             failures[s_id] = last_err
                             if self._incidents is not None:

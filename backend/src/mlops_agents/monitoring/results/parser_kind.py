@@ -7,7 +7,10 @@ import logging
 from pydantic import BaseModel
 
 from mlops_agents.agents.tools.base import Preview
-from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
+from mlops_agents.monitoring.results.constants import (
+    CODE_PARSER_CHUNK_BYTES,
+    HELD_TAIL_QUIET_SECONDS,
+)
 from mlops_agents.monitoring.results.contract import (
     ParserPayload,
     Parsers,
@@ -24,11 +27,14 @@ logger = logging.getLogger(__name__)
 # What a code parser's script is run with, shown on its card so the script is written against
 # it. code_parser.py's bootstrap implements it.
 CODE_PARSER_CONTRACT = (
-    "The script runs once per new chunk of the file, in the project's sandbox, without network.\n"
-    "- stdin: exactly the chunk, UTF-8 text, in whole lines: the file from its start on the"
-    " first read (and after the file shrinks, truncated or replaced by a shorter one), then"
-    " only the bytes past the previous read. A chunk ends at a newline, except a final line"
-    " without one, given only once the file has been unchanged for"
+    "The script runs once per chunk of the file, each chunk a separate run in the project's"
+    " sandbox, without network. A chunk is at most"
+    f" {CODE_PARSER_CHUNK_BYTES / 1024:g} KiB and starts at a line start; a single line longer"
+    " than that is a chunk of its own. The script must not assume it sees the whole file.\n"
+    "- stdin: exactly the chunk, UTF-8 text, in whole lines. The chunks cover the file from its"
+    " start on the first read (and after the file shrinks, truncated or replaced by a shorter"
+    " one), then only the bytes past the previous read. A chunk ends at a newline, except the"
+    " file's final line without one, given only once the file has been unchanged for"
     f" {HELD_TAIL_QUIET_SECONDS} s; the script judges whether it is complete.\n"
     "- sys.argv[1]: the file's path in the connection.\n"
     "- sys.argv[2]: the chunk's start byte offset in the file.\n"
