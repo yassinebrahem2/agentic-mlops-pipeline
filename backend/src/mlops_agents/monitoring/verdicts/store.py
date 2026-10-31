@@ -63,6 +63,16 @@ def _row_values(view: VerdictView) -> dict[str, Any]:
     }
 
 
+def is_label_evidence(result: StoredResult) -> bool:
+    """A label-based result that can decide: an agent's model performance check. A
+    not-enough-data record is the minimum sample not being met: it never decides."""
+    return (
+        result.origin == "agent"
+        and result.category == "model_performance"
+        and not result.not_enough_data
+    )
+
+
 def _latest_per_check(found: Iterable[StoredResult]) -> builtins.list[StoredResult]:
     latest: dict[str, StoredResult] = {}
     for result in found:
@@ -277,14 +287,7 @@ class SqliteVerdicts(Verdicts):
             project_id,
             ResultQuery(model=incident.model, origin="agent", since=incident.started_at),
         )
-        # A not-enough-data record is the minimum sample not being met: it never decides.
-        evidence = [
-            r
-            for r in found
-            if r.category == "model_performance"
-            and not r.not_enough_data
-            and r.ran_at > incident.started_at
-        ]
+        evidence = [r for r in found if is_label_evidence(r) and r.ran_at > incident.started_at]
         if not evidence:
             return None
         latest = _latest_per_check(evidence)

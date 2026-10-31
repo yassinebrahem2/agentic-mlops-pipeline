@@ -7048,6 +7048,100 @@
         "title": "SlotState",
         "type": "object"
       },
+      "StatValue": {
+        "additionalProperties": false,
+        "properties": {
+          "collecting": {
+            "title": "Collecting",
+            "type": "boolean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "n",
+          "collecting"
+        ],
+        "title": "StatValue",
+        "type": "object"
+      },
+      "StatsView": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_available": {
+            "title": "Baseline Available",
+            "type": "boolean"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "groups": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/StatValue"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "detection",
+                "speed",
+                "noise",
+                "diagnosis",
+                "effort",
+                "model_impact",
+                "cost",
+                "reliability"
+              ]
+            },
+            "title": "Groups",
+            "type": "object"
+          },
+          "window": {
+            "enum": [
+              "7d",
+              "30d",
+              "all"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "baseline_available",
+          "groups"
+        ],
+        "title": "StatsView",
+        "type": "object"
+      },
       "SyncBody": {
         "properties": {
           "source_id": {
@@ -12639,6 +12733,85 @@
         "summary": "Update Project Sandbox Settings",
         "tags": [
           "sandbox"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/stats": {
+      "get": {
+        "operationId": "get_stats_api_projects__project_id__stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "30d",
+              "enum": [
+                "7d",
+                "30d",
+                "all"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "data_quality",
+                    "drift",
+                    "model_performance",
+                    "operational"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stats",
+        "tags": [
+          "stats"
         ]
       }
     },
