@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import Protocol, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -13,9 +13,15 @@ from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.storage.databases import Databases
 
-if TYPE_CHECKING:
-    from mlops_agents.agents.runtime.sessions import SessionManager
-    from mlops_agents.agents.runtime.worker import TurnWorkers
+
+class QueuedTurns(Protocol):
+    """What the inbound source needs of the session manager: the one owner that starts a
+    worker for a session's queued turns."""
+
+    async def start_queued_turns(self, project_id: str, session_id: str, agent: str) -> None:
+        """Start a worker for the session's queued turns when it has some and none is running.
+        The caller holds the session lock, or the session's worker is running."""
+        ...
 
 
 class SqliteInboundSource(InboundSource, TurnObserver):
@@ -25,11 +31,11 @@ class SqliteInboundSource(InboundSource, TurnObserver):
     def __init__(self, databases: Databases, store: SessionStore | None = None) -> None:
         self._databases = databases
         self._store = store or SessionStore(databases)
-        self._sessions: SessionManager | None = None
+        self._sessions: QueuedTurns | None = None
         self._locks: dict[tuple[str, str], AsyncRLock] = {}
         self._hubs: dict[tuple[str, str], SessionHub] = {}
 
-    def bind(self, sessions: SessionManager) -> None:
+    def bind(self, sessions: QueuedTurns) -> None:
         """The session manager binds itself; a second call raises RuntimeError."""
         if self._sessions is not None:
             raise RuntimeError("The inbound source is already bound.")
@@ -108,6 +114,4 @@ class SqliteInboundSource(InboundSource, TurnObserver):
                 await hub.message(msg, created=False)
 
             if self._sessions is not None and redelivered:
-                workers = cast("TurnWorkers | None", getattr(self._sessions, "_workers", None))
-                if workers is not None and not workers.running((project_id, session_id)):
-                    workers.start(project_id, session_id, agent, hub, lock)
+                await self._sessions.start_queued_turns(project_id, session_id, agent)
