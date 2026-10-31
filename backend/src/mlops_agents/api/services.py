@@ -90,10 +90,16 @@ from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
-from mlops_agents.notifications.contract import Channel, Notifier, OnCallPeople
+from mlops_agents.notifications.contract import (
+    Channel,
+    MorningReports,
+    Notifier,
+    OnCallPeople,
+)
 from mlops_agents.notifications.escalation import EscalationJob
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
+from mlops_agents.notifications.report import MorningReportJob, SqliteMorningReports
 from mlops_agents.notifications.retries import RetryJob
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
@@ -184,6 +190,7 @@ class Services:
     fixes: SqliteFixes
     training: SqliteTraining
     stats: StatsService
+    morning_reports: MorningReports
 
 
 async def _app_secrets(
@@ -603,6 +610,24 @@ async def build_services(
         clock=clock,
     )
     scheduler.register(escalation_job)
+    morning_reports = SqliteMorningReports(
+        databases=databases,
+        incidents=incidents,
+        hooks=hooks,
+        approvals=approvals,
+        expectations=expectations,
+        events=events,
+    )
+    morning_report_job = MorningReportJob(
+        databases=databases,
+        on_call=on_call,
+        notifier=notifier,
+        reports=morning_reports,
+        clock=clock,
+        incidents=incidents,
+        settings=integration_settings,
+    )
+    scheduler.register(morning_report_job)
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
@@ -672,4 +697,5 @@ async def build_services(
         fixes=fixes,
         training=training,
         stats=stats,
+        morning_reports=morning_reports,
     )
