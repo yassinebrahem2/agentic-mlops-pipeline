@@ -18,7 +18,7 @@
 
 ### Task 1: A Stop is decided under the session lock
 
-**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` (`_stop`), `backend/src/mlops_agents/agents/runtime/worker.py` (`_loop`, and what a worker started by Stop carries); tests under `backend/tests/agents/runtime/`.
+**Files:** `backend/src/mlops_agents/agents/runtime/sessions.py` (`_stop`), `backend/src/mlops_agents/agents/runtime/worker.py` (`_loop`, and what a worker started by Stop carries); tests under `backend/tests/agents/runtime/`, and `backend/tests/agents/test_approval_stop_races.py` (Decision #562).
 
 **Why it is lost today:** `_stop` calls `workers.stop` before it takes the session lock and looks for a waiting turn after. `resume_turn` starts the resume's worker under the lock, and the worker takes the waiting turn under the lock (`take_waiting_turn`, the one check that it still waits). A Stop whose `workers.stop` runs before that worker exists stops nothing. Then it either finds the turn already `running` (window A) or finds it `waiting` and awaits the worker that runs it to `done` (window C).
 
@@ -43,6 +43,9 @@
 - Two Stops in quick succession, the second arriving before the worker that the first Stop started takes its first turn: the queued turn runs and its model is called.
 - `stop_turn` for a waiting turn while the worker runs another turn: the other turn is not stopped.
 - A Stop of a running turn, of a waiting turn, and with nothing to stop behave as today (the existing tests stay green).
+- `test_approval_stop_races.py` (Decision #562): its three tests that wait for Stop's unlocked read of `waiting_turn` (the read this fix removes) move only their hold points and keep every assertion. `..._is_kept` is re-targeted at the worker's take guard, which stays as defence in depth (approval cancellation and the restart repair also store `stopped`): `TurnWorkers.resume` on a turn already stored `stopped`, not through `_stop`, takes nothing and the turn stays `stopped`; its docstring says so, and drops the line that windows A and C are not covered.
+- The reviewer proves the re-timed tests still race: with the unlocked decision restored, the new window A (both orders) and window C tests fail; with the `take_waiting_turn` guard disabled, the re-targeted `..._is_kept` fails; each of the three modified tests changes only its hold points.
+- No production path holds the session lock while it awaits `stop`, `stop_turn` or anything Stop waits on, from another task (`AsyncRLock` re-enters only for the same task); the PR says what was checked.
 - Full backend suite, ruff, pyright; CI green.
 
 ## Known debt added
