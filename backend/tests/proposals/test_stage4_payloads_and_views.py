@@ -251,4 +251,3 @@ def test_exported_proposal_view_schema_keeps_kind_discriminator() -> None:
         TRAINING_POLICY_KIND,
         PROMOTION_KIND,
     }
-
