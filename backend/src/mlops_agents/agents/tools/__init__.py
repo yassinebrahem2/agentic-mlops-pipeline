@@ -27,6 +27,7 @@ from mlops_agents.agents.tools.search_notes import SearchNotes
 from mlops_agents.agents.tools.tasks import ResumeTaskTool, StartTaskTool
 from mlops_agents.agents.tools.tracking_history import TrackingHistory
 from mlops_agents.agents.tools.write import WriteTool
+from mlops_agents.training.tools import RecordFixChoice, RequestFix
 
 if TYPE_CHECKING:
     import httpx2
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
     from mlops_agents.tracking.contract import Tracking
+    from mlops_agents.training.fixes import SqliteFixes
     from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
@@ -63,6 +65,8 @@ __all__ = [
     "ProposeTool",
     "ReadHandoffTool",
     "ReadTool",
+    "RecordFixChoice",
+    "RequestFix",
     "ResumeTaskTool",
     "RunHookTool",
     "SaveNote",
@@ -104,6 +108,7 @@ def default_registry(
     reports: Reports | None = None,
     hooks: Hooks | None = None,
     incidents: Incidents | None = None,
+    fixes: SqliteFixes | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -176,4 +181,7 @@ def default_registry(
         registry.register(RunHookTool(hooks))
         if incidents is not None:
             registry.register(HoldTool(hooks, incidents))
+    if fixes is not None:
+        registry.register(RequestFix(fixes))
+        registry.register(RecordFixChoice(fixes))
     return registry
