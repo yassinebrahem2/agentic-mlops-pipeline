@@ -7,7 +7,6 @@ import * as streamModule from "@/lib/stream";
 import { TestFakeStream } from "@/pages/inbox/testing";
 import { project, stubProjects } from "@/test/projects";
 import { renderPage } from "@/test/render";
-import { NOTES_PAGE_SIZE } from "./useNotes";
 import { route } from "./route";
 
 type NoteView = components["schemas"]["NoteView"];
@@ -299,130 +298,23 @@ describe("KnowledgePage", () => {
     expect(screen.getByTestId("note-kno_1")).toBeInTheDocument();
   });
 
-  function manyNotes(count: number): NoteView[] {
-    return Array.from({ length: count }, (_, i) => note(`kno_${String(i + 1)}`));
-  }
-
-  it("shows no Show more button when fewer notes than the limit came back", async () => {
-    stubNotes((query) => ok(result(manyNotes(Number(query.limit) - 1))));
-    renderPage("/projects/prj_1/knowledge");
-    await screen.findByTestId("note-kno_1");
-    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
-  });
-
-  it("shows Show more on a full page, requests the larger limit and keeps rows meanwhile", async () => {
+  it("shows the loading state, not the previous rows, while a new search loads", async () => {
     const user = userEvent.setup();
-    let release: (() => void) | undefined;
-    stubNotes((query) => {
-      const limit = Number(query.limit);
-      if (limit === NOTES_PAGE_SIZE) return ok(result(manyNotes(limit)));
-      return new Promise((resolve) => {
-        release = () => {
-          resolve({
-            data: result(manyNotes(limit - 5)),
-            response: new Response(null, { status: 200 }),
-          });
-        };
-      });
-    });
+    stubNotes((query) => (query.q ? new Promise(() => undefined) : ok(result([note("kno_1")]))));
     renderPage("/projects/prj_1/knowledge");
     await screen.findByTestId("note-kno_1");
-
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    await waitFor(() => {
-      expect(noteQueries()).toContainEqual(expect.objectContaining({ limit: NOTES_PAGE_SIZE * 2 }));
-    });
-    expect(screen.getByTestId("note-kno_1")).toBeInTheDocument();
-    expect(screen.queryByText("Loading notes...")).toBeNull();
-    expect(screen.getByRole("button", { name: "Show more" })).toBeDisabled();
-
-    act(() => {
-      release?.();
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`)).toBeInTheDocument();
-    });
-    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
-  });
-
-  it("resets the limit when the type filter changes", async () => {
-    const user = userEvent.setup();
-    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
-    renderPage("/projects/prj_1/knowledge");
-    await screen.findByTestId("note-kno_1");
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
-
-    await user.click(screen.getByRole("combobox", { name: "Type" }));
-    await user.click(await screen.findByRole("option", { name: "Decision" }));
-
-    await waitFor(() => {
-      expect(noteQueries()).toContainEqual({
-        q: undefined,
-        type: "decision",
-        limit: NOTES_PAGE_SIZE,
-      });
-    });
-  });
-
-  it("resets the limit when a new search is submitted", async () => {
-    const user = userEvent.setup();
-    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
-    renderPage("/projects/prj_1/knowledge");
-    await screen.findByTestId("note-kno_1");
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
 
     await user.type(screen.getByRole("searchbox", { name: "Search notes" }), "abc{Enter}");
 
-    await waitFor(() => {
-      expect(noteQueries()).toContainEqual({ q: "abc", type: undefined, limit: NOTES_PAGE_SIZE });
-    });
+    expect(await screen.findByText("Loading notes...")).toBeInTheDocument();
+    expect(screen.queryByTestId("note-kno_1")).toBeNull();
   });
 
-  it("edits a row beyond the first page", async () => {
-    const user = userEvent.setup();
-    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
-    patchSpy = vi
-      .spyOn(api, "PATCH")
-      .mockImplementation(() =>
-        ok(note(`kno_${String(NOTES_PAGE_SIZE + 1)}`, { title: "Edited late" })),
-      );
+  it("sends no limit", async () => {
+    stubNotes(() => ok(result([note("kno_1")])));
     renderPage("/projects/prj_1/knowledge");
     await screen.findByTestId("note-kno_1");
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    const row = await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
-
-    await user.click(within(row).getByRole("button", { name: "Edit" }));
-    await user.type(within(row).getByLabelText("Title"), "!");
-    await user.click(within(row).getByRole("button", { name: "Save" }));
-
-    expect(await within(row).findByText("Edited late")).toBeInTheDocument();
-  });
-
-  it("deletes a row beyond the first page", async () => {
-    const user = userEvent.setup();
-    const lastId = `kno_${String(NOTES_PAGE_SIZE + 1)}`;
-    let deleted = false;
-    stubNotes((query) => {
-      const all = manyNotes(Number(query.limit)).filter((n) => !(deleted && n.id === lastId));
-      return ok(result(all));
-    });
-    deleteSpy = vi.spyOn(api, "DELETE").mockImplementation((() => {
-      deleted = true;
-      return Promise.resolve({ data: undefined, response: new Response(null, { status: 204 }) });
-    }) as never);
-    renderPage("/projects/prj_1/knowledge");
-    await screen.findByTestId("note-kno_1");
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    const row = await screen.findByTestId(`note-${lastId}`);
-
-    await user.click(within(row).getByRole("button", { name: "Delete" }));
-    await user.click(await screen.findByRole("button", { name: "Delete note" }));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId(`note-${lastId}`)).toBeNull();
-    });
+    expect(noteQueries()[0]?.limit).toBeUndefined();
   });
 
   it("refetches when a note.deleted event arrives", async () => {
