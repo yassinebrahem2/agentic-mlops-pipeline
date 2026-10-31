@@ -211,6 +211,51 @@ async def test_update_in_place_and_disable_dropped_hooks(
 
 
 @pytest.mark.asyncio
+async def test_suspended_hook_keeps_status_and_reason_on_spec_update(
+    service: HooksService,
+    handoff_hooks: HandoffHooks,
+) -> None:
+    project_id = new_id("prj")
+    cmd_v1 = command(kind="rollback", template="echo rb v1")
+    payload1 = _make_payload(project_commands=[cmd_v1], model_commands=[])
+    view1 = HandoffView(
+        proposal_id="prp_1",
+        version=1,
+        approved=datetime.now(UTC),
+        payload=payload1,
+    )
+    await handoff_hooks.stored(project_id, view1)
+
+    hooks1 = await service.list(project_id)
+    hook = hooks1[0]
+
+    # Suspend the hook
+    await service.suspend(project_id, hook.id, "Drift alert")
+    suspended = await service.get(project_id, hook.id)
+    assert suspended is not None
+    assert suspended.status == "suspended"
+    assert suspended.suspended_reason == "Drift alert"
+
+    # Store handoff changing its template
+    cmd_v2 = command(kind="rollback", template="echo rb v2")
+    payload2 = _make_payload(project_commands=[cmd_v2], model_commands=[])
+    view2 = HandoffView(
+        proposal_id="prp_2",
+        version=2,
+        approved=datetime.now(UTC),
+        payload=payload2,
+    )
+    await handoff_hooks.stored(project_id, view2)
+
+    updated = await service.get(project_id, hook.id)
+    assert updated is not None
+    assert updated.id == hook.id
+    assert updated.spec.template == "echo rb v2"
+    assert updated.status == "suspended"
+    assert updated.suspended_reason == "Drift alert"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_logs_failure_and_continues(
     handoff_hooks: HandoffHooks,
     monkeypatch: pytest.MonkeyPatch,

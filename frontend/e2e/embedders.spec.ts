@@ -67,6 +67,7 @@ test("embedder settings flow: verify, app default, project override, and fallbac
       "Not applicable",
       "Not applicable",
       "16",
+      "–",
       "Verified",
       /.+/,
       /Verify/,
