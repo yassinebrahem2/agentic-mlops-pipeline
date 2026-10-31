@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Generator, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +20,13 @@ from mlops_agents.integrations.github import api
 from mlops_agents.integrations.github.auth import GITHUB_KEYSTORE_REF, GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
+from mlops_agents.sandbox.contract import (
+    CommandResult,
+    DockerStatus,
+    EnvironmentStatus,
+    Sandbox,
+    SandboxUnavailable,
+)
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import integrations, tasks
 from mlops_agents.workspace.service import WorkspaceService
@@ -97,6 +104,33 @@ class _TasksServiceForTests(TasksService):
         return await self.view(project_id, task_id)
 
 
+class FailingSandbox:
+    async def docker(self) -> DockerStatus:
+        return DockerStatus(available=False, version=None, detail="Docker is not available.")
+
+    async def environment(self, project_id: str) -> EnvironmentStatus:
+        return EnvironmentStatus(state="unavailable", tag=None, detail="Docker is not available.")
+
+    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        raise SandboxUnavailable("Docker is not available.")
+
+    async def run(
+        self, project_id: str, task: TaskRef, command: str, timeout_s: int
+    ) -> CommandResult:
+        raise SandboxUnavailable("Docker is not available.")
+
+    async def remove_task(self, project_id: str, task_id: str) -> None:
+        pass
+
+    @asynccontextmanager
+    async def paused(self, project_id: str, task_id: str) -> AsyncGenerator[None, None]:
+        raise SandboxUnavailable("Docker is not available.")
+        yield
+
+    async def close(self) -> None:
+        pass
+
+
 async def setup_test_service(
     tmp_path: Path,
     paths: DataPaths,
@@ -106,6 +140,7 @@ async def setup_test_service(
     *,
     token: str | None = None,
     remote_url: str | None = None,
+    sandbox: Sandbox | None = None,
 ) -> tuple[
     _TasksServiceForTests,
     WorkspaceService,
@@ -137,7 +172,12 @@ async def setup_test_service(
     project = await workspace.add_local(str(repo))
     events = FakeEventLog()
     service = _TasksServiceForTests(
-        databases=databases, paths=paths, git=runner, events=events, workspace=workspace
+        databases=databases,
+        paths=paths,
+        git=runner,
+        events=events,
+        workspace=workspace,
+        sandbox=sandbox,
     )
     tool = OpenPullRequestTool(
         tasks=service, workspace=workspace, github=github, events=events, http=http
@@ -463,6 +503,120 @@ async def test_open_pull_request_zero_commits_local_review_errors(
     task_view = await service.view(project_id, task.id)
     assert task_view.status != "in_review"
     assert len([r for r in events.records if r["type"].startswith("pr.")]) == 0
+
+
+async def test_open_pull_request_local_sandbox_unavailable_preview_and_run(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    sandbox = FailingSandbox()
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, sandbox=sandbox
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Local sandbox fail")
+
+    (task.worktree / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    ctx = await make_ctx(service, project_id, task)
+
+    preview = await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
+    assert preview.kind == "diff"
+    assert preview.body == ""
+
+    output = await tool.invoke(ctx, {"title": "Local PR", "body": "Testing"})
+    assert output.is_error is True
+    assert "Docker is not available" in output.content
+
+
+async def test_open_pull_request_github_sandbox_unavailable_preview_and_run(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    sandbox = FailingSandbox()
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN, sandbox=sandbox
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "GitHub sandbox fail")
+
+        (task.worktree / "mod.py").write_text("x = 1\n", encoding="utf-8")
+        ctx = await make_ctx(service, project_id, task)
+
+        preview = await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
+        assert preview.kind == "diff"
+        assert preview.body == ""
+
+        output = await tool.invoke(ctx, {"title": "GitHub PR", "body": "Testing"})
+        assert output.is_error is True
+        assert "Docker is not available" in output.content
+
+
+async def test_open_pull_request_local_nested_repo_git_add_failure(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Local nested repo")
+
+    nested = task.worktree / "nested"
+    nested.mkdir()
+    cmd(["git", "init"], cwd=nested)
+    (nested / "nested_file.txt").write_text("nested\n", encoding="utf-8")
+    ctx = await make_ctx(service, project_id, task)
+
+    preview = await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
+    assert preview.kind == "diff"
+    assert preview.body == ""
+
+    output = await tool.invoke(ctx, {"title": "Local PR", "body": "Testing"})
+    assert output.is_error is True
+    assert "fatal: adding files failed" in output.content
+
+
+async def test_open_pull_request_github_nested_repo_git_add_failure(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    service, _, _, tool, project_id, _ = await setup_test_service(
+        tmp_path, paths, databases, keystore, git_env, remote_url=ORIGIN
+    )
+    with git_instead_of(tmp_path, bare):
+        await create_session(databases, project_id, "ses_1", agent="coder")
+        task = await service.start(project_id, "ses_1", "coder", "GitHub nested repo")
+
+        nested = task.worktree / "nested"
+        nested.mkdir()
+        cmd(["git", "init"], cwd=nested)
+        (nested / "nested_file.txt").write_text("nested\n", encoding="utf-8")
+        ctx = await make_ctx(service, project_id, task)
+
+        preview = await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
+        assert preview.kind == "diff"
+        assert preview.body == ""
+
+        output = await tool.invoke(ctx, {"title": "GitHub PR", "body": "Testing"})
+        assert output.is_error is True
+        assert "fatal: adding files failed" in output.content
 
 
 def test_default_registry_wiring(

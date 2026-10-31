@@ -15,6 +15,7 @@ from mlops_agents.agents.tools.base import (
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.git import GitError
 from mlops_agents.integrations.github.pulls import create_pull, update_pull
+from mlops_agents.sandbox.contract import SandboxUnavailable
 
 if TYPE_CHECKING:
     import httpx2
@@ -56,7 +57,10 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
     async def preview(self, ctx: ToolContext, args: OpenPullRequestArgs) -> Preview:
         if ctx.task is None:
             return Preview(kind="diff", title=args.title, body="")
-        diff = await self._tasks.staged_diff(ctx.project_id, ctx.task)
+        try:
+            diff = await self._tasks.staged_diff(ctx.project_id, ctx.task)
+        except (SandboxUnavailable, GitError):
+            return Preview(kind="diff", title=args.title, body="")
         return Preview(kind="diff", title=args.title, body=diff)
 
     async def run(self, ctx: ToolContext, args: OpenPullRequestArgs) -> ToolOutput:
@@ -76,6 +80,8 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
         if ref is not None:
             try:
                 await self._tasks.commit(ctx.project_id, ctx.task, args.title)
+            except SandboxUnavailable as err:
+                return ToolOutput(content=str(err), is_error=True)
             except CommitRefused as err:
                 task_view = await self._tasks.view(ctx.project_id, ctx.task.id)
                 has_unpublished = await self._tasks.has_unpublished_changes(
@@ -172,6 +178,8 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
         # Case B: Project has NO RepoRef -> local review
         try:
             await self._tasks.commit(ctx.project_id, ctx.task, args.title)
+        except SandboxUnavailable as err:
+            return ToolOutput(content=str(err), is_error=True)
         except CommitRefused as err:
             task_view = await self._tasks.view(ctx.project_id, ctx.task.id)
             has_unpublished = await self._tasks.has_unpublished_changes(ctx.project_id, ctx.task)
