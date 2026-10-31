@@ -23,12 +23,16 @@
 **Why it is lost today:** `_stop` calls `workers.stop` before it takes the session lock and looks for a waiting turn after. `resume_turn` starts the resume's worker under the lock, and the worker takes the waiting turn under the lock (`take_waiting_turn`, the one check that it still waits). A Stop whose `workers.stop` runs before that worker exists stops nothing. Then it either finds the turn already `running` (window A) or finds it `waiting` and awaits the worker that runs it to `done` (window C).
 
 **Notes:**
-- **Keep Stop instant, then decide under the lock.** `_stop` still calls `workers.stop` first, without the lock (for `stop`, not `stop_turn`), so a running turn is cancelled at once. Then it decides in a loop under the session lock, in this order:
-  1. The session's worker is running and not finishing its loop: `workers.stop` (before its first look the Stop goes to the turn it takes, the existing `_stop_next`). Done.
-  2. The worker is only finishing its loop (its turn has gone `waiting` or ended, `_turn_over`, no current turn): release the lock, await that worker, and go back to step 1. Never await a worker while holding the lock (the worker needs it: deadlock). Going back to step 1 matters: `resume_turn` also waits for that worker, and may take the lock first and start the resume's worker.
+- **Keep Stop instant, then decide under the lock** (Decision #566). `TurnWorkers` gets one marker, "this worker's turn went waiting", set in the same callback that adds the key to `_turn_over` (`_WaitAwareSink`), and cleared wherever `_turn_over` is cleared (a turn taken, `_leave`, `forget`), so a new worker never inherits it. `TurnWorkers.stop` classifies in one synchronous call and returns the outcome; `_stop` branches on it and reads no private field:
+  - **landed:** the worker is running a turn (the turn task is cancelled, as today), or it is before its first look (the Stop goes to the turn it takes, `_stop_next`). Done.
+  - **dropped:** the worker is between two turns (in `_turn_over` without the went-waiting marker). A Stop between two turns is dropped (stage 1 rule). Done.
+  - **waiting:** the worker's turn went waiting and it is only finishing its loop. Do not cancel anything (cancelling a turn while it reports its wait is what leaves the orphan checkpoint, the #531 row in `docs/known-debt.md`).
+  - **no worker.**
+  On **waiting** or **no worker**, `_stop` decides in a loop under the session lock:
+  1. A worker is running now (`resume_turn` may have started one): classify it again; landed or dropped ends here.
+  2. It is the went-waiting worker: release the lock, await that worker (never while holding the lock: the worker needs it), and go back to step 1. `resume_turn` also waits for that worker and may take the lock first and start the resume's worker.
   3. A matching turn waits: stop it (`stop_waiting_turn`, as today), then start a worker for the queued turns only if none is running.
   4. Otherwise there is nothing to stop.
-  `TurnWorkers` gets one small accessor for step 2 (for example `finishing(key) -> bool`: running and in `_turn_over`, the test `running_sessions` already uses; `_take_turn` adds the key there before the loop drops its current turn, so "no current turn" would miss that gap); `_stop` reads no private field.
   Because the resume's worker is started and takes the turn under the same lock, a Stop now lands either before the start (the turn is stopped while waiting, so `resume_turn` and the worker find it not waiting) or after it (the worker is stopped).
 - **`stop_turn(turn_id)` stops only that turn, and is not lost either:** in step 1 it calls `workers.stop` only when the worker is on exactly this `turn_id`, either its current turn, or (a resume's worker before its first look) the turn it resumes. `resume()` stores that turn ID, and `TurnWorkers` exposes one accessor for "the turn this worker is on or about to resume". A worker on another turn, a queued one say, is left alone. Steps 2 and 3 apply to that `turn_id` as for `stop`.
 - **A worker that Stop starts for the queued turns** is started only when none is running (`TurnWorkers.start`'s precondition). A second Stop that arrives before it takes its first turn is a Stop between two turns, so it is dropped (stage 1 rule) and must not stop the queued turn: such a worker does not take Stops for its first turn the way a worker started by a Send does.
@@ -40,6 +44,8 @@
 - Window C: Stop when the resume's worker exists but has not taken the turn. The turn ends `stopped` and the model is not called.
 - Window B (#393's test) still passes.
 - A message sent right after a Stop of a waiting turn runs: it doesn't stay `queued`.
+- A Stop that lands while `turn.waiting` is being reported (hold the sink callback with an event): the turn ends `stopped`, the Stop is not dropped, and no worker is cancelled mid-report.
+- The three tests in `test_sessions_stop.py` (a Stop before the worker takes the queued turn, one that finds no more turns, one that stops neither) stay unchanged: they pin "a Stop between two turns is dropped".
 - Two Stops in quick succession, the second arriving before the worker that the first Stop started takes its first turn: the queued turn runs and its model is called.
 - `stop_turn` for a waiting turn while the worker runs another turn: the other turn is not stopped.
 - A Stop of a running turn, of a waiting turn, and with nothing to stop behave as today (the existing tests stay green).

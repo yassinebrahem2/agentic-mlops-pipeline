@@ -259,3 +259,18 @@ def stages_of(subject: str, payload: HandoffPayload) -> list[str]:
         for stage in payload.pipeline
         if subject in stage.inputs or subject in stage.outputs
     ]
+
+
+class WindowSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: datetime
+    end: datetime
+    scope: list[str]
+    reason: str
+
+
+class MaintenancePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window: WindowSpec
