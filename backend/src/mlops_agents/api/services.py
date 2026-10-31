@@ -54,6 +54,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
+from mlops_agents.monitoring.expectations.checks import ChecksQueryProvider, SqliteChecks
 from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
 from mlops_agents.monitoring.expectations.query import (
     ExpectationsQueryProvider,
@@ -212,6 +213,7 @@ class Services:
     on_call: OnCallPeople
     notification_channels: Mapping[str, Channel]
     expectations: ExpectationsService
+    checks: SqliteChecks
     fixes: SqliteFixes
     training: SqliteTraining
     stats: StatsService
@@ -499,6 +501,24 @@ async def build_services(
     authorities.register("policy", policy_authority)
     fixes.bind_policy_authority(policy_authority)
 
+    expectations = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        tracking=tracking,
+        maintenance=maintenance,
+        clock=clock,
+    )
+    checks = SqliteChecks(
+        databases=databases,
+        expectations=expectations,
+        events=events,
+        clock=clock,
+    )
+    pr_sync.add_observer(checks)
+    results.bind_checks(checks)
+
     # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     tools = default_registry(
@@ -527,6 +547,7 @@ async def build_services(
         clock=clock,
         surfaces=surfaces,
         pr_sync=pr_sync,
+        checks=checks,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -647,21 +668,13 @@ async def build_services(
     scheduler.add_sync_observer(suspect_linker)
     pr_sync.add_observer(suspect_linker)
 
-    expectations = ExpectationsService(
-        databases=databases,
-        handoffs=handoffs,
-        connections=connections,
-        incidents=incidents,
-        tracking=tracking,
-        maintenance=maintenance,
-        clock=clock,
-    )
     incidents.bind_expectations(expectations)
     handoffs.add_observer(expectations.handoff_observer)
     results.add_observer(expectations.results_observer)
     scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
     query_providers.register(ResultsQueryProvider(results))
     query_providers.register(ExpectationsQueryProvider(expectations))
+    query_providers.register(ChecksQueryProvider(checks))
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
     query_providers.register(PoliciesQueryProvider(training))
@@ -828,6 +841,7 @@ async def build_services(
         on_call=on_call,
         notification_channels=notification_channels,
         expectations=expectations,
+        checks=checks,
         fixes=fixes,
         training=training,
         stats=stats,

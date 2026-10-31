@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
@@ -38,6 +38,9 @@ from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.payloads import CiResults, FileResults, JobFeedRef
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.contract import Page, Tracking
+
+if TYPE_CHECKING:
+    from mlops_agents.monitoring.expectations.checks import ChecksStore
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +83,7 @@ class ResultsService(Results):
         incidents: SignalSink | None = None,
         maintenance: Maintenance | None = None,
         parsers: Parsers | None = None,
+        checks: ChecksStore | None = None,
     ) -> None:
         self._databases = databases
         self._handoffs = handoffs
@@ -96,12 +100,17 @@ class ResultsService(Results):
         self._incidents = incidents
         self._maintenance = maintenance or NeverSuspended()
         self._parsers = parsers or SqliteParsers(databases)
+        self._checks = checks
         self._observers: list[ResultsObserver] = []
         self._delivery_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def parsers(self) -> Parsers:
         return self._parsers
+
+    def bind_checks(self, checks: ChecksStore) -> None:
+        """Binds checks store to results service."""
+        self._checks = checks
 
     def bind_incidents(self, incidents: SignalSink) -> None:
         """Binds incidents service to results service."""
@@ -215,6 +224,20 @@ class ResultsService(Results):
                     elif feed.ref.ci_workflow is not None:
                         s_id = source_id("ci", feed.ref.ci_workflow)
                         derived[s_id] = ("ci", False)
+
+        if self._checks is not None:
+            active_checks = await self._checks.list_active(project_id)
+            for chk in active_checks:
+                if isinstance(chk.results_location, FileResults):
+                    s_id = source_id(
+                        "file",
+                        chk.results_location.path_pattern,
+                        chk.results_location.connection,
+                    )
+                    derived[s_id] = ("file", False)
+                else:
+                    s_id = source_id("mlflow", chk.results_location.metric)
+                    derived[s_id] = ("mlflow", False)
 
         return [(s_id, kind, needs_parser) for s_id, (kind, needs_parser) in derived.items()]
 
