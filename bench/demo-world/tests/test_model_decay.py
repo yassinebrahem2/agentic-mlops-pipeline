@@ -9,15 +9,16 @@ from demo_world import answer_key, backfill, model_decay, paths, scenarios, simu
 from demo_world.answer_key import Record
 from tests.fixture import FIXTURE_CSV
 
-# A world first played on ORIGIN, with a decay window of arrival dates well after it.
+# A world first played on ORIGIN, with a decay window of arrival dates well after it: the share
+# ramps up over March, then holds through April.
 ORIGIN = date(2016, 1, 1)
-START, END = date(2016, 3, 1), date(2016, 4, 30)
+START, RAMP_END, END = date(2016, 3, 1), date(2016, 3, 31), date(2016, 4, 30)
 LAST_ARRIVAL = date(2016, 5, 31)
 GROUP = (("market_segment", "Online TA"), ("deposit_type", "No Deposit"))
 ENTRY = (
     '[[injection]]\nkind = "model_decay"\n'
     'group = { market_segment = "Online TA", deposit_type = "No Deposit" }\n'
-    f"max_share = 1.0\nstart = {START}\nend = {END}\n"
+    f"max_share = 1.0\nstart = {START}\nramp_end = {RAMP_END}\nend = {END}\n"
 )
 
 
@@ -55,7 +56,9 @@ def loaded() -> pd.DataFrame:
 
 
 def _rule(max_share: float = 1.0) -> model_decay.Rule:
-    return model_decay.Rule(group=GROUP, start=START, end=END, max_share=max_share)
+    return model_decay.Rule(
+        group=GROUP, start=START, ramp_end=RAMP_END, end=END, max_share=max_share
+    )
 
 
 def _in_group(frame: pd.DataFrame) -> pd.Series:
@@ -120,15 +123,25 @@ def test_its_followers_cancel_below_the_cut_and_not_above(loaded: pd.DataFrame) 
     assert 0 < cut < loaded["lead_time"].max()
     expected = (loaded.loc[follows, "lead_time"] < cut).astype("int64")
     assert relabelled.loc[follows, "is_canceled"].equals(expected)
-    # The rule runs against the source, where long lead times cancel more.
-    assert relabelled.loc[follows & (loaded["lead_time"] >= cut), "is_canceled"].sum() == 0
+    # The rule runs against the source, where long lead times cancel more, and changes both
+    # sides: a follower at or above the cut that cancelled in the source is kept, and one below
+    # it that stayed is cancelled.
+    above = follows & (loaded["lead_time"] >= cut)
+    below = follows & (loaded["lead_time"] < cut)
+    assert relabelled.loc[above, "is_canceled"].sum() == 0
+    assert (above & (loaded["is_canceled"] == 1)).sum() > 50
+    assert relabelled.loc[below, "is_canceled"].all()
+    assert (below & (loaded["is_canceled"] == 0)).sum() > 20
 
 
-def test_the_share_ramps_from_0_at_the_start_to_max_share_at_the_end() -> None:
+def test_the_share_ramps_from_0_at_the_start_to_max_share_then_holds() -> None:
     rule = _rule(0.6)
 
     assert rule.share(START) == 0
-    assert rule.share(START + (END - START) / 2) == pytest.approx(0.3)
+    assert rule.share(START + (RAMP_END - START) / 2) == pytest.approx(0.3)
+    assert rule.share(RAMP_END - timedelta(days=1)) < 0.6
+    assert rule.share(RAMP_END) == pytest.approx(0.6)
+    assert rule.share(RAMP_END + timedelta(days=10)) == pytest.approx(0.6)
     assert rule.share(END) == pytest.approx(0.6)
     assert rule.share(START - timedelta(days=1)) == 0
     assert rule.share(END + timedelta(days=1)) == 0
@@ -141,11 +154,11 @@ def test_the_followers_share_ramps_by_arrival_date(loaded: pd.DataFrame) -> None
 
     assert not (follows & ~scope).any()
     assert not follows[arrival == pd.Timestamp(START)].any()
-    early = scope & (arrival < pd.Timestamp(START + timedelta(days=15)))
-    late = scope & (arrival > pd.Timestamp(END - timedelta(days=15)))
-    # Expected about 0.6 * 7/60 early and 0.6 * 53/60 late.
+    early = scope & (arrival < pd.Timestamp(START + timedelta(days=8)))
+    held = scope & (arrival >= pd.Timestamp(RAMP_END))
+    # Expected about 0.6 * 3.5/30 early, and 0.6 over the whole hold.
     assert follows[early].mean() < 0.15
-    assert 0.42 < follows[late].mean() < 0.66
+    assert 0.52 < follows[held].mean() < 0.68
 
 
 def test_a_label_date_moves_only_when_the_outcome_changes(loaded: pd.DataFrame) -> None:
@@ -174,7 +187,11 @@ def test_it_changes_the_same_labels_on_every_run(loaded: pd.DataFrame) -> None:
 
 def test_a_group_with_no_booking_before_the_window_is_refused(loaded: pd.DataFrame) -> None:
     rule = model_decay.Rule(
-        group=(("market_segment", "Online TA"),), start=date(2015, 11, 1), end=END, max_share=1.0
+        group=(("market_segment", "Online TA"),),
+        start=date(2015, 11, 1),
+        ramp_end=RAMP_END,
+        end=END,
+        max_share=1.0,
     )
 
     with pytest.raises(model_decay.DecayError, match="before 2015-11-01"):

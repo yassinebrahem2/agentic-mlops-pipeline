@@ -2,9 +2,11 @@
 model learned, for the bookings arriving in a window.
 
 In the source, long lead times cancel more, and the first model learned it. A booking that
-follows the rule cancels when its lead time is below a cut, and does not otherwise. The share
-of the group's bookings that follow it ramps with their arrival date over the window. Only the
-labels change: the bookings, which the company scores and checks for drift, stay as they are.
+follows the rule cancels when its lead time is below a cut, and does not cancel at or above
+it, whatever its source outcome: both sides change. The rule reads only the booking's own
+columns, never a model's score. The share of the group's bookings that follow it ramps with
+their arrival date up to a ramp end, then holds to the window's end. Only the labels change: the
+bookings, which the company scores and checks for drift, stay as they are.
 """
 
 import hashlib
@@ -29,18 +31,22 @@ def _draw(purpose: str, booking_id: int) -> int:
 @dataclass(frozen=True)
 class Rule:
     """The rule for the bookings whose every `group` column holds its value, arriving from
-    `start` to `end` (both included); `max_share` of them follow it at the end."""
+    `start` to `end` (both included); `max_share` of them follow it from `ramp_end` on."""
 
     group: tuple[tuple[str, str], ...]
     start: date
+    ramp_end: date
     end: date
     max_share: float
 
     def share(self, arrival: date) -> float:
-        """The share of the group's bookings arriving on `arrival` that follow the rule."""
+        """The share of the group's bookings arriving on `arrival` that follow the rule: from 0
+        at the start up to `max_share` at the ramp end, then `max_share` to the end."""
         if not self.start <= arrival <= self.end:
             return 0.0
-        return self.max_share * (arrival - self.start).days / (self.end - self.start).days
+        if arrival >= self.ramp_end:
+            return self.max_share
+        return self.max_share * (arrival - self.start).days / (self.ramp_end - self.start).days
 
     def _in_group(self, loaded: pd.DataFrame) -> pd.Series:
         matches = pd.Series(True, index=loaded.index)

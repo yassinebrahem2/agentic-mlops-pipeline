@@ -132,10 +132,17 @@ class ModelDecay(Problem):
     """Its window is of arrival dates: it changes the outcomes of the bookings arriving then."""
 
     group: tuple[tuple[str, str], ...]
+    ramp_end: date
     max_share: float
 
     def rule(self) -> model_decay.Rule:
-        return model_decay.Rule(self.group, self.start, self.end, self.max_share)
+        return model_decay.Rule(
+            group=self.group,
+            start=self.start,
+            ramp_end=self.ramp_end,
+            end=self.end,
+            max_share=self.max_share,
+        )
 
     def relabel(self, loaded: pd.DataFrame, origin: date) -> pd.DataFrame:
         try:
@@ -283,11 +290,20 @@ def _model_decay(entry: _Entry, start: date, end: date) -> Problem:
     group, max_share = entry.group(), entry.number("max_share")
     if not 0 < max_share <= 1:
         raise entry.error(f"'max_share' must be above 0 and at most 1, not {max_share}")
-    if end == start:
+    ramp_end = entry.date("ramp_end")
+    if not start < ramp_end <= end:
         raise entry.error(
-            "needs a window of at least two days: its share ramps from 0 to max_share"
+            f"'ramp_end' must be after 'start' and at most 'end' (the share ramps from 0 at the "
+            f"start to max_share at the ramp end, then holds), not {ramp_end}"
         )
-    return ModelDecay(kind="model_decay", start=start, end=end, group=group, max_share=max_share)
+    return ModelDecay(
+        kind="model_decay",
+        start=start,
+        end=end,
+        group=group,
+        ramp_end=ramp_end,
+        max_share=max_share,
+    )
 
 
 type _Builder = Callable[[_Entry, date, date], Problem]

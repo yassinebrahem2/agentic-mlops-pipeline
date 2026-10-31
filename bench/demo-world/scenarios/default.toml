@@ -67,4 +67,5 @@ kind = "model_decay"
 group = { market_segment = "Online TA", deposit_type = "No Deposit" }
 max_share = 0.7
 start = 2016-10-01
-end = 2017-01-15
+ramp_end = 2016-12-01
+end = 2017-03-31

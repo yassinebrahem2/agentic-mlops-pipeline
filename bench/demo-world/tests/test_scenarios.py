@@ -6,13 +6,13 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from demo_world import model_decay, scenarios, source
+from demo_world import scenarios, source
 from demo_world.answer_key import Record
 from tests.fixture import DEFAULT_SCENARIO, FIXTURE_CSV
 
 DAY = date(2016, 1, 2)
 WINDOW = "start = 2016-01-02\nend = 2016-01-03\n"
-DECAY = 'kind = "model_decay"\ngroup = { market_segment = "Online TA" }\n'
+DECAY = 'kind = "model_decay"\ngroup = { market_segment = "Online TA" }\nramp_end = 2016-01-03\n'
 
 
 @pytest.fixture(scope="module")
@@ -46,16 +46,19 @@ def test_the_default_scenario_has_one_of_each_kind_and_the_natural_shift() -> No
     assert spike.columns == ("country", "adr")
 
 
-def test_the_default_model_decay_ramps_over_arrivals_from_october_to_mid_january() -> None:
+def test_the_default_model_decay_ramps_up_to_december_then_holds_to_the_runs_end() -> None:
     decay = next(p for p in scenarios.load(DEFAULT_SCENARIO).problems if p.kind == "model_decay")
 
     assert isinstance(decay, scenarios.ModelDecay)
-    assert decay.rule() == model_decay.Rule(
-        group=(("market_segment", "Online TA"), ("deposit_type", "No Deposit")),
-        start=date(2016, 10, 1),
-        end=date(2017, 1, 15),
-        max_share=0.7,
+    rule = decay.rule()
+    assert rule.group == (("market_segment", "Online TA"), ("deposit_type", "No Deposit"))
+    assert (rule.start, rule.ramp_end, rule.end) == (
+        date(2016, 10, 1),
+        date(2016, 12, 1),
+        date(2017, 3, 31),
     )
+    assert 0 < rule.max_share <= 1
+    assert decay.records()[0].end == "2017-03-31"
 
 
 def test_the_default_injections_sit_between_the_quiet_july_and_the_natural_shift() -> None:
@@ -268,8 +271,16 @@ def test_an_injection_changes_nothing_outside_its_window(
             "text column",
         ),
         (
-            f"[[injection]]\n{DECAY}max_share = 0.5\nstart = 2016-02-01\nend = 2016-02-01\n",
-            "two days",
+            _injection('kind = "model_decay"\ngroup = { hotel = "City Hotel" }\nmax_share = 0.5\n'),
+            "missing 'ramp_end'",
+        ),
+        (
+            f"[[injection]]\n{DECAY}max_share = 0.5\nstart = 2016-01-03\nend = 2016-01-04\n",
+            "'ramp_end' must be after 'start'",
+        ),
+        (
+            f"[[injection]]\n{DECAY}max_share = 0.5\nstart = 2016-01-01\nend = 2016-01-02\n",
+            "'ramp_end' must be after 'start'",
         ),
     ],
 )

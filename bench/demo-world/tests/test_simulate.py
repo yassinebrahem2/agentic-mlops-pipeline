@@ -22,7 +22,7 @@ INJECTIONS = {
     "score_failure": "",
     "ci_failure": "",
     "model_decay": 'group = { market_segment = "Online TA", deposit_type = "No Deposit" }\n'
-    "max_share = 1.0\n",
+    "max_share = 1.0\nramp_end = 2016-01-03\n",
 }
 # The plan whose "Planted flaws" list `answer_key.PLANTED_FLAWS` carries.
 PLAN = Path(__file__).parents[3] / "docs" / "superpowers" / "plans" / "2026-10-27-demo-world.md"
