@@ -30,6 +30,7 @@ from mlops_agents.agents.tools.tracking_history import TrackingHistory
 from mlops_agents.agents.tools.write import WriteTool
 from mlops_agents.monitoring.incidents.query import MonitoringQueryTool
 from mlops_agents.monitoring.incidents.tools import (
+    AdjustSeverity,
     IncidentFollowUp,
     IncidentMerge,
     IncidentSplit,
@@ -51,7 +52,7 @@ if TYPE_CHECKING:
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
     from mlops_agents.monitoring.hooks.contract import Hooks
-    from mlops_agents.monitoring.incidents.contract import Incidents
+    from mlops_agents.monitoring.incidents.contract import Incidents, SeverityPolicy
     from mlops_agents.monitoring.query import QueryProviders
     from mlops_agents.promotion.contract import ProtectionSurfaces, Reports
     from mlops_agents.proposals.contract import Handoffs
@@ -66,6 +67,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PROPOSE_TOOL_NAME",
+    "AdjustSeverity",
     "BashTool",
     "CommentOnIssueTool",
     "EditTool",
@@ -128,6 +130,7 @@ def default_registry(
     reports: Reports | None = None,
     hooks: Hooks | None = None,
     incidents: Incidents | None = None,
+    severity: SeverityPolicy | None = None,
     query_providers: QueryProviders | None = None,
     data_summaries: DataSummaries | None = None,
     connections: Connections | None = None,
@@ -220,6 +223,8 @@ def default_registry(
         registry.register(IncidentUpdate(incidents))
         registry.register(IncidentMerge(incidents))
         registry.register(IncidentSplit(incidents))
+        if severity is not None:
+            registry.register(AdjustSeverity(incidents=incidents, severity=severity))
         if (
             databases is not None
             and handoffs is not None

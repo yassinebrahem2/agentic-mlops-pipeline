@@ -15,12 +15,17 @@ from mlops_agents.agents.tools.base import (
     ToolOutput,
 )
 from mlops_agents.agents.tools.names import (
+    ADJUST_SEVERITY,
     INCIDENT_FOLLOW_UP,
     INCIDENT_MERGE,
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
 )
 from mlops_agents.monitoring.incidents.contract import IncidentPatch
+from mlops_agents.monitoring.incidents.severity import (
+    RANK_TO_SEVERITY,
+    SEVERITY_RANKS,
+)
 from mlops_agents.monitoring.results.contract import ResultCategory
 from mlops_agents.providers.failover import Clock, SystemClock
 from mlops_agents.storage.tables import incident_follow_ups
@@ -28,7 +33,7 @@ from mlops_agents.storage.tables import incident_follow_ups
 if TYPE_CHECKING:
     from mlops_agents.connections.contract import Connections
     from mlops_agents.data.summaries import DataSummaries
-    from mlops_agents.monitoring.incidents.contract import Incidents
+    from mlops_agents.monitoring.incidents.contract import Incidents, SeverityPolicy
     from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.storage.databases import Databases
 
@@ -244,6 +249,67 @@ class IncidentFollowUp(AgentTool[IncidentFollowUpArgs]):
                 )
             return ToolOutput(
                 content=f"Follow-up scheduled for incident {args.incident_id} (id={fol_id})."
+            )
+        except Exception as exc:
+            return ToolOutput(content=str(exc), is_error=True)
+
+
+class AdjustSeverityArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str = Field(description="Incident ID to adjust severity for.")
+    direction: Literal["up", "down"] = Field(description="Adjustment direction ('up' or 'down').")
+    reason: str = Field(description="Reason for adjusting severity.")
+
+
+class AdjustSeverity(AgentTool[AdjustSeverityArgs]):
+    name: ClassVar[str] = ADJUST_SEVERITY
+    description: ClassVar[str] = (
+        "Adjust an incident's severity up or down by one level from current severity."
+    )
+    risk: ClassVar[RiskClass] = RiskClass.READ
+    args_model: ClassVar[type[BaseModel]] = AdjustSeverityArgs
+
+    def __init__(self, incidents: Incidents, severity: SeverityPolicy) -> None:
+        self._incidents = incidents
+        self._severity = severity
+
+    async def run(self, ctx: ToolContext, args: AdjustSeverityArgs) -> ToolOutput:
+        try:
+            if ctx.agent != "alert-prioritization":
+                return ToolOutput(
+                    content="AdjustSeverity is only permitted for alert-prioritization.",
+                    is_error=True,
+                )
+            inc = await self._incidents.get(ctx.project_id, args.incident_id)
+            if inc is None:
+                return ToolOutput(
+                    content=f"Incident '{args.incident_id}' not found.",
+                    is_error=True,
+                )
+            decision = await self._severity.decide(ctx.project_id, inc)
+            policy_rank = SEVERITY_RANKS[decision.severity]
+            current_rank = SEVERITY_RANKS[inc.severity]
+            target_rank = current_rank + 1 if args.direction == "up" else current_rank - 1
+            if target_rank < 1:
+                return ToolOutput(content="Cannot lower severity below low.", is_error=True)
+            if target_rank > 4:
+                return ToolOutput(content="Cannot raise severity above critical.", is_error=True)
+            if abs(target_rank - policy_rank) > 1:
+                return ToolOutput(
+                    content="Adjustment beyond one level from policy severity is refused.",
+                    is_error=True,
+                )
+            target_severity = RANK_TO_SEVERITY[target_rank]
+            await self._incidents.set_severity(
+                ctx.project_id,
+                args.incident_id,
+                severity=target_severity,
+                reason=args.reason,
+                by=ctx.agent,
+            )
+            return ToolOutput(
+                content=f"Severity of incident {args.incident_id} adjusted to {target_severity}."
             )
         except Exception as exc:
             return ToolOutput(content=str(exc), is_error=True)

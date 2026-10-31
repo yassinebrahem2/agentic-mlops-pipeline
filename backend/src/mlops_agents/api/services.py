@@ -69,6 +69,7 @@ from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.follow_ups import FollowUpsJob
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.prioritization import PrioritizationWake
 from mlops_agents.monitoring.incidents.query import IncidentsQueryProvider, SignalsQueryProvider
 from mlops_agents.monitoring.incidents.reactor import Reactor
 from mlops_agents.monitoring.incidents.routing import OnCallRouter
@@ -421,6 +422,8 @@ async def build_services(
         clock=clock,
     )
     incidents.add_observer(reactor)
+    prioritization_wake = PrioritizationWake(waker=waker, events=events)
+    incidents.add_observer(prioritization_wake)
 
     fixes = SqliteFixes(
         databases,
@@ -459,6 +462,7 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        severity=severity,
         fixes=fixes,
         query_providers=query_providers,
         data_summaries=data_summaries,
