@@ -72,23 +72,28 @@ const FULL: Deployments = {
     decision({
       kind: "promotion",
       model: "fraud",
-      decided_by: "rule",
-      decided_by_ref: "rul_auto",
+      decided_by: "team_gate",
       from_version: "6",
       to_version: "7",
     }),
-    decision({ kind: "rollback", decided_by: "team_gate", from_version: "3", to_version: "2" }),
+    decision({
+      kind: "rollback",
+      decided_by: "person",
+      decided_by_ref: "apr_9",
+      from_version: "3",
+      to_version: "2",
+    }),
     decision({
       kind: "fall_back",
-      decided_by: "agent_bypass",
+      decided_by: "rule",
+      decided_by_ref: "rul_auto",
       from_version: null,
       to_version: null,
     }),
     decision({
       kind: "promotion",
       model: "fraud",
-      decided_by: "person",
-      decided_by_ref: "apr_9",
+      decided_by: "agent_bypass",
       from_version: "5",
       to_version: "6",
     }),
@@ -180,13 +185,13 @@ describe("DeploymentsPage", () => {
     expect(within(rowAt(rows, 0)).getByText("Promotion")).toBeInTheDocument();
     expect(within(rowAt(rows, 0)).getByText("Person")).toBeInTheDocument();
     expect(within(rowAt(rows, 0)).getByText("2 → 3")).toBeInTheDocument();
-    expect(within(rowAt(rows, 1)).getByText("Rule rul_auto")).toBeInTheDocument();
+    expect(within(rowAt(rows, 1)).getByText("Team gate")).toBeInTheDocument();
     expect(within(rowAt(rows, 2)).getByText("Rollback")).toBeInTheDocument();
-    expect(within(rowAt(rows, 2)).getByText("Team gate")).toBeInTheDocument();
+    expect(within(rowAt(rows, 2)).getByText("Person (approval apr_9)")).toBeInTheDocument();
     expect(within(rowAt(rows, 3)).getByText("Fall-back")).toBeInTheDocument();
-    expect(within(rowAt(rows, 3)).getByText("Agent bypass")).toBeInTheDocument();
+    expect(within(rowAt(rows, 3)).getByText("Rule rul_auto")).toBeInTheDocument();
     expect(within(rowAt(rows, 3)).getByText("unknown → unknown")).toBeInTheDocument();
-    expect(within(rowAt(rows, 4)).getByText("Person (approval apr_9)")).toBeInTheDocument();
+    expect(within(rowAt(rows, 4)).getByText("Agent bypass")).toBeInTheDocument();
   });
 
   it("offers a Report button only where the decision has a report, and fetches it lazily", async () => {

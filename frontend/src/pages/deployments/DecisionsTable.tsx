@@ -33,8 +33,11 @@ export function DecisionsTable({ rows, onOpenReport }: DecisionsTableProps) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((row) => (
-          <TableRow key={`${row.at}/${row.model}/${row.kind}`} data-testid="decision-row">
+        {rows.map((row, index) => (
+          <TableRow // Read-only and in the server's order, and two decisions can share a second, model and kind.
+            key={index}
+            data-testid="decision-row"
+          >
             <TableCell className="text-xs text-muted-foreground">
               <time dateTime={row.at}>{formatTime(row.at)}</time>
             </TableCell>

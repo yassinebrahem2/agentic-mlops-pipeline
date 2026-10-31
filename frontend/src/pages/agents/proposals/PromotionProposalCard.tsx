@@ -1,6 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
 import { ReportDetails } from "@/components/ReportDetails";
-import { api, unwrap } from "@/lib/api";
+import { useReport } from "@/lib/useReport";
 import type { ApprovalCardComponent } from "../ApprovalCard";
 import { ProposalShell } from "./ProposalShell";
 import { useProposal } from "./useProposal";
@@ -16,20 +15,7 @@ export const PromotionProposalCard: ApprovalCardComponent = ({
   const payload = proposal?.kind === "promotion" ? proposal.payload : undefined;
   const reportId = payload?.report_id;
 
-  const { data: report } = useQuery({
-    queryKey: ["projects", projectId, "reports", reportId],
-    queryFn: async () => {
-      if (!reportId) {
-        throw new Error("Missing reportId");
-      }
-      return unwrap(
-        await api.GET("/api/projects/{project_id}/reports/{report_id}", {
-          params: { path: { project_id: projectId, report_id: reportId } },
-        }),
-      );
-    },
-    enabled: Boolean(reportId),
-  });
+  const { data: report } = useReport(projectId, reportId);
 
   return (
     <ProposalShell

@@ -1,7 +1,7 @@
 import { ReportDetails } from "@/components/ReportDetails";
 import { QueryStatus } from "@/components/QueryStatus";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { useReport } from "./useReport";
+import { useReport } from "@/lib/useReport";
 
 interface ReportDialogProps {
   projectId: string;
