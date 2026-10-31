@@ -678,7 +678,7 @@ async def test_last_two_turns_exceeding_budget_have_tool_results_trimmed(
     tool_messages = [m for m in sent_messages if getattr(m, "tool_call_id", None) == "c1"]
     assert len(tool_messages) == 1
     tool_content = str(tool_messages[0].content)
-    assert "earlier output truncated" in tool_content
+    assert "characters cut to fit context budget" in tool_content
     assert "END" not in tool_content
 
 
