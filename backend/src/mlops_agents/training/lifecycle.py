@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from mlops_agents.ids import new_id
+from mlops_agents.monitoring.expectations.contract import ExpectationKey, ExpectationSpec
 from mlops_agents.monitoring.hooks.contract import (
     HookCall,
     HookLifecycle,
@@ -18,10 +19,15 @@ from mlops_agents.monitoring.hooks.contract import (
     RunContext,
 )
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
+from mlops_agents.training.constants import (
+    TRAINING_REQUEST_DEADLINE_MINUTES,
+    TRAINING_REQUEST_GRACE_MINUTES,
+)
 from mlops_agents.training.contract import TrainingWindow
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
+    from mlops_agents.monitoring.expectations.contract import Expectations
     from mlops_agents.providers.failover import Clock
     from mlops_agents.training.fixes import SqliteFixes
     from mlops_agents.training.requests import SqliteTraining
@@ -39,12 +45,17 @@ class TrainingLifecycle(HookLifecycle):
         resolver: PlaceholderResolver,
         clock: Clock,
         events: EventLog,
+        expectations: Expectations | None = None,
     ) -> None:
         self._training = training
         self._fixes = fixes
         self._resolver = resolver
         self._clock = clock
         self._events = events
+        self._expectations = expectations
+
+    def bind_expectations(self, expectations: Expectations) -> None:
+        self._expectations = expectations
 
     async def before(self, project_id: str, hook: HookView, call: HookCall) -> HookCall:
         is_training = hook.spec.kind in ("train", "evaluate")
@@ -190,5 +201,30 @@ class TrainingLifecycle(HookLifecycle):
         if hook.spec.kind not in ("train", "evaluate"):
             return
         request_id = result.request_id or call.params.get("request_id")
-        if not result.ok and request_id is not None:
-            await self._training.set_status(project_id, request_id, "failed")
+        if not result.ok:
+            if request_id is not None:
+                await self._training.set_status(project_id, request_id, "failed")
+            fix_id = call.fix_id
+            if fix_id is None and request_id is not None:
+                trq = await self._training.request(project_id, request_id)
+                if trq is not None:
+                    fix_id = trq.fix_id
+            if fix_id is not None:
+                await self._fixes.set_outcome(project_id, fix_id, "not_cleared")
+        elif result.ok and request_id is not None and self._expectations is not None:
+            started = self._clock.now()
+            due_at = started + timedelta(minutes=TRAINING_REQUEST_DEADLINE_MINUTES)
+            await self._expectations.register(
+                project_id,
+                ExpectationSpec(
+                    key=ExpectationKey(kind="training_request", ref=request_id, model=hook.model),
+                    category="operational",
+                    cadence=None,
+                    due_at=due_at,
+                    source="training",
+                    timezone="UTC",
+                    grace_minutes=TRAINING_REQUEST_GRACE_MINUTES,
+                    second_deadline=False,
+                    activates_on_pr=None,
+                ),
+            )
