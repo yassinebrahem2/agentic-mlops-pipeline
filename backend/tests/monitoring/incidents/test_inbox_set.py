@@ -272,9 +272,14 @@ async def test_inbox_preserves_severity_ranking(
 @pytest.mark.asyncio
 async def test_inbox_pagination(
     service: IncidentsService,
+    databases: Databases,
     project_id: str,
 ) -> None:
-    """Paging with inbox=true returns the right total, offset, and sliced rows."""
+    """Paging with inbox=true returns the right total, offset, and sliced rows.
+
+    Mixes in excluded rows (a closed one, and a resolved one with a verdict) with newer
+    timestamps so that an unfiltered count query or post-fetch filtering fails the test.
+    """
     t0 = datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC)
 
     created_ids: list[str] = []
@@ -286,27 +291,62 @@ async def test_inbox_pagination(
         )
         created_ids.append(out.incident_id)
 
-    # Page 1: limit 2, offset 0
+    # Mixed in excluded row 1: closed incident with newer timestamp
+    out_closed = await service.raise_signal(
+        project_id,
+        _make_signal("sub_excluded_closed", t0 + timedelta(seconds=10)),
+        seen_at=t0 + timedelta(seconds=10),
+    )
+    await service.close(project_id, out_closed.incident_id, by="user")
+
+    # Mixed in excluded row 2: resolved incident with a verdict and newer timestamp
+    out_verdict = await service.raise_signal(
+        project_id,
+        _make_signal("sub_excluded_verdict", t0 + timedelta(seconds=11)),
+        seen_at=t0 + timedelta(seconds=11),
+    )
+    await service.update(
+        project_id, out_verdict.incident_id, "user", IncidentPatch(status="resolved")
+    )
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            verdicts.insert().values(
+                incident_id=out_verdict.incident_id,
+                value="real_issue",
+                source="user",
+                check_versions="{}",
+                created=t0.isoformat(),
+            )
+        )
+
+    # Unfiltered total is 7 (5 inbox + 2 excluded)
+    unfiltered = await service.list(project_id)
+    assert unfiltered.total == 7
+
+    # Page 1: limit 2, offset 0 -> inbox total is 5, rows contain newest 2 inbox items
     p1 = await service.list(project_id, inbox=True, limit=2, offset=0)
     assert p1.total == 5
     assert len(p1.rows) == 2
     assert p1.truncated is True
 
-    # Page 2: limit 2, offset 2
+    # Page 2: limit 2, offset 2 -> inbox total is 5
     p2 = await service.list(project_id, inbox=True, limit=2, offset=2)
     assert p2.total == 5
     assert len(p2.rows) == 2
     assert p2.truncated is True
 
-    # Page 3: limit 2, offset 4
+    # Page 3: limit 2, offset 4 -> inbox total is 5
     p3 = await service.list(project_id, inbox=True, limit=2, offset=4)
     assert p3.total == 5
     assert len(p3.rows) == 1
     assert p3.truncated is False
 
-    # Check distinct items across pages
+    # Check distinct items across pages: exactly the 5 inbox items in reverse chronological order
     all_paged_ids = [r.id for r in p1.rows] + [r.id for r in p2.rows] + [r.id for r in p3.rows]
-    assert len(set(all_paged_ids)) == 5
+    assert all_paged_ids == list(reversed(created_ids))
+    assert out_closed.incident_id not in all_paged_ids
+    assert out_verdict.incident_id not in all_paged_ids
 
 
 @pytest.mark.asyncio
