@@ -435,6 +435,7 @@ RESPONSE_MENU: tuple[str, ...] = (
     "open an issue",
     f"`{HOLD}`",
     "roll back",
+    "fall back",
     "rerun",
     f"`{RUN_HOOK}`",
     "revert",
