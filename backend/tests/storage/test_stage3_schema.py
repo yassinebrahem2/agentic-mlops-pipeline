@@ -502,7 +502,7 @@ def test_version_1_app_database_migrates_with_its_rows(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "app", tmp_path / "bk") == [2, 3]
+    assert migrate(db, "app", tmp_path / "bk") == [2, 3, 4]
 
     conn = connect_sync(db)
     try:
@@ -527,7 +527,7 @@ def test_version_1_app_database_migrates_with_its_rows(tmp_path: Path) -> None:
 )
 def test_app_checks_reject_bad_values(tmp_path: Path, statement: str) -> None:
     db = tmp_path / "app.db"
-    assert migrate(db, "app", tmp_path / "bk") == [1, 2, 3]
+    assert migrate(db, "app", tmp_path / "bk") == [1, 2, 3, 4]
     conn = connect_sync(db)
     try:
         conn.execute(
