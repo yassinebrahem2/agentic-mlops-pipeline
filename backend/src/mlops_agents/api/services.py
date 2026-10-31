@@ -558,9 +558,13 @@ async def build_services(
     await kickoff.resume()
 
     # Resume pending wakes before starting the scheduler, so a wake fired by a job that has
-    # inserted its row but not posted yet cannot be posted twice.
+    # inserted its row but not posted yet cannot be posted twice. Results stored but not
+    # delivered before a restart are delivered here too, once every results observer is
+    # registered and before the scheduler's first collection.
+    startup_now = clock.now()
     for project in await workspace.list_projects():
         await waker.resume(project.id)
+        await results.deliver_undelivered(project.id, startup_now)
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
@@ -570,10 +574,8 @@ async def build_services(
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
-    # Deliver undelivered results across restarts, after all observers and services are registered and ready.
-    startup_now = clock.now()
+    # Reconcile on-call and expectations across existing projects
     for project in await workspace.list_projects():
-        await results.deliver_undelivered(project.id, startup_now)
         try:
             await on_call_seeder.reconcile(project.id)
         except Exception:

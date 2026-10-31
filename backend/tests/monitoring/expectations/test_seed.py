@@ -11,6 +11,7 @@ from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.payloads import Cadence, HandoffPayload
 from mlops_agents.storage.databases import Databases
 from tests.proposals.samples import data_feed, handoff, job_feed
+from tests.providers.fake_clock import FakeClock
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def project_id() -> str:
 
 
 async def test_handoff_stored_seeds_feeds_and_checks(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     seeder = HandoffExpectationsSeeder(store)
 
     check_item = {
@@ -47,7 +48,7 @@ async def test_handoff_stored_seeds_feeds_and_checks(databases: Databases, proje
     feed_key = ExpectationKey(kind="feed", ref="feed_bookings", model=None)
     feed_rec = await store.get(project_id, feed_key)
     assert feed_rec is not None
-    feed_spec, active, _, _, _ = feed_rec
+    feed_spec, active, _, _, _, _ = feed_rec
     assert active is True
     assert feed_spec.category == "data_quality"
     assert feed_spec.second_deadline is True
@@ -58,7 +59,7 @@ async def test_handoff_stored_seeds_feeds_and_checks(databases: Databases, proje
     job_key = ExpectationKey(kind="job", ref="job_nightly", model=None)
     job_rec = await store.get(project_id, job_key)
     assert job_rec is not None
-    job_spec, active, _, _, _ = job_rec
+    job_spec, active, _, _, _, _ = job_rec
     assert active is True
     assert job_spec.category == "operational"
     assert job_spec.second_deadline is True
@@ -69,7 +70,7 @@ async def test_handoff_stored_seeds_feeds_and_checks(databases: Databases, proje
     chk_key = ExpectationKey(kind="check", ref="chk_auc", model=None)
     chk_rec = await store.get(project_id, chk_key)
     assert chk_rec is not None
-    chk_spec, active, _, _, _ = chk_rec
+    chk_spec, active, _, _, _, _ = chk_rec
     assert active is True
     assert chk_spec.category == "model_performance"
     assert chk_spec.second_deadline is False
@@ -78,7 +79,7 @@ async def test_handoff_stored_seeds_feeds_and_checks(databases: Databases, proje
 
 
 async def test_second_handoff_retires_removed_feed(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     seeder = HandoffExpectationsSeeder(store)
 
     raw1 = handoff()
@@ -103,7 +104,7 @@ async def test_second_handoff_retires_removed_feed(databases: Databases, project
 async def test_restore_and_restart_leave_check_and_training_request_active(
     databases: Databases, project_id: str
 ) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     seeder = HandoffExpectationsSeeder(store)
 
     # Register external check and training_request expectations
@@ -141,7 +142,7 @@ async def test_startup_reconciles_handoff_stored_before(
     databases: Databases, project_id: str
 ) -> None:
     handoffs = SqliteHandoffs(databases)
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     seeder = HandoffExpectationsSeeder(store)
 
     raw = handoff()
