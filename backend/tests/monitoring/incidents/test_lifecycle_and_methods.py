@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Literal
 
 import pytest
+from sqlalchemy import select
 
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
@@ -19,6 +20,7 @@ from mlops_agents.monitoring.incidents.contract import (
 )
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import notification_log
 from tests.monitoring.incidents.conftest import (
     FakeClock,
     FakeMaintenance,
@@ -527,3 +529,165 @@ async def test_merge_refused_when_any_incident_closed_or_merged(
     )
     assert await service.get(project_id, live.incident_id) == live_before
     assert await event_log.page(project_id, subject_id=live.incident_id) == live_events_before
+
+
+@pytest.mark.asyncio
+async def test_update_resolved_refused_when_second_subject_still_fires(
+    service: IncidentsService,
+    fake_results: FakeResults,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    """An incident with two subjects does not resolve while the second still fires."""
+    now = fake_clock.now()
+    d1 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="feature_a",
+        model="m1",
+        ran_at=now - timedelta(minutes=15),
+        detail={},
+    )
+    d2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="feature_b",
+        model="m1",
+        ran_at=now - timedelta(minutes=10),
+        detail={},
+    )
+    out1 = await service.raise_signal(project_id, d1, seen_at=now - timedelta(minutes=15))
+    inc_id = out1.incident_id
+
+    out2 = await service.raise_signal(project_id, d2, seen_at=now - timedelta(minutes=10))
+    await service.merge(project_id, [inc_id, out2.incident_id], agent="merger")
+
+    signals = await service.signals(project_id, inc_id)
+    assert len(signals) == 2
+    assert {s.subject for s in signals} == {"feature_a", "feature_b"}
+
+    # feature_a is cleared, but feature_b is still firing
+    fake_results.latest_results = [
+        make_stored_result("res_a", fired=False, subject="feature_a", model="m1"),
+        make_stored_result("res_b", fired=True, subject="feature_b", model="m1"),
+    ]
+
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # Now feature_b also clears
+    fake_results.latest_results = [
+        make_stored_result("res_a", fired=False, subject="feature_a", model="m1"),
+        make_stored_result("res_b", fired=False, subject="feature_b", model="m1"),
+    ]
+    fake_clock.advance(30)
+    resolved = await service.update(
+        project_id,
+        inc_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved.status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_merge_critical_into_medium_gives_critical_winner_and_reassigns_notifications(
+    service: IncidentsService,
+    event_log: SqliteEventLog,
+    databases: Databases,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    """Merging a critical incident into a medium incident gives a critical winner and a severity change event."""
+    obs = RecordingObserver()
+    service.add_observer(obs)
+
+    now = fake_clock.now()
+    d1 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="feature_med",
+        model=None,
+        ran_at=now - timedelta(minutes=20),
+        detail={},
+    )
+    d2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="feature_crit",
+        model=None,
+        ran_at=now - timedelta(minutes=10),
+        detail={},
+    )
+    out1 = await service.raise_signal(project_id, d1, seen_at=now - timedelta(minutes=20))
+    out2 = await service.raise_signal(project_id, d2, seen_at=now - timedelta(minutes=10))
+    inc1_id = out1.incident_id
+    inc2_id = out2.incident_id
+
+    # Raise inc2 to critical
+    await service.set_severity(project_id, inc2_id, "critical", "urgent issue", by="tester")
+    inc1_view = await service.get(project_id, inc1_id)
+    inc2_view = await service.get(project_id, inc2_id)
+    assert inc1_view is not None and inc1_view.severity == "medium"
+    assert inc2_view is not None and inc2_view.severity == "critical"
+
+    # Insert a dummy notification_log row for inc2 to verify reassign to winner
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            notification_log.insert().values(
+                id="notif_crit_1",
+                incident=inc2_id,
+                person="alice",
+                channel="discord",
+                kind="incident",
+                escalation_step=0,
+                status="sent",
+                attempts=1,
+                message="Critical incident",
+                created=now.isoformat(),
+            )
+        )
+
+    # Merge inc1 and inc2; inc1 is older, so it is the winner
+    obs.changes.clear()
+    winner = await service.merge(project_id, [inc1_id, inc2_id], agent="merger")
+    assert winner.id == inc1_id
+    assert winner.severity == "critical"
+
+    # Verify event recorded
+    events = await event_log.page(project_id, subject_id=inc1_id)
+    sev_events = [e for e in events if e.type == "incident.severity_changed"]
+    assert any(
+        e.payload.get("before") == "medium" and e.payload.get("after") == "critical"
+        for e in sev_events
+    )
+
+    # Verify observer was notified of severity_raised
+    raised_changes = [
+        c for c in obs.changes if c.kind == "severity_raised" and c.incident_id == inc1_id
+    ]
+    assert len(raised_changes) == 1
+    assert raised_changes[0].before == "medium"
+    assert raised_changes[0].after == "critical"
+
+    # Verify notification_log row was reassigned to winner
+    async with engine.connect() as conn:
+        row = (
+            (
+                await conn.execute(
+                    select(notification_log).where(notification_log.c.id == "notif_crit_1")
+                )
+            )
+            .mappings()
+            .first()
+        )
+        assert row is not None
+        assert row["incident"] == inc1_id

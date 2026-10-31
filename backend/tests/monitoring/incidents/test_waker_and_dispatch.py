@@ -724,3 +724,79 @@ async def test_dispatch_cause_only_update_then_separate_raise_wakes_diagnoser(
         )
         assert "diagnoser:model-performance" in rows
         assert "severity:high" in rows
+
+
+async def test_restart_fresh_dispatch_unchanged_subtype_wakes_nobody(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    fake_sessions: FakeSessions,
+    project_id: str,
+) -> None:
+    """After a restart (a fresh DiagnosisDispatch), an unchanged subtype wakes nobody again."""
+    waker = Waker(databases, event_log, fake_clock)
+    waker.bind(fake_sessions)
+
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=FakeSeverityPolicy(),
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+    )
+    dispatch1 = DiagnosisDispatch(incidents, waker)
+    incidents.add_observer(dispatch1)
+
+    # 1. Open an operational incident
+    outcome = await incidents.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="operational",
+            subject="job_training",
+            model="churn",
+            ran_at=fake_clock.now(),
+            detail={"step": "training"},
+        ),
+        seen_at=fake_clock.now(),
+    )
+    inc_id = outcome.incident_id
+    # Initial wake for operational is "orchestrator"
+    assert len(fake_sessions.posted_messages) == 1
+    assert fake_sessions.posted_messages[0][1] == "orchestrator"
+
+    # 2. Update subtype to "failed_training", which maps to "retraining" diagnoser
+    await incidents.update(
+        project_id,
+        inc_id,
+        agent="orchestrator",
+        patch=IncidentPatch(subtype="failed_training"),
+    )
+    assert len(fake_sessions.posted_messages) == 2
+    assert fake_sessions.posted_messages[1][1] == "retraining"
+
+    # 3. Simulate process restart: create a brand new DiagnosisDispatch (empty in-memory state)
+    fake_sessions.posted_messages.clear()
+    waker_calls: list[str] = []
+    orig_wake = waker.wake
+
+    async def spy_wake(*args: Any, **kwargs: Any) -> Any:
+        waker_calls.append(str(kwargs.get("agent") or (args[1] if len(args) > 1 else "")))
+        return await orig_wake(*args, **kwargs)
+
+    waker.wake = spy_wake  # type: ignore[method-assign]
+
+    fresh_dispatch = DiagnosisDispatch(incidents, waker)
+
+    # An event with change.kind == "cause" arrives (e.g. redundant notification or patch with same subtype)
+    await fresh_dispatch.changed(
+        project_id,
+        IncidentChange(incident_id=inc_id, kind="cause"),
+    )
+
+    # Fresh dispatch should recognize that the stored subtype "failed_training" matches diagnoser "retraining"
+    # and NOT wake retraining again
+    assert len(waker_calls) == 0
+    assert len(fake_sessions.posted_messages) == 0
