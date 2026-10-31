@@ -260,6 +260,66 @@
         "title": "AgentStatus",
         "type": "object"
       },
+      "AllOf": {
+        "additionalProperties": false,
+        "properties": {
+          "all_of": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Compare"
+                },
+                {
+                  "$ref": "#/components/schemas/AllOf"
+                },
+                {
+                  "$ref": "#/components/schemas/AnyOf"
+                },
+                {
+                  "$ref": "#/components/schemas/Not"
+                }
+              ]
+            },
+            "title": "All Of",
+            "type": "array"
+          }
+        },
+        "required": [
+          "all_of"
+        ],
+        "title": "AllOf",
+        "type": "object"
+      },
+      "AnyOf": {
+        "additionalProperties": false,
+        "properties": {
+          "any_of": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Compare"
+                },
+                {
+                  "$ref": "#/components/schemas/AllOf"
+                },
+                {
+                  "$ref": "#/components/schemas/AnyOf"
+                },
+                {
+                  "$ref": "#/components/schemas/Not"
+                }
+              ]
+            },
+            "title": "Any Of",
+            "type": "array"
+          }
+        },
+        "required": [
+          "any_of"
+        ],
+        "title": "AnyOf",
+        "type": "object"
+      },
       "AppInfo": {
         "properties": {
           "data_dir": {
@@ -293,6 +353,7 @@
         "type": "object"
       },
       "ApplyResult": {
+        "additionalProperties": false,
         "properties": {
           "applied": {
             "items": {
@@ -582,6 +643,42 @@
         "title": "BackupResult",
         "type": "object"
       },
+      "BaselineLink": {
+        "additionalProperties": false,
+        "properties": {
+          "first_fired_at": {
+            "format": "date-time",
+            "title": "First Fired At",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "lead_seconds": {
+            "title": "Lead Seconds",
+            "type": "number"
+          },
+          "seen_at": {
+            "format": "date-time",
+            "title": "Seen At",
+            "type": "string"
+          },
+          "team_check_id": {
+            "title": "Team Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "team_check_id",
+          "first_fired_at",
+          "seen_at",
+          "lead_seconds"
+        ],
+        "title": "BaselineLink",
+        "type": "object"
+      },
       "Cadence": {
         "additionalProperties": false,
         "properties": {
@@ -860,6 +957,48 @@
         "title": "CommandSpec",
         "type": "object"
       },
+      "Compare": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "lt",
+              "le",
+              "gt",
+              "ge",
+              "eq",
+              "ne"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "op",
+          "field",
+          "value"
+        ],
+        "title": "Compare",
+        "type": "object"
+      },
       "ConnectionSpec": {
         "additionalProperties": false,
         "properties": {
@@ -972,6 +1111,106 @@
           "connections"
         ],
         "title": "ConnectionsPayload",
+        "type": "object"
+      },
+      "ConnectionsProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "connections",
+            "default": "connections",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ConnectionsPayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "ConnectionsProposalView",
         "type": "object"
       },
       "Contact": {
@@ -1829,6 +2068,84 @@
         "title": "ExpectationKey",
         "type": "object"
       },
+      "ExpectationState": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/components/schemas/ExpectationKey"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "next_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Deadline"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "due",
+              "late",
+              "silent",
+              "suspended",
+              "pending_pr"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "category",
+          "active",
+          "status"
+        ],
+        "title": "ExpectationState",
+        "type": "object"
+      },
       "Feed": {
         "additionalProperties": false,
         "properties": {
@@ -2270,7 +2587,108 @@
         "title": "HandoffPayload",
         "type": "object"
       },
+      "HandoffProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "handoff",
+            "default": "handoff",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/HandoffPayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "HandoffProposalView",
+        "type": "object"
+      },
       "HandoffView": {
+        "additionalProperties": false,
         "properties": {
           "approved": {
             "format": "date-time",
@@ -2311,6 +2729,40 @@
           "ok"
         ],
         "title": "HeartbeatView",
+        "type": "object"
+      },
+      "HookProposal": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/CommandSpec"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "spec",
+          "why"
+        ],
+        "title": "HookProposal",
         "type": "object"
       },
       "HookView": {
@@ -2416,6 +2868,123 @@
           "created"
         ],
         "title": "HookView",
+        "type": "object"
+      },
+      "HooksPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "hooks": {
+            "items": {
+              "$ref": "#/components/schemas/HookProposal"
+            },
+            "title": "Hooks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hooks"
+        ],
+        "title": "HooksPayload",
+        "type": "object"
+      },
+      "HooksProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "hooks",
+            "default": "hooks",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/HooksPayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "HooksProposalView",
         "type": "object"
       },
       "IncidentView": {
@@ -2770,6 +3339,119 @@
         "title": "LocalReview",
         "type": "object"
       },
+      "MaintenancePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "window": {
+            "$ref": "#/components/schemas/WindowSpec"
+          }
+        },
+        "required": [
+          "window"
+        ],
+        "title": "MaintenancePayload",
+        "type": "object"
+      },
+      "MaintenanceProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "maintenance",
+            "default": "maintenance",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/MaintenancePayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "MaintenanceProposalView",
+        "type": "object"
+      },
       "MessageCreated": {
         "description": "Every new message, the user's included.",
         "properties": {
@@ -3057,6 +3739,89 @@
           "n"
         ],
         "title": "MetricValue",
+        "type": "object"
+      },
+      "MissDraft": {
+        "additionalProperties": false,
+        "description": "A person's report of a problem nothing caught; the server stamps `reported_at`.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "occurred_at"
+        ],
+        "title": "MissDraft",
+        "type": "object"
+      },
+      "MissReport": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "occurred_at",
+          "reported_at"
+        ],
+        "title": "MissReport",
         "type": "object"
       },
       "MlflowResults": {
@@ -3563,6 +4328,33 @@
           }
         },
         "title": "MonitoringSettings",
+        "type": "object"
+      },
+      "Not": {
+        "additionalProperties": false,
+        "properties": {
+          "not_": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Compare"
+              },
+              {
+                "$ref": "#/components/schemas/AllOf"
+              },
+              {
+                "$ref": "#/components/schemas/AnyOf"
+              },
+              {
+                "$ref": "#/components/schemas/Not"
+              }
+            ],
+            "title": "Not"
+          }
+        },
+        "required": [
+          "not_"
+        ],
+        "title": "Not",
         "type": "object"
       },
       "NoteDraft": {
@@ -4129,6 +4921,248 @@
         "title": "ParityResult",
         "type": "object"
       },
+      "ParserCode": {
+        "additionalProperties": false,
+        "properties": {
+          "script": {
+            "title": "Script",
+            "type": "string"
+          },
+          "timeout_s": {
+            "default": 30,
+            "title": "Timeout S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "title": "ParserCode",
+        "type": "object"
+      },
+      "ParserMapping": {
+        "additionalProperties": false,
+        "properties": {
+          "defaults": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Defaults",
+            "type": "object"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "fired_when": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Compare"
+              },
+              {
+                "$ref": "#/components/schemas/AllOf"
+              },
+              {
+                "$ref": "#/components/schemas/AnyOf"
+              },
+              {
+                "$ref": "#/components/schemas/Not"
+              }
+            ],
+            "title": "Fired When"
+          },
+          "format": {
+            "enum": [
+              "jsonl",
+              "json",
+              "csv",
+              "log"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          }
+        },
+        "required": [
+          "format",
+          "fields",
+          "fired_when"
+        ],
+        "title": "ParserMapping",
+        "type": "object"
+      },
+      "ParserPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "sample_input": {
+            "title": "Sample Input",
+            "type": "string"
+          },
+          "sample_records": {
+            "items": {
+              "$ref": "#/components/schemas/ResultRecord"
+            },
+            "title": "Sample Records",
+            "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ParserSpec"
+          }
+        },
+        "required": [
+          "spec",
+          "sample_input",
+          "sample_records"
+        ],
+        "title": "ParserPayload",
+        "type": "object"
+      },
+      "ParserProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "parser",
+            "default": "parser",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ParserPayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "ParserProposalView",
+        "type": "object"
+      },
+      "ParserSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParserCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mapping": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParserMapping"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "ParserSpec",
+        "type": "object"
+      },
       "PasswordSignIn": {
         "properties": {
           "password": {
@@ -4516,7 +5550,48 @@
         "title": "Project",
         "type": "object"
       },
-      "ProposalView": {
+      "PromotionPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_version": {
+            "title": "Candidate Version",
+            "type": "string"
+          },
+          "champion_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Version"
+          },
+          "deploy_hook_id": {
+            "title": "Deploy Hook Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "report_id",
+          "candidate_version",
+          "deploy_hook_id"
+        ],
+        "title": "PromotionPayload",
+        "type": "object"
+      },
+      "PromotionProposalView": {
+        "additionalProperties": false,
         "properties": {
           "agent": {
             "title": "Agent",
@@ -4547,19 +5622,13 @@
             "type": "string"
           },
           "kind": {
+            "const": "promotion",
+            "default": "promotion",
             "title": "Kind",
             "type": "string"
           },
           "payload": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ConnectionsPayload"
-              },
-              {
-                "$ref": "#/components/schemas/HandoffPayload"
-              }
-            ],
-            "title": "Payload"
+            "$ref": "#/components/schemas/PromotionPayload"
           },
           "result": {
             "anyOf": [
@@ -4606,9 +5675,7 @@
         },
         "required": [
           "id",
-          "kind",
           "key",
-          "payload",
           "warnings",
           "status",
           "agent",
@@ -4617,10 +5684,53 @@
           "tool_call_id",
           "result",
           "slots",
-          "created"
+          "created",
+          "payload"
         ],
-        "title": "ProposalView",
+        "title": "PromotionProposalView",
         "type": "object"
+      },
+      "ProposalView": {
+        "discriminator": {
+          "mapping": {
+            "connections": "#/components/schemas/ConnectionsProposalView",
+            "handoff": "#/components/schemas/HandoffProposalView",
+            "hooks": "#/components/schemas/HooksProposalView",
+            "maintenance": "#/components/schemas/MaintenanceProposalView",
+            "parser": "#/components/schemas/ParserProposalView",
+            "promotion": "#/components/schemas/PromotionProposalView",
+            "rule": "#/components/schemas/RuleProposalView",
+            "training_policy": "#/components/schemas/TrainingPolicyProposalView"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ConnectionsProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/HandoffProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/ParserProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/RuleProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/HooksProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/MaintenanceProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/TrainingPolicyProposalView"
+          },
+          {
+            "$ref": "#/components/schemas/PromotionProposalView"
+          }
+        ],
+        "title": "ProposalView"
       },
       "Provider": {
         "properties": {
@@ -4935,6 +6045,117 @@
         "title": "ReportView",
         "type": "object"
       },
+      "ResultRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "fired": {
+            "title": "Fired",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "not_enough_data": {
+            "default": false,
+            "title": "Not Enough Data",
+            "type": "boolean"
+          },
+          "origin": {
+            "enum": [
+              "team",
+              "agent",
+              "tracker"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "ran_at": {
+            "format": "date-time",
+            "title": "Ran At",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "check_id",
+          "origin",
+          "ran_at",
+          "fired",
+          "category",
+          "subject",
+          "detail",
+          "source_ref"
+        ],
+        "title": "ResultRecord",
+        "type": "object"
+      },
       "Resync": {
         "description": "The client's position is unknown to the hub: it calls get again.",
         "properties": {
@@ -5003,6 +6224,256 @@
         ],
         "title": "RiskClass",
         "type": "string"
+      },
+      "RuleLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "per_day": {
+            "default": 1,
+            "title": "Per Day",
+            "type": "integer"
+          },
+          "per_incident": {
+            "default": 1,
+            "title": "Per Incident",
+            "type": "integer"
+          }
+        },
+        "title": "RuleLimits",
+        "type": "object"
+      },
+      "RulePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/RuleSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "RulePayload",
+        "type": "object"
+      },
+      "RuleProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "rule",
+            "default": "rule",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RulePayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "RuleProposalView",
+        "type": "object"
+      },
+      "RuleSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "hook_id": {
+            "title": "Hook Id",
+            "type": "string"
+          },
+          "hook_kind": {
+            "enum": [
+              "rollback",
+              "rerun",
+              "fall_back"
+            ],
+            "title": "Hook Kind",
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/RuleLimits"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTerm"
+            },
+            "title": "Terms",
+            "type": "array"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "why",
+          "terms",
+          "hook_id",
+          "hook_kind",
+          "limits"
+        ],
+        "title": "RuleSpec",
+        "type": "object"
+      },
+      "RuleTerm": {
+        "additionalProperties": false,
+        "properties": {
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "min_records": {
+            "default": 1,
+            "title": "Min Records",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "quantifier": {
+            "enum": [
+              "latest",
+              "any",
+              "all"
+            ],
+            "title": "Quantifier",
+            "type": "string"
+          },
+          "when": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Compare"
+              },
+              {
+                "$ref": "#/components/schemas/AllOf"
+              },
+              {
+                "$ref": "#/components/schemas/AnyOf"
+              },
+              {
+                "$ref": "#/components/schemas/Not"
+              }
+            ],
+            "title": "When"
+          },
+          "window_minutes": {
+            "title": "Window Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "check_id",
+          "when",
+          "window_minutes",
+          "quantifier"
+        ],
+        "title": "RuleTerm",
+        "type": "object"
       },
       "RunRow": {
         "properties": {
@@ -5489,7 +6960,72 @@
         "title": "SignalView",
         "type": "object"
       },
+      "SilentTeamAlert": {
+        "additionalProperties": false,
+        "properties": {
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "ran_at": {
+            "format": "date-time",
+            "title": "Ran At",
+            "type": "string"
+          },
+          "result_id": {
+            "title": "Result Id",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "real_issue",
+                  "not_an_issue"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "result_id",
+          "check_id",
+          "subject",
+          "ran_at"
+        ],
+        "title": "SilentTeamAlert",
+        "type": "object"
+      },
+      "SilentVerdictBody": {
+        "additionalProperties": false,
+        "description": "A person's verdict on a team alert no incident matched.",
+        "properties": {
+          "value": {
+            "enum": [
+              "real_issue",
+              "not_an_issue"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SilentVerdictBody",
+        "type": "object"
+      },
       "SlotState": {
+        "additionalProperties": false,
         "properties": {
           "index": {
             "title": "Index",
@@ -5510,6 +7046,100 @@
           "set"
         ],
         "title": "SlotState",
+        "type": "object"
+      },
+      "StatValue": {
+        "additionalProperties": false,
+        "properties": {
+          "collecting": {
+            "title": "Collecting",
+            "type": "boolean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "n",
+          "collecting"
+        ],
+        "title": "StatValue",
+        "type": "object"
+      },
+      "StatsView": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_available": {
+            "title": "Baseline Available",
+            "type": "boolean"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "groups": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/StatValue"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "detection",
+                "speed",
+                "noise",
+                "diagnosis",
+                "effort",
+                "model_impact",
+                "cost",
+                "reliability"
+              ]
+            },
+            "title": "Groups",
+            "type": "object"
+          },
+          "window": {
+            "enum": [
+              "7d",
+              "30d",
+              "all"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "baseline_available",
+          "groups"
+        ],
+        "title": "StatsView",
         "type": "object"
       },
       "SyncBody": {
@@ -6070,6 +7700,155 @@
         "title": "TrackingSourceView",
         "type": "object"
       },
+      "TrainingPolicyPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluate_hook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluate Hook Id"
+          },
+          "max_runs_per_week": {
+            "title": "Max Runs Per Week",
+            "type": "integer"
+          },
+          "min_interval_hours": {
+            "title": "Min Interval Hours",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "run_time_limit_minutes": {
+            "title": "Run Time Limit Minutes",
+            "type": "integer"
+          },
+          "train_hook_id": {
+            "title": "Train Hook Id",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/WindowRule"
+          }
+        },
+        "required": [
+          "model",
+          "train_hook_id",
+          "window",
+          "min_interval_hours",
+          "max_runs_per_week",
+          "run_time_limit_minutes"
+        ],
+        "title": "TrainingPolicyPayload",
+        "type": "object"
+      },
+      "TrainingPolicyProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "const": "training_policy",
+            "default": "training_policy",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TrainingPolicyPayload"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotState"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "warnings",
+          "status",
+          "agent",
+          "approval_id",
+          "turn_id",
+          "tool_call_id",
+          "result",
+          "slots",
+          "created",
+          "payload"
+        ],
+        "title": "TrainingPolicyProposalView",
+        "type": "object"
+      },
       "TrainingWindow": {
         "additionalProperties": false,
         "properties": {
@@ -6338,6 +8117,64 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VerdictDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "right_category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Category"
+          },
+          "right_subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Subtype"
+          },
+          "value": {
+            "enum": [
+              "real_issue",
+              "not_an_issue",
+              "wrong_type"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "VerdictDraft",
+        "type": "object"
+      },
       "VerdictView": {
         "additionalProperties": false,
         "properties": {
@@ -6436,6 +8273,94 @@
           "address"
         ],
         "title": "VerifyModel",
+        "type": "object"
+      },
+      "WindowRule": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "kind": {
+            "enum": [
+              "trailing_days",
+              "since_last_run",
+              "fixed"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "WindowRule",
+        "type": "object"
+      },
+      "WindowSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "scope",
+          "reason"
+        ],
+        "title": "WindowSpec",
         "type": "object"
       }
     }
@@ -7921,6 +9846,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/baseline/silent-alerts": {
+      "get": {
+        "operationId": "list_silent_alerts_api_projects__project_id__baseline_silent_alerts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SilentTeamAlert"
+                  },
+                  "title": "Response List Silent Alerts Api Projects  Project Id  Baseline Silent Alerts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Silent Alerts",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/baseline/silent-alerts/{result_id}/verdict": {
+      "post": {
+        "operationId": "judge_silent_alert_api_projects__project_id__baseline_silent_alerts__result_id__verdict_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "result_id",
+            "required": true,
+            "schema": {
+              "title": "Result Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SilentVerdictBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilentTeamAlert"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Silent Alert",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
     "/api/projects/{project_id}/connections": {
       "get": {
         "operationId": "list_connections_api_projects__project_id__connections_get",
@@ -8367,6 +10399,52 @@
         "summary": "Stream Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/expectations": {
+      "get": {
+        "operationId": "list_expectations_api_projects__project_id__expectations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExpectationState"
+                  },
+                  "title": "Response List Expectations Api Projects  Project Id  Expectations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Expectations",
+        "tags": [
+          "expectations"
         ]
       }
     },
@@ -8894,6 +10972,61 @@
         ]
       }
     },
+    "/api/projects/{project_id}/incidents/{incident_id}/baseline": {
+      "get": {
+        "operationId": "list_baseline_links_api_projects__project_id__incidents__incident_id__baseline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BaselineLink"
+                  },
+                  "title": "Response List Baseline Links Api Projects  Project Id  Incidents  Incident Id  Baseline Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Baseline Links",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
     "/api/projects/{project_id}/incidents/{incident_id}/close": {
       "post": {
         "operationId": "close_incident_api_projects__project_id__incidents__incident_id__close_post",
@@ -9080,6 +11213,173 @@
         "summary": "Get Incident Timeline",
         "tags": [
           "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/verdict": {
+      "post": {
+        "operationId": "record_verdict_api_projects__project_id__incidents__incident_id__verdict_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerdictDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Verdict",
+        "tags": [
+          "verdicts"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/misses": {
+      "get": {
+        "operationId": "list_misses_api_projects__project_id__misses_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MissReport"
+                  },
+                  "title": "Response List Misses Api Projects  Project Id  Misses Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Misses",
+        "tags": [
+          "verdicts"
+        ]
+      },
+      "post": {
+        "operationId": "report_miss_api_projects__project_id__misses_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Miss",
+        "tags": [
+          "verdicts"
         ]
       }
     },
@@ -10436,6 +12736,85 @@
         ]
       }
     },
+    "/api/projects/{project_id}/stats": {
+      "get": {
+        "operationId": "get_stats_api_projects__project_id__stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "30d",
+              "enum": [
+                "7d",
+                "30d",
+                "all"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "data_quality",
+                    "drift",
+                    "model_performance",
+                    "operational"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stats",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
     "/api/projects/{project_id}/tasks/{task_id}/discard": {
       "post": {
         "operationId": "discard_project_task_api_projects__project_id__tasks__task_id__discard_post",
@@ -11366,6 +13745,69 @@
         "summary": "Get Versions",
         "tags": [
           "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/verdicts": {
+      "get": {
+        "operationId": "list_verdicts_api_projects__project_id__verdicts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/VerdictView"
+                  },
+                  "title": "Response List Verdicts Api Projects  Project Id  Verdicts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Verdicts",
+        "tags": [
+          "verdicts"
         ]
       }
     },

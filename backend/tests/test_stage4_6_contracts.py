@@ -346,8 +346,22 @@ def test_stage4_6_protocol_methods() -> None:
         "run",
         "runs",
     }
-    assert _methods(Verdicts) == {"record", "get", "confirm_by_labels", "report_miss", "list"}
-    assert _methods(Baseline) == {"available", "links", "silent_alerts", "judge_silent"}
+    assert _methods(Verdicts) == {
+        "record",
+        "get",
+        "confirm_by_labels",
+        "report_miss",
+        "list",
+        "list_misses",
+    }
+    assert _methods(Baseline) == {
+        "available",
+        "links",
+        "silent_alerts",
+        "matched_incidents",
+        "judged_silent_alerts",
+        "judge_silent",
+    }
     assert _methods(Fixes) == {"request", "choose", "guards", "circuit", "get"}
     assert _methods(Training) == {"policies", "request", "requests"}
     assert _methods(EvaluationReader) == {"for_candidate", "latest"}

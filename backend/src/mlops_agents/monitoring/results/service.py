@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from mlops_agents.connections.contract import Connections
+from mlops_agents.credentials.scrub import scrub_url_secrets
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.expectations.contract import Maintenance, NeverSuspended
+from mlops_agents.monitoring.incidents.contract import SignalDraft
+from mlops_agents.monitoring.results.ci_source import CiSourceReader
 from mlops_agents.monitoring.results.contract import (
     CollectionReport,
+    EvaluationCopies,
     ResultQuery,
     ResultRecord,
     Results,
@@ -18,14 +24,17 @@ from mlops_agents.monitoring.results.contract import (
     SourceKind,
     SourceState,
     StoredResult,
+    parse_source_id,
     source_id,
 )
+from mlops_agents.monitoring.results.evaluation_copy import SqliteEvaluationCopies
 from mlops_agents.monitoring.results.file_source import FileSourceReader, SourceReadOutcome
+from mlops_agents.monitoring.results.mlflow_source import MlflowSourceReader
 from mlops_agents.monitoring.results.store import ResultsStore
 from mlops_agents.proposals.contract import Handoffs
-from mlops_agents.proposals.payloads import FileResults, JobFeedRef
+from mlops_agents.proposals.payloads import CiResults, FileResults, JobFeedRef
 from mlops_agents.storage.databases import Databases
-from mlops_agents.tracking.contract import Page
+from mlops_agents.tracking.contract import Page, Tracking
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +43,19 @@ class SourceReader(Protocol):
     """Protocol for reading a source kind."""
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, object]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, object],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome: ...
+
+
+class SignalSink(Protocol):
+    """Protocol for raising signals into Incidents."""
+
+    async def raise_signal(self, project_id: str, draft: SignalDraft, seen_at: datetime) -> Any: ...
 
 
 class ResultsService(Results):
@@ -48,16 +68,47 @@ class ResultsService(Results):
         connections: Connections,
         events: SqliteEventLog,
         *,
+        tracking: Tracking | None = None,
         store: ResultsStore | None = None,
         file_reader: FileSourceReader | None = None,
+        ci_reader: CiSourceReader | None = None,
+        mlflow_reader: MlflowSourceReader | None = None,
+        evaluation_copies: EvaluationCopies | None = None,
+        incidents: SignalSink | None = None,
+        maintenance: Maintenance | None = None,
     ) -> None:
         self._databases = databases
         self._handoffs = handoffs
         self._connections = connections
         self._events = events
+        self._tracking = tracking
         self._store = store or ResultsStore(databases)
         self._file_reader = file_reader or FileSourceReader(connections)
+        self._ci_reader = ci_reader or (CiSourceReader(tracking, handoffs) if tracking else None)
+        self._mlflow_reader = mlflow_reader or (
+            MlflowSourceReader(tracking, handoffs) if tracking else None
+        )
+        self._evaluation_copies = evaluation_copies or SqliteEvaluationCopies(databases)
+        self._incidents = incidents
+        self._maintenance = maintenance or NeverSuspended()
         self._observers: list[ResultsObserver] = []
+        self._delivery_locks: dict[str, asyncio.Lock] = {}
+
+    def bind_incidents(self, incidents: SignalSink) -> None:
+        """Binds incidents service to results service."""
+        self._incidents = incidents
+
+    def bind_tracking(self, tracking: Tracking) -> None:
+        """Binds tracking service to results service and initializes tracker readers."""
+        self._tracking = tracking
+        if self._ci_reader is None:
+            self._ci_reader = CiSourceReader(tracking, self._handoffs)
+        if self._mlflow_reader is None:
+            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs)
+
+    def bind_maintenance(self, maintenance: Maintenance) -> None:
+        """Binds maintenance service to results service."""
+        self._maintenance = maintenance
 
     @property
     def store(self) -> ResultsStore:
@@ -66,8 +117,22 @@ class ResultsService(Results):
     def add_observer(self, observer: ResultsObserver) -> None:
         self._observers.append(observer)
 
+    def _delivery_lock(self, project_id: str) -> asyncio.Lock:
+        """The project's delivery lock. Held from reading undelivered rows to marking them,
+        so two deliveries for one project never hand the same rows to the observers."""
+        lock = self._delivery_locks.get(project_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._delivery_locks[project_id] = lock
+        return lock
+
     async def deliver_undelivered(self, project_id: str, now: datetime) -> None:
         """Delivers any previously committed but undelivered results to observers."""
+        async with self._delivery_lock(project_id):
+            await self._deliver_undelivered_locked(project_id, now)
+
+    async def _deliver_undelivered_locked(self, project_id: str, now: datetime) -> None:
+        """`deliver_undelivered` for a caller already holding the project's delivery lock."""
         if not self._observers:
             return
 
@@ -104,6 +169,9 @@ class ResultsService(Results):
                     ops.results_location.connection,
                 )
                 derived[s_id] = ("file", False)
+            else:
+                s_id = source_id("mlflow", ops.results_location.metric)
+                derived[s_id] = ("mlflow", False)
 
             # Standard check specs
             for check in ops.checks:
@@ -114,23 +182,50 @@ class ResultsService(Results):
                         check.results.connection,
                     )
                     derived[s_id] = ("file", False)
+                elif isinstance(check.results, CiResults):
+                    s_id = source_id("ci", check.results.workflow)
+                    derived[s_id] = ("ci", False)
+                else:
+                    s_id = source_id("mlflow", check.results.metric)
+                    derived[s_id] = ("mlflow", False)
 
-            # Team job feeds (needs a parser)
+            # Team job feeds (file needs a parser; ci_workflow does not)
             for feed in ops.feeds:
-                if isinstance(feed.ref, JobFeedRef) and feed.ref.file is not None:
-                    s_id = source_id(
-                        "file",
-                        feed.ref.file.path_pattern,
-                        feed.ref.file.connection,
-                    )
-                    derived[s_id] = ("file", True)
+                if isinstance(feed.ref, JobFeedRef):
+                    if feed.ref.file is not None:
+                        s_id = source_id(
+                            "file",
+                            feed.ref.file.path_pattern,
+                            feed.ref.file.connection,
+                        )
+                        derived[s_id] = ("file", True)
+                    elif feed.ref.ci_workflow is not None:
+                        s_id = source_id("ci", feed.ref.ci_workflow)
+                        derived[s_id] = ("ci", False)
 
         return [(s_id, kind, needs_parser) for s_id, (kind, needs_parser) in derived.items()]
 
     async def collect(self, project_id: str, now: datetime) -> CollectionReport:
         """Runs a collection cycle for all derived sources."""
+        # The rows a cycle stores stay undelivered until its own delivery marks them, so the
+        # whole cycle holds the project's delivery lock.
+        async with self._delivery_lock(project_id):
+            report = await self._collect_locked(project_id, now)
+
+        # 5. Emit results.collected event
+        await self._events.record(
+            project_id,
+            source="results",
+            type="results.collected",
+            payload=report.model_dump(),
+        )
+
+        return report
+
+    async def _collect_locked(self, project_id: str, now: datetime) -> CollectionReport:
+        """Steps 1 to 4 of `collect`, for a caller holding the project's delivery lock."""
         # 1. Deliver any undelivered records first
-        await self.deliver_undelivered(project_id, now)
+        await self._deliver_undelivered_locked(project_id, now)
 
         # 2. Derive sources
         sources = await self._derive_sources(project_id)
@@ -176,14 +271,59 @@ class ResultsService(Results):
                 by_source[s_id] = 0
                 continue
 
-            outcome = await self._file_reader.read(project_id, s_id, cursor=current_cursor)
+            prev_failures = state.consecutive_failures if state else 0
+            try:
+                if kind == "file":
+                    outcome = await self._file_reader.read(
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                    )
+                elif kind == "ci":
+                    if self._ci_reader is None:
+                        raise RuntimeError("CI source reader is not configured")
+                    outcome = await self._ci_reader.read(
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                    )
+                elif kind == "mlflow":
+                    if self._mlflow_reader is None:
+                        raise RuntimeError("MLflow source reader is not configured")
+                    outcome = await self._mlflow_reader.read(
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                    )
+                else:
+                    raise ValueError(f"Unknown source kind: {kind}")
+            except Exception as exc:
+                err_msg = scrub_url_secrets(str(exc))
+                outcome = SourceReadOutcome(
+                    records=[],
+                    cursor=current_cursor,
+                    consecutive_failures=prev_failures + 1,
+                    last_error=err_msg,
+                )
+
+            # Store evaluation copies if any
+            if outcome.evaluations:
+                for eval_rec in outcome.evaluations:
+                    try:
+                        await self._evaluation_copies.store_copy(project_id, eval_rec)
+                    except Exception:
+                        logger.exception("Failed to store evaluation copy for %s", eval_rec)
+
+            if outcome.last_error is not None:
+                new_failures = (
+                    outcome.consecutive_failures
+                    if outcome.consecutive_failures > prev_failures
+                    else prev_failures + 1
+                )
+            else:
+                new_failures = 0
+
             new_state = SourceState(
                 source_id=s_id,
                 kind=kind,
                 cursor=outcome.cursor,
                 last_read=now,
                 last_error=outcome.last_error,
-                consecutive_failures=outcome.consecutive_failures,
+                consecutive_failures=new_failures,
             )
 
             new_stored = await self._store.save_items_and_state(
@@ -198,6 +338,30 @@ class ResultsService(Results):
             by_source[s_id] = len(new_stored)
             if outcome.last_error is not None:
                 failures[s_id] = outcome.last_error
+                # Only raise source_failure when the source starts failing (was not failing previously)
+                was_failing = (
+                    state is not None
+                    and state.last_error is not None
+                    and state.consecutive_failures > 0
+                )
+                if not was_failing and self._incidents is not None:
+                    try:
+                        _k, _ref, conn_name = parse_source_id(s_id)
+                        scope = conn_name if conn_name is not None else s_id
+                    except ValueError:
+                        scope = s_id
+
+                    is_suspended = await self._maintenance.suspended(project_id, scope, now)
+                    if not is_suspended:
+                        draft = SignalDraft(
+                            kind="source_failure",
+                            category="operational",
+                            subject=s_id,
+                            ran_at=now,
+                            detail={"error": outcome.last_error, "source_id": s_id},
+                            source_ref=s_id,
+                        )
+                        await self._incidents.raise_signal(project_id, draft, seen_at=now)
 
         # 4. Deliver all newly stored records sorted by ran_at ASC, id ASC
         if all_newly_stored and self._observers:
@@ -215,21 +379,11 @@ class ResultsService(Results):
                 project_id, [r.id for r in all_newly_stored], delivered_at=now
             )
 
-        report = CollectionReport(
+        return CollectionReport(
             stored=stored_total,
             by_source=by_source,
             failures=failures,
         )
-
-        # 5. Emit results.collected event
-        await self._events.record(
-            project_id,
-            source="results",
-            type="results.collected",
-            payload=report.model_dump(),
-        )
-
-        return report
 
     async def ingest(
         self,

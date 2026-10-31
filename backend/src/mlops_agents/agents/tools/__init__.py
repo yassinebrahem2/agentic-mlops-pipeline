@@ -35,6 +35,7 @@ from mlops_agents.monitoring.incidents.tools import (
     IncidentSplit,
     IncidentUpdate,
 )
+from mlops_agents.training.tools import RecordFixChoice, RequestFix
 
 if TYPE_CHECKING:
     import httpx2
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
     from mlops_agents.sandbox.contract import Sandbox
     from mlops_agents.storage.databases import Databases
     from mlops_agents.tracking.contract import Tracking
+    from mlops_agents.training.fixes import SqliteFixes
     from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
@@ -83,6 +85,8 @@ __all__ = [
     "ProposeTool",
     "ReadHandoffTool",
     "ReadTool",
+    "RecordFixChoice",
+    "RequestFix",
     "ResumeTaskTool",
     "RunHookTool",
     "SaveNote",
@@ -128,6 +132,7 @@ def default_registry(
     data_summaries: DataSummaries | None = None,
     connections: Connections | None = None,
     clock: Clock | None = None,
+    fixes: SqliteFixes | None = None,
     surfaces: ProtectionSurfaces | None = None,
     pr_sync: PrSyncObserver | None = None,
 ) -> ToolRegistry:
@@ -233,4 +238,7 @@ def default_registry(
             )
     if query_providers is not None:
         registry.register(MonitoringQueryTool(query_providers))
+    if fixes is not None:
+        registry.register(RequestFix(fixes))
+        registry.register(RecordFixChoice(fixes))
     return registry
