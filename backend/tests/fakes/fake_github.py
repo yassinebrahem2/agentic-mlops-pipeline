@@ -49,6 +49,10 @@ class FakeGitHubState:
         default_factory=dict[tuple[str, str], list[dict[str, Any]]]
     )
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    dispatches: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    workflow_dispatch_errors: dict[tuple[str, str], tuple[int, dict[str, Any]]] = field(
+        default_factory=dict[tuple[str, str], tuple[int, dict[str, Any]]]
+    )
 
     def merge_pull(self, repo: str, number: int) -> dict[str, Any]:
         key = (repo, number)
@@ -87,6 +91,8 @@ class FakeGitHubState:
         self.workflow_runs.clear()
         self.check_runs.clear()
         self.requests.clear()
+        self.dispatches.clear()
+        self.workflow_dispatch_errors.clear()
 
 
 def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
@@ -481,6 +487,34 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         start = (page - 1) * per_page
         end = start + per_page
         return JSONResponse({"total_count": len(runs), "check_runs": runs[start:end]})
+
+    @app.post("/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches")
+    async def dispatch_workflow_route(
+        owner: str, repo: str, workflow: str, request: Request
+    ) -> Response:
+        full_name = f"{owner}/{repo}"
+        try:
+            body: dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        state.requests.append(
+            {
+                "method": "POST",
+                "path": f"/repos/{full_name}/actions/workflows/{workflow}/dispatches",
+                "body": body,
+            }
+        )
+        err = _check_common(request, "actions: write")
+        if err is not None:
+            return err
+
+        dispatch_error = state.workflow_dispatch_errors.get((full_name, workflow))
+        if dispatch_error is not None:
+            status_code, err_body = dispatch_error
+            return JSONResponse(err_body, status_code=status_code)
+
+        state.dispatches.append({"repo": full_name, "workflow": workflow, "body": body})
+        return Response(status_code=204)
 
     return app
 

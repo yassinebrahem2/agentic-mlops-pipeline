@@ -12,6 +12,7 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.ids import new_id
+from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner
 from mlops_agents.monitoring.hooks.kind import HooksKind
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
@@ -46,6 +47,11 @@ async def test_build_services_hooks_wiring(
 
         # Verify hooks exists on services
         assert isinstance(services.hooks, HooksService)
+        assert "ci_dispatch" in services.hooks._runners  # pyright: ignore[reportPrivateUsage]
+        assert isinstance(
+            services.hooks._runners["ci_dispatch"],  # pyright: ignore[reportPrivateUsage]
+            CiDispatchRunner,
+        )
 
         # Verify RunHook and Hold in services.tools
         assert isinstance(services.tools.get("RunHook"), RunHookTool)
