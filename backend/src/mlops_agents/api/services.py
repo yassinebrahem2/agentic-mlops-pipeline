@@ -71,6 +71,9 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
+from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
+from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.contract import Notifier, OnCallPeople
@@ -151,6 +154,7 @@ class Services:
     reports: Reports
     hooks: HooksService
     incidents: IncidentsService
+    verdicts: SqliteVerdicts
     waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
@@ -316,6 +320,9 @@ async def build_services(
         maintenance=maintenance,
         clock=clock,
     )
+    verdicts = SqliteVerdicts(databases, incidents, results, events, clock)
+    incidents.bind_verdicts(verdicts)
+    query_providers.register(VerdictsQueryProvider(verdicts))
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
     results.add_observer(SignalsFromResults(incidents, maintenance))
@@ -461,6 +468,7 @@ async def build_services(
     scheduler.register(SyncTrackingJob(tracking))
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
+    scheduler.add_sync_observer(LabelConfirmation(verdicts))
 
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
@@ -548,6 +556,7 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        verdicts=verdicts,
         waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
