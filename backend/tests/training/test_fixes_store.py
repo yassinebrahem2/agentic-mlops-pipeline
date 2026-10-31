@@ -33,8 +33,10 @@ class WakeCall:
 
 
 class FakeAgentWaker:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_once: bool = False) -> None:
         self.calls: list[WakeCall] = []
+        self._keys_woken: set[str] = set()
+        self.fail_once = fail_once
 
     async def wake(
         self,
@@ -45,7 +47,12 @@ class FakeAgentWaker:
         text: str,
         key: str,
     ) -> None:
-        self.calls.append(WakeCall(project_id, agent, label, subject_id, text, key))
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("Post failure in wake")
+        if key not in self._keys_woken:
+            self._keys_woken.add(key)
+            self.calls.append(WakeCall(project_id, agent, label, subject_id, text, key))
 
 
 class FakeIncidents:
@@ -201,6 +208,39 @@ async def test_repeated_request_returns_same_fix_no_second_wake(
     assert len(fake_waker.calls) == 1
     evts2 = await events_log.page(project_id)
     assert len(evts2) == 1
+
+
+async def test_wake_fails_once_then_retried_request_wakes_retraining(
+    databases: Databases,
+    fake_incidents: FakeIncidents,
+    fake_clock: FakeClock,
+) -> None:
+    fake_waker = FakeAgentWaker(fail_once=True)
+    events = SqliteEventLog(databases)
+    fixes_service = SqliteFixes(
+        databases=databases,
+        incidents=fake_incidents,  # type: ignore[arg-type]
+        waker=fake_waker,
+        events=events,
+        clock=fake_clock,
+    )
+    project_id = "prj_test"
+    incident_id = "inc_test"
+
+    # First request fails when waking Retraining
+    with pytest.raises(RuntimeError, match="Post failure in wake"):
+        await fixes_service.request(project_id, incident_id, "agent_1", "evidence 1")
+
+    assert len(fake_waker.calls) == 0
+
+    # Retrying the request for the same incident finds the requested fix and calls wake again
+    fix_retried = await fixes_service.request(project_id, incident_id, "agent_1", "evidence 1")
+    assert fix_retried.status == "requested"
+
+    assert len(fake_waker.calls) == 1
+    assert fake_waker.calls[0].agent == RETRAINING_AGENT
+    assert fake_waker.calls[0].key == fix_retried.id
+    assert fake_waker.calls[0].subject_id == incident_id
 
 
 async def test_request_unknown_incident_refused(

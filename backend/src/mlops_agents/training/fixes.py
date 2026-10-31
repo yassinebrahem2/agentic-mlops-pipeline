@@ -129,7 +129,21 @@ class SqliteFixes:
             )
 
             if existing_row is not None:
-                return self._row_to_view(existing_row)
+                view = self._row_to_view(existing_row)
+                if view.status == "requested":
+                    wake_text = (
+                        f"Fix request {view.id} for incident {incident_id} (model: {incident.model}):\n"
+                        f"{untrusted(view.evidence, source='fix_request')}"
+                    )
+                    await self._waker.wake(
+                        project_id=project_id,
+                        agent=RETRAINING_AGENT,
+                        label="fix_request",
+                        subject_id=incident_id,
+                        text=wake_text,
+                        key=view.id,
+                    )
+                return view
 
         capped_evidence = evidence[:EVIDENCE_MAX_CHARS]
         fix_id = new_id("fix")
