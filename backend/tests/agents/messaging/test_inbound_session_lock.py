@@ -92,13 +92,26 @@ async def test_the_take_and_the_redelivery_reach_the_sessions_live_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The take marks alpha's message complete while turn 1 runs; turn 1 then fails, and the
-    redelivery queues it again: both changes reach a subscriber of beta's stream."""
+    redelivery queues it again: both changes reach a subscriber of beta's stream, and the
+    redelivery's write runs while its task holds the registry's lock for the session."""
     gate = HoldingGate()
     env, _ = await build_inbound_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, gate=gate
     )
     _fail_once_released(monkeypatch, env, gate)
     manager = env.session.manager
+    registry: Any = getattr(manager, "_registry", None)
+    held_by_redeliverer: list[bool] = []
+    redeliver_inbound = SessionStore.redeliver_inbound
+
+    async def redeliver_inbound_seen(
+        self: SessionStore, project: str, session: str, turn: str
+    ) -> list[MessageView]:
+        owner: Any = getattr(registry.lock(project, session), "_owner", None)
+        held_by_redeliverer.append(owner is asyncio.current_task())
+        return await redeliver_inbound(self, project, session, turn)
+
+    monkeypatch.setattr(SessionStore, "redeliver_inbound", redeliver_inbound_seen)
     try:
         async with asyncio.timeout(20):
             session_id, sub = await _start_turn_and_post(env, gate)
@@ -115,6 +128,8 @@ async def test_the_take_and_the_redelivery_reach_the_sessions_live_stream(
     # The take, before turn 1 ended; the redelivery, after it (the next turn completes it).
     assert _updates(first, taken_id) == ["complete"]
     assert _updates(second, taken_id)[:1] == ["queued"]
+    assert held_by_redeliverer
+    assert all(held_by_redeliverer)
 
 
 async def test_a_send_waits_while_a_mid_turn_take_of_the_same_session_runs(
@@ -184,13 +199,19 @@ async def test_a_send_waits_while_a_mid_turn_take_of_the_same_session_runs(
     assert waited
     assert not wrote
     taken_seq = next(
-        e.seq for e in events if isinstance(e, MessageUpdated) and e.data.message.id == taken_id
+        (e.seq for e in events if isinstance(e, MessageUpdated) and e.data.message.id == taken_id),
+        None,
     )
     user_seq = next(
-        e.seq
-        for e in events
-        if isinstance(e, MessageCreated) and e.data.message.id == user_message.id
+        (
+            e.seq
+            for e in events
+            if isinstance(e, MessageCreated) and e.data.message.id == user_message.id
+        ),
+        None,
     )
+    assert taken_seq is not None
+    assert user_seq is not None
     assert taken_seq < user_seq
 
 
