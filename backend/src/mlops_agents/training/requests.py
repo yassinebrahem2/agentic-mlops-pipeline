@@ -145,13 +145,13 @@ class SqliteTraining(Training):
         if ci_run_url is not None:
             values["ci_run_url"] = ci_run_url
 
+        stmt = update(training_requests).where(training_requests.c.id == request_id)
+        if status == "failed":
+            stmt = stmt.where(training_requests.c.status == "started")
+
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
-            await conn.execute(
-                update(training_requests)
-                .where(training_requests.c.id == request_id)
-                .values(**values)
-            )
+            await conn.execute(stmt.values(**values))
 
     def _row_to_view(self, row: Any) -> TrainingRequestView:
         window_raw = row["window"]

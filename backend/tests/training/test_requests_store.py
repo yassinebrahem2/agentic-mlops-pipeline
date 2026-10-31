@@ -158,3 +158,39 @@ async def test_set_status(training_store: SqliteTraining) -> None:
     assert req.status == "linked"
     assert req.run_key == "run-999"
     assert req.ci_run_url == "https://github.com/actions/runs/12345"
+
+
+async def test_set_status_failed_only_overwrites_started(
+    training_store: SqliteTraining,
+) -> None:
+    project_id = "prj_1"
+    req_id = new_id("trq")
+    await training_store.create_request(
+        project_id=project_id,
+        request_id=req_id,
+        model="model_a",
+        hook_id="hook-a",
+        mode="train",
+        status="started",
+    )
+
+    # First link it
+    await training_store.set_status(
+        project_id=project_id,
+        request_id=req_id,
+        status="linked",
+        run_key="run-1",
+    )
+    req = await training_store.request(project_id, req_id)
+    assert req is not None
+    assert req.status == "linked"
+
+    # Attempting to set failed on a linked request does not overwrite
+    await training_store.set_status(
+        project_id=project_id,
+        request_id=req_id,
+        status="failed",
+    )
+    req = await training_store.request(project_id, req_id)
+    assert req is not None
+    assert req.status == "linked"
