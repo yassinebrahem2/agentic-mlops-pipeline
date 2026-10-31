@@ -616,6 +616,45 @@
         "title": "Cadence",
         "type": "object"
       },
+      "ChannelTest": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelTest",
+        "type": "object"
+      },
+      "ChannelTestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "title": "ChannelTestRequest",
+        "type": "object"
+      },
       "CheckSpec": {
         "additionalProperties": false,
         "properties": {
@@ -1256,6 +1295,50 @@
         "title": "DetectedKey",
         "type": "object"
       },
+      "DiscordSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "webhook_set": {
+            "title": "Webhook Set",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "webhook_set"
+        ],
+        "title": "DiscordSettings",
+        "type": "object"
+      },
+      "DiscordUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "DiscordUpdate",
+        "type": "object"
+      },
       "DockerStatus": {
         "properties": {
           "available": {
@@ -1291,6 +1374,102 @@
           "detail"
         ],
         "title": "DockerStatus",
+        "type": "object"
+      },
+      "EmailSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "password_set": {
+            "title": "Password Set",
+            "type": "boolean"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          },
+          "starttls": {
+            "title": "Starttls",
+            "type": "boolean"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "host",
+          "port",
+          "user",
+          "sender",
+          "starttls",
+          "password_set"
+        ],
+        "title": "EmailSettings",
+        "type": "object"
+      },
+      "EmailUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "default": "",
+            "title": "Host",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "default": 587,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "sender": {
+            "default": "",
+            "title": "Sender",
+            "type": "string"
+          },
+          "starttls": {
+            "default": true,
+            "title": "Starttls",
+            "type": "boolean"
+          },
+          "user": {
+            "default": "",
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "EmailUpdate",
         "type": "object"
       },
       "EmbedderChoice": {
@@ -4610,6 +4789,45 @@
         "title": "ProviderSettings",
         "type": "object"
       },
+      "PublicUrlUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
+          }
+        },
+        "title": "PublicUrlUpdate",
+        "type": "object"
+      },
+      "PublicUrlView": {
+        "additionalProperties": false,
+        "properties": {
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
+          }
+        },
+        "required": [
+          "public_url"
+        ],
+        "title": "PublicUrlView",
+        "type": "object"
+      },
       "RelinkProject": {
         "additionalProperties": false,
         "properties": {
@@ -6791,6 +7009,279 @@
         "summary": "Heartbeat",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/integrations/discord": {
+      "get": {
+        "description": "Returns the current Discord integration settings.",
+        "operationId": "get_discord_settings_api_integrations_discord_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Discord Settings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Updates Discord integration settings.",
+        "operationId": "update_discord_settings_api_integrations_discord_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscordUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Discord Settings",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/discord/webhook": {
+      "delete": {
+        "description": "Clears the stored Discord webhook URL.",
+        "operationId": "delete_discord_webhook_api_integrations_discord_webhook_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Discord Webhook",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/email": {
+      "get": {
+        "description": "Returns the current Email integration settings.",
+        "operationId": "get_email_settings_api_integrations_email_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Email Settings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Updates Email integration settings.",
+        "operationId": "update_email_settings_api_integrations_email_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Email Settings",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/email/password": {
+      "delete": {
+        "description": "Clears the stored Email SMTP password.",
+        "operationId": "delete_email_password_api_integrations_email_password_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Email Password",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/public-url": {
+      "get": {
+        "description": "Returns the configured public URL.",
+        "operationId": "get_public_url_api_integrations_public_url_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUrlView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Public Url",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Sets or clears the app's public URL.",
+        "operationId": "update_public_url_api_integrations_public_url_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicUrlUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUrlView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Public Url",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/{channel}/test": {
+      "post": {
+        "description": "Sends a single test message directly through the specified channel.",
+        "operationId": "test_channel_api_integrations__channel__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel",
+            "required": true,
+            "schema": {
+              "enum": [
+                "discord",
+                "email"
+              ],
+              "title": "Channel",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Channel",
+        "tags": [
+          "integrations"
         ]
       }
     },

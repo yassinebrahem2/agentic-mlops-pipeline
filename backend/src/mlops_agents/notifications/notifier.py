@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from ulid import ULID
 
+from mlops_agents.config import RunMode
 from mlops_agents.credentials.scrub import error_text, scrub_values
 from mlops_agents.events.contract import EventLog, EventType
 from mlops_agents.notifications.constants import ERROR_MAX_CHARS, RETRY_BACKOFFS_S
@@ -21,6 +22,7 @@ from mlops_agents.notifications.contract import (
     Notifier,
     OnCallPerson,
 )
+from mlops_agents.notifications.links import incident_link
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.proposals.payloads import Contact
 from mlops_agents.providers.failover import Clock
@@ -38,6 +40,7 @@ class SqliteNotifier(Notifier):
         channels: Mapping[str, Channel] | Sequence[Channel],
         events: EventLog,
         clock: Clock,
+        run_mode: RunMode = RunMode.LOCAL,
     ) -> None:
         self._databases = databases
         self._settings = settings
@@ -47,6 +50,7 @@ class SqliteNotifier(Notifier):
             self._channels = dict(channels)
         self._events = events
         self._clock = clock
+        self._run_mode = run_mode
         self._incidents: Any = None
 
     def bind_incidents(self, incidents: Any) -> None:
@@ -126,6 +130,16 @@ class SqliteNotifier(Notifier):
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
         now_iso = now.isoformat()
+
+        public_url = await self._settings.public_url()
+        if incident_id is not None:
+            link = incident_link(public_url, project_id, incident_id)
+        elif not public_url:
+            link = None
+        else:
+            link = message.link
+        local_mode_note = self._run_mode == RunMode.LOCAL
+        message = message.model_copy(update={"link": link, "local_mode_note": local_mode_note})
 
         # Calculate escalation_step
         escalation_step = 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -68,7 +69,7 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncTrackingJob,
 )
 from mlops_agents.notifications.channels import default_channels
-from mlops_agents.notifications.contract import Notifier, OnCallPeople
+from mlops_agents.notifications.contract import Channel, Notifier, OnCallPeople
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
 from mlops_agents.notifications.retries import RetryJob
@@ -144,6 +145,7 @@ class Services:
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    notification_channels: Mapping[str, Channel]
 
 
 async def _app_secrets(
@@ -219,6 +221,7 @@ async def build_services(
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
     integration_settings = IntegrationSettings(databases, keystore)
+    await integration_settings.init_cache()
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings, integration_settings)
@@ -443,6 +446,7 @@ async def build_services(
         channels=notification_channels,
         events=events,
         clock=clock,
+        run_mode=settings.mode,
     )
     retry_notifications_job = RetryJob(databases, notifier, clock)
     scheduler.register(retry_notifications_job)
@@ -505,4 +509,5 @@ async def build_services(
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        notification_channels=notification_channels,
     )
