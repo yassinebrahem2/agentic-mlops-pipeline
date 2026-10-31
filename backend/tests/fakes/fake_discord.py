@@ -21,10 +21,15 @@ from fastapi.responses import JSONResponse, Response
 @dataclass
 class FakeDiscordState:
     posts: list[dict[str, Any]] = field(default_factory=lambda: list[dict[str, Any]]())
-    failures: list[int] = field(default_factory=lambda: list[int]())
+    failures: list[int | tuple[int, str]] = field(
+        default_factory=lambda: list[int | tuple[int, str]]()
+    )
 
-    def fail_next(self, status_code: int) -> None:
-        self.failures.append(status_code)
+    def fail_next(self, status_code: int, body: str | None = None) -> None:
+        if body is not None:
+            self.failures.append((status_code, body))
+        else:
+            self.failures.append(status_code)
 
     def reset(self) -> None:
         self.posts.clear()
@@ -37,7 +42,15 @@ def create_fake_discord_app(state: FakeDiscordState) -> FastAPI:
     @app.post("/{path:path}")
     async def post_webhook(path: str, request: Request) -> Response:
         if state.failures:
-            status_code = state.failures.pop(0)
+            failure_item = state.failures.pop(0)
+            if isinstance(failure_item, tuple):
+                status_code, custom_body = failure_item
+                return Response(
+                    content=custom_body,
+                    status_code=status_code,
+                    media_type="text/plain",
+                )
+            status_code = failure_item
             if status_code == 429:
                 return JSONResponse(
                     {"message": "You are being rate limited.", "retry_after": 5.0},

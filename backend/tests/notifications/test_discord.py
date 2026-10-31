@@ -131,7 +131,10 @@ async def test_discord_failing_webhook_scrubs_url_and_token(
     secret_token = "ultra_sensitive_discord_token_xyz"
     webhook_url = f"{fake_discord.base_url}/api/webhooks/12345/{secret_token}"
     await settings.set_discord(enabled=True, webhook_url=webhook_url)
-    fake_discord.state.fail_next(429)
+    # The server error body explicitly contains the URL and secret token to prove scrubbing works
+    fake_discord.state.fail_next(
+        500, body=f"Internal Server Error at {webhook_url} using secret {secret_token}"
+    )
 
     async with httpx2.AsyncClient() as http:
         channel = DiscordChannel(settings, http)
@@ -142,3 +145,4 @@ async def test_discord_failing_webhook_scrubs_url_and_token(
         err_text = str(exc_info.value)
         assert secret_token not in err_text
         assert webhook_url not in err_text
+        assert "[REDACTED]" in err_text or "***" in err_text

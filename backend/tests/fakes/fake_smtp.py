@@ -28,10 +28,14 @@ class RecordedEmail:
 class FakeSmtpState:
     messages: list[RecordedEmail] = field(default_factory=lambda: list[RecordedEmail]())
     fail_next_sends: int = 0
+    fail_auth_message: str | None = None
+    fail_rcpt: bool = False
 
     def reset(self) -> None:
         self.messages.clear()
         self.fail_next_sends = 0
+        self.fail_auth_message = None
+        self.fail_rcpt = False
 
 
 async def _handle_client(
@@ -69,6 +73,10 @@ async def _handle_client(
                 writer.write(b"454 TLS not available\r\n")
                 await writer.drain()
             elif cmd == "AUTH":
+                if state.fail_auth_message is not None:
+                    writer.write(f"535 5.7.8 {state.fail_auth_message}\r\n".encode())
+                    await writer.drain()
+                    continue
                 subcmd = arg.upper()
                 if subcmd.startswith("LOGIN"):
                     writer.write(b"334 VXNlcm5hbWU6\r\n")  # Base64 for 'Username:'
@@ -108,6 +116,10 @@ async def _handle_client(
                 writer.write(b"250 2.1.0 OK\r\n")
                 await writer.drain()
             elif cmd == "RCPT":
+                if state.fail_rcpt:
+                    writer.write(b"550 5.1.1 User unknown\r\n")
+                    await writer.drain()
+                    continue
                 addr = arg
                 if ":" in addr:
                     addr = addr.split(":", 1)[1].strip()

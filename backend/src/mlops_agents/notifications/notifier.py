@@ -247,7 +247,8 @@ class SqliteNotifier(Notifier):
                 results.append("sent")
             except Exception as exc:
                 # Inline attempt failed
-                scrubbed_err = scrub_values(error_text(exc), secrets)[:ERROR_MAX_CHARS]
+                to_scrub = [*list(secrets), contact.address]
+                scrubbed_err = scrub_values(error_text(exc), to_scrub)[:ERROR_MAX_CHARS]
                 next_backoff: int = int(RETRY_BACKOFFS_S[0])
                 next_attempt_dt = now + timedelta(seconds=next_backoff)
                 next_attempt_iso = next_attempt_dt.isoformat()
@@ -415,7 +416,8 @@ class SqliteNotifier(Notifier):
                     subject_id=incident_id,
                 )
             except Exception as exc:
-                scrubbed_err = scrub_values(error_text(exc), secrets)[:ERROR_MAX_CHARS]
+                to_scrub = [*list(secrets), address]
+                scrubbed_err = scrub_values(error_text(exc), to_scrub)[:ERROR_MAX_CHARS]
                 # Check backoffs: attempts index
                 backoff_idx: int = attempts - 1
                 if backoff_idx < len(RETRY_BACKOFFS_S):
