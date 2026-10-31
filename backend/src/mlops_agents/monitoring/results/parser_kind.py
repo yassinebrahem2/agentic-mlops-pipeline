@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.monitoring.results.constants import (
     CODE_PARSER_CHUNK_BYTES,
+    CODE_PARSER_MAX_CHUNKS_PER_CYCLE,
     HELD_TAIL_QUIET_SECONDS,
 )
 from mlops_agents.monitoring.results.contract import (
@@ -34,10 +35,15 @@ CODE_PARSER_CONTRACT = (
     " than that is a chunk of its own. A chunk whose output (stdout and stderr together)"
     f" exceeds {HEAD_CAPTURE_CHARS + TAIL_CAPTURE_CHARS:,} characters is run again in smaller"
     " pieces, each starting at a line start, each a separate run with its own start offset."
-    " The script must not assume it sees the whole file.\n"
-    "- stdin: exactly the chunk, UTF-8 text, in whole lines. The chunks cover the file from its"
-    " start on the first read (and after the file shrinks, truncated or replaced by a shorter"
-    " one), then only the bytes past the previous read. A chunk ends at a newline, except the"
+    " The script must not assume it sees the whole file. A collection cycle runs at most"
+    f" {CODE_PARSER_MAX_CHUNKS_PER_CYCLE} chunks of a file; the rest are read on later cycles,"
+    " in order.\n"
+    "- stdin: exactly the chunk, UTF-8 text, in whole lines. The script gets whole lines and"
+    " nothing joins a record that spans a line boundary for it, so a format whose records can"
+    " span lines (a csv with quoted newlines, say) belongs to a mapping parser. The chunks"
+    " cover the file from its start on the first read (and after the file shrinks, truncated"
+    " or replaced by a shorter one), then go on from where the previous chunk ended. A chunk"
+    " ends at a newline, except the"
     " file's final line without one, given only once the file has been unchanged for"
     f" {HELD_TAIL_QUIET_SECONDS} s; the script judges whether it is complete.\n"
     "- sys.argv[1]: the file's path in the connection.\n"

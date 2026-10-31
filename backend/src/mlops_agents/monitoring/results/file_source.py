@@ -9,12 +9,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
 from mlops_agents.monitoring.results.constants import (
     CODE_PARSER_CHUNK_BYTES,
+    CODE_PARSER_MAX_CHUNKS_PER_CYCLE,
     HELD_TAIL_QUIET_SECONDS,
 )
 from mlops_agents.monitoring.results.contract import ParserMapping, ResultRecord, parse_source_id
@@ -454,39 +455,70 @@ def _byte_end(data: bytes, text: str, end: int) -> int:
     return position
 
 
-def _line_pieces(data: bytes, bound: int) -> list[tuple[int, int]]:
-    """`data` split in order into (start, end) byte ranges of at most `bound` bytes, each
-    ending just past a newline: a line longer than `bound` is a range of its own, and the
-    last range ends where `data` does."""
-    pieces: list[tuple[int, int]] = []
-    start = 0
-    while start < len(data):
-        end = len(data)
-        if end - start > bound:
-            cut = data.rfind(b"\n", start, start + bound)
-            if cut != -1:
-                end = cut + 1
-            else:
-                newline = data.find(b"\n", start)
-                end = newline + 1 if newline != -1 else len(data)
-        pieces.append((start, end))
-        start = end
+def read_code_parser_pieces(
+    f: BinaryIO, offset: int, size: int, quiet: bool
+) -> list[tuple[int, bytes]]:
+    """This cycle's pieces of a file for a code parser: (start offset, bytes) of at most
+    CODE_PARSER_MAX_CHUNKS_PER_CYCLE pieces from `offset`, never past `size`, the file's size
+    when it was stat'd.
+
+    A piece is at most CODE_PARSER_CHUNK_BYTES and ends just past a newline; a line longer
+    than that is a piece of its own. Only the pieces' bytes are read, and at most one bound
+    past the last, so a large file is read over several cycles. The tail without a newline is
+    judged only once the read reaches `size`: held until the file is quiet, then a piece whose
+    script judges it."""
+    bound = CODE_PARSER_CHUNK_BYTES
+    pieces: list[tuple[int, bytes]] = []
+    end = size
+    start = offset
+    data = b""  # bytes read from `start` on
+
+    def read_more(length: int) -> bytes:
+        nonlocal end
+        more = f.read(length)
+        if len(more) < length:
+            # The file shrank since its stat: it ends here
+            end = start + len(data) + len(more)
+        return more
+
+    f.seek(offset)
+    while start < end and len(pieces) < CODE_PARSER_MAX_CHUNKS_PER_CYCLE:
+        want = min(bound, end - start) - len(data)
+        if want > 0:
+            data += read_more(want)
+        if end - start <= bound:
+            take = _cut_tail(data, data.rfind(b"\n") + 1, quiet, None).deliver
+            if take:
+                pieces.append((start, data[:take]))
+            break
+        cut = data.rfind(b"\n", 0, bound) + 1
+        while cut == 0 and start + len(data) < end:
+            # A line longer than the bound: read on to its newline
+            searched = len(data)
+            data += read_more(min(bound, end - start - len(data)))
+            cut = data.find(b"\n", searched) + 1
+        if cut == 0:
+            # That line runs to the end of the file without a newline
+            if _cut_tail(data, 0, quiet, None).deliver:
+                pieces.append((start, data))
+            break
+        pieces.append((start, data[:cut]))
+        start += cut
+        data = data[cut:]
     return pieces
 
 
 def _cut_chunk(
     chunk: bytes,
     offset: int,
-    fmt: LineFormat | None,
+    fmt: LineFormat,
     pattern: str | None,
     saved_header: list[str] | None,
     quiet: bool,
 ) -> tuple[_TailCut, list[str] | None]:
-    """The cut of a chunk read from `offset` for a parser of format `fmt` (None: a code
-    parser, whose script judges a tail itself), and the file's csv header."""
+    """The cut of a chunk read from `offset` for a mapping parser of format `fmt`, and the
+    file's csv header."""
     newline_end = chunk.rfind(b"\n") + 1
-    if fmt is None:
-        return _cut_tail(chunk, newline_end, quiet, None), None
     if fmt != "csv":
 
         def complete(tail: str) -> bool:
@@ -624,6 +656,35 @@ def _read_raw_files_sync(
             }
             continue
 
+        if fmt is None:
+            # A code parser's run keeps a bounded output, so it is given the file in pieces,
+            # a bounded number per cycle. Surrogate escapes keep each piece's byte length
+            # exact for its run to read.
+            try:
+                with resolved_path.open("rb") as f:
+                    pieces = read_code_parser_pieces(f, offset, cur_size, _quiet(cur_mtime, now))
+            except OSError as exc:
+                last_error = scrub_url_secrets(str(exc))
+                continue
+            files_cursor[rel_posix] = {
+                "size": cur_size,
+                "mtime": cur_mtime,
+                "offset": pieces[-1][0] + len(pieces[-1][1]) if pieces else offset,
+                "csv_header": None,
+            }
+            chunks.extend(
+                RawChunk(
+                    rel_posix=rel_posix,
+                    content=piece.decode("utf-8", errors="surrogateescape"),
+                    start_offset=start,
+                    new_offset=start + len(piece),
+                    size=cur_size,
+                    mtime=cur_mtime,
+                )
+                for start, piece in pieces
+            )
+            continue
+
         try:
             with resolved_path.open("rb") as f:
                 f.seek(offset)
@@ -643,22 +704,6 @@ def _read_raw_files_sync(
             "csv_header": csv_header,
         }
         if cut.consume == 0:
-            continue
-
-        if mapping is None:
-            # A code parser's run keeps a bounded output, so it is given the file in pieces.
-            # Surrogate escapes keep each piece's byte length exact for its run to read.
-            chunks.extend(
-                RawChunk(
-                    rel_posix=rel_posix,
-                    content=chunk[start:end].decode("utf-8", errors="surrogateescape"),
-                    start_offset=offset + start,
-                    new_offset=offset + end,
-                    size=cur_size,
-                    mtime=cur_mtime,
-                )
-                for start, end in _line_pieces(chunk[: cut.deliver], CODE_PARSER_CHUNK_BYTES)
-            )
             continue
 
         chunks.append(

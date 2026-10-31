@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -255,7 +256,7 @@ class ResultsService(Results):
         """Runs a collection cycle for all derived sources."""
         # The rows a cycle stores stay undelivered until its own delivery marks them, so the
         # whole cycle holds the project's delivery lock.
-        async with self._delivery_lock(project_id):
+        async with self._delivery_lock(project_id), self._parser_cycle(project_id):
             report = await self._collect_locked(project_id, now)
 
         # 5. Emit results.collected event
@@ -267,6 +268,13 @@ class ResultsService(Results):
         )
 
         return report
+
+    def _parser_cycle(self, project_id: str) -> contextlib.AbstractAsyncContextManager[None]:
+        """The parsers' scope for one collection cycle, so its code parser runs prepare the
+        sandbox once."""
+        if isinstance(self._parsers, SqliteParsers):
+            return self._parsers.cycle(project_id)
+        return contextlib.nullcontext()
 
     async def _collect_locked(self, project_id: str, now: datetime) -> CollectionReport:
         """Steps 1 to 4 of `collect`, for a caller holding the project's delivery lock."""

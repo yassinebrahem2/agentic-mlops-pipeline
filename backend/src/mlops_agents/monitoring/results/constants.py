@@ -14,3 +14,7 @@ HELD_TAIL_QUIET_SECONDS: Final[int] = 300
 # The script decides how much it prints, so CodeParserRunner runs a chunk whose output was still
 # cut again in smaller pieces.
 CODE_PARSER_CHUNK_BYTES: Final[int] = 8_192
+# A cycle runs at most this many of a file's chunks (256 KiB of it), each a container run; the
+# rest wait for the next cycle. A project's collection reads its sources one after another, so
+# a large file read whole in one cycle would hold its other sources and their alerts for hours.
+CODE_PARSER_MAX_CHUNKS_PER_CYCLE: Final[int] = 32

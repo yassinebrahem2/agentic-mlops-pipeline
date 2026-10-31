@@ -251,8 +251,10 @@ class FakeSandbox:
     def __init__(self, tag: str = "img:test", ready: bool = True) -> None:
         self.tag = tag
         self.ready = ready
+        self.rebuilds = 0
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        self.rebuilds += 1
         return EnvironmentStatus(
             state="ready" if self.ready else "failed",
             tag=self.tag if self.ready else None,
@@ -381,6 +383,28 @@ for line in sys.stdin.read().splitlines():
 """
 
 
+class MountsConnections(FakeConnections):
+    """Connections whose mounts are `mounts`, counting the lookups; with `mounts_error` set,
+    every lookup raises it."""
+
+    def __init__(self, mounts: list[Mount], mounts_error: str | None = None) -> None:
+        super().__init__()
+        self._mounts = mounts
+        self._mounts_error = mounts_error
+        self.mount_lookups = 0
+
+    async def mounts(self, project_id: str) -> list[Mount]:
+        self.mount_lookups += 1
+        if self._mounts_error is not None:
+            raise RuntimeError(self._mounts_error)
+        return self._mounts
+
+
+def feed_mount(data_dir: Path) -> Mount:
+    """The conn_feed connection's mount of `data_dir`."""
+    return Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
+
+
 async def code_feed_service(
     databases: Databases,
     events: SqliteEventLog,
@@ -389,18 +413,17 @@ async def code_feed_service(
     filename: str,
     script: str,
     incidents: FakeIncidents | None = None,
+    *,
+    sandbox: FakeSandbox | None = None,
+    connections: MountsConnections | None = None,
 ) -> tuple[ResultsService, LocalExecDockerRunner]:
-    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
-
-    class MountsConnections(FakeConnections):
-        async def mounts(self, project_id: str) -> list[Mount]:
-            return [mount]
-
-    connections = MountsConnections()
+    mount = feed_mount(data_dir)
+    if connections is None:
+        connections = MountsConnections([mount])
     connections.add_local_folder("conn_feed", data_dir)
     docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
     runner = CodeParserRunner(
-        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        sandbox=sandbox or FakeSandbox(tag="sandbox:test-tag"),
         docker_runner=docker_runner,
         connections=connections,
     )

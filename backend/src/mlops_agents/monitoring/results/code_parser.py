@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -52,6 +55,29 @@ class _Sandbox(Protocol):
 
 
 @dataclass(frozen=True)
+class _Prepared:
+    """What preparing a project's sandbox gives every run: its image and the data mounts."""
+
+    image_tag: str
+    mounts: list[Mount]
+
+
+@dataclass
+class _Cycle:
+    """One collection cycle's preparation for `project_id` by `runner`: done on its first run,
+    kept until the cycle ends, a failure included."""
+
+    runner: CodeParserRunner
+    project_id: str
+    prepared: _Prepared | None = None
+    failure: str | None = None
+
+
+# Task-local, so concurrent collections of other projects and direct runs prepare their own
+_current_cycle: ContextVar[_Cycle | None] = ContextVar("code_parser_cycle", default=None)
+
+
+@dataclass(frozen=True)
 class _Target:
     """What every run over one chunk shares."""
 
@@ -76,6 +102,17 @@ class CodeParserRunner:
         self._docker_runner = docker_runner
         self._connections = connections
 
+    @asynccontextmanager
+    async def cycle(self, project_id: str) -> AsyncGenerator[None]:
+        """A collection cycle of `project_id`: its runs share one sandbox rebuild and mounts
+        lookup, done on the first run, so a cycle without a code parser run does neither. A
+        failed preparation fails every later run of the cycle without being retried."""
+        token = _current_cycle.set(_Cycle(runner=self, project_id=project_id))
+        try:
+            yield
+        finally:
+            _current_cycle.reset(token)
+
     async def run(
         self,
         project_id: str,
@@ -89,16 +126,11 @@ class CodeParserRunner:
         if connection_name is None:
             raise RuntimeError(f"Code parser has no connection to read {origin_ref!r} from")
 
-        env_status = await self._sandbox.rebuild(project_id)
-        if env_status.tag is None or env_status.state != "ready":
-            raise RuntimeError(
-                f"Sandbox unavailable for project {project_id}: {env_status.detail or env_status.state}"
-            )
-
+        prepared = await self._prepared(project_id)
         target = _Target(
             project_id=project_id,
-            image_tag=env_status.tag,
-            mounts=await self._connections.mounts(project_id),
+            image_tag=prepared.image_tag,
+            mounts=prepared.mounts,
             code=code,
             container_path=f"{DATA_MOUNT_ROOT}/{connection_name}/{origin_ref}",
             origin_ref=origin_ref,
@@ -114,6 +146,31 @@ class CodeParserRunner:
             records.extend(outcome.records)
             errors.extend(outcome.errors)
         return ParseOutcome(records=records, errors=errors)
+
+    async def _prepared(self, project_id: str) -> _Prepared:
+        """The project's preparation: the current cycle's when this run is in one."""
+        cycle = _current_cycle.get()
+        if cycle is None or cycle.runner is not self or cycle.project_id != project_id:
+            return await self._prepare(project_id)
+        if cycle.failure is not None:
+            raise RuntimeError(cycle.failure)
+        if cycle.prepared is None:
+            try:
+                cycle.prepared = await self._prepare(project_id)
+            except Exception as exc:
+                cycle.failure = str(exc)
+                raise
+        return cycle.prepared
+
+    async def _prepare(self, project_id: str) -> _Prepared:
+        env_status = await self._sandbox.rebuild(project_id)
+        if env_status.tag is None or env_status.state != "ready":
+            raise RuntimeError(
+                f"Sandbox unavailable for project {project_id}: {env_status.detail or env_status.state}"
+            )
+        return _Prepared(
+            image_tag=env_status.tag, mounts=await self._connections.mounts(project_id)
+        )
 
     async def _run_split(
         self, target: _Target, start_offset: int, data: bytes

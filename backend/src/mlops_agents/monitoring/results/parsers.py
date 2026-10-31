@@ -39,6 +39,13 @@ class SqliteParsers(Parsers):
     def set_code_runner(self, code_runner: CodeParserRunner) -> None:
         self._code_runner = code_runner
 
+    def cycle(self, project_id: str) -> contextlib.AbstractAsyncContextManager[None]:
+        """A collection cycle of `project_id`, whose code parser runs share one sandbox
+        preparation (CodeParserRunner.cycle)."""
+        if self._code_runner is None:
+            return contextlib.nullcontext()
+        return self._code_runner.cycle(project_id)
+
     async def store(
         self,
         project_id: str,
