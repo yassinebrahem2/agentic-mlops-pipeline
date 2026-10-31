@@ -139,7 +139,14 @@ describe("ProjectSwitcher", () => {
                     ? issues
                     : url.endsWith("/sandbox")
                       ? sandbox
-                      : url.endsWith("/connections") || url.endsWith("/on-call")
+                      : [
+                            "/connections",
+                            "/on-call",
+                            "/hooks",
+                            "/expectations",
+                            "/training/policies",
+                            "/maintenance-windows",
+                          ].some((suffix) => url.endsWith(suffix))
                         ? []
                         : url.endsWith("/monitoring-settings")
                           ? monitoring

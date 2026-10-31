@@ -6,9 +6,13 @@ import { AgentsSection } from "./AgentsSection";
 import { IssuesSection } from "./IssuesSection";
 import { MessagingSection } from "./MessagingSection";
 import { PermissionsSection } from "./PermissionsSection";
+import { PoliciesSection } from "./PoliciesSection";
 import { SandboxSection } from "./SandboxSection";
 import { ConnectionsSection } from "./ConnectionsSection";
+import { ChecksSection } from "./ChecksSection";
 import { EmbedderSection } from "./EmbedderSection";
+import { HooksSection } from "./HooksSection";
+import { MaintenanceSection } from "./MaintenanceSection";
 import { MonitoringSection } from "./MonitoringSection";
 import { OnCallSection } from "./OnCallSection";
 import { TrackingSourcesSection } from "./TrackingSourcesSection";
@@ -43,6 +47,10 @@ function ProjectSettings({ projectId }: { projectId: string }) {
           <MessagingSection projectId={projectId} />
           <OnCallSection projectId={projectId} />
           <MonitoringSection projectId={projectId} />
+          <HooksSection projectId={projectId} />
+          <ChecksSection projectId={projectId} />
+          <PoliciesSection projectId={projectId} />
+          <MaintenanceSection projectId={projectId} />
           <EmbedderSection projectId={projectId} />
           <TrackingSourcesSection projectId={projectId} />
           <RemoveProjectDialog project={project.data} />
