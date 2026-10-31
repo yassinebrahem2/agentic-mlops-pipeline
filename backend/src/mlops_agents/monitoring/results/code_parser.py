@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Protocol, cast
@@ -15,7 +16,7 @@ from mlops_agents.monitoring.results.contract import (
 )
 from mlops_agents.sandbox.containers import build_one_shot_run_args
 from mlops_agents.sandbox.contract import EnvironmentStatus
-from mlops_agents.sandbox.docker import DockerRunner
+from mlops_agents.sandbox.docker import DockerRunner, DockerTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class CodeParserRunner:
         code: ParserCode,
         raw: str,
         origin_ref: str,
+        *,
+        connection_name: str | None = None,
+        start_offset: int = 0,
     ) -> ParseOutcome:
         env_status = await self._sandbox.rebuild(project_id)
         if env_status.tag is None or env_status.state != "ready":
@@ -58,7 +62,11 @@ class CodeParserRunner:
         mounts = await self._connections.mounts(project_id)
 
         container_name = f"parser-{new_id('res')}"
-        command = ["python", "-c", code.script, origin_ref, raw]
+        if connection_name:
+            container_path = f"/data/{connection_name}/{origin_ref.lstrip('/')}"
+        else:
+            container_path = origin_ref
+        command = ["python", "-c", code.script, origin_ref, container_path]
 
         run_args = build_one_shot_run_args(
             project_id=project_id,
@@ -70,13 +78,30 @@ class CodeParserRunner:
             name=container_name,
         )
 
-        res = await self._docker_runner.run(run_args, timeout_s=float(code.timeout_s))
+        try:
+            res = await self._docker_runner.run(run_args, timeout_s=float(code.timeout_s))
+        except DockerTimeoutError as err:
+            try:
+                await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
+            except Exception:
+                logger.exception("Failed to remove timed-out parser container %s", container_name)
+            raise RuntimeError(f"Code parser execution timed out: {err}") from err
+        except asyncio.CancelledError:
+            try:
+                await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
+            except Exception:
+                logger.exception("Failed to remove cancelled parser container %s", container_name)
+            raise
+
         if res.exit_code != 0:
             stdout, stderr = res.command_output()
             err_msg = stderr or stdout or f"Container exited with code {res.exit_code}"
             raise RuntimeError(f"Code parser execution failed: {err_msg}")
 
-        stdout, _ = res.command_output()
+        stdout, truncated = res.command_output()
+        if res.truncated or truncated:
+            raise RuntimeError("Code parser output was truncated")
+
         records: list[tuple[str, ResultRecord]] = []
         errors: list[str] = []
 
@@ -115,8 +140,14 @@ class CodeParserRunner:
                 item_dict["origin"] = "team"
                 if not item_dict.get("source_ref"):
                     item_dict["source_ref"] = origin_ref
+                if "detail" not in item_dict or not isinstance(item_dict["detail"], dict):
+                    item_dict["detail"] = {}
                 custom_key = item_dict.pop("source_key", None) or item_dict.pop("key", None)
-                source_key = str(custom_key) if custom_key is not None else f"{origin_ref}:{idx}"
+                source_key = (
+                    str(custom_key)
+                    if custom_key is not None
+                    else f"{origin_ref}:{start_offset + idx}"
+                )
                 rec = ResultRecord.model_validate(item_dict)
                 records.append((source_key, rec))
             except Exception as exc:

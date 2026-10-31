@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import csv
 import json
 import logging
 from dataclasses import dataclass, field
@@ -31,9 +33,11 @@ class SourceReadOutcome:
 class RawChunk:
     rel_posix: str
     content: str
+    start_offset: int
     new_offset: int
     size: int
     mtime: float
+    csv_header: list[str] | None = None
 
 
 @dataclass
@@ -308,6 +312,8 @@ class FileSourceReader:
         project_id: str,
         source_id: str,
         cursor: dict[str, Any],
+        *,
+        format: str | None = None,
     ) -> RawReadOutcome:
         """Reads raw file contents from files matching source_id pattern."""
         kind, pattern, connection_name = parse_source_id(source_id)
@@ -363,7 +369,7 @@ class FileSourceReader:
 
         try:
             return await asyncio.to_thread(
-                _read_raw_files_sync, root, pattern, secret_paths, cursor
+                _read_raw_files_sync, root, pattern, secret_paths, cursor, format
             )
         except Exception as exc:
             return RawReadOutcome(
@@ -378,10 +384,12 @@ def _read_raw_files_sync(
     pattern: str,
     secret_paths: set[str],
     cursor: dict[str, Any],
+    format: str | None = None,
 ) -> RawReadOutcome:
     files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
     chunks: list[RawChunk] = []
     candidate_files: list[tuple[str, Path]] = []
+    last_error: str | None = None
 
     try:
         matches = sorted(root.glob(pattern))
@@ -397,7 +405,8 @@ def _read_raw_files_sync(
             resolved = match.resolve()
             if not resolved.is_file():
                 continue
-        except OSError:
+        except OSError as exc:
+            last_error = scrub_url_secrets(str(exc))
             continue
 
         try:
@@ -415,7 +424,8 @@ def _read_raw_files_sync(
     for rel_posix, resolved_path in candidate_files:
         try:
             stat = resolved_path.stat()
-        except OSError:
+        except OSError as exc:
+            last_error = scrub_url_secrets(str(exc))
             continue
 
         cur_size = stat.st_size
@@ -424,6 +434,36 @@ def _read_raw_files_sync(
         prev_offset = prev.get("offset", 0)
         prev_size = prev.get("size", 0)
         prev_mtime = prev.get("mtime", 0.0)
+        saved_header: list[str] | None = prev.get("csv_header")
+
+        if format == "json":
+            if cur_size == prev_size and cur_mtime == prev_mtime:
+                continue
+
+            try:
+                with resolved_path.open("rb") as f:
+                    chunk = f.read(cur_size)
+            except OSError as exc:
+                last_error = scrub_url_secrets(str(exc))
+                continue
+
+            raw_text = chunk.decode("utf-8", errors="replace")
+            chunks.append(
+                RawChunk(
+                    rel_posix=rel_posix,
+                    content=raw_text,
+                    start_offset=0,
+                    new_offset=cur_size,
+                    size=cur_size,
+                    mtime=cur_mtime,
+                )
+            )
+            files_cursor[rel_posix] = {
+                "size": cur_size,
+                "mtime": cur_mtime,
+                "offset": cur_size,
+            }
+            continue
 
         if (
             cur_size < prev_offset
@@ -431,6 +471,7 @@ def _read_raw_files_sync(
             or (cur_mtime != prev_mtime and cur_size < prev_offset)
         ):
             offset = 0
+            saved_header = None
         else:
             offset = prev_offset
 
@@ -439,6 +480,7 @@ def _read_raw_files_sync(
                 "size": cur_size,
                 "mtime": cur_mtime,
                 "offset": offset,
+                "csv_header": saved_header,
             }
             continue
 
@@ -446,7 +488,8 @@ def _read_raw_files_sync(
             with resolved_path.open("rb") as f:
                 f.seek(offset)
                 chunk = f.read(cur_size - offset)
-        except OSError:
+        except OSError as exc:
+            last_error = scrub_url_secrets(str(exc))
             continue
 
         last_nl = chunk.rfind(b"\n")
@@ -461,21 +504,41 @@ def _read_raw_files_sync(
                 "size": cur_size,
                 "mtime": cur_mtime,
                 "offset": offset,
+                "csv_header": saved_header,
             }
             continue
 
         raw_text = chunk_to_consume.decode("utf-8", errors="replace")
+
+        if format == "csv" and offset == 0 and saved_header is None:
+            lines = raw_text.splitlines(keepends=False)
+            if lines:
+                with contextlib.suppress(Exception):
+                    hdr_r = csv.reader([lines[0]])
+                    hdr_cols = next(hdr_r, None)
+                    if hdr_cols:
+                        saved_header = [str(c) for c in hdr_cols]
+
         chunks.append(
             RawChunk(
                 rel_posix=rel_posix,
                 content=raw_text,
+                start_offset=offset,
                 new_offset=new_offset,
                 size=cur_size,
                 mtime=cur_mtime,
+                csv_header=saved_header,
             )
         )
+        files_cursor[rel_posix] = {
+            "size": cur_size,
+            "mtime": cur_mtime,
+            "offset": new_offset,
+            "csv_header": saved_header,
+        }
 
     return RawReadOutcome(
         chunks=chunks,
         cursor={"files": files_cursor},
+        last_error=last_error,
     )

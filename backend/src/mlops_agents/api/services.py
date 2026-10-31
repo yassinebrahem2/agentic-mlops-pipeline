@@ -644,6 +644,7 @@ async def build_services(
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(CollectResultsJob(databases, results))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
+    scheduler.add_sync_observer(checks)
     scheduler.add_sync_observer(LabelConfirmation(verdicts))
 
     retry_notifications_job = RetryJob(databases, notifier, clock)

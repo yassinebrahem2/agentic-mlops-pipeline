@@ -23,7 +23,7 @@ from mlops_agents.monitoring.settings import MonitoringSettings, set_monitoring_
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import expectations
+from mlops_agents.storage.tables import expectations, sessions, tasks
 from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs
 from tests.providers.fake_clock import FakeClock
 
@@ -572,3 +572,148 @@ async def test_merged_check_location_becomes_results_source_and_updates_version(
     assert len(views) == 1
     assert views[0].check_id == "latency_check"
     assert views[0].version == "v1.2.3"
+
+
+async def test_re_registering_check_whose_pr_is_already_merged(
+    databases: Databases,
+    expectations_service: ExpectationsService,
+    events: SqliteEventLog,
+    fake_clock: FakeClock,
+) -> None:
+    project_id = "prj_alreadymerged"
+    checks_store = SqliteChecks(databases, expectations_service, events, fake_clock)
+
+    # Insert a merged task in tasks table with pr_number=99
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            sessions.insert().values(
+                id="sess_1",
+                agent="orchestrator",
+                created_at=fake_clock.now().isoformat(),
+            )
+        )
+        await conn.execute(
+            tasks.insert().values(
+                id="task_merged_99",
+                session_id="sess_1",
+                agent="orchestrator",
+                title="Merged PR task",
+                branch="feature/chk",
+                worktree="/wt",
+                base_ref="main",
+                base_sha="abc123",
+                status="merged",
+                pr_number=99,
+                created_at=fake_clock.now().isoformat(),
+            )
+        )
+
+    # Register check with pr_number=99
+    view = await checks_store.register(
+        project_id,
+        check_id="already_merged_check",
+        category="data_quality",
+        cadence=Cadence(cron=None, every_minutes=15),
+        timezone="UTC",
+        results_location=FileResults(connection="local", path_pattern="checks/*.jsonl"),
+        pr_number=99,
+        agent="orchestrator",
+    )
+
+    # Immediately active!
+    assert view.status == "active"
+
+    # Expectation in DB is also active
+    async with engine.connect() as conn:
+        exp_row = (
+            (
+                await conn.execute(
+                    select(expectations).where(expectations.c.ref == "already_merged_check")
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert exp_row["active"] == 1
+
+
+async def test_reconcile_repairs_missed_merge(
+    databases: Databases,
+    expectations_service: ExpectationsService,
+    events: SqliteEventLog,
+    fake_clock: FakeClock,
+) -> None:
+    project_id = "prj_reconcile"
+    checks_store = SqliteChecks(databases, expectations_service, events, fake_clock)
+
+    # Register check with pr_number=101
+    view = await checks_store.register(
+        project_id,
+        check_id="missed_merge_check",
+        category="model_performance",
+        cadence=Cadence(cron=None, every_minutes=30),
+        timezone="UTC",
+        results_location=FileResults(connection="local", path_pattern="checks/*.jsonl"),
+        pr_number=101,
+        agent="orchestrator",
+    )
+    assert view.status == "pending_pr"
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        exp_row = (
+            (
+                await conn.execute(
+                    select(expectations).where(expectations.c.ref == "missed_merge_check")
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert exp_row["active"] == 0
+
+    # Simulate PR merge recorded in tasks table without PrObserver notification
+    async with engine.begin() as conn:
+        await conn.execute(
+            sessions.insert().values(
+                id="sess_2",
+                agent="orchestrator",
+                created_at=fake_clock.now().isoformat(),
+            )
+        )
+        await conn.execute(
+            tasks.insert().values(
+                id="task_merged_101",
+                session_id="sess_2",
+                agent="orchestrator",
+                title="Merged PR task 101",
+                branch="feature/chk101",
+                worktree="/wt",
+                base_ref="main",
+                base_sha="def456",
+                status="merged",
+                pr_number=101,
+                created_at=fake_clock.now().isoformat(),
+            )
+        )
+
+    # Reconcile
+    await checks_store.reconcile(project_id)
+
+    # Now active!
+    views = await checks_store.list(project_id)
+    reconciled = next(v for v in views if v.check_id == "missed_merge_check")
+    assert reconciled.status == "active"
+
+    async with engine.connect() as conn:
+        exp_row = (
+            (
+                await conn.execute(
+                    select(expectations).where(expectations.c.ref == "missed_merge_check")
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert exp_row["active"] == 1

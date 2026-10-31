@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import json
 import logging
 import re
@@ -67,7 +66,7 @@ def _map_row(
     raw_item: dict[str, Any],
     mapping: ParserMapping,
     origin_ref: str,
-    index: int,
+    key_suffix: str | int,
 ) -> tuple[str, ResultRecord]:
     # Start with defaults
     item_dict: dict[str, Any] = dict(mapping.defaults)
@@ -80,7 +79,7 @@ def _map_row(
 
     # Determine source_key
     custom_key = item_dict.pop("source_key", None) or item_dict.pop("key", None)
-    source_key = str(custom_key) if custom_key is not None else f"{origin_ref}:{index}"
+    source_key = str(custom_key) if custom_key is not None else f"{origin_ref}:{key_suffix}"
 
     # Force origin to 'team'
     item_dict["origin"] = "team"
@@ -113,6 +112,9 @@ def evaluate_mapping(
     mapping: ParserMapping,
     raw: str,
     origin_ref: str,
+    *,
+    start_offset: int = 0,
+    csv_header: list[str] | None = None,
 ) -> ParseOutcome:
     """Evaluates a ParserMapping against raw text content."""
     records: list[tuple[str, ResultRecord]] = []
@@ -121,20 +123,23 @@ def evaluate_mapping(
     fmt = mapping.format
 
     if fmt == "jsonl":
-        for idx, line in enumerate(raw.splitlines()):
-            line_str = line.strip()
+        cur_offset = start_offset
+        for raw_line in raw.splitlines(keepends=True):
+            line_offset = cur_offset
+            cur_offset += len(raw_line.encode("utf-8"))
+            line_str = raw_line.strip()
             if not line_str:
                 continue
             try:
                 raw_parsed: object = json.loads(line_str)
                 if not isinstance(raw_parsed, dict):
-                    errors.append(f"Line {idx} is not a JSON object")
+                    errors.append(f"Offset {line_offset} is not a JSON object")
                     continue
                 data = cast(dict[str, Any], raw_parsed)
-                k, rec = _map_row(data, mapping, origin_ref, idx)
+                k, rec = _map_row(data, mapping, origin_ref, line_offset)
                 records.append((k, rec))
             except Exception as exc:
-                errors.append(f"Line {idx}: {exc}")
+                errors.append(f"Offset {line_offset}: {exc}")
 
     elif fmt == "json":
         try:
@@ -165,14 +170,41 @@ def evaluate_mapping(
 
     elif fmt == "csv":
         try:
-            reader = csv.DictReader(io.StringIO(raw))
-            for idx, row in enumerate(reader):
+            lines = raw.splitlines(keepends=True)
+            if start_offset == 0:
+                if lines:
+                    header_line = lines[0]
+                    hdr_reader = csv.reader([header_line])
+                    detected_header = next(hdr_reader, None)
+                    if detected_header:
+                        csv_header = [str(c) for c in detected_header]
+                    data_lines = lines[1:]
+                    cur_offset = start_offset + len(header_line.encode("utf-8"))
+                else:
+                    data_lines = []
+                    cur_offset = start_offset
+            else:
+                data_lines = lines
+                cur_offset = start_offset
+
+            for line in data_lines:
+                line_offset = cur_offset
+                cur_offset += len(line.encode("utf-8"))
+                if not line.strip():
+                    continue
+                row_reader = csv.reader([line])
+                row_vals = next(row_reader, None)
+                if row_vals is None:
+                    continue
+                if csv_header:
+                    row_dict = dict(zip(csv_header, row_vals, strict=False))
+                else:
+                    row_dict = {f"col_{i}": v for i, v in enumerate(row_vals)}
                 try:
-                    row_dict = cast(dict[str, Any], dict(row))
-                    k, rec = _map_row(row_dict, mapping, origin_ref, idx)
+                    k, rec = _map_row(row_dict, mapping, origin_ref, line_offset)
                     records.append((k, rec))
                 except Exception as exc:
-                    errors.append(f"Row {idx}: {exc}")
+                    errors.append(f"Offset {line_offset}: {exc}")
         except Exception as exc:
             errors.append(f"Invalid CSV: {exc}")
 
@@ -181,8 +213,11 @@ def evaluate_mapping(
         if mapping.pattern:
             pattern = re.compile(mapping.pattern)
 
-        for idx, line in enumerate(raw.splitlines()):
-            line_str = line.strip()
+        cur_offset = start_offset
+        for raw_line in raw.splitlines(keepends=True):
+            line_offset = cur_offset
+            cur_offset += len(raw_line.encode("utf-8"))
+            line_str = raw_line.strip()
             if not line_str:
                 continue
             if pattern is not None:
@@ -194,9 +229,9 @@ def evaluate_mapping(
                 row_data = {"message": line_str}
 
             try:
-                k, rec = _map_row(row_data, mapping, origin_ref, idx)
+                k, rec = _map_row(row_data, mapping, origin_ref, line_offset)
                 records.append((k, rec))
             except Exception as exc:
-                errors.append(f"Line {idx}: {exc}")
+                errors.append(f"Offset {line_offset}: {exc}")
 
     return ParseOutcome(records=records, errors=errors)

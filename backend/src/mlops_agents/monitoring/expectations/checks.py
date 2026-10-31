@@ -21,10 +21,11 @@ from mlops_agents.monitoring.expectations.contract import (
 )
 from mlops_agents.monitoring.query import MonitoringQuery, QueryProvider, QueryWhat
 from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.scheduler.contract import SyncObserver
 from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import checks, results
+from mlops_agents.storage.tables import checks, results, tasks
 from mlops_agents.tracking.contract import Page
 
 if TYPE_CHECKING:
@@ -57,8 +58,10 @@ class ChecksStore(Protocol):
 
     async def list_active(self, project_id: str) -> list[CheckView]: ...
 
+    async def reconcile(self, project_id: str) -> None: ...
 
-class SqliteChecks(ChecksStore, PrObserver):
+
+class SqliteChecks(ChecksStore, PrObserver, SyncObserver):
     """SQLite-backed checks store and PR merge/close observer."""
 
     def __init__(
@@ -114,6 +117,15 @@ class SqliteChecks(ChecksStore, PrObserver):
 
         chk_id: str
         async with engine.begin() as conn:
+            task_status = (
+                await conn.execute(
+                    select(tasks.c.status).where(tasks.c.pr_number == pr_number).limit(1)
+                )
+            ).scalar_one_or_none()
+            is_pr_merged = task_status == "merged"
+
+            target_status = "active" if is_pr_merged else "pending_pr"
+
             existing = (
                 (await conn.execute(select(checks).where(checks.c.check_id == check_id)))
                 .mappings()
@@ -132,7 +144,7 @@ class SqliteChecks(ChecksStore, PrObserver):
                         results_location=location_json,
                         pr_number=pr_number,
                         agent=agent,
-                        status="pending_pr",
+                        status=target_status,
                         registered=now_iso,
                     )
                 )
@@ -149,14 +161,14 @@ class SqliteChecks(ChecksStore, PrObserver):
                         pr_number=pr_number,
                         agent=agent,
                         version=None,
-                        status="pending_pr",
+                        status=target_status,
                         registered=now_iso,
                     )
                 )
 
             version = await self._resolve_version(conn, check_id)
 
-        # Register inactive expectation
+        # Register expectation
         spec = ExpectationSpec(
             key=ExpectationKey(kind="check", ref=check_id),
             category=category,
@@ -164,10 +176,12 @@ class SqliteChecks(ChecksStore, PrObserver):
             timezone=timezone,
             grace_minutes=None,
             second_deadline=False,
-            activates_on_pr=pr_number,
+            activates_on_pr=None if is_pr_merged else pr_number,
             source="check",
         )
         await self._expectations.register(project_id, spec)
+        if is_pr_merged:
+            await self._expectations.activate_for_pr(project_id, pr_number)
 
         view = CheckView(
             id=chk_id,
@@ -179,7 +193,7 @@ class SqliteChecks(ChecksStore, PrObserver):
             pr_number=pr_number,
             agent=agent,
             version=version,
-            status="pending_pr",
+            status=target_status,
             registered=now_dt,
         )
 
@@ -191,7 +205,56 @@ class SqliteChecks(ChecksStore, PrObserver):
         )
         return view
 
+    async def activate_check(self, project_id: str, pr_number: int) -> None:
+        """Idempotently activates expectation before updating check status to active."""
+        await self._expectations.activate_for_pr(project_id, pr_number)
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(checks)
+                .where(
+                    checks.c.pr_number == pr_number,
+                    checks.c.status == "pending_pr",
+                )
+                .values(status="active")
+            )
+
+    async def reconcile(self, project_id: str) -> None:
+        """Repairs check states against merged PR tasks and ensures expectations are active."""
+        engine = await self._databases.project(project_id)
+        to_activate_prs: set[int] = set()
+        async with engine.connect() as conn:
+            pending_checks = (
+                (
+                    await conn.execute(
+                        select(checks.c.id, checks.c.pr_number).where(
+                            checks.c.status == "pending_pr"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            for chk in pending_checks:
+                pr_num = chk["pr_number"]
+                if pr_num is not None:
+                    t_status = (
+                        await conn.execute(
+                            select(tasks.c.status).where(tasks.c.pr_number == pr_num).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if t_status == "merged":
+                        to_activate_prs.add(int(pr_num))
+
+        for pr_num in to_activate_prs:
+            await self.activate_check(project_id, pr_num)
+
+    async def synced(self, project_id: str, now: datetime) -> None:
+        """SyncObserver callback for background reconciliation."""
+        await self.reconcile(project_id)
+
     async def list(self, project_id: str) -> list[CheckView]:
+        await self.reconcile(project_id)
         engine = await self._databases.project(project_id)
         views: list[CheckView] = []
         async with engine.connect() as conn:
@@ -231,18 +294,7 @@ class SqliteChecks(ChecksStore, PrObserver):
             await self._on_closed(project_id, pr.number)
 
     async def _on_merged(self, project_id: str, pr_number: int) -> None:
-        engine = await self._databases.project(project_id)
-        async with engine.begin() as conn:
-            await conn.execute(
-                update(checks)
-                .where(
-                    checks.c.pr_number == pr_number,
-                    checks.c.status == "pending_pr",
-                )
-                .values(status="active")
-            )
-
-        await self._expectations.activate_for_pr(project_id, pr_number)
+        await self.activate_check(project_id, pr_number)
 
     async def _on_closed(self, project_id: str, pr_number: int) -> None:
         engine = await self._databases.project(project_id)

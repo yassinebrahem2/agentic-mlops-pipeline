@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from mlops_agents.monitoring.results.contract import (
     Parsers,
     ParserSpec,
     ParserVersion,
+    parse_source_id,
 )
 from mlops_agents.monitoring.results.mapping import evaluate_mapping
 from mlops_agents.storage.databases import Databases
@@ -165,6 +167,9 @@ class SqliteParsers(Parsers):
         source_id: str,
         raw: str,
         origin_ref: str,
+        *,
+        start_offset: int = 0,
+        csv_header: list[str] | None = None,
     ) -> ParseOutcome:
         ver = await self.current(project_id, source_id)
         if ver is None:
@@ -173,12 +178,28 @@ class SqliteParsers(Parsers):
             raise RuntimeError(f"Parser version {ver.version} for {source_id} is disabled")
 
         if ver.spec.mapping is not None:
-            return evaluate_mapping(ver.spec.mapping, raw, origin_ref)
+            return evaluate_mapping(
+                ver.spec.mapping,
+                raw,
+                origin_ref,
+                start_offset=start_offset,
+                csv_header=csv_header,
+            )
 
         if ver.spec.code is not None:
             if self._code_runner is None:
                 raise RuntimeError("Code parser runner is not configured")
-            return await self._code_runner.run(project_id, ver.spec.code, raw, origin_ref)
+            conn_name: str | None = None
+            with contextlib.suppress(ValueError):
+                _, _, conn_name = parse_source_id(source_id)
+            return await self._code_runner.run(
+                project_id,
+                ver.spec.code,
+                raw,
+                origin_ref,
+                connection_name=conn_name,
+                start_offset=start_offset,
+            )
 
         raise ValueError("Invalid parser spec: neither mapping nor code is set")
 

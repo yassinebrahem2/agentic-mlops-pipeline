@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import pytest
+from sqlalchemy import select
 
 from mlops_agents.connections.contract import Mount
 from mlops_agents.events.log import SqliteEventLog
@@ -33,8 +37,9 @@ from mlops_agents.proposals.payloads import (
     Operations,
 )
 from mlops_agents.sandbox.contract import EnvironmentStatus
-from mlops_agents.sandbox.docker import DockerResult
+from mlops_agents.sandbox.docker import DockerResult, DockerTimeoutError
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import results
 from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs, FakeObserver
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
@@ -416,7 +421,16 @@ async def test_raising_parser_raises_signal_and_keeps_cursor(
 
     # Override parse to simulate a parser raising an unexpected exception
     class RaisingParsers(SqliteParsers):
-        async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str) -> Any:
+        async def parse(
+            self,
+            project_id: str,
+            source_id: str,
+            raw: str,
+            origin_ref: str,
+            *,
+            start_offset: int = 0,
+            csv_header: list[str] | None = None,
+        ) -> Any:
             raise RuntimeError("Parser execution crashed")
 
     raising_parsers = RaisingParsers(databases)
@@ -472,10 +486,26 @@ async def test_disabled_after_n_failures_and_read_again_after_new_version(
             super().__init__(db)
             self.should_crash = True
 
-        async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str) -> Any:
+        async def parse(
+            self,
+            project_id: str,
+            source_id: str,
+            raw: str,
+            origin_ref: str,
+            *,
+            start_offset: int = 0,
+            csv_header: list[str] | None = None,
+        ) -> Any:
             if self.should_crash:
                 raise RuntimeError("Crash on parse")
-            return await super().parse(project_id, source_id, raw, origin_ref)
+            return await super().parse(
+                project_id,
+                source_id,
+                raw,
+                origin_ref,
+                start_offset=start_offset,
+                csv_header=csv_header,
+            )
 
     parsers = CrashingParsers(databases)
     spec1 = ParserSpec(
@@ -616,3 +646,447 @@ async def test_code_parser_runs_through_docker_runner(
     assert "--env-file" not in last_args
     mount_args = [a for a in last_args if "readonly" in a]
     assert len(mount_args) > 0
+
+
+async def test_file_appends_for_all_formats(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "appends_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    connections = FakeConnections()
+    connections.add_local_folder("conn_app", data_dir)
+
+    # 1. JSONL Append
+    jsonl_file = data_dir / "feed.jsonl"
+    jsonl_file.write_text('{"id": "j1", "time": "2026-10-30T10:00:00Z"}\n', encoding="utf-8")
+
+    # 2. CSV Append
+    csv_file = data_dir / "feed.csv"
+    csv_file.write_text("chk_col,time_col\nc1,2026-10-30T10:00:00Z\n", encoding="utf-8")
+
+    # 3. JSON Array Rewrite/Append
+    json_file = data_dir / "feed.json"
+    json_file.write_text(
+        json.dumps([{"id": "item1", "time": "2026-10-30T10:00:00Z"}]), encoding="utf-8"
+    )
+
+    # 4. Log Append
+    log_file = data_dir / "feed.log"
+    log_file.write_text("2026-10-30T10:00:00Z [CHECK:l1] value=1.0\n", encoding="utf-8")
+
+    parsers = SqliteParsers(databases)
+
+    # Store parsers for each
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_app:feed.jsonl",
+            mapping=ParserMapping(
+                format="jsonl",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="p_jsonl",
+    )
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_app:feed.csv",
+            mapping=ParserMapping(
+                format="csv",
+                fields={"check_id": "chk_col", "ran_at": "time_col"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="p_csv",
+    )
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_app:feed.json",
+            mapping=ParserMapping(
+                format="json",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="p_json",
+    )
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_app:feed.log",
+            mapping=ParserMapping(
+                format="log",
+                pattern=r"^(?P<time>\S+) \[CHECK:(?P<id>\w+)\]",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="p_log",
+    )
+
+    feeds = [
+        _build_feed_handoff("conn_app", "feed.jsonl").payload.operations.feeds[0],
+        _build_feed_handoff("conn_app", "feed.csv").payload.operations.feeds[0],
+        _build_feed_handoff("conn_app", "feed.json").payload.operations.feeds[0],
+        _build_feed_handoff("conn_app", "feed.log").payload.operations.feeds[0],
+    ]
+    ops = Operations(
+        scheduler=None,
+        feeds=feeds,
+        on_call=[],
+        checks=[],
+        results_location=FileResults(connection="conn_app", path_pattern="standard/*.jsonl"),
+    )
+    handoff = HandoffView(
+        proposal_id="prop_h1",
+        version=1,
+        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+        payload=HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump())),
+    )
+    handoffs = FakeHandoffs(handoff)
+    service = ResultsService(
+        databases,
+        handoffs,
+        connections,
+        events,
+        parsers=parsers,
+    )
+
+    # First cycle: 1 record per format = 4 records stored
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.stored == 4
+
+    # Now append to files!
+    with jsonl_file.open("a", encoding="utf-8") as f:
+        f.write('{"id": "j2", "time": "2026-10-30T10:05:00Z"}\n')
+
+    with csv_file.open("a", encoding="utf-8") as f:
+        # Note: no header line appended!
+        f.write("c2,2026-10-30T10:05:00Z\n")
+
+    # JSON is re-written with one additional item
+    json_file.write_text(
+        json.dumps(
+            [
+                {"id": "item1", "time": "2026-10-30T10:00:00Z"},
+                {"id": "item2", "time": "2026-10-30T10:05:00Z"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with log_file.open("a", encoding="utf-8") as f:
+        f.write("2026-10-30T10:05:00Z [CHECK:l2] value=2.0\n")
+
+    # Second cycle: each format appends 1 record = 4 new records stored!
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.stored == 4
+
+    # Verify query returns all 8 records with distinct source keys
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        all_res = (await conn.execute(select(results))).mappings().all()
+    assert len(all_res) == 8
+    keys = {item["source_key"] for item in all_res}
+    assert len(keys) == 8
+
+
+async def test_code_parser_timeout_removes_container(project_id: str, tmp_path: Path) -> None:
+    class FakeTimeoutDockerRunner(FakeDockerRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rm_calls: list[list[str]] = []
+
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            arg_list = list(args)
+            if arg_list and arg_list[0] == "run":
+                raise DockerTimeoutError("timed out")
+            if arg_list and arg_list[0] == "rm":
+                self.rm_calls.append(arg_list)
+                return DockerResult(stdout="", stderr="", exit_code=0)
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    runner_mock = FakeTimeoutDockerRunner()
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [Mount(host_path=tmp_path, container_path="/data")]
+
+    connections = MountsConnections()
+
+    runner = CodeParserRunner(sandbox=sandbox, docker_runner=runner_mock, connections=connections)
+    code = ParserCode(script="import time; time.sleep(10)", timeout_s=1)
+
+    with pytest.raises(RuntimeError, match="Code parser execution timed out"):
+        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+
+    # Assert container rm -f was called!
+    assert len(runner_mock.rm_calls) == 1
+    rm_call = runner_mock.rm_calls[0]
+    assert rm_call[0] == "rm"
+    assert rm_call[1] == "-f"
+    assert "parser-" in rm_call[2]
+
+
+async def test_code_parser_cancelled_removes_container(project_id: str, tmp_path: Path) -> None:
+    class FakeCancelledDockerRunner(FakeDockerRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rm_calls: list[list[str]] = []
+
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            arg_list = list(args)
+            if arg_list and arg_list[0] == "run":
+                raise asyncio.CancelledError()
+            if arg_list and arg_list[0] == "rm":
+                self.rm_calls.append(arg_list)
+                return DockerResult(stdout="", stderr="", exit_code=0)
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    runner_mock = FakeCancelledDockerRunner()
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [Mount(host_path=tmp_path, container_path="/data")]
+
+    connections = MountsConnections()
+
+    runner = CodeParserRunner(sandbox=sandbox, docker_runner=runner_mock, connections=connections)
+    code = ParserCode(script="pass", timeout_s=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+
+    assert len(runner_mock.rm_calls) == 1
+    rm_call = runner_mock.rm_calls[0]
+    assert rm_call[0] == "rm"
+    assert rm_call[1] == "-f"
+    assert "parser-" in rm_call[2]
+
+
+async def test_code_parser_truncation_raises_runtime_error(project_id: str, tmp_path: Path) -> None:
+    class FakeTruncatedDockerRunner(FakeDockerRunner):
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            return DockerResult(stdout="partial output", stderr="", exit_code=0, truncated=True)
+
+    runner_mock = FakeTruncatedDockerRunner()
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [Mount(host_path=tmp_path, container_path="/data")]
+
+    connections = MountsConnections()
+
+    runner = CodeParserRunner(sandbox=sandbox, docker_runner=runner_mock, connections=connections)
+    code = ParserCode(script="pass", timeout_s=1)
+
+    with pytest.raises(RuntimeError, match="Code parser output was truncated"):
+        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+
+
+async def test_source_derivation_preserves_needs_parser_when_merged_with_check(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "deriv_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    connections = FakeConnections()
+    connections.add_local_folder("conn_deriv", data_dir)
+
+    ops = Operations(
+        scheduler=None,
+        feeds=[_build_feed_handoff("conn_deriv", "shared/*.jsonl").payload.operations.feeds[0]],
+        on_call=[],
+        checks=[],
+        results_location=FileResults(connection="conn_deriv", path_pattern="standard/*.jsonl"),
+    )
+    handoff = HandoffView(
+        proposal_id="prop_h2",
+        version=1,
+        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+        payload=HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump())),
+    )
+    handoffs = FakeHandoffs(handoff)
+
+    class FakeChecksStore:
+        async def list_active(self, project_id: str) -> list[Any]:
+            from mlops_agents.monitoring.expectations.contract import CheckView
+
+            return [
+                CheckView(
+                    id="chk_shared",
+                    check_id="shared_check",
+                    category="data_quality",
+                    cadence=Cadence(cron=None, every_minutes=60),
+                    timezone="UTC",
+                    # Check specifies same location but normally needs_parser=False
+                    results_location=FileResults(
+                        connection="conn_deriv", path_pattern="shared/*.jsonl"
+                    ),
+                    pr_number=50,
+                    agent="agent",
+                    version=None,
+                    status="active",
+                    registered=datetime.now(UTC),
+                )
+            ]
+
+    service = ResultsService(
+        databases,
+        handoffs,
+        connections,
+        events,
+    )
+    service.bind_checks(FakeChecksStore())  # type: ignore[arg-type]
+
+    sources = await service._derive_sources(project_id)  # pyright: ignore[reportPrivateUsage]
+    shared_src = next(s for s in sources if s[0] == "file:conn_deriv:shared/*.jsonl")
+    # Crucial: needs_parser must be True, not overwritten with False!
+    assert shared_src[2] is True
+
+
+async def test_code_parser_passes_mounted_container_path_not_raw_text(
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    captured_commands: list[list[str]] = []
+
+    class CapturingDockerRunner(FakeDockerRunner):
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            arg_list = list(args)
+            captured_commands.append(arg_list)
+            return DockerResult(
+                stdout=json.dumps(
+                    [
+                        {
+                            "check_id": "c1",
+                            "ran_at": "2026-10-30T10:00:00Z",
+                            "fired": False,
+                            "category": "data_quality",
+                            "subject": "tbl",
+                        }
+                    ]
+                ),
+                stderr="",
+                exit_code=0,
+            )
+
+    runner_mock = CapturingDockerRunner()
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [Mount(host_path=tmp_path, container_path="/data")]
+
+    connections = MountsConnections()
+
+    runner = CodeParserRunner(sandbox=sandbox, docker_runner=runner_mock, connections=connections)
+    code = ParserCode(script="print('hi')", timeout_s=15)
+
+    outcome = await runner.run(
+        project_id,
+        code,
+        raw="THIS IS VERY LARGE RAW DATA",
+        origin_ref="logs/test.json",
+        connection_name="my_conn",
+    )
+    assert len(outcome.records) == 1
+    assert len(captured_commands) > 0
+    run_cmd = captured_commands[-1]
+    # Verify the mounted path is passed, not the large raw string
+    assert "/data/my_conn/logs/test.json" in run_cmd
+    assert "THIS IS VERY LARGE RAW DATA" not in run_cmd
+
+
+async def test_parser_backed_source_failure_signal_on_raw_read_error(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "missing_data"
+    # Do not create data_dir -> read_raw will fail with missing connection folder
+    connections = FakeConnections()
+    connections.add_local_folder("conn_missing", data_dir)
+
+    handoff = _build_feed_handoff("conn_missing", "feed.jsonl")
+    handoffs = FakeHandoffs(handoff)
+
+    parsers = SqliteParsers(databases)
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_missing:feed.jsonl",
+            mapping=ParserMapping(
+                format="jsonl",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="p_miss",
+    )
+
+    incidents = FakeIncidents()
+    service = ResultsService(
+        databases,
+        handoffs,
+        connections,
+        events,
+        parsers=parsers,
+        incidents=incidents,
+    )
+
+    rep = await service.collect(project_id, clock.now())
+    assert rep.stored == 0
+    assert "file:conn_missing:feed.jsonl" in rep.failures
+
+    # Verify source_failure signal was raised!
+    matching = [
+        d
+        for _p, d, _t in incidents.signals
+        if d.kind == "source_failure" and d.subject == "file:conn_missing:feed.jsonl"
+    ]
+    assert len(matching) == 1
+    assert "does not exist" in str(matching[0].detail.get("error"))

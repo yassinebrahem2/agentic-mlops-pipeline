@@ -180,6 +180,14 @@ class ResultsService(Results):
         Returns tuples of (source_id, kind, needs_parser).
         """
         derived: dict[str, tuple[SourceKind, bool]] = {}
+
+        def _add_source(s_id: str, kind: SourceKind, needs_parser: bool) -> None:
+            if s_id in derived:
+                cur_kind, cur_parser = derived[s_id]
+                derived[s_id] = (cur_kind, cur_parser or needs_parser)
+            else:
+                derived[s_id] = (kind, needs_parser)
+
         handoff = await self._handoffs.current(project_id)
         if handoff is not None:
             ops = handoff.payload.operations
@@ -190,10 +198,10 @@ class ResultsService(Results):
                     ops.results_location.path_pattern,
                     ops.results_location.connection,
                 )
-                derived[s_id] = ("file", False)
+                _add_source(s_id, "file", False)
             else:
                 s_id = source_id("mlflow", ops.results_location.metric)
-                derived[s_id] = ("mlflow", False)
+                _add_source(s_id, "mlflow", False)
 
             # Standard check specs
             for check in ops.checks:
@@ -203,13 +211,13 @@ class ResultsService(Results):
                         check.results.path_pattern,
                         check.results.connection,
                     )
-                    derived[s_id] = ("file", False)
+                    _add_source(s_id, "file", False)
                 elif isinstance(check.results, CiResults):
                     s_id = source_id("ci", check.results.workflow)
-                    derived[s_id] = ("ci", False)
+                    _add_source(s_id, "ci", False)
                 else:
                     s_id = source_id("mlflow", check.results.metric)
-                    derived[s_id] = ("mlflow", False)
+                    _add_source(s_id, "mlflow", False)
 
             # Team job feeds (file needs a parser; ci_workflow does not)
             for feed in ops.feeds:
@@ -220,10 +228,10 @@ class ResultsService(Results):
                             feed.ref.file.path_pattern,
                             feed.ref.file.connection,
                         )
-                        derived[s_id] = ("file", True)
+                        _add_source(s_id, "file", True)
                     elif feed.ref.ci_workflow is not None:
                         s_id = source_id("ci", feed.ref.ci_workflow)
-                        derived[s_id] = ("ci", False)
+                        _add_source(s_id, "ci", False)
 
         if self._checks is not None:
             active_checks = await self._checks.list_active(project_id)
@@ -234,10 +242,10 @@ class ResultsService(Results):
                         chk.results_location.path_pattern,
                         chk.results_location.connection,
                     )
-                    derived[s_id] = ("file", False)
+                    _add_source(s_id, "file", False)
                 else:
                     s_id = source_id("mlflow", chk.results_location.metric)
-                    derived[s_id] = ("mlflow", False)
+                    _add_source(s_id, "mlflow", False)
 
         return [(s_id, kind, needs_parser) for s_id, (kind, needs_parser) in derived.items()]
 
@@ -310,22 +318,51 @@ class ResultsService(Results):
 
                 source_stored = 0
                 if kind == "file":
+                    parser_format = (
+                        cur_parser.spec.mapping.format
+                        if cur_parser.spec.mapping is not None
+                        else None
+                    )
                     raw_read = await self._file_reader.read_raw(
-                        project_id, s_id, cursor=current_cursor
+                        project_id, s_id, cursor=current_cursor, format=parser_format
                     )
                     if raw_read.last_error:
                         failures[s_id] = raw_read.last_error
+                        prev_err = state.last_error if state else None
+                        if not prev_err and self._incidents is not None:
+                            try:
+                                _k, _ref, conn_name = parse_source_id(s_id)
+                                scope = conn_name if conn_name is not None else s_id
+                            except ValueError:
+                                scope = s_id
+                            is_suspended = await self._maintenance.suspended(project_id, scope, now)
+                            if not is_suspended:
+                                draft = SignalDraft(
+                                    kind="source_failure",
+                                    category="operational",
+                                    subject=s_id,
+                                    ran_at=now,
+                                    detail={"error": raw_read.last_error, "source_id": s_id},
+                                    source_ref=s_id,
+                                )
+                                await self._incidents.raise_signal(project_id, draft, seen_at=now)
+
+                    cycle_has_errors = False
+                    failed_files: set[str] = set()
 
                     for chunk in raw_read.chunks:
                         try:
                             outcome = await self._parsers.parse(
-                                project_id, s_id, chunk.content, origin_ref=chunk.rel_posix
+                                project_id,
+                                s_id,
+                                chunk.content,
+                                origin_ref=chunk.rel_posix,
+                                start_offset=chunk.start_offset,
+                                csv_header=chunk.csv_header,
                             )
-                            if isinstance(self._parsers, SqliteParsers):
-                                await self._parsers.reset_failures(
-                                    project_id, s_id, cur_parser.version
-                                )
                         except Exception as exc:
+                            cycle_has_errors = True
+                            failed_files.add(chunk.rel_posix)
                             last_err = scrub_url_secrets(str(exc))
                             failures[s_id] = last_err
                             if self._incidents is not None:
@@ -349,29 +386,11 @@ class ResultsService(Results):
                                     await self._incidents.raise_signal(
                                         project_id, draft, seen_at=now
                                     )
-
-                            settings = await get_monitoring_settings(self._databases, project_id)
-                            if isinstance(self._parsers, SqliteParsers):
-                                _new_f, newly_disabled = await self._parsers.record_failure(
-                                    project_id,
-                                    s_id,
-                                    cur_parser.version,
-                                    disable_after=settings.parser_disable_after,
-                                )
-                                if newly_disabled:
-                                    await self._events.record(
-                                        project_id,
-                                        source="results",
-                                        type="parser.disabled",
-                                        payload={
-                                            "source_id": s_id,
-                                            "version": cur_parser.version,
-                                        },
-                                    )
-                            # Cursor is kept: do not advance offset for this chunk
                             continue
 
                         if outcome.errors:
+                            cycle_has_errors = True
+                            failed_files.add(chunk.rel_posix)
                             for err in outcome.errors:
                                 last_err = scrub_url_secrets(err)
                                 failures[s_id] = last_err
@@ -410,8 +429,34 @@ class ResultsService(Results):
                             "size": chunk.size,
                             "mtime": chunk.mtime,
                             "offset": chunk.new_offset,
+                            "csv_header": chunk.csv_header,
                         }
                         current_cursor = {"files": files_cur}
+
+                    if cycle_has_errors:
+                        settings = await get_monitoring_settings(self._databases, project_id)
+                        if isinstance(self._parsers, SqliteParsers):
+                            for _ in failed_files:
+                                _new_f, newly_disabled = await self._parsers.record_failure(
+                                    project_id,
+                                    s_id,
+                                    cur_parser.version,
+                                    disable_after=settings.parser_disable_after,
+                                )
+                                if newly_disabled:
+                                    await self._events.record(
+                                        project_id,
+                                        source="results",
+                                        type="parser.disabled",
+                                        payload={
+                                            "source_id": s_id,
+                                            "version": cur_parser.version,
+                                        },
+                                    )
+                                    break
+                    elif raw_read.chunks and not failures.get(s_id):
+                        if isinstance(self._parsers, SqliteParsers):
+                            await self._parsers.reset_failures(project_id, s_id, cur_parser.version)
 
                 consec_fail = (
                     0
