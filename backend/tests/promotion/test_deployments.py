@@ -468,6 +468,24 @@ async def test_moves_before_the_oldest_run_do_not_fill_the_page() -> None:
 
 
 @pytest.mark.anyio
+async def test_other_models_moves_do_not_fill_the_page() -> None:
+    tracking = FakeTracking()
+    tracking.deployments.append(_move("production", "v1", "v0", T0 + timedelta(seconds=1)))
+    # A page's worth of another model's moves after the run: read with no model filter they
+    # would overflow the page and leave the run with no versions.
+    tracking.deployments += [
+        _move("production", f"c{i}", f"c{i + 1}", T0 + timedelta(seconds=2 + i), model="other")
+        for i in range(500)
+    ]
+    runs = [_run("hrun_rb", "rollback", T0, rule_id="rul_1")]
+
+    async with httpx2.AsyncClient() as http:
+        view = await _service(http, tracking=tracking, runs=runs).get_deployments(PROJECT_ID)
+
+    assert [(d.from_version, d.to_version) for d in view.decisions] == [("v1", "v0")]
+
+
+@pytest.mark.anyio
 async def test_open_prs_carry_their_labels_from_github(fake_github: RunningFakeGitHub) -> None:
     repo = f"{REPO.owner}/{REPO.repo}"
     fake_github.state.prs[(repo, 42)] = {
