@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 import httpx2
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.api import (
@@ -197,3 +197,47 @@ async def get_last_issue_comment(
         return None
     except (ValidationError, ValueError):
         raise unreadable() from None
+
+
+class _Label(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+
+
+class _OpenPull(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    number: int
+    labels: list[_Label] = []
+
+
+_OPEN_PULLS = TypeAdapter(list[_OpenPull])
+
+
+async def get_open_pull_labels(
+    http: httpx2.AsyncClient,
+    token: str,
+    repo: str,
+) -> dict[int, list[str]]:
+    """The label names of the repository's open pull requests, by PR number, in one call.
+
+    One page of 100: labels of open pull requests beyond the first 100 are not read.
+    """
+    response = await request(
+        http,
+        "GET",
+        f"/repos/{repo}/pulls",
+        token,
+        params={"state": "open", "per_page": 100},
+        permission=PERMISSION_PULL_REQUESTS_WRITE,
+    )
+    if response.status_code != 200:
+        raise DomainError(
+            "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+        )
+    try:
+        pulls = _OPEN_PULLS.validate_python(response.json())
+    except (ValidationError, ValueError):
+        raise unreadable() from None
+    return {pull.number: [label.name for label in pull.labels] for pull in pulls}

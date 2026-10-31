@@ -64,7 +64,9 @@ class SaveReport(AgentTool[SaveReportArgs]):
             else:
                 parts.append("Decision: None")
 
-            if ev.payload.reasons:
+            if ev.payload.reasons is None:
+                parts.append("Reasons: not computed")
+            elif ev.payload.reasons:
                 parts.append("Reasons:")
                 for r in ev.payload.reasons:
                     parts.append(untrusted(r, source="evaluation"))
