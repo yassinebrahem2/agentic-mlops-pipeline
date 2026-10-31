@@ -104,6 +104,7 @@ from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
+from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ class Services:
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    fixes: SqliteFixes
 
 
 async def _app_secrets(
@@ -342,6 +344,7 @@ async def build_services(
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
+    fixes = SqliteFixes(databases, incidents, waker, events, clock, handoffs=handoffs)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -360,6 +363,7 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        fixes=fixes,
         surfaces=surfaces,
         pr_sync=pr_sync,
     )
@@ -549,4 +553,5 @@ async def build_services(
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        fixes=fixes,
     )
