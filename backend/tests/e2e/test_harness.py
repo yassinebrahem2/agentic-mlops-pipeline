@@ -177,7 +177,8 @@ def test_fixture_project_payloads() -> None:
 
     # Pipeline stages and downstream relationships
     assert is_downstream(TABLE_BOOKINGS, TABLE_PREDICTIONS, validated) is True
-    assert is_downstream(TABLE_WEATHER, TABLE_PREDICTIONS, validated) is False
+    assert is_downstream(TABLE_BOOKINGS, TABLE_WEATHER, validated) is False
+    assert is_downstream(TABLE_WEATHER, TABLE_PREDICTIONS, validated) is True
 
     # Feed
     assert len(validated.operations.feeds) == 1

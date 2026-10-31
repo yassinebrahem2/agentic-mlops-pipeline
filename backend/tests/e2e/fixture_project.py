@@ -200,12 +200,13 @@ def handoff_payload(
             {
                 "name": "score",
                 "entry": "score.py",
-                "inputs": [TABLE_BOOKINGS, TABLE_WEATHER],
+                "inputs": [TABLE_BOOKINGS],
                 "outputs": [TABLE_PREDICTIONS, MODEL_NAME],
             },
         ],
         "edges": [
             {"from_stage": "ingest_bookings", "to_stage": "score"},
+            {"from_stage": "ingest_weather", "to_stage": "score"},
         ],
         "operations": {
             "scheduler": {"name": "cron", "config_location": "deploy/crontab"},
@@ -259,6 +260,14 @@ def handoff_payload(
                     "cadence": {"cron": "30 1 * * *", "every_minutes": None},
                     "timezone": TIMEZONE,
                     "results": {"connection": CONNECTION_NAME, "path_pattern": "checks/*.jsonl"},
+                },
+                {
+                    "check_id": f"ci:{SCORING_WORKFLOW}",
+                    "name": "Scoring CI check",
+                    "category": "operational",
+                    "cadence": {"cron": "0 3 * * *", "every_minutes": None},
+                    "timezone": TIMEZONE,
+                    "results": {"workflow": SCORING_WORKFLOW},
                 },
             ],
             "results_location": file_results,

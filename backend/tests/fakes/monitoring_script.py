@@ -43,6 +43,22 @@ ASK_FOR_DATA: Final = (
 NO_PROPOSE: Final = f"I cannot set the project up: the {PROPOSE_TOOL_NAME} tool is not offered."
 ONBOARDING_COMPLETE: Final = "Onboarding is complete."
 
+_deployment_hook_id: str | None = None
+_deployment_rule_id: str | None = None
+
+
+def set_deployment_ids(*, hook_id: str | None = None, rule_id: str | None = None) -> None:
+    global _deployment_hook_id, _deployment_rule_id
+    _deployment_hook_id = hook_id
+    _deployment_rule_id = rule_id
+
+
+def reset_deployment_ids() -> None:
+    global _deployment_hook_id, _deployment_rule_id
+    _deployment_hook_id = None
+    _deployment_rule_id = None
+
+
 ToolCall = dict[str, Any]
 
 
@@ -137,10 +153,12 @@ def deployment_rollback_reply(
         return "Rollback executed via rule.", None
 
     inc_id = _find_incident_id(messages)
+    hook_id = _deployment_hook_id or ROLLBACK_HOOK_ID
+    rule_id = _deployment_rule_id or ROLLBACK_RULE_ID
     args: dict[str, Any] = {
-        "hook_id": ROLLBACK_HOOK_ID,
+        "hook_id": hook_id,
         "reason": "Scoring failure detected; executing automated rollback",
-        "rule_id": ROLLBACK_RULE_ID,
+        "rule_id": rule_id,
     }
     if inc_id is not None:
         args["incident_id"] = inc_id
