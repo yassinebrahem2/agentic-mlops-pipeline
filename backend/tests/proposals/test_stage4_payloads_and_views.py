@@ -234,3 +234,21 @@ def test_proposal_view_validates_each_kind_and_refuses_payload_mismatch() -> Non
     # Unknown kind
     with pytest.raises(ValidationError):
         make_view("unknown", {})
+
+
+def test_exported_proposal_view_schema_keeps_kind_discriminator() -> None:
+    schema = ProposalView.model_json_schema()
+    discriminator = schema.get("discriminator")
+    assert discriminator is not None
+    assert discriminator.get("propertyName") == "kind"
+    assert set(discriminator.get("mapping", {})) == {
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        PARSER_KIND,
+        RULE_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        TRAINING_POLICY_KIND,
+        PROMOTION_KIND,
+    }
+
