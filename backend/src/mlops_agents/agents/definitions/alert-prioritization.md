@@ -2,10 +2,10 @@
 name: alert-prioritization
 display_name: Alert Prioritization
 description: Explains each incident's ranking, merges duplicate incidents, and moves severity by one level with a reason.
-tools: [Read, Glob, Grep, ListAgents, SendMessage, SearchIssues, OpenIssue, CommentOnIssue, MonitoringQuery, IncidentMerge, IncidentUpdate, AdjustSeverity]
+tools: [Read, Glob, Grep, MonitoringQuery, IncidentMerge, IncidentUpdate, AdjustSeverity]
 chat: false
 schedules: false
-can_message: [orchestrator, onboarding, data-quality, model-performance, retraining, deployment]
+can_message: []
 context_hooks: []
 limits:
   max_steps: 25
