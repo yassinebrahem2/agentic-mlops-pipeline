@@ -16,7 +16,7 @@ import { errorText } from "@/lib/api";
 import { fromSelectValue, SELECT_NONE, toSelectValue } from "@/lib/selectNone";
 import { NoteRow } from "./NoteRow";
 import { NOTE_TYPE_LABELS, NOTE_TYPES, type NoteType } from "./noteTypes";
-import { useNotes } from "./useNotes";
+import { NOTES_PAGE_SIZE, useNotes } from "./useNotes";
 
 export function KnowledgePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -29,14 +29,17 @@ function Knowledge({ projectId }: { projectId: string }) {
   const [draft, setDraft] = useState("");
   const [q, setQ] = useState("");
   const [type, setType] = useState<NoteType | undefined>(undefined);
+  // Back to one page whenever the search or filter changes.
+  const [limit, setLimit] = useState(NOTES_PAGE_SIZE);
 
-  const query = useNotes(projectId, { q, type });
+  const query = useNotes(projectId, { q, type, limit });
   const notes = query.data?.notes ?? [];
   const filtered = q !== "" || type !== undefined;
 
   const applySearch = (event: SubmitEvent) => {
     event.preventDefault();
     setQ(draft.trim());
+    setLimit(NOTES_PAGE_SIZE);
   };
 
   return (
@@ -79,6 +82,7 @@ function Knowledge({ projectId }: { projectId: string }) {
             onValueChange={(value) => {
               const picked = fromSelectValue(value);
               setType(NOTE_TYPES.find((t) => t === picked));
+              setLimit(NOTES_PAGE_SIZE);
             }}
           >
             <SelectTrigger id="knowledge-type" className="w-44">
@@ -140,6 +144,19 @@ function Knowledge({ projectId }: { projectId: string }) {
             <NoteRow key={note.id} projectId={projectId} note={note} />
           ))}
         </ul>
+      )}
+
+      {notes.length >= limit && (
+        <div className="flex justify-center">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setLimit(limit + NOTES_PAGE_SIZE);
+            }}
+          >
+            Show more
+          </Button>
+        </div>
       )}
     </div>
   );

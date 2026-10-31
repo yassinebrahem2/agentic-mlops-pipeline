@@ -7,6 +7,7 @@ import * as streamModule from "@/lib/stream";
 import { TestFakeStream } from "@/pages/inbox/testing";
 import { project, stubProjects } from "@/test/projects";
 import { renderPage } from "@/test/render";
+import { NOTES_PAGE_SIZE } from "./useNotes";
 import { route } from "./route";
 
 type NoteView = components["schemas"]["NoteView"];
@@ -296,6 +297,106 @@ describe("KnowledgePage", () => {
 
     expect(deleteSpy).not.toHaveBeenCalled();
     expect(screen.getByTestId("note-kno_1")).toBeInTheDocument();
+  });
+
+  function manyNotes(count: number): NoteView[] {
+    return Array.from({ length: count }, (_, i) => note(`kno_${String(i + 1)}`));
+  }
+
+  it("shows no Show more button when fewer notes than the limit came back", async () => {
+    stubNotes((query) => ok(result(manyNotes(Number(query.limit) - 1))));
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("shows Show more on a full page, requests the larger limit and keeps rows meanwhile", async () => {
+    const user = userEvent.setup();
+    let release: (() => void) | undefined;
+    stubNotes((query) => {
+      const limit = Number(query.limit);
+      if (limit === NOTES_PAGE_SIZE) return ok(result(manyNotes(limit)));
+      return new Promise((resolve) => {
+        release = () => {
+          resolve({
+            data: result(manyNotes(limit - 5)),
+            response: new Response(null, { status: 200 }),
+          });
+        };
+      });
+    });
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    await waitFor(() => {
+      expect(noteQueries()).toContainEqual(expect.objectContaining({ limit: NOTES_PAGE_SIZE * 2 }));
+    });
+    expect(screen.getByTestId("note-kno_1")).toBeInTheDocument();
+    expect(screen.queryByText("Loading notes...")).toBeNull();
+
+    act(() => {
+      release?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`)).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("resets the limit when the type filter changes", async () => {
+    const user = userEvent.setup();
+    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
+
+    await user.click(screen.getByRole("combobox", { name: "Type" }));
+    await user.click(await screen.findByRole("option", { name: "Decision" }));
+
+    await waitFor(() => {
+      expect(noteQueries()).toContainEqual({
+        q: undefined,
+        type: "decision",
+        limit: NOTES_PAGE_SIZE,
+      });
+    });
+  });
+
+  it("resets the limit when a new search is submitted", async () => {
+    const user = userEvent.setup();
+    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
+
+    await user.type(screen.getByRole("searchbox", { name: "Search notes" }), "abc{Enter}");
+
+    await waitFor(() => {
+      expect(noteQueries()).toContainEqual({ q: "abc", type: undefined, limit: NOTES_PAGE_SIZE });
+    });
+  });
+
+  it("edits a row beyond the first page", async () => {
+    const user = userEvent.setup();
+    stubNotes((query) => ok(result(manyNotes(Number(query.limit)))));
+    patchSpy = vi
+      .spyOn(api, "PATCH")
+      .mockImplementation(() =>
+        ok(note(`kno_${String(NOTES_PAGE_SIZE + 1)}`, { title: "Edited late" })),
+      );
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    const row = await screen.findByTestId(`note-kno_${String(NOTES_PAGE_SIZE + 1)}`);
+
+    await user.click(within(row).getByRole("button", { name: "Edit" }));
+    await user.type(within(row).getByLabelText("Title"), "!");
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+
+    expect(await within(row).findByText("Edited late")).toBeInTheDocument();
   });
 
   it("refetches when a note.deleted event arrives", async () => {
