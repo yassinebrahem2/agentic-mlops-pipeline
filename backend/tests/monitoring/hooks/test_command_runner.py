@@ -192,6 +192,9 @@ async def test_command_runner_success_with_credential_and_env_file(tmp_path: Pat
     # Flags present
     assert call_args[0] == "run"
     assert "--rm" in call_args
+    assert "--name" in call_args
+    name_idx = call_args.index("--name")
+    assert call_args[name_idx + 1].startswith("hook-")
     assert "app-env:readytag" in call_args
     assert "--network" not in call_args  # network enabled by default
     assert "--env-file" in call_args
@@ -429,8 +432,13 @@ async def test_command_runner_removes_container_on_timeout(tmp_path: Path) -> No
 
     assert res.ok is False
     assert "timed out" in res.detail
-    # Check that docker rm -f hook-hok_timeout was called
-    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", "hook-hok_timeout"]]
+    call_args = docker_runner.calls[0]
+    assert "--name" in call_args
+    name_idx = call_args.index("--name")
+    container_name = call_args[name_idx + 1]
+    assert container_name.startswith("hook-")
+    # Check that docker rm -f was called with that exact container name
+    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", container_name]]
     assert len(rm_calls) == 1
 
 
@@ -454,6 +462,56 @@ async def test_command_runner_removes_container_on_cancel(tmp_path: Path) -> Non
     with pytest.raises(asyncio.CancelledError):
         await runner.run("prj_1", hook, {}, Authority(basis="none", reason="test"))
 
-    # Check that docker rm -f hook-hok_cancel was called
-    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", "hook-hok_cancel"]]
+    call_args = docker_runner.calls[0]
+    assert "--name" in call_args
+    name_idx = call_args.index("--name")
+    container_name = call_args[name_idx + 1]
+    assert container_name.startswith("hook-")
+    # Check that docker rm -f was called with that exact container name
+    rm_calls = [c for c in docker_runner.calls if c[:3] == ["rm", "-f", container_name]]
     assert len(rm_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_command_runner_rm_failure_logged_on_timeout(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    projects = MemorySandboxProjects(roots={"prj_1": repo_root})
+
+    class FailingRmDockerRunner(HookFakeDockerRunner):
+        async def run(
+            self,
+            args: Sequence[str],
+            *,
+            timeout_s: float | None = None,
+            secrets: Iterable[str] = (),
+        ) -> DockerResult:
+            cmd = list(args)
+            if cmd and cmd[0] == "run":
+                self.calls.append(cmd)
+                raise DockerTimeoutError("Command timed out", output="timed out")
+            if cmd and cmd[:2] == ["rm", "-f"]:
+                self.calls.append(cmd)
+                raise RuntimeError("Docker daemon disconnected during rm")
+            return await super().run(args, timeout_s=timeout_s, secrets=secrets)
+
+    docker_runner = FailingRmDockerRunner()
+    sandbox = FakeSandbox()
+    runner = CommandRunner(
+        sandbox=sandbox,
+        projects=projects,
+        docker_runner=docker_runner,
+        keystore=MemoryKeyStore(),
+    )
+
+    hook = make_command_hook(hook_id="hok_rm_fail", template="sleep 100")
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        res = await runner.run("prj_1", hook, {}, Authority(basis="none", reason="test"))
+
+    assert res.ok is False
+    assert "timed out" in res.detail
+    assert "Failed to remove timed-out hook container" in caplog.text

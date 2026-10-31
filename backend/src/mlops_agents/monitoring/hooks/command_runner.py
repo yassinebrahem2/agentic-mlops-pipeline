@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import shlex
 import tempfile
@@ -16,6 +17,7 @@ from mlops_agents.agents.approvals.authority import Authority
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.credentials.project_secrets import hook_ref
 from mlops_agents.credentials.scrub import scrub_url_secrets, scrub_values
+from mlops_agents.ids import new_id
 from mlops_agents.monitoring.hooks.constants import (
     HOOK_COMMAND_TIMEOUT_S,
     HOOK_CREDENTIAL_ENV,
@@ -31,6 +33,8 @@ from mlops_agents.sandbox.docker import (
     docker_error_boundary,
 )
 from mlops_agents.sandbox.projects import Mount, SandboxProjects
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -111,7 +115,8 @@ class CommandRunner(HookRunner):
                     env_file_path.chmod(0o600)
 
         command = ["bash", "-lc", filled_cmd]
-        container_name = f"hook-{hook.id}"
+        run_id = params.get("run_id") or new_id("hok")
+        container_name = f"hook-{run_id}"
         run_args = build_one_shot_run_args(
             project_id,
             image_tag,
@@ -136,13 +141,17 @@ class CommandRunner(HookRunner):
                 output, _ = res.command_output()
                 raw_detail = output
             except DockerTimeoutError as err:
-                with contextlib.suppress(Exception):
+                try:
                     await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
+                except Exception:
+                    logger.exception("Failed to remove timed-out hook container %s", container_name)
                 ok = False
                 raw_detail = err.output or f"{err.stdout}{err.stderr}" or str(err)
             except asyncio.CancelledError:
-                with contextlib.suppress(Exception):
+                try:
                     await self._docker_runner.run(["rm", "-f", container_name], timeout_s=15.0)
+                except Exception:
+                    logger.exception("Failed to remove cancelled hook container %s", container_name)
                 raise
             except SandboxUnavailable as err:
                 return HookResult(ok=False, detail=str(err), request_id=request_id)
