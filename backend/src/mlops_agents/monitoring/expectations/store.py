@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import RowMapping, func, insert, select, update
+from sqlalchemy import RowMapping, case, func, insert, select, update
 
 from mlops_agents.clock import to_iso
 from mlops_agents.monitoring.expectations.contract import ExpectationKey, ExpectationSpec
@@ -51,8 +51,10 @@ class SqliteExpectationsStore:
     ) -> None:
         """Registers an expectation. Replaces spec if key exists.
 
-        registered_at is set on the first insert only: a re-seed, a reconcile or a re-register
-        after a retire keeps it, so a slot missed before a restart is still judged.
+        registered_at is when the expectation last became active: stamped on insert, reset when
+        an inactive row is registered active again (a retired key re-added), and kept while it
+        stays active (a re-seed, the reconcile, an upsert), so a slot missed before a restart is
+        still judged and a slot from a retired time never is.
         """
         if active is None:
             active = spec.activates_on_pr is None
@@ -73,6 +75,14 @@ class SqliteExpectationsStore:
             ).first()
 
             if existing is not None:
+                values: dict[str, Any] = {"spec": spec_json, "active": 1 if active else 0}
+                if active:
+                    # Keyed on the row's current active value in the same statement: no
+                    # read-then-write race with a concurrent retire or activation.
+                    values["registered_at"] = case(
+                        (expectations.c.active == 0, to_iso(self._clock.now())),
+                        else_=expectations.c.registered_at,
+                    )
                 await conn.execute(
                     update(expectations)
                     .where(
@@ -80,10 +90,7 @@ class SqliteExpectationsStore:
                         expectations.c.ref == spec.key.ref,
                         func.coalesce(expectations.c.model, "") == model_str,
                     )
-                    .values(
-                        spec=spec_json,
-                        active=1 if active else 0,
-                    )
+                    .values(**values)
                 )
             else:
                 await conn.execute(
@@ -164,9 +171,10 @@ class SqliteExpectationsStore:
             )
 
     async def activate_for_pr(self, project_id: str, pr_number: int) -> list[ExpectationKey]:
-        """Activates inactive expectations that match activates_on_pr."""
+        """Activates inactive expectations that match activates_on_pr; registered_at becomes now."""
         engine = await self._databases.project(project_id)
         activated: list[ExpectationKey] = []
+        now_iso = to_iso(self._clock.now())
 
         async with engine.begin() as conn:
             rows = (
@@ -186,7 +194,7 @@ class SqliteExpectationsStore:
                             expectations.c.ref == spec.key.ref,
                             func.coalesce(expectations.c.model, "") == model_str,
                         )
-                        .values(active=1)
+                        .values(active=1, registered_at=now_iso)
                     )
                     activated.append(spec.key)
 
