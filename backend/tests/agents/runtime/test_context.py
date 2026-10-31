@@ -404,8 +404,7 @@ def test_prompt_messages_trims_older_tool_results_and_keeps_stored_intact() -> N
     # Content must be trimmed to head (500) + notice
     assert len(str(tool_msg.content)) < 2000
     assert str(tool_msg.content).startswith("x" * 500)
-    assert "earlier output truncated" in str(tool_msg.content)
-    assert "Full output is in the session." in str(tool_msg.content)
+    assert "characters cut to fit context budget" in str(tool_msg.content)
 
     # Stored part in message view remains untouched
     assert stored_part.content == large_content

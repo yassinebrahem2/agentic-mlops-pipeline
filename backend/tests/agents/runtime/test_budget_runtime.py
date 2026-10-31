@@ -507,3 +507,155 @@ async def test_bash_output_over_budget_cut_once_in_stored_and_model(
     last_msgs = caller.last_messages
     tool_msg = next(m for m in last_msgs if getattr(m, "tool_call_id", None) == "c_bash")
     assert tool_msg.content == tool_part.content
+
+
+async def test_reply_cut_by_length_turns_into_tool_error(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    git_env: dict[str, str],
+) -> None:
+    repo_dir = make_repo(tmp_path / "repo", {"src/app.py": "x\n"}, git_env)
+    agent = _make_custom_agent(
+        repo_dir,
+        paths.bin,
+        fixed_prompt_len=1000,
+        request_limit=8000,
+        tools=("Read",),
+    )
+    store = SessionStore(databases)
+    sink = RecordingSink()
+
+    call_1 = ModelReply(
+        message=AIMessage(
+            content="",
+            invalid_tool_calls=[
+                {
+                    "id": "c_cut",
+                    "name": "Write",
+                    "args": '{"path": "file.txt", "content": "large data...',
+                }
+            ],
+            response_metadata={"finish_reason": "length"},
+        ),
+        prompt_tokens=10,
+        completion_tokens=1200,
+    )
+    call_2 = ModelReply(
+        message=AIMessage(content="Understood"),
+        prompt_tokens=15,
+        completion_tokens=5,
+    )
+    caller = MockModelCaller([call_1, call_2])
+
+    session_id = await store.session_id("prj_test", agent.definition.name)
+    user_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Write large file")],
+        status="complete",
+    )
+    turn_id = await store.add_turn("prj_test", session_id, user_msg.id, "running")
+    agent_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        turn_id=turn_id,
+        author_kind="agent",
+        author_name=agent.definition.name,
+        parts=[],
+        status="streaming",
+    )
+
+    current_parts: list[Any] = []
+    base_hooks = graph_hooks(agent, databases)
+    hooks = replace(base_hooks, gate=AllowAllGate())
+    graph = create_turn_graph(
+        agent=agent,
+        caller=caller,
+        store=store,
+        sink=sink,
+        project_id="prj_test",
+        session_id=session_id,
+        turn_id=turn_id,
+        message_id=agent_msg.id,
+        current_parts=current_parts,
+        lock=asyncio.Lock(),
+        hooks=hooks,
+    )
+
+    await graph.ainvoke({"messages": [], "step_count": 0, "stopped_reason": None})  # pyright: ignore[reportUnknownMemberType]
+    assert caller.call_count == 2
+    tool_part = next(p for p in current_parts if isinstance(p, ToolResultPart))
+    assert (
+        "Reply cut by completion token limit. Write output in smaller parts." in tool_part.content
+    )
+
+
+async def test_floor_check_does_not_take_or_drop_queued_inbound(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    git_env: dict[str, str],
+) -> None:
+    repo_dir = make_repo(tmp_path / "repo", {"src/app.py": "x\n"}, git_env)
+    agent = _make_custom_agent(
+        repo_dir,
+        paths.bin,
+        fixed_prompt_len=23600,
+        request_limit=8000,
+        tools=("Read",),
+    )
+    store = SessionStore(databases)
+    sink = RecordingSink()
+    caller = MockModelCaller([])
+
+    session_id = await store.session_id("prj_test", agent.definition.name)
+    user_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Run")],
+        status="complete",
+    )
+    turn_id = await store.add_turn("prj_test", session_id, user_msg.id, "running")
+    agent_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        turn_id=turn_id,
+        author_kind="agent",
+        author_name=agent.definition.name,
+        parts=[],
+        status="streaming",
+    )
+
+    inbound_taken = False
+
+    class TrackingInbound:
+        async def take(self, project_id: str, session_id: str, turn_id: str) -> list[Any]:
+            nonlocal inbound_taken
+            inbound_taken = True
+            return [TextPart(type="text", text="inbound")]
+
+    base_hooks = graph_hooks(agent, databases)
+    hooks = replace(base_hooks, inbound=TrackingInbound())  # pyright: ignore[reportArgumentType]
+    current_parts: list[Any] = []
+    graph = create_turn_graph(
+        agent=agent,
+        caller=caller,
+        store=store,
+        sink=sink,
+        project_id="prj_test",
+        session_id=session_id,
+        turn_id=turn_id,
+        message_id=agent_msg.id,
+        current_parts=current_parts,
+        lock=asyncio.Lock(),
+        hooks=hooks,
+    )
+
+    res = await graph.ainvoke({"messages": [], "step_count": 0, "stopped_reason": None})  # pyright: ignore[reportUnknownMemberType]
+    assert res.get("stopped_reason") == "room_below_floor"
+    assert not inbound_taken, "Inbound take should not be called when floor check fails"

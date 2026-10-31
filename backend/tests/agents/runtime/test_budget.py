@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import httpx2
 
 from mlops_agents.agents.runtime.budget import (
@@ -217,3 +219,61 @@ def test_resolved_model_build_passes_max_tokens_when_limit_set() -> None:
     )
     chat_limited = model_with_limit.build(http)
     assert chat_limited.max_tokens == 1200
+
+
+def test_cut_text_cuts_by_length_even_with_preexisting_notice() -> None:
+    from mlops_agents.agents.runtime.budget import NOTICE_SUFFIX
+
+    large_text = "x" * 10000 + f"\n[... 50 {NOTICE_SUFFIX}"
+    cut = cut_text(large_text, 100)
+    assert len(cut) < 500
+    assert cut.startswith("x" * 100)
+    assert "characters cut to fit context budget" in cut
+
+
+def test_system_message_includes_reply_limit_when_limit_set() -> None:
+    from mlops_agents.agents.catalog import AgentDefinition
+    from mlops_agents.agents.runtime.agent import Agent
+    from mlops_agents.agents.runtime.context import system_message
+    from mlops_agents.workspace.models import Project
+
+    model_with_limit = ResolvedModel(
+        address="fake:gpt",
+        provider_id="p1",
+        provider_name="fake",
+        base_url="https://x.io",
+        wire_model_id="gpt",
+        context_window=64000,
+        keys=(),
+        request_token_limit=8000,
+    )
+    defn = AgentDefinition(
+        name="worker",
+        display_name="Worker",
+        description="Worker description",
+        prompt="You are a worker.",
+    )
+    proj = Project(
+        id="prj_1",
+        name="Project 1",
+        source="local",
+        default_branch="main",
+        status="ok",
+        status_detail=None,
+        created_at="2026-10-31T00:00:00Z",
+        last_opened_at=None,
+        local_path="/path/to/repo",
+        github_full_name=None,
+    )
+    agent = Agent(
+        definition=defn,
+        project=proj,
+        layout="",
+        tools=(),
+        files=MagicMock(),
+        model=model_with_limit,
+        max_steps=10,
+    )
+    sys = system_message(agent, summary=None)
+    assert "Reply limit: your reply must fit within 1200 tokens (~4800 characters)." in sys.content
+    assert "write in smaller parts" in sys.content

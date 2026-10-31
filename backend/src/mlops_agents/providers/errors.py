@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from typing import Any, cast
@@ -97,25 +96,17 @@ def _is_request_too_large(e: BaseException) -> bool:
     msg = _provider_message(e) or str(e)
     msg_lower = msg.lower()
 
-    if (
+    return bool(
         "maximum context length" in msg_lower
         or "reduce the length of the messages" in msg_lower
         or "request payload size exceeds the limit" in msg_lower
         or "context length exceeded" in msg_lower
-    ):
-        return True
-
-    # Groq TPM limit when single request is above per-minute limit (Requested > Limit)
-    if "tokens per minute" in msg_lower or "tpm" in msg_lower:
-        limit_match = re.search(r"\blimit\b\s*[:=]?\s*(\d+)", msg, re.IGNORECASE)
-        req_match = re.search(r"\brequested\b\s*[:=]?\s*(\d+)", msg, re.IGNORECASE)
-        if limit_match and req_match:
-            limit_val = int(limit_match.group(1))
-            req_val = int(req_match.group(1))
-            if req_val > limit_val:
-                return True
-
-    return False
+        or "request too large for model" in msg_lower
+        or (
+            "the input token count" in msg_lower
+            and "exceeds the maximum number of tokens allowed" in msg_lower
+        )
+    )
 
 
 def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:

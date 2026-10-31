@@ -184,22 +184,6 @@ def test_bad_request_other_code_is_bad_request() -> None:
     assert result.kind is ProviderErrorKind.BAD_REQUEST
 
 
-def test_groq_429_tpm_requested_greater_than_limit_is_request_too_large() -> None:
-    err = openai.RateLimitError(
-        "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 0, Requested 9000. Please try again in 1m0s.",
-        response=_response(429),
-        body={
-            "error": {
-                "message": "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 0, Requested 9000. Please try again in 1m0s.",
-                "type": "tokens",
-                "code": "rate_limit_exceeded",
-            }
-        },
-    )
-    result = classify(err)
-    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
-
-
 def test_groq_429_tpm_requested_within_limit_is_rate_limit() -> None:
     err = openai.RateLimitError(
         "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 15s.",
@@ -290,6 +274,43 @@ def test_http_413_is_request_too_large() -> None:
         "Payload Too Large",
         response=_response(413),
         body=None,
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_groq_413_tpm_overage_is_request_too_large() -> None:
+    # Groq returns 413 with code 'rate_limit_exceeded' when a single request exceeds TPM:
+    # "Request too large for model `...` in organization ... on tokens per minute (TPM): Limit 8000, Requested 33128"
+    # Citations: https://community.groq.com/t/gpt-oss-20b-free-tier-getting-413-errors/1411
+    # https://meta.discourse.org/t/ai-exceeds-llm-token-thresholds-randomly-and-unpredictably/402334/4
+    err = openai.RateLimitError(
+        "Request too large for model `llama-3.3-70b-versatile` in organization `org_abc` on tokens per minute (TPM): Limit 8000, Requested 33128, please try again in 3m46.425s.",
+        response=_response(413),
+        body={
+            "error": {
+                "message": "Request too large for model `llama-3.3-70b-versatile` in organization `org_abc` on tokens per minute (TPM): Limit 8000, Requested 33128, please try again in 3m46.425s.",
+                "type": "tokens",
+                "code": "rate_limit_exceeded",
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_gemini_400_input_token_count_is_request_too_large() -> None:
+    # Gemini returns 400 with "The input token count (N) exceeds the maximum number of tokens allowed (M)."
+    # Citation: https://discuss.ai.google.dev/t/gemini-3-5-flash-the-input-token-count-n-exceeds-the-maximum-number-of-tokens-allowed-32768/170484
+    err = openai.BadRequestError(
+        "The input token count (45000) exceeds the maximum number of tokens allowed (32768).",
+        response=_response(400),
+        body={
+            "error": {
+                "message": "The input token count (45000) exceeds the maximum number of tokens allowed (32768).",
+                "status": "INVALID_ARGUMENT",
+            }
+        },
     )
     result = classify(err)
     assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
