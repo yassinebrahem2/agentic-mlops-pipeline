@@ -54,6 +54,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
+from mlops_agents.monitoring.dashboard import DashboardBuilder
 from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
 from mlops_agents.monitoring.expectations.query import (
     ExpectationsQueryProvider,
@@ -65,6 +66,7 @@ from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner, GitHubCi
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.facts import HandoffGateFacts
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.kind import HooksKind
 from mlops_agents.monitoring.hooks.pins import GitHookPinner, PinCheckObserver
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
@@ -87,6 +89,10 @@ from mlops_agents.monitoring.incidents.suspects import SuspectLinker
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.monitoring.rules.authority import RuleAuthority
+from mlops_agents.monitoring.rules.kind import RuleKind
+from mlops_agents.monitoring.rules.query import RulesQueryProvider
+from mlops_agents.monitoring.rules.store import SqliteRules
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
     AfterSyncJob,
@@ -209,6 +215,8 @@ class Services:
     expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
+    rules: SqliteRules
+    dashboard: DashboardBuilder
     stats: StatsService
     morning_reports: MorningReports
 
@@ -344,11 +352,13 @@ async def build_services(
         clock=clock,
         on_call=on_call,
     )
+    rules = SqliteRules(databases, clock=clock)
     hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
         events=events,
         clock=clock,
+        rules=rules,
     )
     command_runner = CommandRunner(
         sandbox=sandbox,
@@ -371,6 +381,7 @@ async def build_services(
 
     query_providers = QueryProviders()
     query_providers.register(HooksQueryProvider(hooks))
+    query_providers.register(RulesQueryProvider(rules))
     query_providers.register(SignalsQueryProvider(databases))
     query_providers.register(IncidentsQueryProvider(databases))
 
@@ -391,6 +402,9 @@ async def build_services(
         connections=connections,
         events=events,
         maintenance=maintenance,
+    )
+    authorities.register(
+        "rule", RuleAuthority(rules=rules, results=results, databases=databases, clock=clock)
     )
     severity = RuleSeverity(handoffs=handoffs)
     incidents = IncidentsService(
@@ -579,7 +593,9 @@ async def build_services(
             secret_values=secret_source,
         )
     )
-    proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=None))
+    proposal_kinds.register(HooksKind(hooks=hooks))
+    proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
+    proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=rules))
     proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))
 
     approvals = ApprovalsService(
@@ -762,6 +778,17 @@ async def build_services(
         except Exception:
             logger.exception("Failed to reconcile expectations for project %s", project.id)
 
+    dashboard = DashboardBuilder(
+        handoffs=handoffs,
+        tracking=tracking,
+        incidents=incidents,
+        expectations=expectations,
+        results=results,
+        baseline=baseline,
+        status_board=status_board,
+        mode=settings.mode,
+    )
+
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
@@ -816,6 +843,8 @@ async def build_services(
         expectations=expectations,
         fixes=fixes,
         training=training,
+        rules=rules,
+        dashboard=dashboard,
         stats=stats,
         morning_reports=morning_reports,
     )
