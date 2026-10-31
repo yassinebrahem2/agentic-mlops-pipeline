@@ -96,7 +96,9 @@ class HostCheck:
             proto = _last(headers.get("x-forwarded-proto", "")).lower()
             scheme = proto if proto in ("http", "https") else scope["scheme"]
             scope = _with_host(scope, host, scheme)
-        if not host or not self.rules.host_allowed(host):
+        path = scope.get("path", "").rstrip("/")
+        is_heartbeat = scope.get("method") == "GET" and path == "/api/health/heartbeat"
+        if not host or not self._is_host_allowed(scope, host, is_heartbeat=is_heartbeat):
             refusal = error_response(
                 400,
                 "bad_host",
@@ -105,7 +107,7 @@ class HostCheck:
             await refusal(scope, receive, send)
             return
         origin = headers.get("origin")
-        if origin is not None and not self.rules.origin_allowed(origin):
+        if not is_heartbeat and origin is not None and not self.rules.origin_allowed(origin):
             refusal = error_response(
                 403,
                 "bad_origin",
@@ -115,6 +117,24 @@ class HostCheck:
             await refusal(scope, receive, send)
             return
         await self.app(scope, receive, send)
+
+    def _is_host_allowed(self, scope: Scope, host: str, *, is_heartbeat: bool) -> bool:
+        if self.rules.host_allowed(host):
+            return True
+        if not is_heartbeat:
+            return False
+        name, _ = _split(host)
+        app = scope.get("app")
+        if app is None:
+            return False
+        services = getattr(getattr(app, "state", None), "services", None)
+        if services is None:
+            return False
+        integration_settings = getattr(services, "integration_settings", None)
+        if integration_settings is None:
+            return False
+        cached_host = integration_settings.cached_public_url_host
+        return bool(cached_host and name == cached_host.lower())
 
 
 def _with_host(scope: Scope, host: str, scheme: str) -> Scope:

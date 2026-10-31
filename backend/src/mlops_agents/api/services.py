@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -95,9 +96,16 @@ from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
-from mlops_agents.notifications.contract import Notifier, OnCallPeople
+from mlops_agents.notifications.contract import (
+    Channel,
+    MorningReports,
+    Notifier,
+    OnCallPeople,
+)
+from mlops_agents.notifications.escalation import EscalationJob
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
+from mlops_agents.notifications.report import MorningReportJob, SqliteMorningReports
 from mlops_agents.notifications.retries import RetryJob
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
@@ -183,10 +191,12 @@ class Services:
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    notification_channels: Mapping[str, Channel]
     expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
     stats: StatsService
+    morning_reports: MorningReports
 
 
 async def _app_secrets(
@@ -262,6 +272,7 @@ async def build_services(
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
     integration_settings = IntegrationSettings(databases, keystore)
+    await integration_settings.init_cache()
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings, integration_settings)
@@ -317,6 +328,7 @@ async def build_services(
         channels=notification_channels,
         events=events,
         clock=clock,
+        on_call=on_call,
     )
     hooks = HooksService(
         databases=databases,
@@ -645,6 +657,45 @@ async def build_services(
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+        run_mode=settings.mode,
+        on_call=on_call,
+    )
+    notifier.bind_incidents(incidents)
+    retry_notifications_job = RetryJob(databases, notifier, clock)
+    scheduler.register(retry_notifications_job)
+    escalation_job = EscalationJob(
+        databases=databases,
+        incidents=incidents,
+        on_call=on_call,
+        notifier=notifier,
+        clock=clock,
+    )
+    scheduler.register(escalation_job)
+    morning_reports = SqliteMorningReports(
+        databases=databases,
+        incidents=incidents,
+        hooks=hooks,
+        approvals=approvals,
+        expectations=expectations,
+        events=events,
+    )
+    morning_report_job = MorningReportJob(
+        databases=databases,
+        on_call=on_call,
+        notifier=notifier,
+        reports=morning_reports,
+        clock=clock,
+        incidents=incidents,
+        settings=integration_settings,
+    )
+    scheduler.register(morning_report_job)
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
@@ -709,8 +760,10 @@ async def build_services(
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        notification_channels=notification_channels,
         expectations=expectations,
         fixes=fixes,
         training=training,
         stats=stats,
+        morning_reports=morning_reports,
     )
