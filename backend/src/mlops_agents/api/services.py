@@ -56,6 +56,9 @@ from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.service import HooksService
+from mlops_agents.monitoring.incidents.contract import MediumSeverity
+from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -128,8 +131,8 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
-    action_hooks: HooksService
     hooks: HooksService
+    incidents: IncidentsService
 
 
 async def _app_secrets(
@@ -246,7 +249,7 @@ async def build_services(
     )
 
     handoffs = SqliteHandoffs(databases)
-    action_hooks = HooksService(
+    hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
         events=events,
@@ -258,15 +261,14 @@ async def build_services(
         docker_runner=runner,
         keystore=keystore,
     )
-    action_hooks.add_runner(command_runner)
-    handoff_hooks = HandoffHooks(action_hooks, handoffs)
+    hooks.add_runner(command_runner)
+    handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
     maintenance = NeverSuspended()
-    _ = maintenance
 
     tracking = TrackingService(
         databases=databases,
@@ -400,6 +402,17 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -463,6 +476,6 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
-        action_hooks=action_hooks,
-        hooks=action_hooks,
+        hooks=hooks,
+        incidents=incidents,
     )

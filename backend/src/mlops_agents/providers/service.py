@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from contextlib import suppress
 
 import httpx2
 from sqlalchemy import delete, insert, select, update
@@ -27,10 +28,19 @@ from mlops_agents.providers.models import (
     RemoteModel,
 )
 from mlops_agents.providers.rows import model_from_row, provider_from_row
+from mlops_agents.providers.usage_contract import ModelPrice
 from mlops_agents.providers.verification import probe_embedder, probe_model
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import models as models_table
 from mlops_agents.storage.tables import provider_keys, providers
+
+
+def _price_values(price: ModelPrice | None) -> dict[str, object]:
+    return {
+        "price_prompt_per_mtok": price.prompt_per_mtok if price else None,
+        "price_completion_per_mtok": price.completion_per_mtok if price else None,
+        "price_source": price.source if price else None,
+    }
 
 
 class ProvidersService:
@@ -208,12 +218,41 @@ class ProvidersService:
         keys = await self.keys_for(provider.id)
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {name} first.", status=409)
-        return await listing.list_remote_models(
+        remote = await listing.list_remote_models(
             provider,
             keys[0] if keys else None,
             get=self._get,
             http=self._http,
         )
+        await self._store_provider_prices(provider, remote)
+        return remote
+
+    async def _store_provider_prices(self, provider: Provider, remote: list[RemoteModel]) -> None:
+        """A listing's price goes to the provider's added models, unless a user price is set. A
+        listing that gives no price changes nothing."""
+        priced = [m for m in remote if m.price is not None]
+        if not priced:
+            return
+        engine = await self._dbs.app()
+        async with engine.begin() as conn:
+            for added in (
+                await conn.execute(
+                    select(models_table.c.address, models_table.c.wire_model_id).where(
+                        models_table.c.provider_id == provider.id,
+                        models_table.c.price_source.is_distinct_from("user"),
+                    )
+                )
+            ).all():
+                price = next(
+                    (m.price for m in priced if listing.match_model_id(m.id, added.wire_model_id)),
+                    None,
+                )
+                if price is not None:
+                    await conn.execute(
+                        update(models_table)
+                        .where(models_table.c.address == added.address)
+                        .values(**_price_values(price))
+                    )
 
     # Models
 
@@ -243,17 +282,17 @@ class ProvidersService:
         address = f"{provider.name}:{wire}"
         if await self.get_model(address) is not None:
             raise DomainError("model_exists", f"{address} is already added.", status=409)
+        try:
+            remote = await self.list_remote_models(provider.name)
+        except DomainError:
+            remote = []  # the listing is only a convenience; the user can enter it later
+        listed = next((m for m in remote if listing.match_model_id(m.id, wire)), None)
         context = data.context_window
         if data.model_type == "embedder":
             context = None
-        elif context is None:
-            try:
-                remote = await self.list_remote_models(provider.name)
-            except DomainError:
-                remote = []  # the listing is only a convenience; the user can enter it later
-            context = next(
-                (m.context_window for m in remote if listing.match_model_id(m.id, wire)), None
-            )
+        elif context is None and listed is not None:
+            context = listed.context_window
+        price = listed.price if listed is not None else None
         engine = await self._dbs.app()
         async with engine.begin() as conn:
             await conn.execute(
@@ -269,6 +308,7 @@ class ProvidersService:
                     verified_at=None,
                     model_type=data.model_type,
                     dimensions=None,
+                    **_price_values(price),
                 )
             )
         return await self.require_model(address)
@@ -280,6 +320,13 @@ class ProvidersService:
             )
         await self.require_model(address)
         await self._update_model(address, context_window=value)
+        return await self.require_model(address)
+
+    async def set_price(self, address: str, price: ModelPrice | None) -> ModelEntry:
+        """Sets the user's price for a model, or clears the price (a later listing may then
+        bring the provider's back)."""
+        await self.require_model(address)
+        await self._update_model(address, **_price_values(price))
         return await self.require_model(address)
 
     async def delete_model(self, address: str) -> None:
@@ -329,6 +376,10 @@ class ProvidersService:
         if provider.kind == "hosted" and not keys:
             raise DomainError("no_keys", f"Add a key to {provider.name} first.", status=409)
         first_key = keys[0] if keys else None
+        # Stores a published price; a failing listing must not fail the check (the probe below
+        # reports its own errors).
+        with suppress(DomainError):
+            await self.list_remote_models(provider.name)
 
         if entry.model_type == "embedder":
             try:

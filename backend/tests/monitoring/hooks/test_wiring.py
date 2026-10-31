@@ -40,9 +40,8 @@ async def test_build_services_hooks_wiring(
     async with app.router.lifespan_context(app):
         services: Services = app.state.services
 
-        # Verify action_hooks and hooks exist on services and are the same instance
-        assert isinstance(services.action_hooks, HooksService)
-        assert services.hooks is services.action_hooks
+        # Verify hooks exists on services
+        assert isinstance(services.hooks, HooksService)
 
         # Create a project directly
         project_id = new_id("prj")
@@ -55,7 +54,7 @@ async def test_build_services_hooks_wiring(
         # Storing via handoffs triggers the observer
         await services.handoffs.store(project_id, "prp_wire", payload)
 
-        hooks = await services.action_hooks.list(project_id)
+        hooks = await services.hooks.list(project_id)
         assert len(hooks) == 1
         assert hooks[0].name == "rollback"
         assert hooks[0].source == "handoff"

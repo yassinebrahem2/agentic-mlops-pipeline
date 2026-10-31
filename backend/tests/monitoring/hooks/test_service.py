@@ -23,13 +23,17 @@ from tests.monitoring.hooks.conftest import FakeLifecycle, FakePinner, FakeRunne
 from tests.proposals.samples import command
 
 
-def _sample_spec(kind: str = "train", cmd_type: str = "command") -> CommandSpec:
+def _sample_spec(
+    kind: str = "train", cmd_type: str = "command", template: str | None = None
+) -> CommandSpec:
+    tmpl = template if template is not None else "python train.py --model {model}"
+    placeholders = ["model"] if "{model}" in tmpl else []
     return CommandSpec.model_validate(
         command(
             kind=kind,
             type=cmd_type,
-            template="python train.py --model {model}",
-            placeholders=["model"],
+            template=tmpl,
+            placeholders=placeholders,
         )
     )
 
@@ -272,13 +276,22 @@ async def test_pinner_stored_on_register_and_replaced_on_approve(
     assert hook.pins[0].path == "train.py"
     assert hook.pins[0].sha256 == "sha_1"
 
-    # Change pinner output and approve
+    # Change pinner output and re-register with changed spec:
+    # register pins only a hook that has no pins yet; it never replaces existing pins or approved_commit
     pinner.commit = "commit_2"
     pinner.pins_list = [
         PinnedFile(path="train.py", sha256="sha_2"),
         PinnedFile(path="eval.py", sha256="sha_eval"),
     ]
 
+    new_spec = _sample_spec(template="echo new template")
+    reregistered = await service.register(project_id, new_spec, "train", "cancel", "handoff")
+    assert reregistered.approved_commit == "commit_1"
+    assert len(reregistered.pins) == 1
+    assert reregistered.pins[0].sha256 == "sha_1"
+    assert reregistered.spec.template == "echo new template"
+
+    # Only approve replaces pins and approved_commit
     approved = await service.approve(project_id, hook.id, by="reviewer")
     assert approved.approved_commit == "commit_2"
     assert len(approved.pins) == 2
@@ -310,6 +323,15 @@ async def test_suspend_then_set_enabled_true_leaves_suspended_and_approve_clears
     enabled = await service.set_enabled(project_id, hook.id, True)
     assert enabled.status == "suspended"
     assert enabled.suspended_reason == "Drift issue"
+
+    # Disabling a suspended hook and enabling it again still preserves suspension
+    disabled = await service.set_enabled(project_id, hook.id, False)
+    assert disabled.status == "disabled"
+    assert disabled.suspended_reason == "Drift issue"
+
+    re_enabled = await service.set_enabled(project_id, hook.id, True)
+    assert re_enabled.status == "suspended"
+    assert re_enabled.suspended_reason == "Drift issue"
 
     # approve clears suspension
     approved = await service.approve(project_id, hook.id, by="operator")

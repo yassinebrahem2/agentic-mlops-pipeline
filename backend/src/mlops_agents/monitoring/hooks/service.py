@@ -90,7 +90,9 @@ class HooksService:
             credential_set = await self._secrets.is_set(hook_ref(project_id, hook_id))
             approved_commit: str | None = None
             new_pins: list[PinnedFile] | None = None
-            if self._pinner is not None:
+            # register pins only a hook that has no pins yet; it never replaces existing pins or approved_commit
+            if not pins and row["approved_commit"] is None and self._pinner is not None:
+                credential_set = await self._secrets.is_set(hook_ref(project_id, hook_id))
                 current_view = make_hook_view(
                     {**row, "spec": spec.model_dump()},
                     pins,
@@ -158,7 +160,12 @@ class HooksService:
         if hook is None:
             raise KeyError(f"Hook {hook_id!r} not found in project {project_id!r}")
         if enabled:
-            if hook.status != "suspended":
+            # set_enabled(True) never clears a suspension; only approve does.
+            if hook.suspended_reason is not None:
+                await self._store.update_hook_status(
+                    project_id, hook_id, "suspended", suspended_reason=hook.suspended_reason
+                )
+            else:
                 await self._store.update_hook_status(
                     project_id, hook_id, "active", suspended_reason=None
                 )
