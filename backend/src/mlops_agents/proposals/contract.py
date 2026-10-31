@@ -300,7 +300,6 @@ class HandoffView(BaseModel):
     version: int
     approved: datetime
     payload: HandoffPayload
-    payload: HandoffPayload
 
 
 class HandoffObserver(Protocol):
