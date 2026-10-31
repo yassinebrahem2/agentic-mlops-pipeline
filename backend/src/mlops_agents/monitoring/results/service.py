@@ -91,6 +91,14 @@ class ResultsService(Results):
         """Binds incidents service to results service."""
         self._incidents = incidents
 
+    def bind_tracking(self, tracking: Tracking) -> None:
+        """Binds tracking service to results service and initializes tracker readers."""
+        self._tracking = tracking
+        if self._ci_reader is None:
+            self._ci_reader = CiSourceReader(tracking, self._handoffs)
+        if self._mlflow_reader is None:
+            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs)
+
     def bind_maintenance(self, maintenance: Maintenance) -> None:
         """Binds maintenance service to results service."""
         self._maintenance = maintenance
