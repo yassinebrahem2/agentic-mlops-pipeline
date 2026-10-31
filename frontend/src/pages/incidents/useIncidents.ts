@@ -2,20 +2,10 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, unwrap } from "@/lib/api";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { PROJECT_EVENT_TYPES, type ProjectEventType } from "@/lib/useProjectEvents";
-import type { IncidentStatus } from "./labels";
 
 /** UI paging sizes: how much one screen loads, not a backend bound. */
 export const INCIDENT_PAGE_SIZE = 25;
 export const TIMELINE_PAGE_SIZE = 25;
-
-// The Inbox shows the incidents still in play. The backend's ACTIVE_STATUSES has no route yet,
-// so this is the one frontend copy; `satisfies` keeps every entry a real status.
-export const ACTIVE_STATUSES = [
-  "open",
-  "acknowledged",
-  "mitigated",
-  "reopened",
-] as const satisfies readonly IncidentStatus[];
 
 // One prefix for every incident query, so one invalidation refreshes list, page, signals and timeline.
 export function incidentsKey(projectId: string | undefined) {
@@ -46,7 +36,8 @@ export function useActiveIncidents(projectId: string | undefined) {
       const res = await api.GET("/api/projects/{project_id}/incidents", {
         params: {
           path: { project_id: projectId },
-          query: { status: [...ACTIVE_STATUSES], limit: INCIDENT_PAGE_SIZE, offset: pageParam },
+          // `inbox` is the backend's own set: active incidents plus resolved ones awaiting a verdict.
+          query: { inbox: true, limit: INCIDENT_PAGE_SIZE, offset: pageParam },
         },
       });
       return unwrap(res);

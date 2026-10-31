@@ -24,7 +24,7 @@ describe("Inbox incidents section", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lists incidents in the order the route returns them, asking for the active ones", async () => {
+  it("lists incidents in the order the route returns them, asking for the inbox set", async () => {
     stubStream();
     const get = stubGet({
       [INCIDENTS]: () =>
@@ -53,10 +53,11 @@ describe("Inbox incidents section", () => {
     );
     const query = (
       get.mock.calls.find((c) => c[0] === INCIDENTS)?.[1] as {
-        params: { query: { status: string[] } };
+        params: { query: Record<string, unknown> };
       }
     ).params.query;
-    expect(query.status).toEqual(["open", "acknowledged", "mitigated", "reopened"]);
+    expect(query.inbox).toBe(true);
+    expect(query).not.toHaveProperty("status");
   });
 
   it("acknowledges an incident: sends the request and the row stops offering it", async () => {
@@ -170,6 +171,24 @@ describe("Inbox incidents section", () => {
     const judged = within(screen.getByTestId("incident-row-inc_2"));
     expect(judged.getByText("Not an issue")).toBeInTheDocument();
     expect(judged.queryByText("Give a verdict")).toBeNull();
+  });
+
+  it("offers the verdict but not Acknowledge on a resolved incident without a verdict", async () => {
+    const user = userEvent.setup();
+    stubStream();
+    stubGet({
+      [INCIDENTS]: () =>
+        ok(
+          pageOf([incident("inc_r", { status: "resolved", resolved_at: "2026-10-30T11:00:00Z" })]),
+        ),
+    });
+
+    renderPage("/projects/prj_1/inbox");
+    const row = await screen.findByTestId("incident-row-inc_r");
+
+    expect(within(row).queryByRole("button", { name: "Acknowledge" })).toBeNull();
+    await user.click(within(row).getByText("Give a verdict"));
+    expect(within(row).getByRole("button", { name: "Real issue" })).toBeInTheDocument();
   });
 
   it("loads more incidents with the offset", async () => {

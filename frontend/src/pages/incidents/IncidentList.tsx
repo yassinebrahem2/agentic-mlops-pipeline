@@ -12,6 +12,7 @@ import {
   StatusBadge,
   VerdictSummary,
 } from "./IncidentBadges";
+import { incidentActions } from "./incidentActions";
 import { VerdictButtons } from "./VerdictButtons";
 import type { IncidentView } from "./labels";
 import { useAcknowledge } from "./useIncidentActions";
@@ -40,7 +41,7 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Inc
             {incident.cause ?? "Cause not known yet"}
           </IncidentLink>
         </p>
-        {incident.acknowledged_at === null && (
+        {incidentActions(incident).canAcknowledge && (
           <Button
             size="sm"
             variant="secondary"
