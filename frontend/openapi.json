@@ -8394,6 +8394,18 @@
       },
       "ToolCallPart": {
         "properties": {
+          "extra_content": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Content"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -8402,6 +8414,17 @@
             "additionalProperties": true,
             "title": "Input",
             "type": "object"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "name": {
             "title": "Name",
