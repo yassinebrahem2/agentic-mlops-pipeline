@@ -54,18 +54,23 @@ end = 2016-12-31
 
 # The model decays: a share of the outcomes turns against what the first model learned. For online
 # travel agent bookings with no deposit arriving in the window, cancellations start to follow a
-# rule: below a lead-time cut they cancel, above it they do not (in the source, long lead times
-# cancel more). The cut keeps the group's cancellation rate at its rate before the window. The
-# share of the group's bookings that follow the rule ramps from 0 at the start to `max_share` at
-# the end. Of 0.5, 0.7, 0.9 and 1.0, tried offline on the source, 0.7 is the largest at which a
-# model the company retrains on the window's first half scores on December's arrivals within 0.05
-# of the first model without the decay.
+# rule: below a lead-time cut they cancel, at or above it they do not, whatever they did in the
+# source (where long lead times cancel more). The cut keeps the group's cancellation rate at its
+# rate before the window. The share of the group's bookings that follow the rule ramps from 0 at
+# the start to `max_share` at `ramp_end`, then holds to the end of the run.
+# `max_share` was chosen offline on the source, before the full run (the first model's PR-AUC on
+# February 2017 arrivals, 0.740 without the decay): 0.5 drops it by 0.121, 0.7 by 0.153 (at the
+# 0.15 the plan asks for), 0.85 by 0.175 and 1.0 by 0.206, while the lowest accuracy check
+# reading falls to 0.745, 0.707, 0.671 and 0.644 against its 0.60 threshold. 0.85 clears both
+# with a margin. At none of these shares does a model the company retrains on 2016-12-15 score
+# on February within 0.05 of the same retrain without the decay: it scores about as the first
+# model does.
 # Only labels change, never a bookings file. It overlaps the natural shift on purpose, in another
 # segment and another category.
 [[injection]]
 kind = "model_decay"
 group = { market_segment = "Online TA", deposit_type = "No Deposit" }
-max_share = 0.7
+max_share = 0.85
 start = 2016-10-01
 ramp_end = 2016-12-01
 end = 2017-03-31
