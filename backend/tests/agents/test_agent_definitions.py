@@ -35,8 +35,12 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
     MONITORING_QUERY,
+    RECORD_FIX_CHOICE,
+    REQUEST_FIX,
     RUN_HOOK,
+    SAVE_REPORT,
 )
+from mlops_agents.agents.tools.propose import ProposeTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.config import RunMode, load_settings
@@ -49,13 +53,16 @@ from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
 from mlops_agents.monitoring.results.contract import ResultCategory
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
-from mlops_agents.proposals.contract import HandoffPayload
+from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
+from mlops_agents.proposals.contract import PROMOTION_KIND, HandoffPayload
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.payloads import ModelSpec, Operations
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.training.constants import REQUEST_TAG
+from mlops_agents.training.contract import FixChoice
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
@@ -399,8 +406,20 @@ TASK_1_COLUMN: dict[str, tuple[str, ...]] = {
     **dict.fromkeys(DIAGNOSING_AGENTS, DIAGNOSING_TOOLS),
     "alert-prioritization": (MONITORING_QUERY, INCIDENT_MERGE, INCIDENT_UPDATE, ADJUST_SEVERITY),
 }
+TASK_2_COLUMN: dict[str, tuple[str, ...]] = {
+    "data-quality": (REQUEST_FIX, ProposeTool.name),
+    "model-performance": (REQUEST_FIX, ProposeTool.name),
+    "retraining": (RECORD_FIX_CHOICE, SAVE_REPORT, ProposeTool.name),
+    "deployment": (REQUEST_FIX, ProposeTool.name),
+    "orchestrator": (REQUEST_FIX,),
+}
+TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (TASK_1_COLUMN, TASK_2_COLUMN)
 AGENT_TABLE: list[dict[str, Any]] = [
-    {**row, "tools": row["tools"] + TASK_1_COLUMN.get(row["name"], ())} for row in STAGE_3_TABLE
+    {
+        **row,
+        "tools": row["tools"] + tuple(t for col in TASK_COLUMNS for t in col.get(row["name"], ())),
+    }
+    for row in STAGE_3_TABLE
 ]
 
 # The operational subtypes `diagnoser()` maps to an agent of their own.
@@ -481,6 +500,8 @@ def test_all_seven_definitions_load_with_real_registries() -> None:
         proposal_kinds=ProposalKinds(),
         tracking=cast(Any, dummy),
         handoffs=cast(Any, dummy),
+        reports=cast(Any, dummy),
+        fixes=cast(Any, dummy),
         hooks=cast(Any, dummy),
         incidents=cast(Any, dummy),
         severity=cast(Any, dummy),
@@ -669,12 +690,21 @@ def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
     assert holders == ["alert-prioritization"]
 
 
-def test_task_1_tools_are_named_in_their_holders_prompts() -> None:
+# These three hold `Propose` from task 2, but the kinds their prompts name arrive in task 3.
+PROPOSE_NAMED_FROM_TASK_3: frozenset[str] = frozenset(
+    {"data-quality", "model-performance", "deployment"}
+)
+
+
+def test_task_tools_are_named_in_their_holders_prompts() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    for name, column in TASK_1_COLUMN.items():
-        prompt = catalog.get(name).prompt
-        for tool_name in column:
-            assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
+    for column in TASK_COLUMNS:
+        for name, tools in column.items():
+            prompt = catalog.get(name).prompt
+            for tool_name in tools:
+                if tool_name == ProposeTool.name and name in PROPOSE_NAMED_FROM_TASK_3:
+                    continue
+                assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
 
 
 @pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
@@ -686,7 +716,12 @@ def test_diagnosing_prompt_covers_wake_menu_and_knowledge_note(name: str) -> Non
         assert words in prompt, f"{name} prompt does not name the {label} wake label"
     position = low.find(RESPONSE_MENU_HEADING)
     assert position >= 0, f"{name} prompt has no '{RESPONSE_MENU_HEADING}'"
-    for item in RESPONSE_MENU:
+    menu = RESPONSE_MENU
+    if REQUEST_FIX in _load_definition(name).tools:
+        # S4 §6's item 6, requesting a fix, comes between the hooks and the revert.
+        at = menu.index("revert")
+        menu = (*menu[:at], f"`{REQUEST_FIX}`", *menu[at:])
+    for item in menu:
         found = low.find(item.lower(), position)
         assert found > position, f"{name} menu lacks '{item}' after the previous item"
         position = found
@@ -699,6 +734,56 @@ def test_data_quality_and_model_performance_role_lines() -> None:
     assert "bad data" in dq and "drift" in dq
     mp = _load_definition("model-performance").prompt.lower()
     assert "label delay" in mp and "skew" in mp
+
+
+# How Retraining's prompt words each required assessment of the report (I37). Indexed, never
+# looked up with a default, so a field contracts adds fails here until the prompt covers it.
+REPORT_FIELD_WORDS: dict[str, str] = {
+    "fix_chosen": "fix chosen",
+    "data_window": "data window",
+    "leakage": "leakage",
+    "label_maturity": "label maturity",
+    "imbalance": "imbalance",
+    "training_serving_skew": "training-serving skew",
+    "risks_and_watch": "what to watch",
+    "rollback_plan": "rollback plan",
+}
+
+
+def test_retraining_prompt_covers_the_fix_menu_and_the_report() -> None:
+    prompt = _load_definition("retraining").prompt
+    low = prompt.lower()
+    for choice in get_args(FixChoice):
+        assert f"`{choice}`" in prompt, f"retraining prompt does not name the `{choice}` fix"
+    for field in REQUIRED_REPORT_FIELDS:
+        words = REPORT_FIELD_WORDS[field]
+        assert words in low, f"retraining prompt does not cover the report's {field}"
+    assert "`fix_request`" in prompt
+    assert "circuit" in low and "escalate" in low
+    assert REQUEST_TAG in prompt and "links" in low and "request id" in low
+    assert f"`{PROMOTION_KIND}` proposal" in prompt
+
+
+def test_only_retraining_names_the_promotion_proposal() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    namers = [d.name for d in catalog.all() if f"`{PROMOTION_KIND}` proposal" in d.prompt]
+    assert namers == ["retraining"]
+
+
+def test_deployment_and_orchestrator_role_lines() -> None:
+    prompt = _load_definition("deployment").prompt
+    low = prompt.lower()
+    assert "`post_deploy`" in prompt
+    for words in ("parity", "holdout", "rollout", "heartbeat"):
+        assert words in low, f"deployment prompt does not name {words}"
+    assert "silence" in _load_definition("orchestrator").prompt.lower()
+
+
+def test_every_wake_label_is_named_by_a_prompt() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    prompts = [d.prompt for d in catalog.all()]
+    for label in get_args(WakeLabel):
+        assert any(f"`{label}`" in p for p in prompts), f"no prompt names the {label} wake label"
 
 
 def test_alert_prioritization_prompt_leaves_paging_and_routing_to_code() -> None:
