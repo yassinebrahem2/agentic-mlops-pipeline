@@ -220,6 +220,47 @@ async def test_a_message_queued_behind_a_resume_whose_take_lost_runs(
     assert [s for t, s in repair.turns.ended if t != turn_id] == ["done"]
 
 
+@pytest.mark.parametrize("stop_at", ["before the take", "after the lost take"])
+async def test_a_lost_take_drops_the_stop_meant_for_its_turn(
+    repair: RepairEnv, monkeypatch: pytest.MonkeyPatch, stop_at: str
+) -> None:
+    """The resumed turn is stored stopped by another writer than Stop before the resume's
+    worker takes it. A Stop that landed on that worker before its first look was meant for the
+    resumed turn, and one after the lost take comes between two turns: neither stops the queued
+    turn the worker goes on to."""
+    app = repair.restart()
+    turn_id, [approval] = await repair.ask(app=app)
+    repair.fake.state.scripted_tool_calls = []  # the next turns answer and end
+    await app.manager.send(repair.project_id, WRITER, "Next, please")
+    queued = await repair.sessions.next_queued_turn(repair.project_id, approval.session_id)
+    assert queued is not None
+    requests = len(repair.fake.state.requests)
+    trigger = hold(monkeypatch, SessionStore, "turn_trigger_id", lambda *a: a[2] == turn_id)
+    # The worker's look for a queued turn once its take lost (the first look made from here).
+    next_look = hold(monkeypatch, SessionStore, "next_queued_turn")
+
+    try:
+        async with asyncio.timeout(15):
+            await _approve(app, repair, approval)
+            await trigger.wait_entered()  # the resume's worker, before its first look
+            if stop_at == "before the take":
+                await app.manager.stop(repair.project_id, WRITER)
+            await repair.sessions.set_turn(repair.project_id, turn_id, "stopped")
+            trigger.release.set()
+            await next_look.wait_entered()  # the take lost; the worker looks for the queue
+            if stop_at == "after the lost take":
+                await app.manager.stop(repair.project_id, WRITER)
+            next_look.release.set()
+            await repair.turns.wait_ended(queued[0])
+    finally:
+        trigger.release.set()
+        next_look.release.set()
+
+    assert repair.ends(queued[0]) == ["done"]
+    assert len(repair.fake.state.requests) > requests
+    assert await repair.turn_status(turn_id) == "stopped"
+
+
 async def test_a_stop_while_the_wait_is_reported_stops_the_turn_once_reported(
     repair: RepairEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
