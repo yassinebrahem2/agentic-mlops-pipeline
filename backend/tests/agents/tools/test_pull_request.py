@@ -13,7 +13,7 @@ from sqlalchemy import insert, update
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools import default_registry
-from mlops_agents.agents.tools.base import TaskRef, ToolContext
+from mlops_agents.agents.tools.base import TaskRef, ToolContext, ToolFailure
 from mlops_agents.agents.tools.pull_request import OpenPullRequestArgs, OpenPullRequestTool
 from mlops_agents.clock import now_iso
 from mlops_agents.integrations.github import api
@@ -522,9 +522,8 @@ async def test_open_pull_request_local_sandbox_unavailable_preview_and_run(
     (task.worktree / "mod.py").write_text("x = 1\n", encoding="utf-8")
     ctx = await make_ctx(service, project_id, task)
 
-    preview = await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
-    assert preview.kind == "diff"
-    assert preview.body == ""
+    with pytest.raises(ToolFailure, match="Docker is not available"):
+        await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
 
     output = await tool.invoke(ctx, {"title": "Local PR", "body": "Testing"})
     assert output.is_error is True
@@ -551,9 +550,8 @@ async def test_open_pull_request_github_sandbox_unavailable_preview_and_run(
         (task.worktree / "mod.py").write_text("x = 1\n", encoding="utf-8")
         ctx = await make_ctx(service, project_id, task)
 
-        preview = await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
-        assert preview.kind == "diff"
-        assert preview.body == ""
+        with pytest.raises(ToolFailure, match="Docker is not available"):
+            await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
 
         output = await tool.invoke(ctx, {"title": "GitHub PR", "body": "Testing"})
         assert output.is_error is True
@@ -579,9 +577,8 @@ async def test_open_pull_request_local_nested_repo_git_add_failure(
     (nested / "nested_file.txt").write_text("nested\n", encoding="utf-8")
     ctx = await make_ctx(service, project_id, task)
 
-    preview = await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
-    assert preview.kind == "diff"
-    assert preview.body == ""
+    with pytest.raises(ToolFailure, match="adding files failed"):
+        await tool.preview(ctx, OpenPullRequestArgs(title="Local PR", body="Testing"))
 
     output = await tool.invoke(ctx, {"title": "Local PR", "body": "Testing"})
     assert output.is_error is True
@@ -610,9 +607,8 @@ async def test_open_pull_request_github_nested_repo_git_add_failure(
         (nested / "nested_file.txt").write_text("nested\n", encoding="utf-8")
         ctx = await make_ctx(service, project_id, task)
 
-        preview = await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
-        assert preview.kind == "diff"
-        assert preview.body == ""
+        with pytest.raises(ToolFailure, match="adding files failed"):
+            await tool.preview(ctx, OpenPullRequestArgs(title="GitHub PR", body="Testing"))
 
         output = await tool.invoke(ctx, {"title": "GitHub PR", "body": "Testing"})
         assert output.is_error is True

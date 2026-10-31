@@ -270,3 +270,143 @@ async def test_history_from_one_model_sent_to_another_drops_extra_content(
     tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
     tc = tcs[0]
     assert "extra_content" not in tc
+
+
+@pytest.mark.asyncio
+async def test_extra_content_and_id_repeated_across_deltas_never_doubled(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    fake_openai.state.scripted_tool_calls = [
+        {
+            "name": "Read",
+            "arguments": {"file_path": "a.txt"},
+            "extra_content": {"google": {"thought_signature": "sig_abc"}},
+            "repeat_extra_content_on_second_delta": True,
+            "repeat_id_on_second_delta": True,
+        }
+    ]
+
+    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
+    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
+
+    chunks: list[AIMessageChunk] = []
+    async for chunk in runnable.astream([HumanMessage(content="Read")]):
+        chunks.append(cast(AIMessageChunk, chunk))
+
+    total_chunk = _merge_chunks(chunks)
+    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
+    tc_id = str(tool_calls[0]["id"])
+
+    fake_openai.state.requests.clear()
+    fake_openai.state.scripted_tool_calls = None
+
+    follow_up: list[BaseMessage] = [
+        HumanMessage(content="Read"),
+        total_chunk,
+        ToolMessage(tool_call_id=tc_id, content="Content A"),
+    ]
+    async for _ in runnable.astream(follow_up):
+        pass
+
+    assert len(fake_openai.state.requests) >= 1
+    sent_request = fake_openai.state.requests[-1]
+    msgs = cast(list[dict[str, Any]], sent_request["messages"])
+    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
+    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
+    tc = tcs[0]
+    assert tc.get("extra_content") == {"google": {"thought_signature": "sig_abc"}}
+
+
+@pytest.mark.asyncio
+async def test_two_tool_calls_in_one_reply_both_with_extra_content(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    fake_openai.state.scripted_tool_calls = [
+        {
+            "name": "Read",
+            "arguments": {"file_path": "a.txt"},
+            "extra_content": {"google": {"thought_signature": "sig_0"}},
+        },
+        {
+            "name": "Read",
+            "arguments": {"file_path": "b.txt"},
+            "extra_content": {"google": {"thought_signature": "sig_1"}},
+        },
+    ]
+
+    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
+    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
+
+    chunks: list[AIMessageChunk] = []
+    async for chunk in runnable.astream([HumanMessage(content="Read both")]):
+        chunks.append(cast(AIMessageChunk, chunk))
+
+    total_chunk = _merge_chunks(chunks)
+    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
+    assert len(tool_calls) == 2
+
+    fake_openai.state.requests.clear()
+    fake_openai.state.scripted_tool_calls = None
+
+    follow_up: list[BaseMessage] = [
+        HumanMessage(content="Read both"),
+        total_chunk,
+        ToolMessage(tool_call_id=str(tool_calls[0]["id"]), content="Content 0"),
+        ToolMessage(tool_call_id=str(tool_calls[1]["id"]), content="Content 1"),
+    ]
+    async for _ in runnable.astream(follow_up):
+        pass
+
+    assert len(fake_openai.state.requests) >= 1
+    sent_request = fake_openai.state.requests[-1]
+    msgs = cast(list[dict[str, Any]], sent_request["messages"])
+    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
+    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
+    assert len(tcs) == 2
+    assert tcs[0].get("extra_content") == {"google": {"thought_signature": "sig_0"}}
+    assert tcs[1].get("extra_content") == {"google": {"thought_signature": "sig_1"}}
+
+
+@pytest.mark.asyncio
+async def test_unsigned_history_sent_to_gemini3_without_extra_content(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    # Older history from another session/model has no extra_content
+    fake_openai.state.scripted_tool_calls = [
+        {
+            "name": "Read",
+            "arguments": {"file_path": "old.txt"},
+        }
+    ]
+
+    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
+    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
+
+    chunks: list[AIMessageChunk] = []
+    async for chunk in runnable.astream([HumanMessage(content="Old read")]):
+        chunks.append(cast(AIMessageChunk, chunk))
+
+    total_chunk = _merge_chunks(chunks)
+    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
+    tc_id = str(tool_calls[0]["id"])
+
+    fake_openai.state.requests.clear()
+    fake_openai.state.scripted_tool_calls = None
+
+    # Sending follow up to Gemini 3 model (fake-tools) with unsigned history
+    follow_up: list[BaseMessage] = [
+        HumanMessage(content="Old read"),
+        total_chunk,
+        ToolMessage(tool_call_id=tc_id, content="Old content"),
+    ]
+    async for _ in runnable.astream(follow_up):
+        pass
+
+    assert len(fake_openai.state.requests) >= 1
+    sent_request = fake_openai.state.requests[-1]
+    msgs = cast(list[dict[str, Any]], sent_request["messages"])
+    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
+    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
+    tc = tcs[0]
+    # No signature is invented
+    assert "extra_content" not in tc

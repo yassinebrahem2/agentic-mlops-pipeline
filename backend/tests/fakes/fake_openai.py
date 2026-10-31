@@ -314,8 +314,12 @@ async def _stream(
                 "index": idx,
                 "function": {"arguments": args[half:]},
             }
+            if tc.get("repeat_id_on_second_delta"):
+                second["id"] = call_id
             if extra_deltas and len(extra_deltas) > 1:
                 second["extra_content"] = extra_deltas[1]
+            elif tc.get("repeat_extra_content_on_second_delta") and extra_content is not None:
+                second["extra_content"] = extra_content
             yield _chunk(
                 model,
                 {"tool_calls": [second]},

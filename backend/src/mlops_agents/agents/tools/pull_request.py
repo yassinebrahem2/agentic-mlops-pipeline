@@ -10,6 +10,7 @@ from mlops_agents.agents.tools.base import (
     Preview,
     RiskClass,
     ToolContext,
+    ToolFailure,
     ToolOutput,
 )
 from mlops_agents.errors import DomainError
@@ -59,8 +60,8 @@ class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
             return Preview(kind="diff", title=args.title, body="")
         try:
             diff = await self._tasks.staged_diff(ctx.project_id, ctx.task)
-        except (SandboxUnavailable, GitError):
-            return Preview(kind="diff", title=args.title, body="")
+        except (SandboxUnavailable, GitError) as err:
+            raise ToolFailure(str(err)) from err
         return Preview(kind="diff", title=args.title, body=diff)
 
     async def run(self, ctx: ToolContext, args: OpenPullRequestArgs) -> ToolOutput:

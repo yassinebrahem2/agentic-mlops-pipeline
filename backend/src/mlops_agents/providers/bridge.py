@@ -16,6 +16,29 @@ KEYLESS = "not-needed"
 EMBED_BATCH = 64
 
 
+def deduplicate_repeated_strings(val: Any) -> Any:
+    """If a string consists of an exact repeated sub-pattern (from langchain chunk addition merging
+    where both chunks had the same value), return the single unit."""
+    if isinstance(val, str):
+        n = len(val)
+        for length in range(1, n // 2 + 1):
+            if n % length == 0:
+                part = val[:length]
+                if part * (n // length) == val:
+                    return part
+        return val
+    if isinstance(val, dict):
+        d = cast(dict[str, object], val)
+        res_dict: dict[str, Any] = {}
+        for k, v in d.items():
+            res_dict[k] = deduplicate_repeated_strings(v)
+        return res_dict
+    if isinstance(val, list):
+        items = cast(list[object], val)
+        return [deduplicate_repeated_strings(v) for v in items]
+    return val
+
+
 # Third-party boundary: LangChain OpenAI (version 1.7.2).
 # Overrides ChatOpenAI._convert_chunk_to_generation_chunk, _create_chat_result, and _get_request_payload.
 # LangChain drops extra_content from tool calls during streaming parse (_convert_delta_to_message_chunk)
@@ -138,8 +161,9 @@ class ChatOpenAIWithExtraContent(ChatOpenAI):
     def _model_matches(self, call_model: str | None) -> bool:
         if call_model is None:
             return True
+        clean_model = cast(str, deduplicate_repeated_strings(call_model))
         target = self._model_address or self.model_name
-        return call_model == target or call_model == self.model_name
+        return clean_model == target or clean_model == self.model_name
 
     def _get_request_payload(
         self,
@@ -158,12 +182,16 @@ class ChatOpenAIWithExtraContent(ChatOpenAI):
         for msg, p_msg in zip(messages, payload_messages, strict=False):
             if not (isinstance(msg, AIMessage) and p_msg.get("role") == "assistant"):
                 continue
-            extra_content_map: dict[str, Any] | None = msg.additional_kwargs.get(
-                "tool_calls_extra_content"
-            )
-            if not extra_content_map:
+            raw_extra_content = msg.additional_kwargs.get("tool_calls_extra_content")
+            if not raw_extra_content:
                 continue
-            model_map: dict[str, str] = msg.additional_kwargs.get("tool_calls_model", {})
+            extra_content_map = cast(
+                dict[str, Any], deduplicate_repeated_strings(raw_extra_content)
+            )
+            model_map = cast(
+                dict[str, str],
+                deduplicate_repeated_strings(msg.additional_kwargs.get("tool_calls_model", {})),
+            )
             for idx, tc in enumerate(cast(list[dict[str, Any]], p_msg.get("tool_calls", []))):
                 call_id = tc.get("id")
                 idx_str = str(idx)
