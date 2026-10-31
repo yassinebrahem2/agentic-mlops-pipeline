@@ -36,7 +36,7 @@ async def test_hooks_routes_full_lifecycle(
         deploys=False,
         entry_files=[],
     )
-    hook = await services.action_hooks.register(
+    hook = await services.hooks.register(
         project_id,
         spec=spec,
         name="test-hook",

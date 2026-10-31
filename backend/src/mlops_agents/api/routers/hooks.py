@@ -33,7 +33,7 @@ async def list_hooks(
     services: ServicesDep,
     model: str | None = None,
 ) -> list[HookView]:
-    return await services.action_hooks.list(project.id, model=model)
+    return await services.hooks.list(project.id, model=model)
 
 
 @router.put(
@@ -47,7 +47,7 @@ async def set_hook_credential(
     services: ServicesDep,
 ) -> HookView:
     try:
-        return await services.action_hooks.set_credential(project.id, hook_id, body.credential)
+        return await services.hooks.set_credential(project.id, hook_id, body.credential)
     except KeyError:
         raise DomainError("hook_not_found", f"Hook '{hook_id}' not found.", status=404) from None
 
@@ -62,7 +62,7 @@ async def delete_hook_credential(
     services: ServicesDep,
 ) -> HookView:
     try:
-        return await services.action_hooks.delete_credential(project.id, hook_id)
+        return await services.hooks.delete_credential(project.id, hook_id)
     except KeyError:
         raise DomainError("hook_not_found", f"Hook '{hook_id}' not found.", status=404) from None
 
@@ -78,6 +78,6 @@ async def set_hook_enabled(
     services: ServicesDep,
 ) -> HookView:
     try:
-        return await services.action_hooks.set_enabled(project.id, hook_id, body.enabled)
+        return await services.hooks.set_enabled(project.id, hook_id, body.enabled)
     except KeyError:
         raise DomainError("hook_not_found", f"Hook '{hook_id}' not found.", status=404) from None
