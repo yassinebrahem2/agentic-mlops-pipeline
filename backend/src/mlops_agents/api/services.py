@@ -70,6 +70,11 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.monitoring.verdicts.baseline import SqliteBaseline
+from mlops_agents.monitoring.verdicts.baseline_observers import (
+    BaselineIncidentObserver,
+    BaselineResultsObserver,
+)
 from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
 from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
@@ -152,6 +157,7 @@ class Services:
     hooks: HooksService
     incidents: IncidentsService
     verdicts: SqliteVerdicts
+    baseline: SqliteBaseline
     waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
@@ -322,6 +328,10 @@ async def build_services(
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
     results.add_observer(SignalsFromResults(incidents, maintenance))
+    # After SignalsFromResults, so an incident an agent fire opens in the same batch exists.
+    baseline = SqliteBaseline(databases, results, incidents, events, clock)
+    results.add_observer(BaselineResultsObserver(baseline))
+    incidents.add_observer(BaselineIncidentObserver(baseline))
 
     tracking = TrackingService(
         databases=databases,
@@ -549,6 +559,7 @@ async def build_services(
         hooks=hooks,
         incidents=incidents,
         verdicts=verdicts,
+        baseline=baseline,
         waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
