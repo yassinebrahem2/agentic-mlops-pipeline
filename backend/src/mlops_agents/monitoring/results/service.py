@@ -358,7 +358,6 @@ class ResultsService(Results):
                     current_cursor = {"files": held_files_cur}
 
                     cycle_has_errors = False
-                    failed_files: set[str] = set()
 
                     for chunk in raw_read.chunks:
                         try:
@@ -372,7 +371,6 @@ class ResultsService(Results):
                             )
                         except Exception as exc:
                             cycle_has_errors = True
-                            failed_files.add(chunk.rel_posix)
                             last_err = scrub_url_secrets(str(exc))
                             failures[s_id] = last_err
                             if self._incidents is not None:
@@ -400,7 +398,6 @@ class ResultsService(Results):
 
                         if outcome.errors:
                             cycle_has_errors = True
-                            failed_files.add(chunk.rel_posix)
                             for err in outcome.errors:
                                 last_err = scrub_url_secrets(err)
                                 failures[s_id] = last_err
@@ -445,25 +442,25 @@ class ResultsService(Results):
 
                     if cycle_has_errors:
                         settings = await get_monitoring_settings(self._databases, project_id)
+                        # One count per failed cycle, however many files failed in it:
+                        # parser_disable_after counts cycles
                         if isinstance(self._parsers, SqliteParsers):
-                            for _ in failed_files:
-                                _new_f, newly_disabled = await self._parsers.record_failure(
+                            _new_f, newly_disabled = await self._parsers.record_failure(
+                                project_id,
+                                s_id,
+                                cur_parser.version,
+                                disable_after=settings.parser_disable_after,
+                            )
+                            if newly_disabled:
+                                await self._events.record(
                                     project_id,
-                                    s_id,
-                                    cur_parser.version,
-                                    disable_after=settings.parser_disable_after,
+                                    source="results",
+                                    type="parser.disabled",
+                                    payload={
+                                        "source_id": s_id,
+                                        "version": cur_parser.version,
+                                    },
                                 )
-                                if newly_disabled:
-                                    await self._events.record(
-                                        project_id,
-                                        source="results",
-                                        type="parser.disabled",
-                                        payload={
-                                            "source_id": s_id,
-                                            "version": cur_parser.version,
-                                        },
-                                    )
-                                    break
                     elif raw_read.chunks and not failures.get(s_id):
                         if isinstance(self._parsers, SqliteParsers):
                             await self._parsers.reset_failures(project_id, s_id, cur_parser.version)

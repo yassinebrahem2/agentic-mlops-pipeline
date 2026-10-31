@@ -1702,6 +1702,55 @@ async def test_header_reading_code_parser_reads_an_appended_row(
     assert {r["check_id"]: r["subject"] for r in rows} == {"c1": "t1", "c2": "t2"}
 
 
+async def test_two_bad_files_in_one_cycle_count_one_failure(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("a.jsonl", "b.jsonl"):
+        (data_dir / name).write_bytes(b'{"id": "c1", "time": "2026-10-30T10:00:00Z"}\n')
+    await set_monitoring_settings(databases, project_id, MonitoringSettings(parser_disable_after=3))
+
+    class RaisingParsers(SqliteParsers):
+        async def parse(
+            self,
+            project_id: str,
+            source_id: str,
+            raw: str,
+            origin_ref: str,
+            *,
+            start_offset: int = 0,
+            csv_header: list[str] | None = None,
+        ) -> Any:
+            raise RuntimeError("Parser execution crashed")
+
+    parsers = RaisingParsers(databases)
+    source = "file:conn_feed:*.jsonl"
+    await parsers.store(
+        project_id,
+        ParserSpec(source_id=source, mapping=_HELD_TAIL_CASES["jsonl"][0]),
+        proposal_id="prop_two_bad",
+    )
+    service = _mapping_feed_service(databases, events, data_dir, "*.jsonl", parsers)
+
+    # Both files fail every cycle (a raising parse keeps their cursors): one count per cycle
+    for cycle in (1, 2, 3):
+        rep = await service.collect(project_id, clock.now())
+        assert source in rep.failures
+
+        ver = await parsers.current(project_id, source)
+        assert ver is not None
+        assert ver.consecutive_failures == cycle
+        assert ver.enabled is (cycle < 3)
+
+    disabled = [e for e in await events.page(project_id) if e.type == "parser.disabled"]
+    assert len(disabled) == 1
+
+
 def test_code_parser_preview_shows_the_script_contract(databases: Databases) -> None:
     spec = ParserSpec(source_id="file:conn_feed:feed.csv", code=ParserCode(script="print(1)"))
     payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
