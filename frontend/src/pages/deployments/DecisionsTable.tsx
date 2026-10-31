@@ -29,15 +29,16 @@ export function DecisionsTable({ rows, onOpenReport }: DecisionsTableProps) {
           <TableHead>Kind</TableHead>
           <TableHead>Version</TableHead>
           <TableHead>Decided by</TableHead>
-          <TableHead className="w-24" />
+          <TableHead className="w-24">
+            <span className="sr-only">Report</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {rows.map((row, index) => (
-          <TableRow // Read-only and in the server's order, and two decisions can share a second, model and kind.
-            key={index}
-            data-testid="decision-row"
-          >
+          // Index keys: the list is read-only and in the server's order, and two decisions can
+          // share a second, model and kind.
+          <TableRow key={index} data-testid="decision-row">
             <TableCell className="text-xs text-muted-foreground">
               <time dateTime={row.at}>{formatTime(row.at)}</time>
             </TableCell>
