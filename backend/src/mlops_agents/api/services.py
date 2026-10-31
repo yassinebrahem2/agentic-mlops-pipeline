@@ -53,6 +53,8 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
@@ -130,6 +132,7 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    hooks: HooksService
     incidents: IncidentsService
     waker: Waker
 
@@ -246,6 +249,14 @@ async def build_services(
     )
 
     handoffs = SqliteHandoffs(databases)
+    hooks = HooksService(
+        databases=databases,
+        secrets=project_secrets,
+        events=events,
+        clock=clock,
+    )
+    handoff_hooks = HandoffHooks(hooks, handoffs)
+    handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
@@ -285,15 +296,17 @@ async def build_services(
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
-    hooks = HookRegistry()
+    turn_hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
-    hooks.register(status_board_hook)
-    hooks.register(KnowledgeHook(knowledge))
+    turn_hooks.register(status_board_hook)
+    turn_hooks.register(KnowledgeHook(knowledge))
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
-    hooks.register(DataSummaryHook(connections, data_summaries))
-    hooks.register(TrackingSummaryHook(tracking))
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
+    turn_hooks.register(DataSummaryHook(connections, data_summaries))
+    turn_hooks.register(TrackingSummaryHook(tracking))
+    catalog = await asyncio.to_thread(
+        AgentCatalog.load, tools.names(), hook_names=turn_hooks.names()
+    )
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
@@ -323,7 +336,7 @@ async def build_services(
         approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
-        hooks=hooks,
+        hooks=turn_hooks,
         audit_log=audit,
         event_log=events,
     )
@@ -383,7 +396,6 @@ async def build_services(
         connections=connections,
         events=events,
     )
-
     maintenance = NeverSuspended()
     severity = MediumSeverity()
     incidents = IncidentsService(
@@ -394,6 +406,8 @@ async def build_services(
         maintenance=maintenance,
         clock=clock,
     )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
     signals_from_results = SignalsFromResults(incidents, maintenance)
     results.add_observer(signals_from_results)
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
@@ -410,6 +424,11 @@ async def build_services(
     # exists, and before the app serves.
     await kickoff.resume()
 
+    # Resume pending wakes before starting the scheduler, so a wake fired by a job that has
+    # inserted its row but not posted yet cannot be posted twice.
+    for project in await workspace.list_projects():
+        await waker.resume(project.id)
+
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
     await scheduler.start()
@@ -419,7 +438,9 @@ async def build_services(
     startup_now = clock.now()
     for project in await workspace.list_projects():
         await results.deliver_undelivered(project.id, startup_now)
-        await waker.resume(project.id)
+
+    # Reconcile handoff hooks across existing projects
+    await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
     return Services(
         settings=settings,
@@ -459,6 +480,7 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        hooks=hooks,
         incidents=incidents,
         waker=waker,
     )

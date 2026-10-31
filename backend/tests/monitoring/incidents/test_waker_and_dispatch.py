@@ -639,3 +639,88 @@ async def test_build_services_waker_wiring(tmp_path: Path) -> None:
         assert services.waker is not None
         assert isinstance(services.waker, Waker)
         assert services.waker.is_bound
+
+
+async def test_dispatch_cause_only_update_then_separate_raise_wakes_diagnoser(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    fake_sessions: FakeSessions,
+    project_id: str,
+) -> None:
+    """A cause-only update, then a separate severity raise, wakes the diagnoser."""
+    waker = Waker(databases, event_log, fake_clock)
+    waker.bind(fake_sessions)
+
+    # Decisions policy keeps all decisions as medium by default
+    severity_policy = FakeSeverityPolicy(default_severity="medium")
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=severity_policy,
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+    )
+    dispatch = DiagnosisDispatch(incidents, waker)
+    incidents.add_observer(dispatch)
+
+    # 1. Open incident with data_quality (medium)
+    outcome = await incidents.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="orders",
+            model="churn",
+            ran_at=fake_clock.now(),
+            detail={},
+        ),
+        seen_at=fake_clock.now(),
+    )
+    inc_id = outcome.incident_id
+    assert len(fake_sessions.posted_messages) == 1
+    assert fake_sessions.posted_messages[0][1] == "data-quality"
+
+    # 2. Cause-only update: change category to model_performance (severity remains medium)
+    await incidents.update(
+        project_id,
+        inc_id,
+        agent="user",
+        patch=IncidentPatch(category="model_performance"),
+    )
+    # New diagnoser model-performance is woken under key "diagnoser:model-performance"
+    assert len(fake_sessions.posted_messages) == 2
+    assert fake_sessions.posted_messages[1][1] == "model-performance"
+
+    # 3. Subsequent separate severity raise to high
+    await dispatch.changed(
+        project_id,
+        IncidentChange(
+            incident_id=inc_id,
+            kind="severity_raised",
+            before="medium",
+            after="high",
+        ),
+    )
+    # The separate severity raise was NOT dropped: diagnoser was woken
+    assert len(fake_sessions.posted_messages) == 3
+    assert fake_sessions.posted_messages[2][1] == "model-performance"
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    select(agent_wakes.c.key).where(
+                        agent_wakes.c.subject == inc_id,
+                        agent_wakes.c.agent == "model-performance",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert "diagnoser:model-performance" in rows
+        assert "severity:high" in rows

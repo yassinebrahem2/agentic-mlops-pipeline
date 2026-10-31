@@ -88,6 +88,8 @@ class FakeState:
     server_error_remaining: int = 0
     auth_fail: bool = False
     usage_in_stream: bool = True
+    # Per-token USD strings, as OpenRouter's /models publishes them, by model id.
+    pricing: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     drop_after_chunks: int | None = None
     scripted_tool_calls: list[dict[str, Any]] | None = None
     bad_generation_remaining: int = 0
@@ -125,6 +127,7 @@ class FakeState:
         self.server_error_remaining = 0
         self.auth_fail = False
         self.usage_in_stream = True
+        self.pricing.clear()
         self.drop_after_chunks = None
         self.scripted_tool_calls = None
         self.bad_generation_remaining = 0
@@ -369,9 +372,12 @@ def create_fake_app(state: FakeState) -> FastAPI:
     async def list_models(request: Request) -> Response:
         if not authorized(request):
             return _error(401, "Invalid API key", "invalid_api_key")
-        data = [{"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()] + [
-            {"id": m, "object": "model"} for m in EMBEDDING_MODELS
-        ]
+        data: list[dict[str, Any]] = [
+            {"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()
+        ] + [{"id": m, "object": "model"} for m in EMBEDDING_MODELS]
+        for entry in data:
+            if entry["id"] in state.pricing:
+                entry["pricing"] = state.pricing[str(entry["id"])]
         return JSONResponse({"object": "list", "data": data})
 
     async def chat(request: Request) -> Response:

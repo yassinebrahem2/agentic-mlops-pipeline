@@ -15,6 +15,8 @@ from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.storage.databases import Databases
 
+pytestmark = pytest.mark.serial
+
 
 @pytest.mark.asyncio
 async def test_hub_replay_and_live_events(databases: Databases) -> None:
