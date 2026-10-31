@@ -136,11 +136,17 @@ from mlops_agents.stats.service import StatsService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
+from mlops_agents.training.authority import PolicyAuthority
 from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.training.lifecycle import TrainingLifecycle
 from mlops_agents.training.linking import RequestLinker
 from mlops_agents.training.outcomes import FixOutcomeObserver
-from mlops_agents.training.queries import FixesQueryProvider, TrainingRequestsQueryProvider
+from mlops_agents.training.policies import TrainingPolicyKind
+from mlops_agents.training.queries import (
+    FixesQueryProvider,
+    PoliciesQueryProvider,
+    TrainingRequestsQueryProvider,
+)
 from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -461,6 +467,17 @@ async def build_services(
     training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
     hooks.add_lifecycle(training_lifecycle)
 
+    policy_authority = PolicyAuthority(
+        policies=training.policies_store,
+        training=training,
+        tracking=tracking,
+        hooks=hooks,
+        clock=clock,
+        rules=None,
+    )
+    authorities.register("policy", policy_authority)
+    fixes.bind_policy_authority(policy_authority)
+
     # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     tools = default_registry(
@@ -553,6 +570,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=None))
 
     approvals = ApprovalsService(
         databases=databases,
@@ -623,8 +641,9 @@ async def build_services(
     query_providers.register(ExpectationsQueryProvider(expectations))
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
+    query_providers.register(PoliciesQueryProvider(training))
     training_lifecycle.bind_expectations(expectations)
-    pin_observer = PinCheckObserver(hooks, workspace, git)
+    pin_observer = PinCheckObserver(hooks, workspace, git, training=training)
     scheduler.add_sync_observer(pin_observer)
     pr_sync.add_observer(pin_observer)
     verifier = HookAliasVerifier(

@@ -18,6 +18,7 @@ from mlops_agents.training.contract import (
     TrainingRequestView,
     TrainingWindow,
 )
+from mlops_agents.training.policies import SqliteTrainingPolicies
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
@@ -32,14 +33,55 @@ class SqliteTraining(Training):
         databases: Databases,
         events: EventLog,
         clock: Clock,
+        policies: SqliteTrainingPolicies | None = None,
     ) -> None:
         self._databases = databases
         self._events = events
         self._clock = clock
+        self._policies = policies or SqliteTrainingPolicies(databases, clock, events)
+
+    @property
+    def policies_store(self) -> SqliteTrainingPolicies:
+        return self._policies
 
     async def policies(self, project_id: str, model: str | None = None) -> list[TrainingPolicyView]:
-        # Policies store is introduced in Task 8
-        return []
+        return await self._policies.list(project_id, model=model)
+
+    async def get_policy(self, project_id: str, policy_id: str) -> TrainingPolicyView | None:
+        return await self._policies.get(project_id, policy_id)
+
+    async def set_policy_enabled(
+        self, project_id: str, policy_id: str, enabled: bool
+    ) -> TrainingPolicyView:
+        status = "active" if enabled else "disabled"
+        return await self._policies.set_status(project_id, policy_id, status)
+
+    async def suspend_policies_for_hook(self, project_id: str, hook_id: str, reason: str) -> None:
+        await self._policies.suspend_for_hook(project_id, hook_id, reason)
+
+    async def activate_policies_for_hook(self, project_id: str, hook_id: str) -> None:
+        await self._policies.activate_for_hook(project_id, hook_id)
+
+    async def page_policies(
+        self,
+        project_id: str,
+        *,
+        policy_id: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Page[TrainingPolicyView]:
+        return await self._policies.page_policies(
+            project_id,
+            policy_id=policy_id,
+            model=model,
+            status=status,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
 
     async def request(self, project_id: str, request_id: str) -> TrainingRequestView | None:
         engine = await self._databases.project(project_id)

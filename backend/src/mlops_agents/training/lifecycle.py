@@ -23,7 +23,7 @@ from mlops_agents.training.constants import (
     TRAINING_REQUEST_DEADLINE_MINUTES,
     TRAINING_REQUEST_GRACE_MINUTES,
 )
-from mlops_agents.training.contract import TrainingWindow
+from mlops_agents.training.contract import TrainingWindow, WindowRule
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
@@ -33,6 +33,31 @@ if TYPE_CHECKING:
     from mlops_agents.training.requests import SqliteTraining
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._:+-]{1,128}$")
+
+
+def resolve_window(
+    rule: WindowRule,
+    now: datetime,
+    last_linked_end: datetime | None = None,
+) -> TrainingWindow:
+    """Resolve a WindowRule against current time and optional last linked run window end."""
+
+    def _utc(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+    now_utc = _utc(now)
+    if rule.kind == "trailing_days":
+        days = rule.days if rule.days is not None else 0
+        start = now_utc - timedelta(days=days)
+        return TrainingWindow(start=start, end=now_utc)
+    if rule.kind == "since_last_run":
+        start = _utc(last_linked_end) if last_linked_end is not None else now_utc
+        return TrainingWindow(start=start, end=now_utc)
+    if rule.kind == "fixed":
+        start = _utc(rule.start) if rule.start is not None else now_utc
+        end = _utc(rule.end) if rule.end is not None else now_utc
+        return TrainingWindow(start=start, end=end)
+    raise ValueError(f"Unknown WindowRule kind: {rule.kind}")
 
 
 class TrainingLifecycle(HookLifecycle):
@@ -101,7 +126,20 @@ class TrainingLifecycle(HookLifecycle):
             window = TrainingWindow(start=start_dt, end=end_dt)
 
         if is_training:
-            # 1. Take window from call params
+            # 1. Take window from call params or fallback to policy WindowRule
+            if window is None and call.policy_id is not None:
+                policy = await self._training.get_policy(project_id, call.policy_id)
+                if policy is not None and hook.model is not None:
+                    last_linked_end: datetime | None = None
+                    if policy.payload.window.kind == "since_last_run":
+                        linked_reqs = await self._training.list_requests(
+                            project_id, model=hook.model, status="linked", limit=1
+                        )
+                        if linked_reqs and linked_reqs[0].window:
+                            last_linked_end = linked_reqs[0].window.end
+                    now = self._clock.now()
+                    window = resolve_window(policy.payload.window, now, last_linked_end)
+
             if window is None:
                 raise HookRefused("Window is required for training/evaluation hooks")
 
@@ -212,8 +250,15 @@ class TrainingLifecycle(HookLifecycle):
             if fix_id is not None:
                 await self._fixes.set_outcome(project_id, fix_id, "not_cleared")
         elif result.ok and request_id is not None and self._expectations is not None:
+            deadline_minutes = TRAINING_REQUEST_DEADLINE_MINUTES
+            req = await self._training.request(project_id, request_id)
+            if req is not None and req.policy_id is not None:
+                policy = await self._training.get_policy(project_id, req.policy_id)
+                if policy is not None:
+                    deadline_minutes = policy.payload.run_time_limit_minutes
+
             started = self._clock.now()
-            due_at = started + timedelta(minutes=TRAINING_REQUEST_DEADLINE_MINUTES)
+            due_at = started + timedelta(minutes=deadline_minutes)
             await self._expectations.register(
                 project_id,
                 ExpectationSpec(

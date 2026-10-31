@@ -55,6 +55,11 @@ class HookAliasVerifier(HookVerifier):
             return PinCheck(ok=True, changed=[])
         return await verify_hook_pins(self._hooks, self._workspace, self._git, project_id, hook_id)
 
+    async def suspend_hook(self, project_id: str, hook_id: str, reason: str) -> None:
+        if self._hooks is not None:
+            await self._hooks.suspend(project_id, hook_id, reason)
+        await self._training.suspend_policies_for_hook(project_id, hook_id, reason)
+
     async def check_run(
         self,
         project_id: str,

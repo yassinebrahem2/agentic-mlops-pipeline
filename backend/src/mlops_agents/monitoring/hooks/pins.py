@@ -21,6 +21,7 @@ from mlops_agents.proposals.payloads import CommandSpec
 
 if TYPE_CHECKING:
     from mlops_agents.integrations.github.git import GitRunner
+    from mlops_agents.training.requests import SqliteTraining
     from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -150,10 +151,12 @@ class PinCheckObserver(SyncObserver, PrObserver):
         hooks: Hooks,
         workspace: WorkspaceService,
         git: GitRunner,
+        training: SqliteTraining | None = None,
     ) -> None:
         self._hooks = hooks
         self._workspace = workspace
         self._git = git
+        self._training = training
         self._last_checked_head: dict[str, str] = {}
 
     async def synced(self, project_id: str, now: datetime | None = None) -> None:
@@ -165,11 +168,14 @@ class PinCheckObserver(SyncObserver, PrObserver):
                 pinned = {p.path for p in hook.pins}
                 missing = required - pinned
                 if missing:
+                    reason = f"Unpinned paths in hook spec: {', '.join(sorted(missing))}"
                     await self._hooks.suspend(
                         project_id,
                         hook.id,
-                        f"Unpinned paths in hook spec: {', '.join(sorted(missing))}",
+                        reason,
                     )
+                    if self._training is not None:
+                        await self._training.suspend_policies_for_hook(project_id, hook.id, reason)
 
         # 2. Head moved check
         project = await self._workspace.get(project_id)
@@ -216,11 +222,14 @@ class PinCheckObserver(SyncObserver, PrObserver):
             for hook in approved_hooks:
                 changed_paths = await self._check_hook_pins(repo_root, head_commit, hook)
                 if changed_paths:
+                    reason = f"Pinned files changed on default branch: {', '.join(sorted(changed_paths))}"
                     await self._hooks.suspend(
                         project_id,
                         hook.id,
-                        f"Pinned files changed on default branch: {', '.join(sorted(changed_paths))}",
+                        reason,
                     )
+                    if self._training is not None:
+                        await self._training.suspend_policies_for_hook(project_id, hook.id, reason)
             self._last_checked_head[project_id] = head_commit
 
     async def changed(self, project_id: str, pr: PrChange) -> None:
@@ -265,11 +274,16 @@ class PinCheckObserver(SyncObserver, PrObserver):
         for hook in hooks_to_check:
             changed_paths = await self._check_hook_pins(repo_root, head_commit, hook)
             if changed_paths:
+                reason = (
+                    f"Pinned files changed on default branch: {', '.join(sorted(changed_paths))}"
+                )
                 await self._hooks.suspend(
                     project_id,
                     hook.id,
-                    f"Pinned files changed on default branch: {', '.join(sorted(changed_paths))}",
+                    reason,
                 )
+                if self._training is not None:
+                    await self._training.suspend_policies_for_hook(project_id, hook.id, reason)
         self._last_checked_head[project_id] = head_commit
 
     async def _check_hook_pins(

@@ -7035,6 +7035,20 @@
         "title": "SetHookCredentialBody",
         "type": "object"
       },
+      "SetPolicyEnabledBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetPolicyEnabledBody",
+        "type": "object"
+      },
       "SetPrice": {
         "additionalProperties": false,
         "properties": {
@@ -8065,6 +8079,56 @@
           "payload"
         ],
         "title": "TrainingPolicyProposalView",
+        "type": "object"
+      },
+      "TrainingPolicyView": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "format": "date-time",
+            "title": "Approved",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TrainingPolicyPayload"
+          },
+          "proposal_id": {
+            "title": "Proposal Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suspended_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suspended Reason"
+          }
+        },
+        "required": [
+          "id",
+          "payload",
+          "status",
+          "proposal_id",
+          "approved"
+        ],
+        "title": "TrainingPolicyView",
         "type": "object"
       },
       "TrainingWindow": {
@@ -14287,6 +14351,129 @@
         "summary": "Get Versions",
         "tags": [
           "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/training/policies": {
+      "get": {
+        "operationId": "list_training_policies_api_projects__project_id__training_policies_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrainingPolicyView"
+                  },
+                  "title": "Response List Training Policies Api Projects  Project Id  Training Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Training Policies",
+        "tags": [
+          "training"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/training/policies/{policy_id}/enabled": {
+      "put": {
+        "operationId": "set_policy_enabled_api_projects__project_id__training_policies__policy_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPolicyEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Policy Enabled",
+        "tags": [
+          "training"
         ]
       }
     },

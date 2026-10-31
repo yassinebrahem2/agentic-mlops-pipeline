@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from mlops_agents.agents.approvals.authority import ActionAuthority, ActionCall
 from mlops_agents.monitoring.incidents.contract import ACTIVE_STATUSES
 from mlops_agents.training.contract import GuardRefusal, TrainingWindow
 
@@ -158,4 +159,29 @@ def check_labels_immature(
             ),
         )
 
+    return None
+
+
+async def check_policy_limit(
+    authority: ActionAuthority,
+    project_id: str,
+    model: str,
+    policy_id: str | None,
+    hook_id: str | None = None,
+) -> GuardRefusal | None:
+    """Check rate limits and authority requirements through PolicyAuthority."""
+    if policy_id is None:
+        return None
+
+    call = ActionCall(
+        project_id=project_id,
+        agent="system",
+        kind="train",
+        model=model,
+        policy_id=policy_id,
+        hook_id=hook_id,
+    )
+    auth = await authority.authorize(call)
+    if auth.basis != "policy":
+        return GuardRefusal(code="policy_limit", detail=auth.reason)
     return None

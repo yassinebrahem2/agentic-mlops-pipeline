@@ -111,6 +111,9 @@ class RequestLinker(SyncObserver):
                             )
                             if alias_check.moved:
                                 await self._hooks.suspend(project_id, hook.id, alias_check.detail)
+                                await self._training.suspend_policies_for_hook(
+                                    project_id, hook.id, alias_check.detail
+                                )
                                 if self._incidents is not None:
                                     draft = SignalDraft(
                                         kind="fired_result",
