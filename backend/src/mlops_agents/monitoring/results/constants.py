@@ -11,4 +11,6 @@ HELD_TAIL_QUIET_SECONDS: Final[int] = 300
 # sandbox keeps about 30,000 characters of a run's output (HEAD_CAPTURE_CHARS +
 # TAIL_CAPTURE_CHARS in sandbox/docker.py), and a run whose output was cut fails. A record's
 # JSON is usually a small multiple of its input line, so 8 KiB leaves room for a few times that.
+# The script decides how much it prints, so CodeParserRunner runs a chunk whose output was still
+# cut again in smaller pieces.
 CODE_PARSER_CHUNK_BYTES: Final[int] = 8_192

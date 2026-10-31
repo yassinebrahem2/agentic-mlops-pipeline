@@ -53,8 +53,36 @@ for line in sys.stdin.read().splitlines():
 """
 
 
-def _script(flag: Path | None = None) -> str:
-    return _SCRIPT.replace("__FLAG__", repr(str(flag) if flag is not None else ""))
+# Like _SCRIPT, but a HUGE line's record alone overflows the capture, and while the flag file
+# exists a run that does not start at offset 0 and holds BOOM exits with an error before
+# printing, so a run of the whole file from offset 0 succeeds.
+_SPLIT_SCRIPT = """
+import json, os, sys
+FLAG = __FLAG__
+text = sys.stdin.read()
+if FLAG and os.path.exists(FLAG) and int(sys.argv[2]) > 0 and "BOOM" in text:
+    raise SystemExit("a marker past offset 0 while the flag file exists")
+for line in text.splitlines():
+    if not line.strip():
+        continue
+    print(json.dumps({
+        "check_id": line.split(",")[0],
+        "ran_at": "2026-10-30T10:00:00Z",
+        "fired": False,
+        "category": "data_quality",
+        "subject": sys.argv[1],
+        "detail": {"pad": "x" * 40000} if line == "HUGE" else {},
+    }))
+"""
+
+
+def _script(flag: Path | None = None, template: str = _SCRIPT) -> str:
+    return template.replace("__FLAG__", repr(str(flag) if flag is not None else ""))
+
+
+def _short_lines(count: int, marker_at: int | None = None) -> bytes:
+    """`count` lines far shorter than one record's JSON, line `marker_at` holding BOOM."""
+    return b"".join(f"{i},{'BOOM' if i == marker_at else '0.5'}\n".encode() for i in range(count))
 
 
 def _line(i: int, marker: str = "") -> bytes:
@@ -91,7 +119,7 @@ async def _check_ids(databases: Databases, project_id: str) -> list[str]:
 async def _offset(service: ResultsService, project_id: str) -> int:
     state = await service.store.get_source_state(project_id, _SOURCE)
     assert state is not None
-    return state.cursor["files"]["feed.raw"]["offset"]
+    return state.cursor.get("files", {}).get("feed.raw", {}).get("offset", 0)
 
 
 async def test_file_whose_records_exceed_one_capture_is_read_in_pieces(
@@ -236,3 +264,122 @@ async def test_line_longer_than_the_bound_is_one_piece_of_its_own(
     ]
     assert all(c.size == len(data) for c in outcome.chunks)
     assert outcome.cursor["files"]["feed.raw"]["offset"] == len(data)
+
+
+async def test_chunk_whose_output_overflows_is_run_again_in_pieces(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir()
+    data = _short_lines(1_000)
+    assert len(data) <= CODE_PARSER_CHUNK_BYTES
+    (data_dir / "feed.raw").write_bytes(data)
+    service, runner = await code_feed_service(
+        databases, events, project_id, data_dir, "feed.raw", _script(template=_SPLIT_SCRIPT)
+    )
+
+    rep = await service.collect(project_id, clock.now())
+
+    assert rep.failures == {}
+    assert rep.stored == 1_000
+    assert sorted(await _check_ids(databases, project_id)) == sorted(str(i) for i in range(1_000))
+    assert await _offset(service, project_id) == len(data)
+    runs = _runs(runner)
+    assert len(runs) > 1
+    for start, length in runs:
+        assert start == 0 or data[start - 1 : start] == b"\n"
+        assert start + length <= len(data)
+        assert data[start + length - 1 : start + length] == b"\n"
+
+
+async def test_single_line_whose_output_overflows_fails_at_its_chunk_start(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir()
+    target = data_dir / "feed.raw"
+    target.write_bytes(b"a1\n")
+    incidents = FakeIncidents()
+    service, runner = await code_feed_service(
+        databases,
+        events,
+        project_id,
+        data_dir,
+        "feed.raw",
+        _script(template=_SPLIT_SCRIPT),
+        incidents,
+    )
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.stored == 1
+    with target.open("ab") as f:
+        f.write(b"HUGE\nb1\n")
+
+    rep2 = await service.collect(project_id, clock.now())
+
+    assert rep2.failures == {_SOURCE: "Code parser output was truncated"}
+    assert rep2.stored == 0
+    assert await _check_ids(databases, project_id) == ["a1"]
+    assert await _offset(service, project_id) == 3
+    assert [d.kind for _p, d, _t in incidents.signals] == ["parser_failure"]
+    # The chunk, then its first piece: the HUGE line alone, whose output still overflows
+    assert _runs(runner)[1:] == [(3, 8), (3, 5)]
+
+
+async def test_raise_in_a_later_piece_keeps_the_whole_chunk_for_the_next_cycle(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir()
+    flag = tmp_path / "fail.flag"
+    flag.write_bytes(b"")
+    data = _short_lines(1_000, marker_at=750)
+    (data_dir / "feed.raw").write_bytes(data)
+    incidents = FakeIncidents()
+    service, runner = await code_feed_service(
+        databases,
+        events,
+        project_id,
+        data_dir,
+        "feed.raw",
+        _script(flag, _SPLIT_SCRIPT),
+        incidents,
+    )
+
+    rep1 = await service.collect(project_id, clock.now())
+
+    # The whole chunk overflowed; its first half ran in pieces, some past offset 0, then the
+    # second half raised: nothing from the chunk is kept
+    runs1 = _runs(runner)
+    assert len(runs1) > 2
+    assert runs1[0] == (0, len(data))
+    first_half = runs1[1]
+    assert first_half[0] == 0
+    assert len(data) // 3 < first_half[1] < data.index(b"BOOM")
+    assert any(start > 0 for start, _length in runs1[2:-1])
+    assert runs1[-1] == (first_half[1], len(data) - first_half[1])
+    assert _SOURCE in rep1.failures
+    assert "marker past offset 0" in rep1.failures[_SOURCE]
+    assert rep1.stored == 0
+    assert await _check_ids(databases, project_id) == []
+    assert await _offset(service, project_id) == 0
+    assert [d.kind for _p, d, _t in incidents.signals] == ["parser_failure"]
+
+    flag.unlink()
+    rep2 = await service.collect(project_id, clock.now())
+
+    assert rep2.failures == {}
+    assert rep2.stored == 1_000
+    assert sorted(await _check_ids(databases, project_id)) == sorted(str(i) for i in range(1_000))
+    assert await _offset(service, project_id) == len(data)

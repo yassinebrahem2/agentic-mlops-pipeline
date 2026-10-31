@@ -21,6 +21,7 @@ from mlops_agents.proposals.contract import (
     CredentialSlot,
     parser_key,
 )
+from mlops_agents.sandbox.docker import HEAD_CAPTURE_CHARS, TAIL_CAPTURE_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,10 @@ CODE_PARSER_CONTRACT = (
     "The script runs once per chunk of the file, each chunk a separate run in the project's"
     " sandbox, without network. A chunk is at most"
     f" {CODE_PARSER_CHUNK_BYTES / 1024:g} KiB and starts at a line start; a single line longer"
-    " than that is a chunk of its own. The script must not assume it sees the whole file.\n"
+    " than that is a chunk of its own. A chunk whose output (stdout and stderr together)"
+    f" exceeds {HEAD_CAPTURE_CHARS + TAIL_CAPTURE_CHARS:,} characters is run again in smaller"
+    " pieces, each starting at a line start, each a separate run with its own start offset."
+    " The script must not assume it sees the whole file.\n"
     "- stdin: exactly the chunk, UTF-8 text, in whole lines. The chunks cover the file from its"
     " start on the first read (and after the file shrinks, truncated or replaced by a shorter"
     " one), then only the bytes past the previous read. A chunk ends at a newline, except the"
