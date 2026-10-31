@@ -6,7 +6,8 @@ import { api, unwrap } from "@/lib/api";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { formatCadence } from "@/pages/agents/proposals/formatCadence";
 import { CATEGORY_LABELS } from "@/pages/incidents/labels";
-import { checksKey } from "./checksKey";
+
+const checksKey = (projectId: string) => ["projects", projectId, "checks"] as const;
 
 type Check = components["schemas"]["CheckView"];
 
@@ -27,11 +28,12 @@ export function RegisteredChecks({ projectId }: { projectId: string }) {
         }),
       ),
   });
-  // The PR observer ends the task, then activates or retires the checks of that PR.
+  // A check is registered by check.registered; the PR observer ends the PR's task (task.ended) and
+  // then activates or retires its checks; the version shown is read from the collected results.
   useInvalidateOnEvents(projectId, checksKey(projectId), [
     "check.registered",
     "task.ended",
-    "pr.merged_by_agent",
+    "results.collected",
   ]);
   return (
     <div className="space-y-3">

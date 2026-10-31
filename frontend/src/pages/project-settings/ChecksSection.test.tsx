@@ -2,6 +2,7 @@ import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
+import type { ProjectEventType } from "@/lib/useProjectEvents";
 import { ChecksSection } from "./ChecksSection";
 import { failure, json, renderSection, stubEventStream, stubRoutes } from "./testing";
 
@@ -109,7 +110,7 @@ function setup(
   };
 }
 
-function emit(type: "check.registered" | "pr.updated", seq: number) {
+function emit(type: ProjectEventType, seq: number) {
   return act(async () => {
     stream.emit(
       type,
@@ -265,5 +266,19 @@ describe("ChecksSection", () => {
       expect(await screen.findByRole("listitem", { name: "Check auc_floor" })).toBeInTheDocument();
       expect(checkRequests(requests)).toBe(2);
     });
+
+    it.each(["task.ended", "results.collected"] as const)(
+      "refetches the checks on %s",
+      async (type) => {
+        const { requests, setChecks } = setup([], [MLFLOW_CHECK]);
+        await screen.findByRole("listitem", { name: "Check auc_floor" });
+
+        setChecks([{ ...MLFLOW_CHECK, status: "active", version: "v9" }]);
+        await emit(type, 3);
+
+        expect(await screen.findByText("v9")).toBeInTheDocument();
+        expect(checkRequests(requests)).toBe(2);
+      },
+    );
   });
 });
