@@ -596,6 +596,7 @@ async def build_services(
         maintenance=maintenance,
         clock=clock,
     )
+    incidents.bind_expectations(expectations)
     handoffs.add_observer(expectations.handoff_observer)
     results.add_observer(expectations.results_observer)
     scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))

@@ -304,6 +304,57 @@ async def test_one_wake_per_change_and_none_after_own_adjustment(
     assert "severity_lowered" in last_text
 
 
+async def test_two_changes_of_one_kind_wake_twice(
+    waker: Waker,
+    fake_sessions: FakeSessions,
+    event_log: SqliteEventLog,
+    incidents_service: IncidentsService,
+    fake_clock: FakeClock,
+    project_id: str,
+) -> None:
+    """Alert Prioritization is woken for every change of the same kind."""
+    prioritization_wake = PrioritizationWake(waker=waker, events=event_log)
+    incidents_service.add_observer(prioritization_wake)
+
+    now = fake_clock.now()
+    outcome = await incidents_service.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            result_id="res_1",
+            subject="pipeline_test",
+            category="data_quality",
+            model="churn",
+            ran_at=now,
+            detail={"issue": "test"},
+        ),
+        seen_at=now,
+    )
+    inc_id = outcome.incident_id
+    assert inc_id is not None
+    assert len(fake_sessions.posted_messages) == 1
+
+    # First severity change by user -> wakes
+    await incidents_service.set_severity(
+        project_id,
+        inc_id,
+        severity="high",
+        reason="First external change",
+        by="user",
+    )
+    assert len(fake_sessions.posted_messages) == 2
+
+    # Second severity change by user of the same kind -> wakes again (two severity changes wake twice)
+    await incidents_service.set_severity(
+        project_id,
+        inc_id,
+        severity="critical",
+        reason="Second external change",
+        by="user",
+    )
+    assert len(fake_sessions.posted_messages) == 3
+
+
 async def test_second_adjustment_beyond_one_level_refused(
     incidents_service: IncidentsService,
     fake_severity: FakeSeverityPolicy,

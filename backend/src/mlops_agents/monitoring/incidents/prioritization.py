@@ -33,10 +33,19 @@ class PrioritizationWake(IncidentObserver):
             )
             if events and events[0].source == ALERT_PRIORITIZATION_AGENT:
                 return
-        elif change.kind not in ("opened", "reopened", "merged", "split"):
+            seq = events[0].seq if events else 1
+            key = f"{change.kind}:{seq}"
+        elif change.kind in ("opened", "reopened", "merged", "split"):
+            events = await self._events.page(
+                project_id,
+                subject_id=change.incident_id,
+                limit=1,
+            )
+            seq = events[0].seq if events else 1
+            key = f"{change.kind}:{seq}"
+        else:
             return
 
-        key = f"{change.kind}:{change.incident_id}"
         text = (
             f"Incident {change.incident_id} changed ({change.kind}). "
             "Please review and adjust alert prioritization."

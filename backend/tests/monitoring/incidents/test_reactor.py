@@ -23,6 +23,7 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalDraft,
 )
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
+from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.reactor import Reactor
 from mlops_agents.monitoring.incidents.routing import OnCallRouter
 from mlops_agents.monitoring.incidents.service import IncidentsService
@@ -46,6 +47,7 @@ from mlops_agents.workspace.refs import RepoRef
 from tests.fakes.fake_discord import FakeDiscordState, RunningFakeDiscord, start_fake_discord
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
 from tests.fakes.fake_tasks import FakeTasks
+from tests.monitoring.incidents.conftest import FakeSeverityPolicy, make_stored_result
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.proposals.samples import model as sample_model_dict
 
@@ -81,9 +83,10 @@ class MemoryKeyStore(KeyStore):
 class FakeResults:
     def __init__(self) -> None:
         self.records: list[Any] = []
+        self.latest_results: list[Any] = []
 
     async def latest_per_check(self, project_id: str, subject: str, model: str | None) -> list[Any]:
-        return []
+        return self.latest_results
 
 
 class FakeSessions:
@@ -853,5 +856,113 @@ async def test_cause_change_only_calls_dispatch(tmp_path: Any) -> None:
     # Dispatch was called, notifier was not called
     assert fake_dispatch.changed.call_count == 1
     assert fake_notifier.notify.call_count == 0
+
+    await http.aclose()
+
+
+async def test_reopen_clears_resolved_offline_and_pages_and_wakes(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    project_id: str,
+) -> None:
+    fake_notifier = AsyncMock()
+    fake_dispatch = AsyncMock()
+    fake_on_call = AsyncMock()
+    fake_handoffs = AsyncMock()
+    fake_handoffs.current.return_value = None
+
+    person = _make_on_call_person("alice")
+    fake_on_call.list.return_value = [person]
+
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,  # type: ignore[arg-type]
+        severity=FakeSeverityPolicy("high"),
+        maintenance=NeverSuspended(),
+        clock=fake_clock,
+        handoffs=fake_handoffs,
+    )
+    router = OnCallRouter(on_call=fake_on_call, databases=databases)
+    tasks = TaskDouble()
+    github = DummyGitHubAuth()
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(lambda req: httpx2.Response(200)))
+
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=fake_on_call,
+        notifier=fake_notifier,
+        dispatch=fake_dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=event_log,
+        clock=fake_clock,
+    )
+    incidents.add_observer(reactor)
+
+    signals_from_results = SignalsFromResults(
+        incidents=incidents,
+        maintenance=NeverSuspended(),
+        results=results,  # type: ignore[arg-type]
+    )
+
+    t0 = datetime(2026, 10, 30, 2, 0, 0, tzinfo=UTC)
+    t1 = datetime(2026, 10, 30, 3, 0, 0, tzinfo=UTC)
+    r_fired = make_stored_result(
+        "res_fired_0200",
+        check_id="chk_offline",
+        subject="orders",
+        model="churn",
+        fired=True,
+        ran_at=t0,
+        seen_at=t1,
+    )
+    r_cleared = make_stored_result(
+        "res_cleared_0300",
+        check_id="chk_offline",
+        subject="orders",
+        model="churn",
+        fired=False,
+        ran_at=t1,
+        seen_at=t1,
+    )
+    results.latest_results = [r_cleared]
+    await signals_from_results.stored(project_id, [r_fired, r_cleared])
+
+    page = await incidents.list(project_id)
+    assert len(page.rows) == 1
+    inc = page.rows[0]
+    assert inc.status == "resolved"
+    assert inc.resolved_offline is True
+    # Initial offline resolve: no page, no wake
+    assert fake_notifier.notify.call_count == 0
+    assert fake_dispatch.changed.call_count == 0
+
+    # Fresh fire arrives within reopen window
+    t2 = datetime(2026, 10, 30, 4, 0, 0, tzinfo=UTC)
+    r_fresh = make_stored_result(
+        "res_fresh_0400",
+        check_id="chk_offline",
+        subject="orders",
+        model="churn",
+        fired=True,
+        ran_at=t2,
+        seen_at=t2,
+    )
+    results.latest_results = [r_fresh]
+    await signals_from_results.stored(project_id, [r_fresh])
+
+    reopened_inc = await incidents.get(project_id, inc.id)
+    assert reopened_inc is not None
+    assert reopened_inc.status == "reopened"
+    assert reopened_inc.resolved_offline is False
+
+    # Now paged and woken!
+    assert fake_notifier.notify.call_count >= 1
+    assert fake_dispatch.changed.call_count >= 1
 
     await http.aclose()
