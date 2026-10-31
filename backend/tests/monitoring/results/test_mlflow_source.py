@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -507,3 +508,100 @@ async def test_mlflow_metrics_query_error_stops_before_run_and_retains_cursor(
     assert st2.cursor.get("since") == t2.isoformat()
     assert st2.consecutive_failures == 0
     assert st2.last_error is None
+
+
+async def test_mlflow_source_reader_scrubs_credentials_in_all_failure_sites(
+    tracking_env: TrackingEnv,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+
+    t1 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+    run_1 = RunRow(
+        source_id=source.id,
+        key="run_1",
+        experiment="exp_1",
+        status="succeeded",
+        start=t1,
+        end=t1,
+        params={},
+        tags={},
+        git_commit=None,
+        datasets=[],
+    )
+    metric_p1 = MetricPoint(
+        source_id=source.id, run_key="run_1", metric="loss", step=1, value=0.5, time=t1
+    )
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[],
+        runs=[run_1],
+        metrics=[metric_p1],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, source.id)
+
+    # 1. Site 1: Source id parse failure carrying credential
+    secret_s1 = "site1_secret_pass_111"
+    raw_s1_url = f"https://user:{secret_s1}@mlflow.discovery/api?token=tok_s1"
+    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks([]))
+    reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
+
+    out_s1 = await reader.read(env.project_id, f"invalid_source_{raw_s1_url}", cursor={})
+    assert out_s1.last_error is not None
+    assert secret_s1 not in out_s1.last_error
+    assert "tok_s1" not in out_s1.last_error
+    assert "***@" in out_s1.last_error
+
+    # 2. Site 2: Runs query failure carrying credential
+    secret_s2 = "site2_secret_token_222"
+    raw_s2_error = f"Runs query failed at https://user:{secret_s2}@mlflow.runs/api?token=tok_s2"
+
+    original_query = env.service.query
+
+    async def runs_failing_query(*args: Any, **kwargs: Any) -> Any:
+        query = args[1] if len(args) > 1 else kwargs.get("query")
+        if getattr(query, "what", None) == "runs":
+            raise RuntimeError(raw_s2_error)
+        return await original_query(*args, **kwargs)
+
+    env.service.query = runs_failing_query  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING):
+        out_s2 = await reader.read(env.project_id, "mlflow:loss", cursor={})
+    assert out_s2.last_error is not None
+    assert secret_s2 not in out_s2.last_error
+    assert "tok_s2" not in out_s2.last_error
+    assert "***@" in out_s2.last_error
+    assert secret_s2 not in caplog.text
+    assert "tok_s2" not in caplog.text
+
+    # 3. Site 3: Metrics query failure carrying credential
+    secret_s3 = "site3_secret_token_333"
+    raw_s3_error = (
+        f"Metrics query failed at https://user:{secret_s3}@mlflow.metrics/api?token=tok_s3"
+    )
+
+    async def metrics_failing_query(*args: Any, **kwargs: Any) -> Any:
+        query = args[1] if len(args) > 1 else kwargs.get("query")
+        if getattr(query, "what", None) == "metrics":
+            raise RuntimeError(raw_s3_error)
+        return await original_query(*args, **kwargs)
+
+    env.service.query = metrics_failing_query  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        out_s3 = await reader.read(env.project_id, "mlflow:loss", cursor={})
+    assert out_s3.last_error is not None
+    assert secret_s3 not in out_s3.last_error
+    assert "tok_s3" not in out_s3.last_error
+    assert "***@" in out_s3.last_error
+    assert secret_s3 not in caplog.text
+    assert "tok_s3" not in caplog.text
