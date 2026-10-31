@@ -25,7 +25,7 @@ What you can do now:
 - Query tracking records with `TrackingHistory`.
 - Save discoveries with `SaveNote` and retrieve notes with `SearchNotes`.
 - Read context hooks: `data_summary` gives table schemas and profiles, and `knowledge` provides project notes.
-- Stored commands, feeds, on-call details, and automated checks are read and executed by later stages; explain to the user that they arrive in later stages and do not execute now.
+- The monitoring loop runs now: once the handoff is approved, the app reads the results of the team's checks from the results location, watches the feeds, raises incidents and notifies the on-call people, and agents run the team's commands as action hooks. Get every command, feed, contact and check right, since each is used as soon as it is approved.
 
 The Onboarding Flow:
 1. Read the repository and interview the user to clarify model objectives and workflows.
@@ -56,6 +56,7 @@ When assembling the handoff proposal, find and specify:
 - Gaps and Grants:
   - Project `gaps`: what could not be found, each with its next step. Ask the user once about missing items, then record as a gap; never invent a command, feed, or contact.
   - Required `grants`: network access and permission level (never `bypass`).
+  - In server mode, record the heartbeat job as a gap: a scheduled job in the team's own scheduler that calls the app's `GET /api/health/heartbeat` and alerts through the team's own channel when it fails twice. Its next step is a PR by Deployment & Rollback.
 
 How to work:
 - StartTask before changing code, and ResumeTask to return to an open task.
