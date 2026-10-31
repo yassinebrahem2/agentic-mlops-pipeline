@@ -128,6 +128,7 @@ from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
 from mlops_agents.promotion.promotions import PromotionRejectObserver, SqlitePromotions
 from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.promotion.surfaces import GithubProtectionSurfaces
+from mlops_agents.promotion.team_gate import TeamGateObserver
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -767,6 +768,19 @@ async def build_services(
         settings=integration_settings,
     )
     scheduler.register(morning_report_job)
+    scheduler.add_sync_observer(
+        TeamGateObserver(
+            databases=databases,
+            tracking=tracking,
+            handoffs=handoffs,
+            reader=evaluation_reader,
+            reports=reports,
+            promotions=promotions,
+            notifier=notifier,
+            on_call=on_call,
+            clock=clock,
+        )
+    )
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)

@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select, update
 
 from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
-from mlops_agents.clock import now_iso, utc_now
+from mlops_agents.clock import now_iso, to_iso, utc_now
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.hooks.contract import Authority, HookCall, Hooks
@@ -397,6 +397,126 @@ class SqlitePromotions(Promotions):
                 subject_id=promo_id,
             )
             return ApplyResult(applied=[], failed={"promotion": hook_detail})
+
+    async def record_team_gate(
+        self,
+        project_id: str,
+        *,
+        model: str,
+        candidate_version: str,
+        champion_version: str | None,
+        decision: Literal["promote", "hold", "reject"],
+        reasons: list[str] | None,
+        report_id: str | None,
+        created: datetime | None = None,
+    ) -> PromotionView | None:
+        """Record a team_gate promotion row and emit the matching event.
+
+        Idempotent: returns None if a team_gate promotion row already exists for
+        (model, candidate_version).
+        """
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            existing = (
+                await conn.execute(
+                    select(promotions).where(
+                        promotions.c.model == model,
+                        promotions.c.candidate_version == candidate_version,
+                        promotions.c.mode == "team_gate",
+                    )
+                )
+            ).first()
+            if existing is not None:
+                return None
+
+        promo_id = new_id("prm")
+        now_dt = created or (
+            self._clock.now()
+            if (self._clock is not None and hasattr(self._clock, "now"))
+            else utc_now()
+        )
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=UTC)
+        created_str = to_iso(now_dt)
+
+        if decision == "promote":
+            status = "applied"
+            applied_at_str: str | None = created_str
+            refusals_list: list[str] = []
+        else:
+            status = "refused"
+            applied_at_str = None
+            refusals_list = list(reasons) if reasons is not None else []
+
+        refusals_json = json.dumps(refusals_list)
+
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    promotions.insert().values(
+                        id=promo_id,
+                        model=model,
+                        candidate_version=candidate_version,
+                        champion_version=champion_version,
+                        mode="team_gate",
+                        decided_by="team_gate",
+                        status=status,
+                        report_id=report_id,
+                        refusals=refusals_json,
+                        created=created_str,
+                        applied_at=applied_at_str,
+                        proposal_id=None,
+                    )
+                )
+        except Exception:
+            logger.debug(
+                "team_gate promotion row for (%s, %s) already inserted concurrently",
+                model,
+                candidate_version,
+            )
+            return None
+
+        # Emit event
+        if decision == "promote":
+            await self._events.record(
+                project_id,
+                source="system",
+                type="promotion.applied",
+                payload={
+                    "promotion_id": promo_id,
+                    "model": model,
+                    "candidate_version": candidate_version,
+                    "champion_version": champion_version,
+                },
+                subject_id=promo_id,
+            )
+        else:
+            await self._events.record(
+                project_id,
+                source="system",
+                type="promotion.refused",
+                payload={
+                    "promotion_id": promo_id,
+                    "model": model,
+                    "candidate_version": candidate_version,
+                    "refusals": refusals_list,
+                },
+                subject_id=promo_id,
+            )
+
+        return PromotionView(
+            id=promo_id,
+            model=model,
+            candidate_version=candidate_version,
+            champion_version=champion_version,
+            mode="team_gate",
+            decided_by="team_gate",
+            status=status,
+            report_id=report_id,
+            refusals=refusals_list,
+            created=now_dt,
+            applied_at=now_dt if applied_at_str is not None else None,
+        )
 
     async def record_rejection(
         self,
