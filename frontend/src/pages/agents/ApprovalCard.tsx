@@ -39,7 +39,6 @@ export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> =
   rule: RuleProposalCard,
   training_policy: TrainingPolicyProposalCard,
   maintenance: MaintenanceProposalCard,
-  promotion: PromotionProposalCard,
 };
 
 /** The card an approval gets, chosen from the part alone: its kind's card, else its proposal
