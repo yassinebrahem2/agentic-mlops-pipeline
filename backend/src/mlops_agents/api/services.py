@@ -54,6 +54,7 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner, GitHubCiDispatcher
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
@@ -293,6 +294,9 @@ async def build_services(
         keystore=keystore,
     )
     hooks.add_runner(command_runner)
+    ci_dispatcher = GitHubCiDispatcher(http=http, github=github, workspace=workspace, git=git)
+    ci_runner = CiDispatchRunner(dispatcher=ci_dispatcher, github=github)
+    hooks.add_runner(ci_runner)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
