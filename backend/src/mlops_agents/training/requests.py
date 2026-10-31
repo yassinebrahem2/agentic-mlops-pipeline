@@ -6,11 +6,12 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import desc, insert, select, update
+from sqlalchemy import ColumnElement, desc, func, insert, select, update
 
 from mlops_agents.clock import to_iso
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import training_requests
+from mlops_agents.tracking.contract import Page
 from mlops_agents.training.contract import (
     Training,
     TrainingPolicyView,
@@ -152,6 +153,114 @@ class SqliteTraining(Training):
         engine = await self._databases.project(project_id)
         async with engine.begin() as conn:
             await conn.execute(stmt.values(**values))
+
+    async def link(
+        self,
+        project_id: str,
+        request_id: str,
+        run_key: str,
+        ci_run_url: str | None = None,
+    ) -> None:
+        values: dict[str, Any] = {
+            "status": "linked",
+            "run_key": run_key,
+        }
+        if ci_run_url is not None:
+            values["ci_run_url"] = ci_run_url
+
+        stmt = (
+            update(training_requests).where(training_requests.c.id == request_id).values(**values)
+        )
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(stmt)
+
+    async def mark_silent(self, project_id: str, request_id: str) -> None:
+        stmt = (
+            update(training_requests)
+            .where(
+                training_requests.c.id == request_id,
+                training_requests.c.status == "started",
+            )
+            .values(status="silent")
+        )
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(stmt)
+
+    async def started_requests(self, project_id: str) -> list[TrainingRequestView]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (
+                (
+                    await conn.execute(
+                        select(training_requests)
+                        .where(training_requests.c.status == "started")
+                        .order_by(training_requests.c.started.asc())
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [self._row_to_view(row) for row in rows]
+
+    async def list_requests(
+        self,
+        project_id: str,
+        model: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TrainingRequestView]:
+        engine = await self._databases.project(project_id)
+        stmt = select(training_requests)
+        if model is not None:
+            stmt = stmt.where(training_requests.c.model == model)
+        if status is not None:
+            stmt = stmt.where(training_requests.c.status == status)
+        stmt = stmt.order_by(desc(training_requests.c.started)).limit(limit).offset(offset)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_view(row) for row in rows]
+
+    async def page_requests(
+        self,
+        project_id: str,
+        *,
+        request_id: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Page[TrainingRequestView]:
+        filters: list[ColumnElement[bool]] = []
+        if request_id is not None:
+            filters.append(training_requests.c.id == request_id)
+        if model is not None:
+            filters.append(training_requests.c.model == model)
+        if status is not None:
+            filters.append(training_requests.c.status == status)
+        if since is not None:
+            filters.append(training_requests.c.started >= to_iso(since))
+
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            count_stmt = select(func.count()).select_from(training_requests)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = int((await conn.scalar(count_stmt)) or 0)
+
+            select_stmt = select(training_requests)
+            if filters:
+                select_stmt = select_stmt.where(*filters)
+            select_stmt = (
+                select_stmt.order_by(desc(training_requests.c.started)).limit(limit).offset(offset)
+            )
+            rows = (await conn.execute(select_stmt)).mappings().all()
+
+        views = [self._row_to_view(r) for r in rows]
+        return Page(rows=views, total=total, truncated=(offset + len(views)) < total)
 
     def _row_to_view(self, row: Any) -> TrainingRequestView:
         window_raw = row["window"]
