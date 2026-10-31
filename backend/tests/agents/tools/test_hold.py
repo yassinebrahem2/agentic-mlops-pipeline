@@ -451,3 +451,65 @@ def test_default_registry_hold(
     reg_both = default_registry(hooks=service, incidents=incidents_service)
     assert "Hold" in reg_both.names()
     assert isinstance(reg_both.get("Hold"), HoldTool)
+
+
+@pytest.mark.asyncio
+async def test_hold_skips_suspended_and_disabled_hold_hook(
+    service: HooksService,
+    incidents_service: IncidentsService,
+) -> None:
+    project_id = "prj_holdstat1"
+    runner = FakeRunner()
+    service.add_runner(runner)
+
+    spec = _spec(kind="hold")
+    hook = await service.register(
+        project_id,
+        spec=spec,
+        name="hold-cmd",
+        model="iris",
+        source="handoff",
+    )
+    # Suspend the hook
+    await service.suspend(project_id, hook.id, "unapproved changes")
+
+    inc_id = await _create_incident(incidents_service, project_id, model="iris")
+    tool = HoldTool(hooks=service, incidents=incidents_service)
+    ctx = _tool_context(project_id, authority=Authority(basis="approval", reason="approved"))
+    args = HoldArgs(
+        incident_id=inc_id,
+        scope=HoldScope(tables=["features"]),
+        reason="data corrupt",
+    )
+
+    # 1. Action call should have hook_id=None because the hook is suspended
+    action = await tool.action_call(args, ctx)
+    assert action is not None
+    assert action.hook_id is None
+
+    # 2. Run should record hold, skip running the hook, and clearly message that it is suspended
+    output = await tool.run(ctx, args)
+    assert output.is_error is False
+    assert len(runner.calls) == 0
+    assert "is suspended (unapproved changes)" in output.content
+
+    held_inc = await incidents_service.get(project_id, inc_id)
+    assert held_inc is not None
+    assert held_inc.held is True
+
+    # 3. Disable the hook: run should still skip running the hook
+    await service.set_enabled(project_id, hook.id, False)
+    inc_id2 = await _create_incident(incidents_service, project_id, model="iris")
+    args2 = HoldArgs(
+        incident_id=inc_id2,
+        scope=HoldScope(tables=["features"]),
+        reason="data corrupt again",
+    )
+    action2 = await tool.action_call(args2, ctx)
+    assert action2 is not None
+    assert action2.hook_id is None
+
+    output2 = await tool.run(ctx, args2)
+    assert output2.is_error is False
+    assert len(runner.calls) == 0
+    assert "No hold command is registered" in output2.content

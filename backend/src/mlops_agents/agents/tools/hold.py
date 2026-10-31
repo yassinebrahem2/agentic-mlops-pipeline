@@ -45,16 +45,19 @@ class HoldTool(AgentTool[HoldArgs]):
         self._hooks = hooks
         self._incidents = incidents
 
+    async def _resolve_hold_hooks(
+        self, project_id: str, model: str | None
+    ) -> tuple[list[HookView], list[HookView]]:
+        all_hold = [h for h in await self._hooks.list(project_id) if h.spec.kind == "hold"]
+        matching = [h for h in all_hold if h.model == model] if model is not None else []
+        if not matching:
+            matching = [h for h in all_hold if h.model is None]
+        active = [h for h in matching if h.status == "active"]
+        return active, matching
+
     async def _resolve_candidate_hooks(self, project_id: str, model: str | None) -> list[HookView]:
-        active_hold = [
-            h
-            for h in await self._hooks.list(project_id)
-            if h.spec.kind == "hold" and h.status == "active"
-        ]
-        candidates = [h for h in active_hold if h.model == model] if model is not None else []
-        if not candidates:
-            candidates = [h for h in active_hold if h.model is None]
-        return candidates
+        active, _ = await self._resolve_hold_hooks(project_id, model)
+        return active
 
     async def action_call(self, args: HoldArgs, ctx: ToolContext) -> ActionCall | None:
         incident = await self._incidents.get(ctx.project_id, args.incident_id)
@@ -101,22 +104,30 @@ class HoldTool(AgentTool[HoldArgs]):
             by=ctx.agent,
         )
 
-        candidates = await self._resolve_candidate_hooks(ctx.project_id, incident.model)
+        active_candidates, all_matching = await self._resolve_hold_hooks(
+            ctx.project_id, incident.model
+        )
 
-        if len(candidates) == 0:
+        if len(active_candidates) == 0:
+            suspended = [h for h in all_matching if h.status == "suspended"]
+            if suspended:
+                return ToolOutput(
+                    f"Hold recorded on incident {args.incident_id}. Hold command {suspended[0].id} is suspended ({suspended[0].suspended_reason or 'suspended'}).",
+                    is_error=False,
+                )
             return ToolOutput(
                 f"Hold recorded on incident {args.incident_id}. No hold command is registered.",
                 is_error=False,
             )
 
-        if len(candidates) > 1:
-            ids = ", ".join(h.id for h in candidates)
+        if len(active_candidates) > 1:
+            ids = ", ".join(h.id for h in active_candidates)
             return ToolOutput(
                 f"Hold recorded on incident {args.incident_id}. Several active hold hooks found for this scope: {ids}. Choose one to run with RunHook.",
                 is_error=False,
             )
 
-        hook = candidates[0]
+        hook = active_candidates[0]
         call = HookCall(
             hook_id=hook.id,
             reason=args.reason,
