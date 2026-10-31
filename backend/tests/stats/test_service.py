@@ -78,6 +78,18 @@ async def test_without_team_records_the_baseline_numbers_are_none(
     assert _stat(view, "precision").value == 1.0
 
 
+async def test_an_incident_is_windowed_by_when_it_was_detected_not_when_it_started(
+    stats: StatsService, incidents: IncidentsService, project_id: str
+) -> None:
+    await raise_on(
+        incidents, project_id, subject="late", started_at=ago(days=8), detected_at=ago(days=6)
+    )
+
+    view = await stats.compute(project_id, "7d", None, NOW)
+
+    assert _stat(view, "alerts_per_week").n == 1
+
+
 async def test_7d_leaves_out_an_8_day_old_incident_and_all_counts_it(
     stats: StatsService, incidents: IncidentsService, project_id: str
 ) -> None:
