@@ -25,6 +25,7 @@ ACTIVE_STATUSES: Final[tuple[IncidentStatus, ...]] = (
     "mitigated",
     "reopened",
 )
+ALERT_PRIORITIZATION_AGENT: Final[str] = "alert-prioritization"
 SignalKind = Literal[
     "fired_result", "silence", "parser_failure", "source_failure", "notification_failure"
 ]

@@ -21,8 +21,7 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
 )
-from mlops_agents.monitoring.incidents.contract import IncidentPatch
-from mlops_agents.monitoring.incidents.prioritization import ALERT_PRIORITIZATION_AGENT
+from mlops_agents.monitoring.incidents.contract import ALERT_PRIORITIZATION_AGENT, IncidentPatch
 from mlops_agents.monitoring.incidents.severity import (
     RANK_TO_SEVERITY,
     SEVERITY_RANKS,
