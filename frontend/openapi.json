@@ -978,6 +978,94 @@
         "title": "CheckSpec",
         "type": "object"
       },
+      "CheckView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pr_number": {
+            "title": "Pr Number",
+            "type": "integer"
+          },
+          "registered": {
+            "format": "date-time",
+            "title": "Registered",
+            "type": "string"
+          },
+          "results_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileResults"
+              },
+              {
+                "$ref": "#/components/schemas/MlflowResults"
+              }
+            ],
+            "title": "Results Location"
+          },
+          "status": {
+            "enum": [
+              "pending_pr",
+              "active",
+              "retired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "check_id",
+          "category",
+          "cadence",
+          "timezone",
+          "results_location",
+          "pr_number",
+          "agent",
+          "status",
+          "registered"
+        ],
+        "title": "CheckView",
+        "type": "object"
+      },
       "CiResults": {
         "additionalProperties": false,
         "properties": {
@@ -11144,6 +11232,52 @@
         "summary": "Judge Silent Alert",
         "tags": [
           "baseline"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/checks": {
+      "get": {
+        "operationId": "list_checks_api_projects__project_id__checks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CheckView"
+                  },
+                  "title": "Response List Checks Api Projects  Project Id  Checks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Checks",
+        "tags": [
+          "expectations"
         ]
       }
     },
