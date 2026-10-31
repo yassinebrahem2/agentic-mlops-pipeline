@@ -131,6 +131,11 @@ from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.contract import EvaluationReader, Promotions, Reports
+from mlops_agents.promotion.deployments import (
+    DeploymentsService,
+    PromotionsQueryProvider,
+    ReportsQueryProvider,
+)
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
 from mlops_agents.promotion.kind import PromotionKind
 from mlops_agents.promotion.post_deploy import PostDeployObserver
@@ -231,6 +236,7 @@ class Services:
     dashboard: DashboardBuilder
     stats: StatsService
     morning_reports: MorningReports
+    deployments: DeploymentsService
 
 
 async def _app_secrets(
@@ -712,6 +718,8 @@ async def build_services(
     query_providers.register(TrainingRequestsQueryProvider(training))
     query_providers.register(PoliciesQueryProvider(training))
     query_providers.register(WindowsQueryProvider(windows=maintenance_windows))
+    query_providers.register(ReportsQueryProvider(databases, reports))
+    query_providers.register(PromotionsQueryProvider(promotions))
     training_lifecycle.bind_expectations(expectations)
     pin_observer = PinCheckObserver(hooks, workspace, git, training=training)
     scheduler.add_sync_observer(pin_observer)
@@ -852,6 +860,16 @@ async def build_services(
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
+    deployments = DeploymentsService(
+        handoffs=handoffs,
+        tracking=tracking,
+        promotions=promotions,
+        hooks=hooks,
+        tasks=tasks,
+        github=github,
+        http=http,
+    )
+
     return Services(
         settings=settings,
         paths=paths,
@@ -910,4 +928,5 @@ async def build_services(
         dashboard=dashboard,
         stats=stats,
         morning_reports=morning_reports,
+        deployments=deployments,
     )
