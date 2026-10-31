@@ -85,7 +85,7 @@ def test_a_version_7_database_backfills_registered_at_and_keeps_every_other_valu
         conn.close()
 
 
-def test_a_fresh_database_requires_registered_at_as_the_last_column(tmp_path: Path) -> None:
+def test_a_fresh_database_requires_registered_at_last_and_keeps_its_checks(tmp_path: Path) -> None:
     db = tmp_path / "project.db"
     assert migrate(db, "project", tmp_path / "bk") == list(range(1, 9))
     conn = connect_sync(db)
@@ -96,5 +96,7 @@ def test_a_fresh_database_requires_registered_at_as_the_last_column(tmp_path: Pa
             conn.execute(_INSERT, _ROWS[0])
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             conn.execute(_INSERT_REGISTERED, ("cron", *_ROWS[0][1:], _SEEN))
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            conn.execute(_INSERT_REGISTERED, (*_ROWS[0][:4], 2, *_ROWS[0][5:], _SEEN))
     finally:
         conn.close()
