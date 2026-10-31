@@ -176,11 +176,11 @@ D = the agents `diagnoser()` can return: data-quality, model-performance, retrai
 
 From the lead's debt re-triage (#593's row): Alert Prioritization reads untrusted `MonitoringQuery` rows yet still holds its stage 2 `SendMessage`, `OpenIssue` and `CommentOnIssue` and a broad `can_message`; its prompt says it contacts no person, so today only the prompt stops untrusted text from reaching a public repo or another agent.
 
-**Files:** `agents/definitions/alert-prioritization.md`; tests (`tests/agents/` for the tool matrix; rename the `STAGE_2_TOOLS` constant to what it now holds).
+**Files:** `agents/definitions/alert-prioritization.md`; tests (`tests/agents/` for the tool matrix). The `STAGE_2_TOOLS` test constant keeps its name (renaming it touches about 27 files across plans; it stays in the #593 debt row).
 
-**Notes:** remove `SendMessage`, `OpenIssue` and `CommentOnIssue` from its tools and empty its `can_message` (no stage 4 line in its prompt needs them). It keeps `MonitoringQuery`, `IncidentMerge`, `IncidentUpdate` and `AdjustSeverity`.
+**Notes (Decision #606):** remove `SendMessage`, `OpenIssue`, `CommentOnIssue`, `ListAgents` and `SearchIssues` from its tools and empty its `can_message`: no line of its prompt uses them, and the three outbound ones could carry untrusted text out. It keeps `Read`, `Glob`, `Grep` (its prompt says "Read files and search the workspace") and `MonitoringQuery`, `IncidentMerge`, `IncidentUpdate`, `AdjustSeverity`.
 
-**Tests (stop condition):** the definition loads with exactly those four tools; a test fails if any of the three removed tools is added back; backend suite, ruff, pyright; CI green. It rides on the plan branch (no early PR); the lead removes the #593 row when it merges.
+**Tests (stop condition):** the definition loads with exactly those seven tools; a test fails if any of the five removed tools is added back; backend suite, ruff, pyright; CI green. It rides on the plan branch (no early PR); the lead removes the #593 row when it merges.
 
 ## Known debt added
 
