@@ -3137,6 +3137,89 @@
         "title": "MetricValue",
         "type": "object"
       },
+      "MissDraft": {
+        "additionalProperties": false,
+        "description": "A person's report of a problem nothing caught; the server stamps `reported_at`.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "occurred_at"
+        ],
+        "title": "MissDraft",
+        "type": "object"
+      },
+      "MissReport": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "occurred_at",
+          "reported_at"
+        ],
+        "title": "MissReport",
+        "type": "object"
+      },
       "MlflowResults": {
         "additionalProperties": false,
         "properties": {
@@ -6416,6 +6499,64 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VerdictDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "right_category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Category"
+          },
+          "right_subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Subtype"
+          },
+          "value": {
+            "enum": [
+              "real_issue",
+              "not_an_issue",
+              "wrong_type"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "VerdictDraft",
+        "type": "object"
+      },
       "VerdictView": {
         "additionalProperties": false,
         "properties": {
@@ -9207,6 +9348,173 @@
         ]
       }
     },
+    "/api/projects/{project_id}/incidents/{incident_id}/verdict": {
+      "post": {
+        "operationId": "record_verdict_api_projects__project_id__incidents__incident_id__verdict_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerdictDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Verdict",
+        "tags": [
+          "verdicts"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/misses": {
+      "get": {
+        "operationId": "list_misses_api_projects__project_id__misses_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MissReport"
+                  },
+                  "title": "Response List Misses Api Projects  Project Id  Misses Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Misses",
+        "tags": [
+          "verdicts"
+        ]
+      },
+      "post": {
+        "operationId": "report_miss_api_projects__project_id__misses_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Miss",
+        "tags": [
+          "verdicts"
+        ]
+      }
+    },
     "/api/projects/{project_id}/monitoring-settings": {
       "get": {
         "operationId": "get_project_monitoring_settings_api_projects__project_id__monitoring_settings_get",
@@ -11490,6 +11798,69 @@
         "summary": "Get Versions",
         "tags": [
           "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/verdicts": {
+      "get": {
+        "operationId": "list_verdicts_api_projects__project_id__verdicts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/VerdictView"
+                  },
+                  "title": "Response List Verdicts Api Projects  Project Id  Verdicts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Verdicts",
+        "tags": [
+          "verdicts"
         ]
       }
     },
