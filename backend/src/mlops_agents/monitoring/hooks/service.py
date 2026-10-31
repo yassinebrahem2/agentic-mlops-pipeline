@@ -99,7 +99,7 @@ class HooksService:
                     credential_set,
                 )
                 commit, pins_result = await self._pinner.pins(project_id, current_view)
-                approved_commit = commit
+                approved_commit = commit or None
                 new_pins = pins_result
             await self._store.update_hook_spec(
                 project_id,
@@ -134,7 +134,7 @@ class HooksService:
                 created=self._clock.now(),
             )
             commit, pins_result = await self._pinner.pins(project_id, draft_view)
-            approved_commit = commit
+            approved_commit = commit or None
             pins = pins_result
 
         row = {
@@ -235,7 +235,7 @@ class HooksService:
         pins: list[PinnedFile] | None = None
         if self._pinner is not None:
             commit, pins_result = await self._pinner.pins(project_id, hook)
-            approved_commit = commit
+            approved_commit = commit or None
             pins = pins_result
         await self._store.approve_hook(project_id, hook_id, approved_commit, pins)
         updated = await self.get(project_id, hook_id)

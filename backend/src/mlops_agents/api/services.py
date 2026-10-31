@@ -60,9 +60,12 @@ from mlops_agents.monitoring.expectations.query import (
     ResultsQueryProvider,
 )
 from mlops_agents.monitoring.expectations.service import ExpectationsService
+from mlops_agents.monitoring.hooks.alias_check import HookAliasVerifier
 from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner, GitHubCiDispatcher
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
+from mlops_agents.monitoring.hooks.facts import HandoffGateFacts
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.pins import GitHookPinner, PinCheckObserver
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
@@ -326,6 +329,10 @@ async def build_services(
     ci_dispatcher = GitHubCiDispatcher(http=http, github=github, workspace=workspace, git=git)
     ci_runner = CiDispatchRunner(dispatcher=ci_dispatcher, github=github)
     hooks.add_runner(ci_runner)
+    pinner = GitHookPinner(workspace, git)
+    hooks.set_pinner(pinner)
+    gate_facts = HandoffGateFacts(hooks, handoffs)
+    authorities.set_facts(gate_facts)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
@@ -537,6 +544,17 @@ async def build_services(
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
     training_lifecycle.bind_expectations(expectations)
+    pin_observer = PinCheckObserver(hooks, workspace, git)
+    scheduler.add_sync_observer(pin_observer)
+    pr_sync.add_observer(pin_observer)
+    verifier = HookAliasVerifier(
+        tracking=tracking,
+        handoffs=handoffs,
+        training=training,
+        hooks=hooks,
+        workspace=workspace,
+        git=git,
+    )
     linker = RequestLinker(
         training=training,
         fixes=fixes,
@@ -544,6 +562,9 @@ async def build_services(
         expectations=expectations,
         events=events,
         waker=waker,
+        hooks=hooks,
+        incidents=incidents,
+        verifier=verifier,
     )
     scheduler.add_sync_observer(linker)
     # Last, because starting fires the due wake-ups, which can recover projects and expire

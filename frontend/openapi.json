@@ -10512,6 +10512,57 @@
         ]
       }
     },
+    "/api/projects/{project_id}/hooks/{hook_id}/approve": {
+      "post": {
+        "operationId": "approve_hook_api_projects__project_id__hooks__hook_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "title": "Hook Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Hook",
+        "tags": [
+          "training"
+        ]
+      }
+    },
     "/api/projects/{project_id}/hooks/{hook_id}/credential": {
       "delete": {
         "operationId": "delete_hook_credential_api_projects__project_id__hooks__hook_id__credential_delete",
