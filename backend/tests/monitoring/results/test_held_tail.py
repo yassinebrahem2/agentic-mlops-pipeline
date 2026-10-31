@@ -4,7 +4,6 @@ time and the record is complete (I22)."""
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -300,7 +299,6 @@ async def test_standard_incomplete_last_line_after_the_quiet_time_is_an_invalid_
     project_id: str,
     tmp_path: Path,
     clock: FakeClock,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     case = _CASES["standard"]
     service, target = await _service(databases, events, project_id, tmp_path, clock, case)
@@ -308,11 +306,9 @@ async def test_standard_incomplete_last_line_after_the_quiet_time_is_an_invalid_
     assert rep.stored == 1
 
     _write(target, case.half, clock, quiet=True)
-    with caplog.at_level(logging.WARNING):
-        rep = await service.collect(project_id, clock.now())
+    rep = await service.collect(project_id, clock.now())
     assert rep.stored == 0
-    assert case.source in rep.failures
-    assert f"byte offset {len(case.first)}" in caplog.text
+    assert f"Offset {len(case.first)}" in rep.failures[case.source]
 
     state = await service.store.get_source_state(project_id, case.source)
     assert state is not None

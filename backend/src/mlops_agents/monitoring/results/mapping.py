@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from mlops_agents.monitoring.expr import evaluate
+from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import (
     ParseOutcome,
     ParserMapping,
@@ -118,6 +119,15 @@ def is_complete_record(
         return False
     fields = split.records[0].fields
     return fields is not None and (csv_header is None or len(fields) == len(csv_header))
+
+
+def incomplete_record_error(offset: int) -> str:
+    """The error for a last record at `offset` that is still incomplete once its file has
+    been unchanged for the quiet time."""
+    return (
+        f"Offset {offset}: last record is incomplete and the file has not changed for"
+        f" {HELD_TAIL_QUIET_SECONDS} s"
+    )
 
 
 def _get_path_val(data: Mapping[str, Any], path: str) -> object | None:

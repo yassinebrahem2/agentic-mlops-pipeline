@@ -14,7 +14,6 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expectations.contract import Maintenance, NeverSuspended
 from mlops_agents.monitoring.incidents.contract import SignalDraft
 from mlops_agents.monitoring.results.ci_source import CiSourceReader
-from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     EvaluationCopies,
@@ -32,6 +31,7 @@ from mlops_agents.monitoring.results.contract import (
 )
 from mlops_agents.monitoring.results.evaluation_copy import SqliteEvaluationCopies
 from mlops_agents.monitoring.results.file_source import FileSourceReader, SourceReadOutcome
+from mlops_agents.monitoring.results.mapping import incomplete_record_error
 from mlops_agents.monitoring.results.mlflow_source import MlflowSourceReader
 from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.store import ResultsStore
@@ -404,11 +404,7 @@ class ResultsService(Results):
 
                         errors = list(outcome.errors)
                         if chunk.incomplete_tail_offset is not None:
-                            errors.append(
-                                f"Offset {chunk.incomplete_tail_offset}: last record is"
-                                " incomplete and the file has not changed for"
-                                f" {HELD_TAIL_QUIET_SECONDS} s"
-                            )
+                            errors.append(incomplete_record_error(chunk.incomplete_tail_offset))
                         if errors:
                             cycle_has_errors = True
                             for err in errors:

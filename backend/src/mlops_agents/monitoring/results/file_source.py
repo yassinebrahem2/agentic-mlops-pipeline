@@ -17,6 +17,7 @@ from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import ParserMapping, ResultRecord, parse_source_id
 from mlops_agents.monitoring.results.mapping import (
     LineFormat,
+    incomplete_record_error,
     is_complete_record,
     split_csv_records,
 )
@@ -81,6 +82,11 @@ def _cut_tail(
     if complete is None or complete(chunk[records_end:].decode("utf-8", errors="replace")):
         return _TailCut(deliver=len(chunk), consume=len(chunk))
     return _TailCut(deliver=records_end, consume=len(chunk))
+
+
+def _complete_jsonl(tail: str) -> bool:
+    """The standard results file's completeness rule: it is JSON Lines."""
+    return is_complete_record("jsonl", tail)
 
 
 def _read_files_sync(
@@ -172,9 +178,7 @@ def _read_files_sync(
             last_error = scrub_url_secrets(str(exc))
             continue
 
-        # The line loop applies the jsonl rule to a quiet tail itself (a JSON object), so an
-        # incomplete one takes its invalid-line path
-        cut = _cut_tail(chunk, chunk.rfind(b"\n") + 1, _quiet(cur_mtime, now), None)
+        cut = _cut_tail(chunk, chunk.rfind(b"\n") + 1, _quiet(cur_mtime, now), _complete_jsonl)
         if cut.consume == 0:
             files_cursor[rel_posix] = {
                 "size": cur_size,
@@ -183,11 +187,15 @@ def _read_files_sync(
             }
             continue
 
-        chunk_to_consume = chunk[: cut.consume]
         new_offset = offset + cut.consume
+        lines = chunk[: cut.deliver].splitlines(keepends=True)
+        # An incomplete last record is consumed as one line that takes the invalid-line path
+        incomplete_at: int | None = None
+        if cut.deliver < cut.consume:
+            incomplete_at = offset + cut.deliver
+            lines.append(chunk[cut.deliver : cut.consume])
 
         current_line_start = offset
-        lines = chunk_to_consume.splitlines(keepends=True)
         for raw_line_bytes in lines:
             line_offset = current_line_start
             current_line_start += len(raw_line_bytes)
@@ -197,6 +205,8 @@ def _read_files_sync(
                 continue
 
             try:
+                if line_offset == incomplete_at:
+                    raise ValueError(incomplete_record_error(line_offset))
                 parsed_json = json.loads(line_str)
                 if not isinstance(parsed_json, dict):
                     raise ValueError("JSON line is not an object")
