@@ -115,6 +115,8 @@ from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.training.lifecycle import TrainingLifecycle
+from mlops_agents.training.linking import RequestLinker
+from mlops_agents.training.queries import FixesQueryProvider, TrainingRequestsQueryProvider
 from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -502,6 +504,18 @@ async def build_services(
     scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
     query_providers.register(ResultsQueryProvider(results))
     query_providers.register(ExpectationsQueryProvider(expectations))
+    query_providers.register(FixesQueryProvider(fixes))
+    query_providers.register(TrainingRequestsQueryProvider(training))
+    training_lifecycle.bind_expectations(expectations)
+    linker = RequestLinker(
+        training=training,
+        fixes=fixes,
+        tracking=tracking,
+        expectations=expectations,
+        events=events,
+        waker=waker,
+    )
+    scheduler.add_sync_observer(linker)
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store

@@ -6,8 +6,9 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import ColumnElement, func, insert, select, update
 
+from mlops_agents.clock import to_iso
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog, EventType
 from mlops_agents.ids import new_id
@@ -15,6 +16,7 @@ from mlops_agents.monitoring.incidents.contract import AgentWaker, Incidents
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import fix_requests
+from mlops_agents.tracking.contract import Page
 from mlops_agents.training.constants import (
     EVIDENCE_MAX_CHARS,
     RETRAINING_AGENT,
@@ -319,6 +321,74 @@ class SqliteFixes:
                 .where(fix_requests.c.id == fix_id, fix_requests.c.status == "chosen")
                 .values(status="running")
             )
+
+    async def mark_done(self, project_id: str, fix_id: str) -> None:
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(fix_requests).where(fix_requests.c.id == fix_id).values(status="done")
+            )
+
+    async def list_fixes(
+        self,
+        project_id: str,
+        model: str | None = None,
+        incident_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[FixRequestView]:
+        engine = await self._databases.project(project_id)
+        stmt = select(fix_requests)
+        if model is not None:
+            stmt = stmt.where(fix_requests.c.model == model)
+        if incident_id is not None:
+            stmt = stmt.where(fix_requests.c.incident_id == incident_id)
+        stmt = stmt.order_by(fix_requests.c.created.desc()).limit(limit).offset(offset)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [self._row_to_view(row) for row in rows]
+
+    async def page_fixes(
+        self,
+        project_id: str,
+        *,
+        fix_id: str | None = None,
+        model: str | None = None,
+        incident_id: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Page[FixRequestView]:
+        filters: list[ColumnElement[bool]] = []
+        if fix_id is not None:
+            filters.append(fix_requests.c.id == fix_id)
+        if model is not None:
+            filters.append(fix_requests.c.model == model)
+        if incident_id is not None:
+            filters.append(fix_requests.c.incident_id == incident_id)
+        if status is not None:
+            filters.append(fix_requests.c.status == status)
+        if since is not None:
+            filters.append(fix_requests.c.created >= to_iso(since))
+
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            count_stmt = select(func.count()).select_from(fix_requests)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = int((await conn.scalar(count_stmt)) or 0)
+
+            select_stmt = select(fix_requests)
+            if filters:
+                select_stmt = select_stmt.where(*filters)
+            select_stmt = (
+                select_stmt.order_by(fix_requests.c.created.desc()).limit(limit).offset(offset)
+            )
+            rows = (await conn.execute(select_stmt)).mappings().all()
+
+        views = [self._row_to_view(r) for r in rows]
+        return Page(rows=views, total=total, truncated=(offset + len(views)) < total)
 
     async def get(self, project_id: str, fix_id: str) -> FixRequestView | None:
         engine = await self._databases.project(project_id)
