@@ -37,6 +37,7 @@ export const sampleStats: StatsView = {
     },
     cost: {
       cost_per_incident: { value: 1.5, n: 4, collecting: false },
+      tokens_per_agent: { value: 1234.6, n: 3, collecting: false },
     },
     reliability: {
       failed_runs: { value: null, n: 0, collecting: false },

@@ -43,6 +43,8 @@ describe("stats page", () => {
     expect(within(await tile("Detection delay")).getByText("1 min 30 s")).toBeInTheDocument();
     expect(within(await tile("Cost per incident")).getByText("$1.50")).toBeInTheDocument();
     expect(within(await tile("Misses")).getByText("3")).toBeInTheDocument();
+    // An average token count is still a whole number of tokens.
+    expect(within(await tile("Tokens per agent")).getByText("1,235")).toBeInTheDocument();
     expect(within(await tile("brand_new_metric")).getByText("7.00")).toBeInTheDocument();
 
     // Few incidents but not collecting: the API decides, so the value shows.

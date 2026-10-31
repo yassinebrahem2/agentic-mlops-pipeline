@@ -32,7 +32,7 @@ const METRIC_LABELS: ReadonlyMap<string, MetricLabel> = new Map<string, MetricLa
   ["prs_closed", { label: "PRs closed", unit: "count" }],
   ["metric_before", { label: "Model metric before", unit: "number" }],
   ["metric_after", { label: "Model metric after", unit: "number" }],
-  ["tokens_per_agent", { label: "Tokens per agent", unit: "number" }],
+  ["tokens_per_agent", { label: "Tokens per agent", unit: "count" }],
   ["cost_per_incident", { label: "Cost per incident", unit: "usd" }],
   ["failed_runs", { label: "Failed runs", unit: "count" }],
   ["tool_errors", { label: "Tool errors", unit: "count" }],

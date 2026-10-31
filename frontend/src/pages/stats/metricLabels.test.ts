@@ -9,6 +9,7 @@ describe("metric labels", () => {
       unit: "seconds",
     });
     expect(metricLabel("cost_per_incident").unit).toBe("usd");
+    expect(metricLabel("tokens_per_agent").unit).toBe("count");
     expect(metricLabel("failed_runs").unit).toBe("count");
   });
 
