@@ -13,7 +13,7 @@ from statistics import fmean, median
 from typing import Final
 
 from mlops_agents.monitoring.hooks.contract import HookRunView
-from mlops_agents.monitoring.incidents.contract import IncidentView
+from mlops_agents.monitoring.incidents.contract import ACTIVE_STATUSES, IncidentView
 from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert, VerdictValue, VerdictView
 from mlops_agents.providers.usage import cost_usd
 from mlops_agents.providers.usage_contract import ModelPrice
@@ -82,6 +82,12 @@ def _with_verdict(inputs: StatsInputs, *values: VerdictValue) -> list[IncidentVi
     ]
 
 
+def _resolved_at(incident: IncidentView) -> datetime | None:
+    """When the incident was resolved, or None while it is live: a live incident is not
+    finished, whatever `resolved_at` it kept (Decision #565)."""
+    return incident.resolved_at if incident.status not in ACTIVE_STATUSES else None
+
+
 def _seconds(pairs: Iterable[tuple[datetime, datetime]]) -> list[float]:
     return [(later - earlier).total_seconds() for earlier, later in pairs]
 
@@ -117,7 +123,8 @@ def detection_delay_s(inputs: StatsInputs) -> StatValue:
 
 def time_to_resolution_s(inputs: StatsInputs) -> StatValue:
     real = _with_verdict(inputs, "real_issue")
-    times = _seconds((i.detected_at, i.resolved_at) for i in real if i.resolved_at is not None)
+    resolved = [(i.detected_at, at) for i in real if (at := _resolved_at(i)) is not None]
+    times = _seconds(resolved)
     return _stat(median(times) if times else None, len(times), verdicts=True)
 
 
@@ -183,7 +190,7 @@ def impact_candidates(
         for i in incidents
         if i.category == "model_performance"
         and i.model is not None
-        and i.resolved_at is not None
+        and _resolved_at(i) is not None
         and i.id in verdicts
         and verdicts[i.id].value == "real_issue"
     ]

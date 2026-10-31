@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from mlops_agents.monitoring.incidents.contract import IncidentPatch
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.verdicts.baseline import SILENT_ALERTS_MAX, SqliteBaseline
@@ -14,6 +15,7 @@ from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.stats.contract import STATS_MIN_VERDICTS, StatsView, StatValue
 from mlops_agents.stats.service import StatsService
 from mlops_agents.storage.databases import Databases
+from tests.providers.fake_clock import FakeClock
 from tests.stats.conftest import (
     NOW,
     SOURCE,
@@ -22,6 +24,7 @@ from tests.stats.conftest import (
     ago,
     raise_on,
     result_record,
+    store,
     team_fire,
 )
 
@@ -88,6 +91,39 @@ async def test_an_incident_is_windowed_by_when_it_was_detected_not_when_it_start
     view = await stats.compute(project_id, "7d", None, NOW)
 
     assert _stat(view, "alerts_per_week").n == 1
+
+
+async def test_an_incident_live_again_with_an_old_resolved_at_is_not_resolved(
+    stats: StatsService,
+    incidents: IncidentsService,
+    verdicts: SqliteVerdicts,
+    results: ResultsService,
+    clock: FakeClock,
+    project_id: str,
+) -> None:
+    incident_id = await raise_on(incidents, project_id, subject="churn_scores", started_at=T)
+    for ran_at, value in ((T - timedelta(hours=1), 0.70), (T + timedelta(hours=3), 0.80)):
+        record = result_record(
+            ran_at, subject="churn_scores", origin="agent", fired=False, value=value
+        )
+        await store(results, project_id, record)
+    clock.current = T + timedelta(hours=1)
+    await incidents.update(
+        project_id, incident_id, "orchestrator", IncidentPatch(status="resolved")
+    )
+    clock.current = T + timedelta(hours=2)
+    live = await incidents.update(
+        project_id, incident_id, "orchestrator", IncidentPatch(status="mitigated")
+    )
+    clock.current = NOW
+    assert live.resolved_at is not None
+    await verdicts.record(project_id, incident_id, VerdictDraft(value="real_issue"), by="user")
+
+    view = await stats.compute(project_id, "30d", None, NOW)
+
+    assert _stat(view, "time_to_resolution_s").n == 0
+    assert _stat(view, "metric_before").n == 0
+    assert _stat(view, "metric_after").n == 0
 
 
 async def test_7d_leaves_out_an_8_day_old_incident_and_all_counts_it(
