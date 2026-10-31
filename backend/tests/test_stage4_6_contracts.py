@@ -37,6 +37,7 @@ MODULES = [
     "mlops_agents.training.constants",
     "mlops_agents.promotion.constants",
     "mlops_agents.agents.tools.names",
+    "mlops_agents.proposals.contract",
 ]
 
 
@@ -368,3 +369,227 @@ def test_stage4_6_protocol_methods() -> None:
     assert _methods(Promotions) == {"validate", "history"}
     assert _methods(ProtectionSurfaces) == {"paths", "touches"}
     assert _methods(Stats) == {"compute"}
+
+
+def test_parity_result_category_and_action_kind() -> None:
+    from typing import get_args
+
+    from mlops_agents.agents.approvals.authority import ActionKind
+    from mlops_agents.monitoring.results.contract import ResultCategory
+    from mlops_agents.proposals.payloads import CheckSpec, CommandSpec
+
+    assert set(get_args(ResultCategory)) == set(
+        get_args(CheckSpec.model_fields["category"].annotation)
+    )
+    assert set(get_args(ActionKind)) == set(
+        get_args(CommandSpec.model_fields["kind"].annotation)
+    ) | {"merge_pr"}
+
+
+def test_diagnoser_targets_are_packaged_definitions() -> None:
+    from importlib.resources import files
+    from typing import get_args
+
+    from mlops_agents.monitoring.incidents.contract import diagnoser
+    from mlops_agents.monitoring.results.contract import ResultCategory
+
+    folder = files("mlops_agents.agents").joinpath("definitions")
+    packaged_names = {
+        entry.name.removesuffix(".md") for entry in folder.iterdir() if entry.name.endswith(".md")
+    }
+
+    subtypes = [None, "failed_training", "bad_deploy", "failed_scoring", "silence", "unknown"]
+    for cat in get_args(ResultCategory):
+        for sub in subtypes:
+            target = diagnoser(cat, sub)
+            assert target in packaged_names
+
+
+def test_tool_names_in_names_py_are_unique_and_collide_with_no_registered_tool() -> None:
+    from unittest.mock import MagicMock
+
+    import mlops_agents.agents.tools.names as tool_names_mod
+    from mlops_agents.agents.tools import default_registry
+
+    canonical_names = [
+        getattr(tool_names_mod, k)
+        for k in dir(tool_names_mod)
+        if k.isupper() and isinstance(getattr(tool_names_mod, k), str)
+    ]
+    assert len(canonical_names) == len(set(canonical_names))
+
+    stage1_3_services = {
+        "tasks": MagicMock(),
+        "sandbox": MagicMock(),
+        "bus": MagicMock(),
+        "status_board": MagicMock(),
+        "catalog": MagicMock(),
+        "wakeups": MagicMock(),
+        "workspace": MagicMock(),
+        "github": MagicMock(),
+        "events": MagicMock(),
+        "http": MagicMock(),
+        "databases": MagicMock(),
+        "knowledge": MagicMock(),
+        "proposals": MagicMock(),
+        "proposal_kinds": MagicMock(),
+        "tracking": MagicMock(),
+        "handoffs": MagicMock(),
+    }
+    stage1_3_registry = default_registry(**stage1_3_services)
+    stage1_3_tool_names = stage1_3_registry.names()
+    assert len(stage1_3_tool_names) == 20
+    assert set(canonical_names) & stage1_3_tool_names == set()
+
+
+def test_kind_names_are_unique_and_cover_proposal_views() -> None:
+    from typing import get_args
+
+    from mlops_agents.proposals.contract import (
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        PARSER_KIND,
+        PROMOTION_KIND,
+        RULE_KIND,
+        TRAINING_POLICY_KIND,
+        AnyProposalView,
+    )
+
+    kind_names = [
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        PARSER_KIND,
+        RULE_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        TRAINING_POLICY_KIND,
+        PROMOTION_KIND,
+    ]
+    assert len(kind_names) == len(set(kind_names)) == 8
+
+    union_args = get_args(AnyProposalView)[0]
+    members = get_args(union_args)
+    member_kinds = {m.model_fields["kind"].default for m in members}
+    assert member_kinds == set(kind_names)
+    assert len(members) == len(kind_names)
+
+
+def test_every_event_type_is_in_event_type_once() -> None:
+    from typing import get_args
+
+    from mlops_agents.events.contract import EventType
+
+    types = get_args(EventType)
+    assert len(types) == len(set(types))
+
+    expected_stage4_6_types = {
+        "results.collected",
+        "signal.raised",
+        "incident.opened",
+        "incident.updated",
+        "incident.acknowledged",
+        "incident.snoozed",
+        "incident.severity_changed",
+        "incident.reopened",
+        "incident.merged",
+        "incident.split",
+        "incident.suspect_linked",
+        "incident.hold_recorded",
+        "incident.wake_skipped",
+        "incident.closed",
+        "check.registered",
+        "parser.disabled",
+        "notification.sent",
+        "notification.failed",
+        "escalation.sent",
+        "report.sent",
+        "hook.ran",
+        "hook.failed",
+        "hook.suspended",
+        "rule.satisfied",
+        "verdict.recorded",
+        "miss.reported",
+        "fix.requested",
+        "fix.chosen",
+        "fix.declined",
+        "fix.escalated",
+        "training.requested",
+        "training.linked",
+        "policy.suspended",
+        "report.saved",
+        "promotion.applied",
+        "promotion.refused",
+        "pr.merged_by_agent",
+    }
+    assert expected_stage4_6_types <= set(types)
+
+
+def test_stat_metrics_names_unique_and_cover_stat_groups() -> None:
+    from typing import get_args
+
+    from mlops_agents.stats.contract import (
+        STAT_METRICS,
+        STATS_MIN_VERDICTS,
+        StatGroup,
+    )
+
+    assert STATS_MIN_VERDICTS == 5
+    stat_groups = get_args(StatGroup)
+    assert len(stat_groups) == 8
+    assert set(STAT_METRICS.keys()) == set(stat_groups)
+
+    all_metrics: list[str] = []
+    for metrics in STAT_METRICS.values():
+        all_metrics.extend(metrics)
+    assert len(all_metrics) == len(set(all_metrics))
+
+
+def test_prefixes_equal_roadmap_table() -> None:
+    import re
+    from pathlib import Path
+
+    from mlops_agents.ids import PREFIXES
+
+    roadmap_path = Path(__file__).resolve().parents[2] / "docs" / "roadmap.md"
+    content = roadmap_path.read_text(encoding="utf-8")
+    table_match = re.search(
+        r"\| Prefix \| Entity \| Stage \|\n\|---\|---\|---\|\n([\s\S]*?)\n\n", content
+    )
+    assert table_match is not None, "Roadmap prefix table not found"
+    rows = table_match.group(1).strip().splitlines()
+    parsed_prefixes: set[str] = set()
+    for row in rows:
+        m = re.match(r"\|\s*`([a-z0-9]+)`\s*\|", row)
+        if m:
+            parsed_prefixes.add(m.group(1))
+
+    assert parsed_prefixes == PREFIXES
+
+
+def test_payload_and_view_models_forbid_extra_keys_except_evaluation_payload() -> None:
+    from pydantic import BaseModel, RootModel
+
+    from mlops_agents.promotion.contract import EvaluationPayload
+    from mlops_agents.proposals.contract import ProposalView
+
+    discovered_models: list[type[BaseModel]] = []
+    for mod_name in MODULES:
+        mod = importlib.import_module(mod_name)
+        for _, obj in inspect.getmembers(mod, inspect.isclass):
+            if issubclass(obj, BaseModel) and obj is not BaseModel and obj.__module__ == mod_name:
+                discovered_models.append(obj)
+
+    assert len(discovered_models) >= 100
+
+    exceptions = {EvaluationPayload, ProposalView}
+    for model in discovered_models:
+        if model in exceptions or issubclass(model, RootModel):
+            # EvaluationPayload is the documented exception (I37: extra="allow" so team's extra fields survive)
+            # ProposalView is a RootModel over the discriminated union; RootModel does not support extra
+            assert model.model_config.get("extra") != "forbid"
+        else:
+            assert model.model_config.get("extra") == "forbid", (
+                f"{model.__module__}.{model.__name__} must forbid extra keys"
+            )
