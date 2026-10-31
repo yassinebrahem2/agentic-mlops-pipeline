@@ -132,6 +132,19 @@ class FakeTracking(Tracking):
         return Page(rows=[], total=0, truncated=False)
 
 
+class ModelFailingTracking(FakeTracking):
+    """FakeTracking whose versions query fails for one model, as a tracking store outage would."""
+
+    def __init__(self, failing_model: str | None) -> None:
+        super().__init__()
+        self.failing_model = failing_model
+
+    async def query(self, project_id: str, q: TrackingQuery) -> Page[Any]:
+        if q.what == "versions" and q.model is not None and q.model == self.failing_model:
+            raise RuntimeError("tracking store unavailable")
+        return await super().query(project_id, q)
+
+
 class FakeHandoffs(Handoffs):
     def __init__(self, handoff: HandoffView | None = None) -> None:
         self._handoff = handoff
@@ -384,8 +397,10 @@ async def insert_person_promotion(databases: Databases, model: str, version: str
 class Gate:
     """One observer and its promotions service over shared fakes."""
 
-    def __init__(self, databases: Databases, handoff: HandoffView) -> None:
-        self.tracking = FakeTracking()
+    def __init__(
+        self, databases: Databases, handoff: HandoffView, tracking: FakeTracking | None = None
+    ) -> None:
+        self.tracking = tracking or FakeTracking()
         self.handoffs = FakeHandoffs(handoff)
         self.reader = FakeEvaluationReader()
         self.notifier = RecordingNotifier()
@@ -1740,30 +1755,37 @@ async def test_version_without_run_key_does_not_block_other_models(databases: Da
     t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
     t1 = t0 + timedelta(minutes=5)
     t2 = t0 + timedelta(minutes=10)
-    gate = Gate(databases, make_handoff([gate_model("model_a"), gate_model("model_b")]))
+    t3 = t0 + timedelta(minutes=15)
+    gate = Gate(databases, make_handoff([gate_model("model_a"), gate_model("model_b", "person")]))
 
     await gate.observer.synced(PROJECT_ID, now=t0)
 
+    # A's version has no run key; B, still in person mode, gets a requested, decided version.
     add_candidate(gate.tracking, "model_a", "a1", None)
-    add_candidate(gate.tracking, "model_b", "b1", "run_b1")
-    gate.decide("model_b", "b1", "run_b1", decision="promote")
-
+    add_candidate(gate.tracking, "model_b", "b_old", "run_b_old")
+    gate.decide("model_b", "b_old", "run_b_old", decision="promote")
     await gate.observer.synced(PROJECT_ID, now=t1)
 
-    assert [p.candidate_version for p in await gate.promotions.history(PROJECT_ID)] == ["b1"]
-    assert len(gate.notifier.calls) == 1
-    cursors = await gate_cursors(databases)
-    assert cursors["model_a"] == t1
-    assert cursors["model_b"] == t1
-
-    add_candidate(gate.tracking, "model_a", "a2", "run_a2")
-    gate.decide("model_a", "a2", "run_a2", decision="reject")
-
+    # B enters team_gate: its version from before entry is not a candidate.
+    gate.handoffs.set_current(make_handoff([gate_model("model_a"), gate_model("model_b")]))
     await gate.observer.synced(PROJECT_ID, now=t2)
 
+    assert await gate.promotions.history(PROJECT_ID, model="model_b") == []
+    assert gate.notifier.calls == []
+
+    # Versions arriving after B's entry are decided, A's included.
+    add_candidate(gate.tracking, "model_b", "b_new", "run_b_new")
+    gate.decide("model_b", "b_new", "run_b_new", decision="promote")
+    add_candidate(gate.tracking, "model_a", "a2", "run_a2")
+    gate.decide("model_a", "a2", "run_a2", decision="reject")
+    await gate.observer.synced(PROJECT_ID, now=t3)
+
+    history_b = await gate.promotions.history(PROJECT_ID, model="model_b")
+    assert [(p.candidate_version, p.status) for p in history_b] == [("b_new", "applied")]
     history_a = await gate.promotions.history(PROJECT_ID, model="model_a")
     assert [(p.candidate_version, p.status) for p in history_a] == [("a2", "refused")]
     assert len(gate.notifier.calls) == 2
+    assert await gate_cursors(databases) == {"model_a": t3, "model_b": t3}
 
 
 @pytest.mark.anyio
@@ -1853,3 +1875,29 @@ async def test_record_team_gate_refuses_a_version_a_person_decided(databases: Da
     assert recorded is None
     history = await gate.promotions.history(PROJECT_ID, model="model_b")
     assert [(p.candidate_version, p.mode) for p in history] == [("b1", "person")]
+
+
+@pytest.mark.anyio
+async def test_seed_is_kept_when_a_later_model_fails_in_the_same_sync(databases: Databases) -> None:
+    """A model's seed is durable on its own: a later failure in the sync cannot undo it."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    tracking = ModelFailingTracking(failing_model="model_b")
+    gate = Gate(
+        databases, make_handoff([gate_model("model_a"), gate_model("model_b")]), tracking=tracking
+    )
+
+    # A is seeded, then reading B's versions fails.
+    with pytest.raises(RuntimeError, match="tracking store unavailable"):
+        await gate.observer.synced(PROJECT_ID, now=t0)
+
+    # A requested, decided version arrives before the next sync, and tracking recovers.
+    add_candidate(gate.tracking, "model_a", "a1", "run_a1")
+    gate.decide("model_a", "a1", "run_a1", decision="promote")
+    tracking.failing_model = None
+
+    await gate.observer.synced(PROJECT_ID, now=t1)
+
+    history = await gate.promotions.history(PROJECT_ID, model="model_a")
+    assert [(p.candidate_version, p.status) for p in history] == [("a1", "applied")]
+    assert len(gate.notifier.calls) == 1

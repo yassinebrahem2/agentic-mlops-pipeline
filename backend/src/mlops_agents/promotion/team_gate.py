@@ -53,6 +53,14 @@ async def _write_times(conn: AsyncConnection, key: str, times: dict[str, datetim
     )
 
 
+async def _set_cursor(conn: AsyncConnection, model: str, at: datetime) -> None:
+    # Read-modify-write inside the caller's transaction, so each model's progress is saved on
+    # its own and a failure on a later model cannot undo it.
+    cursors = await _read_times(conn, CURSOR_KEY)
+    cursors[model] = at
+    await _write_times(conn, CURSOR_KEY, cursors)
+
+
 class TeamGateObserver(SyncObserver):
     """SyncObserver that checks team_gate decisions for candidate model versions.
 
@@ -111,17 +119,29 @@ class TeamGateObserver(SyncObserver):
         # A model that left team_gate (or the handoff) loses its state, so it is seeded again
         # if it re-enters.
         dropped = [name for name in cursors if name not in gate_models]
-        next_cursors = {name: at for name, at in cursors.items() if name in gate_models}
+        if dropped:
+            async with engine.begin() as conn:
+                for model in dropped:
+                    await conn.execute(
+                        delete(project_settings).where(project_settings.c.key == _seen_key(model))
+                    )
+                await _write_times(
+                    conn,
+                    CURSOR_KEY,
+                    {name: at for name, at in cursors.items() if name in gate_models},
+                )
 
         for model in gate_models:
             versions = await self._model_versions(project_id, model)
             cursor = cursors.get(model)
             if cursor is None:
+                # The seen state and the cursor entry are saved together: a seed is never half
+                # done, so it is never redone over versions that arrived since.
                 async with engine.begin() as conn:
                     await _write_times(
                         conn, _seen_key(model), {v.version: now_dt for v in versions}
                     )
-                next_cursors[model] = now_dt
+                    await _set_cursor(conn, model, now_dt)
                 continue
 
             async with engine.connect() as conn:
@@ -142,14 +162,8 @@ class TeamGateObserver(SyncObserver):
                 if await self._handle_candidate(project_id, model, version, now_dt):
                     waiting = True
             if not waiting:
-                next_cursors[model] = now_dt
-
-        async with engine.begin() as conn:
-            for model in dropped:
-                await conn.execute(
-                    delete(project_settings).where(project_settings.c.key == _seen_key(model))
-                )
-            await _write_times(conn, CURSOR_KEY, next_cursors)
+                async with engine.begin() as conn:
+                    await _set_cursor(conn, model, now_dt)
 
     async def _model_versions(self, project_id: str, model: str) -> list[ModelVersionRow]:
         # The one query for a model's versions, used for seeding and processing alike, so the
