@@ -156,6 +156,21 @@ class Hooks(Protocol):
     ) -> list[HookRunView]: ...
 
 
+class HookProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    model: str | None = None
+    spec: CommandSpec
+    why: str
+
+
+class HooksPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hooks: list[HookProposal]
+
+
 # I36 pipeline-runs types
 class RunContext(BaseModel):
     model_config = ConfigDict(extra="forbid")

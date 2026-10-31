@@ -224,6 +224,10 @@ class ProposalsService:
         kind_obj = self._kinds.get(rec.kind)
         return await self._to_view(project_id, rec, kind_obj)
 
+    async def apply_allowed(self, project_id: str, proposal_id: str) -> ApplyResult | None:
+        """Applies an allowed proposal at once with no approval."""
+        return await self.decide(project_id, proposal_id, approved=True)
+
     async def for_call(
         self, project_id: str, turn_id: str, tool_call_id: str
     ) -> ProposalView | None:

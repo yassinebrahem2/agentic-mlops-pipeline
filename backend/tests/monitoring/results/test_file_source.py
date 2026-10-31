@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -291,3 +294,70 @@ async def test_secret_file_skip_against_real_connections_inspect(
     assert "sub/id_rsa" not in outcome.cursor.get("files", {})
 
     await databases.dispose()
+
+
+async def test_file_source_reader_scrubs_credentials_in_error_and_log(
+    tmp_path: Path, project_id: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    data_dir = tmp_path / "scrub_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "results.jsonl"
+
+    secret_token = "secret_file_pass_12345"
+    secret_param = "param_file_key_67890"
+    raw_url = f"https://user:{secret_token}@fileserver.internal/path?api_key={secret_param}"
+
+    # Site 3: An invalid line where parsing fails and the error text quotes the invalid origin value carrying the URL
+    invalid_line = (
+        f'{{"check_id": "c1", "origin": "invalid_origin_{raw_url}", '
+        '"ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    ).encode()
+    target.write_bytes(invalid_line)
+
+    connections = FakeConnections()
+    connections.add_local_folder("scrub_conn", data_dir)
+    reader = FileSourceReader(connections)
+    s_id = source_id("file", "*.jsonl", "scrub_conn")
+
+    with caplog.at_level(logging.WARNING):
+        out = await reader.read(project_id, s_id, cursor={})
+
+    assert out.last_error is not None
+    assert secret_token not in out.last_error
+    assert secret_param not in out.last_error
+    assert "***@" in out.last_error
+    assert secret_token not in caplog.text
+    assert secret_param not in caplog.text
+
+    # Site 1: stat error carrying credential
+    secret_stat = "stat_secret_token_999"
+    stat_url = f"https://stat_user:{secret_stat}@stat.internal/path"
+    orig_stat = Path.stat
+
+    def failing_stat(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name == "results.jsonl":
+            raise OSError(f"Stat failed for {stat_url}")
+        return orig_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", failing_stat):
+        out_stat = await reader.read(project_id, s_id, cursor={})
+        assert out_stat.last_error is not None
+        assert secret_stat not in out_stat.last_error
+        assert "***@" in out_stat.last_error
+
+    # Site 2: open error carrying credential
+    secret_open = "open_secret_token_888"
+    open_url = f"https://open_user:{secret_open}@open.internal/path"
+    orig_open: Any = Path.open
+
+    def failing_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name == "results.jsonl":
+            raise OSError(f"Open failed for {open_url}")
+        res: Any = orig_open(self, *args, **kwargs)
+        return res
+
+    with patch.object(Path, "open", failing_open):
+        out_open = await reader.read(project_id, s_id, cursor={})
+        assert out_open.last_error is not None
+        assert secret_open not in out_open.last_error
+        assert "***@" in out_open.last_error

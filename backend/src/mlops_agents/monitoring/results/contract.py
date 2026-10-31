@@ -184,6 +184,14 @@ class ParseOutcome(BaseModel):
     errors: list[str]
 
 
+class ParserPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    spec: ParserSpec
+    sample_input: str
+    sample_records: list[ResultRecord]
+
+
 class Parsers(Protocol):
     async def store(self, project_id: str, spec: ParserSpec, proposal_id: str) -> ParserVersion: ...
 

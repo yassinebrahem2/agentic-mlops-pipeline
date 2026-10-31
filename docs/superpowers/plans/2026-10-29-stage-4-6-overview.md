@@ -395,6 +395,7 @@ class Baseline(Protocol):               # stats task 2; never notifies and never
     async def available(self, project_id: str) -> bool: ...   # true once a `team`-origin result is stored; the Dashboard and Stats read it
     async def links(self, project_id: str, incident_id: str) -> list[BaselineLink]: ...
     async def silent_alerts(self, project_id: str) -> list[SilentTeamAlert]: ...
+    async def matched_incidents(self, project_id: str) -> set[str]: ...   # stats task 3 (2026-10-31): IDs of incidents at least one team fire matches, by the same matcher `silent_alerts` uses, on read; a fire matching a merged incident counts for its survivor. Stats reads this, not the stored links (they can lag a widened window)
     async def judge_silent(self, project_id: str, result_id: str, value: SilentVerdict, by: str) -> SilentTeamAlert: ...   # a person's verdict on a silent alert
 ```
 
