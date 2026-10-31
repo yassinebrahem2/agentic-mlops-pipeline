@@ -72,6 +72,7 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.contract import Channel, Notifier, OnCallPeople
+from mlops_agents.notifications.escalation import EscalationJob
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
 from mlops_agents.notifications.retries import RetryJob
@@ -462,8 +463,17 @@ async def build_services(
         clock=clock,
         run_mode=settings.mode,
     )
+    notifier.bind_incidents(incidents)
     retry_notifications_job = RetryJob(databases, notifier, clock)
     scheduler.register(retry_notifications_job)
+    escalation_job = EscalationJob(
+        databases=databases,
+        incidents=incidents,
+        on_call=on_call,
+        notifier=notifier,
+        clock=clock,
+    )
+    scheduler.register(escalation_job)
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)

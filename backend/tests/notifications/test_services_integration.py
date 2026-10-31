@@ -8,6 +8,7 @@ from mlops_agents.config import RunMode, load_settings
 from mlops_agents.credentials.keystore import KeyStore
 from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.monitoring.jobs import JobKind
+from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
@@ -74,6 +75,13 @@ async def test_build_services_registers_retry_notifications_job(tmp_path: Path) 
 
         assert (
             JobKind.RETRY_NOTIFICATIONS in services.scheduler._jobs  # pyright: ignore[reportPrivateUsage]
+        )
+        assert (
+            JobKind.ESCALATE in services.scheduler._jobs  # pyright: ignore[reportPrivateUsage]
+        )
+        assert isinstance(services.notifier, SqliteNotifier)
+        assert (
+            services.notifier._incidents is services.incidents  # pyright: ignore[reportPrivateUsage]
         )
 
         # Configure webhook and password
