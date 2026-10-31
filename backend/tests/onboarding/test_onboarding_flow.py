@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,28 @@ AUDIT_MODEL = "fake-audit"
 # Only the data_summary hook writes a table's header line.
 TABLE_LINE = f'Table "{BOOKINGS}"'
 WAIT_S = 30
+# 07:10 UTC: the handoff's 06:30 UTC check has passed its 30 minute grace, and the look-back
+# before #586's fix still held it, so a fresh onboarding was judged for a slot before it existed.
+PINNED_TIME = (7, 10)
+
+
+class _PinnedClock:
+    """Real time moved to today's PINNED_TIME (UTC): it runs at real speed, and `advance`
+    jumps it forward."""
+
+    def __init__(self) -> None:
+        hour, minute = PINNED_TIME
+        now = datetime.now(UTC)
+        self._offset = now.replace(hour=hour, minute=minute, second=0, microsecond=0) - now
+
+    def now(self) -> datetime:
+        return datetime.now(UTC) + self._offset
+
+    def advance(self, seconds: float) -> None:
+        self._offset += timedelta(seconds=seconds)
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
 
 
 @pytest.fixture
@@ -192,8 +215,9 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
     folder = tmp_path / "exports"
     write_data_folder(folder)
     home = tmp_path / "data"
+    clock = _PinnedClock()
 
-    async with started_app(home) as app, signed_in(app, LOCAL_URL) as http:
+    async with started_app(home, clock=clock) as app, signed_in(app, LOCAL_URL) as http:
         services: Services = app.state.services
         await _use_fake_models(services, fake_openai)
         project_id = await add_local_project(app, tmp_path, git_env)
@@ -223,7 +247,10 @@ async def test_the_onboarding_story_survives_a_restart_and_a_second_handoff_kick
         first = await handoff_messages(services.databases, project_id)
         assert sorted(m.session_agent for m in first) == sorted(KICKOFF_AGENTS)
 
-    async with started_app(home) as app, signed_in(app, LOCAL_URL) as http:
+    # The restart comes a minute later, so its first scheduler pass checks the expectations
+    # the first handoff registered.
+    clock.advance(60)
+    async with started_app(home, clock=clock) as app, signed_in(app, LOCAL_URL) as http:
         services = app.state.services
         await all_idle(services.sessions, project_id)
         assert await handoff_messages(services.databases, project_id) == first

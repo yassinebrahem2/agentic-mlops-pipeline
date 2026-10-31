@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+from sqlalchemy import RowMapping
 
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
-from mlops_agents.monitoring.expectations.contract import Maintenance
+from mlops_agents.monitoring.expectations.contract import Expectations, Maintenance
 from mlops_agents.monitoring.incidents.contract import (
     ACTIVE_STATUSES,
     HoldScope,
@@ -27,16 +29,25 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalView,
     cause_key,
 )
+from mlops_agents.monitoring.incidents.grouping import (
+    find_matching_active_incident,
+    find_reopen_candidate,
+)
 from mlops_agents.monitoring.incidents.store import (
     IncidentStore,
     parse_dt,
     row_to_incident_view,
 )
+from mlops_agents.monitoring.incidents.subtype import determine_subtype
 from mlops_agents.monitoring.results.contract import Results
+from mlops_agents.monitoring.settings import get_monitoring_settings
 from mlops_agents.monitoring.verdicts.contract import Verdicts, VerdictView
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.contract import Page
+
+if TYPE_CHECKING:
+    from mlops_agents.proposals.contract import Handoffs
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +79,7 @@ class IncidentsService(Incidents):
         severity: SeverityPolicy,
         maintenance: Maintenance,
         clock: Clock,
+        handoffs: Handoffs | None = None,
     ) -> None:
         self._databases = databases
         self._events = events
@@ -75,15 +87,20 @@ class IncidentsService(Incidents):
         self._severity = severity
         self._maintenance = maintenance
         self._clock = clock
+        self._handoffs = handoffs
         self._store = IncidentStore(databases)
         self._observers: list[IncidentObserver] = []
         self._verdicts: Verdicts | None = None
+        self._expectations: Expectations | None = None
 
     def add_observer(self, observer: IncidentObserver) -> None:
         self._observers.append(observer)
 
     def bind_verdicts(self, verdicts: Verdicts) -> None:
         self._verdicts = verdicts
+
+    def bind_expectations(self, expectations: Expectations) -> None:
+        self._expectations = expectations
 
     async def _notify_observers(self, project_id: str, change: IncidentChange) -> None:
         for observer in self._observers:
@@ -118,142 +135,257 @@ class IncidentsService(Incidents):
                     severity=sev,
                 )
 
-        c_key = cause_key(draft.subject, draft.model)
-        active_row = await self._store.get_active_incident_by_cause_key(project_id, c_key)
+        settings = await get_monitoring_settings(self._databases, project_id)
+        handoff_view = await self._handoffs.current(project_id) if self._handoffs else None
+        payload = handoff_view.payload if handoff_view is not None else None
 
-        if active_row is None or draft.cleared:
-            # Case A: Open new incident
-            inc_id = new_id("inc")
-            sig_id = new_id("sig")
-            subtype = "silence" if draft.kind == "silence" else None
-            started_at = draft.ran_at
-            detected_at = seen_at
-            is_resolved = bool(draft.cleared)
-
-            temp_view = IncidentView(
-                id=inc_id,
-                category=draft.category,
-                subtype=subtype,
-                severity="medium",
-                status="resolved" if is_resolved else "open",
-                cause_key=c_key,
-                model=draft.model,
-                started_at=started_at,
-                detected_at=detected_at,
-                resolved_offline=is_resolved,
-            )
-            decision = await self._severity.decide(project_id, temp_view)
-            severity = decision.severity
-
-            await self._store.insert_incident(
+        active_row: RowMapping | None = None
+        if not draft.cleared:
+            active_row = await find_matching_active_incident(
+                self._store,
                 project_id,
-                {
-                    "id": inc_id,
-                    "category": draft.category,
-                    "subtype": subtype,
-                    "severity": severity,
-                    "status": "resolved" if is_resolved else "open",
-                    "cause": None,
-                    "cause_key": c_key,
-                    "model": draft.model,
-                    "prs": json.dumps([]),
-                    "issues": json.dumps([]),
-                    "held": 0,
-                    "merged_into": None,
-                    "started_at": started_at.isoformat(),
-                    "detected_at": detected_at.isoformat(),
-                    "acknowledged_at": None,
-                    "mitigated_at": None,
-                    "resolved_at": seen_at.isoformat() if is_resolved else None,
-                    "closed_at": None,
-                    "snoozed_until": None,
-                    "resolved_offline": 1 if is_resolved else 0,
-                    "reopened_count": 0,
-                    "hold_scope": None,
-                    "hold_reason": None,
-                },
+                draft,
+                payload,
+                settings.grouping_window_minutes,
             )
+
+        if active_row is not None:
+            # Case 1: Attach to active incident
+            inc_id = str(active_row["id"])
+            sig_id = new_id("sig")
+            c_key = cause_key(draft.subject, draft.model)
             await self._store.insert_signal(project_id, sig_id, inc_id, draft, seen_at, c_key)
 
-            await self._events.record(
+            cur_started = parse_dt(str(active_row["started_at"]))
+            new_started = min(cur_started, draft.ran_at)
+
+            cur_sev: Severity = active_row["severity"]
+            sig_ids = await self._store.get_signal_ids_for_incident(project_id, inc_id)
+            verdict = await self._get_verdict(project_id, inc_id)
+            cur_view = row_to_incident_view(active_row, sig_ids, verdict)
+            cur_view = cur_view.model_copy(update={"started_at": new_started})
+
+            decision = await self._severity.decide(project_id, cur_view)
+            sev_raised = SEVERITY_RANKS.get(decision.severity, 0) > SEVERITY_RANKS.get(cur_sev, 0)
+            new_sev = decision.severity if sev_raised else cur_sev
+
+            await self._store.update_incident(
                 project_id,
-                source="system",
-                type="incident.opened",
-                payload={
-                    "incident_id": inc_id,
-                    "category": draft.category,
-                    "severity": severity,
-                    "cause_key": c_key,
-                    "subject": draft.subject,
-                    "model": draft.model,
-                },
-                subject_id=inc_id,
+                inc_id,
+                {"started_at": new_started.isoformat(), "severity": new_sev},
             )
 
-            await self._notify_observers(
-                project_id,
-                IncidentChange(
+            if sev_raised:
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="incident.severity_changed",
+                    payload={"before": cur_sev, "after": new_sev},
+                    subject_id=inc_id,
+                )
+                await self._notify_observers(
+                    project_id,
+                    IncidentChange(
+                        incident_id=inc_id,
+                        kind="severity_raised",
+                        before=cur_sev,
+                        after=new_sev,
+                    ),
+                )
+                return SignalOutcome(
+                    signal_id=sig_id,
                     incident_id=inc_id,
-                    kind="opened",
-                    before=None,
-                    after=severity,
-                ),
-            )
+                    change="attached",
+                    severity=new_sev,
+                )
 
+            # Quiet attach: emits no IncidentChange
             return SignalOutcome(
                 signal_id=sig_id,
                 incident_id=inc_id,
-                change="opened",
-                severity=severity,
+                change="quiet",
+                severity=new_sev,
             )
 
-        # Case B: Attach to active incident
-        inc_id = str(active_row["id"])
+        c_key = cause_key(draft.subject, draft.model)
+        if not draft.cleared:
+            reopen_row = await find_reopen_candidate(
+                self._store,
+                project_id,
+                c_key,
+                draft.ran_at,
+                settings.reopen_window_hours,
+            )
+            if reopen_row is not None:
+                # Case 2: Reopen resolved incident
+                inc_id = str(reopen_row["id"])
+                sig_id = new_id("sig")
+                new_reopened_count = int(reopen_row["reopened_count"]) + 1
+                await self._store.insert_signal(project_id, sig_id, inc_id, draft, seen_at, c_key)
+
+                cur_sev = reopen_row["severity"]
+                await self._store.update_incident(
+                    project_id,
+                    inc_id,
+                    {
+                        "status": "reopened",
+                        "reopened_count": new_reopened_count,
+                        "resolved_at": None,
+                        "resolved_offline": 0,
+                    },
+                )
+                await self._events.record(
+                    project_id,
+                    source="system",
+                    type="incident.reopened",
+                    payload={
+                        "incident_id": inc_id,
+                        "reopened_count": new_reopened_count,
+                        "cause_key": c_key,
+                    },
+                    subject_id=inc_id,
+                )
+                await self._notify_observers(
+                    project_id,
+                    IncidentChange(
+                        incident_id=inc_id,
+                        kind="reopened",
+                    ),
+                )
+                return SignalOutcome(
+                    signal_id=sig_id,
+                    incident_id=inc_id,
+                    change="reopened",
+                    severity=cur_sev,
+                )
+
+        # Case 3: Open new incident
+        inc_id = new_id("inc")
         sig_id = new_id("sig")
+        subtype = determine_subtype(draft, payload)
+        started_at = draft.ran_at
+        detected_at = seen_at
+        is_resolved = bool(draft.cleared)
+
+        # Link suspects from recent changes within window before started_at
+        window_seconds = settings.recent_change_window_hours * 3600
+        all_changes = await self._store.list_recent_changes(project_id)
+        matching_changes: list[RowMapping] = []
+        prs: list[int] = []
+        for chg in all_changes:
+            chg_at = parse_dt(str(chg["at"]))
+            diff = (started_at - chg_at).total_seconds()
+            if 0 <= diff <= window_seconds:
+                matching_changes.append(chg)
+                if chg["kind"] in ("pr", "agent_pr"):
+                    try:
+                        pr_num = int(chg["ref"])
+                        if pr_num not in prs:
+                            prs.append(pr_num)
+                    except ValueError:
+                        pass
+        prs.sort()
+
+        await self._store.insert_incident(
+            project_id,
+            {
+                "id": inc_id,
+                "category": draft.category,
+                "subtype": subtype,
+                "severity": "medium",
+                "status": "resolved" if is_resolved else "open",
+                "cause": None,
+                "cause_key": c_key,
+                "model": draft.model,
+                "prs": json.dumps(prs),
+                "issues": json.dumps([]),
+                "held": 0,
+                "merged_into": None,
+                "started_at": started_at.isoformat(),
+                "detected_at": detected_at.isoformat(),
+                "acknowledged_at": None,
+                "mitigated_at": None,
+                "resolved_at": seen_at.isoformat() if is_resolved else None,
+                "closed_at": None,
+                "snoozed_until": None,
+                "resolved_offline": 1 if is_resolved else 0,
+                "reopened_count": 0,
+                "hold_scope": None,
+                "hold_reason": None,
+            },
+        )
         await self._store.insert_signal(project_id, sig_id, inc_id, draft, seen_at, c_key)
 
-        cur_started = parse_dt(str(active_row["started_at"]))
-        new_started = min(cur_started, draft.ran_at)
+        temp_view = IncidentView(
+            id=inc_id,
+            category=draft.category,
+            subtype=subtype,
+            severity="medium",
+            status="resolved" if is_resolved else "open",
+            cause_key=c_key,
+            model=draft.model,
+            started_at=started_at,
+            detected_at=detected_at,
+            resolved_offline=is_resolved,
+            prs=prs,
+            signal_ids=[sig_id],
+        )
+        decision = await self._severity.decide(project_id, temp_view)
+        severity = decision.severity
 
-        cur_sev: Severity = active_row["severity"]
-        sig_ids = await self._store.get_signal_ids_for_incident(project_id, inc_id)
-        verdict = await self._get_verdict(project_id, inc_id)
-        cur_view = row_to_incident_view(active_row, sig_ids, verdict)
-        cur_view = cur_view.model_copy(update={"started_at": new_started})
+        if severity != "medium":
+            await self._store.update_incident(project_id, inc_id, {"severity": severity})
 
-        decision = await self._severity.decide(project_id, cur_view)
-        sev_raised = SEVERITY_RANKS.get(decision.severity, 0) > SEVERITY_RANKS.get(cur_sev, 0)
-        new_sev = decision.severity if sev_raised else cur_sev
-
-        await self._store.update_incident(
+        await self._events.record(
             project_id,
-            inc_id,
-            {"started_at": new_started.isoformat(), "severity": new_sev},
+            source="system",
+            type="incident.opened",
+            payload={
+                "incident_id": inc_id,
+                "category": draft.category,
+                "severity": severity,
+                "cause_key": c_key,
+                "subject": draft.subject,
+                "model": draft.model,
+            },
+            subject_id=inc_id,
         )
 
-        if sev_raised:
+        for chg in matching_changes:
+            chg_at = parse_dt(str(chg["at"]))
             await self._events.record(
                 project_id,
                 source="system",
-                type="incident.severity_changed",
-                payload={"before": cur_sev, "after": new_sev},
+                type="incident.suspect_linked",
+                payload={
+                    "incident_id": inc_id,
+                    "kind": chg["kind"],
+                    "ref": chg["ref"],
+                    "at": chg_at.isoformat(),
+                    "detail": (
+                        json.loads(str(chg["detail"]))
+                        if isinstance(chg["detail"], str)
+                        else chg["detail"]
+                    ),
+                },
                 subject_id=inc_id,
             )
-            await self._notify_observers(
-                project_id,
-                IncidentChange(
-                    incident_id=inc_id,
-                    kind="severity_raised",
-                    before=cur_sev,
-                    after=new_sev,
-                ),
-            )
+
+        await self._notify_observers(
+            project_id,
+            IncidentChange(
+                incident_id=inc_id,
+                kind="opened",
+                before=None,
+                after=severity,
+            ),
+        )
 
         return SignalOutcome(
             signal_id=sig_id,
             incident_id=inc_id,
-            change="attached",
-            severity=new_sev,
+            change="opened",
+            severity=severity,
         )
 
     async def get(self, project_id: str, incident_id: str) -> IncidentView | None:
@@ -268,10 +400,19 @@ class IncidentsService(Incidents):
         self,
         project_id: str,
         status: list[IncidentStatus] | None = None,
+        inbox: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> Page[IncidentView]:
-        rows, total = await self._store.list_incidents(project_id, status, limit, offset)
+        if inbox and status:
+            raise DomainError(
+                "inbox_status_conflict",
+                "Cannot combine 'status' and 'inbox' filters.",
+                status=422,
+            )
+        rows, total = await self._store.list_incidents(
+            project_id, status=status, limit=limit, offset=offset, inbox=inbox
+        )
         inc_ids = [str(r["id"]) for r in rows]
         sig_ids_map = await self._store.get_signal_ids_for_incidents(project_id, inc_ids)
         items: list[IncidentView] = []
@@ -490,6 +631,23 @@ class IncidentsService(Incidents):
             raise RuntimeError(f"Incident {incident_id} not found after set_severity")
         return view
 
+    async def record_issue(self, project_id: str, incident_id: str, issue_number: int) -> list[int]:
+        row = await self._store.get_incident_row(project_id, incident_id)
+        if row is None:
+            raise DomainError(
+                "incident_not_found",
+                f"Incident '{incident_id}' not found.",
+                status=404,
+            )
+        issues: list[int] = json.loads(str(row["issues"])) if row["issues"] else []
+        if issue_number not in issues:
+            issues.append(issue_number)
+            issues.sort()
+            await self._store.update_incident(
+                project_id, incident_id, {"issues": json.dumps(issues)}
+            )
+        return issues
+
     async def update(
         self,
         project_id: str,
@@ -511,12 +669,39 @@ class IncidentsService(Incidents):
 
         if patch.status == "resolved":
             # Silence signals check
-            if any(s.kind == "silence" for s in sigs):
-                raise DomainError(
-                    "incident_still_firing",
-                    "Incident has silence signals and cannot be resolved yet.",
-                    status=409,
-                )
+            silence_sigs = [s for s in sigs if s.kind == "silence"]
+            if silence_sigs:
+                if self._expectations is None:
+                    raise DomainError(
+                        "incident_still_firing",
+                        "Incident has silence signals and cannot be resolved yet.",
+                        status=409,
+                    )
+                states = await self._expectations.states(project_id)
+                states_by_key = {(s.key.kind, s.key.ref, s.key.model): s.status for s in states}
+                for s in silence_sigs:
+                    if s.expectation is not None:
+                        st = states_by_key.get(
+                            (s.expectation.kind, s.expectation.ref, s.expectation.model)
+                        )
+                        if st != "ok":
+                            raise DomainError(
+                                "incident_still_firing",
+                                "Expectation is still silent.",
+                                status=409,
+                            )
+                    else:
+                        matching = [
+                            st
+                            for (_k, ref, model), st in states_by_key.items()
+                            if ref == s.subject and model == s.model
+                        ]
+                        if not matching or any(st != "ok" for st in matching):
+                            raise DomainError(
+                                "incident_still_firing",
+                                "Expectation is still silent.",
+                                status=409,
+                            )
             # Latest results check
             subject = sigs[0].subject if sigs else ""
             model = row["model"]

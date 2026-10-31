@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -53,17 +54,38 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
-from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
+from mlops_agents.monitoring.expectations.query import (
+    ExpectationsQueryProvider,
+    ResultsQueryProvider,
+)
+from mlops_agents.monitoring.expectations.service import ExpectationsService
+from mlops_agents.monitoring.hooks.alias_check import HookAliasVerifier
+from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner, GitHubCiDispatcher
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
+from mlops_agents.monitoring.hooks.facts import HandoffGateFacts
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.pins import GitHookPinner, PinCheckObserver
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
-from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
+from mlops_agents.monitoring.incidents.follow_ups import FollowUpsJob
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.maintenance import (
+    MaintenanceKind,
+    MaintenanceWindows,
+    WindowsQueryProvider,
+)
+from mlops_agents.monitoring.incidents.prioritization import PrioritizationWake
+from mlops_agents.monitoring.incidents.query import IncidentsQueryProvider, SignalsQueryProvider
+from mlops_agents.monitoring.incidents.reactor import Reactor
+from mlops_agents.monitoring.incidents.routing import OnCallRouter
 from mlops_agents.monitoring.incidents.service import IncidentsService
+from mlops_agents.monitoring.incidents.severity import RuleSeverity
+from mlops_agents.monitoring.incidents.suspects import SuspectLinker
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
@@ -71,14 +93,26 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.monitoring.verdicts.baseline import (
+    BaselineIncidentObserver,
+    BaselineResultsObserver,
+    SqliteBaseline,
+)
 from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
 from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
-from mlops_agents.notifications.contract import Notifier, OnCallPeople
+from mlops_agents.notifications.contract import (
+    Channel,
+    MorningReports,
+    Notifier,
+    OnCallPeople,
+)
+from mlops_agents.notifications.escalation import EscalationJob
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
+from mlops_agents.notifications.report import MorningReportJob, SqliteMorningReports
 from mlops_agents.notifications.retries import RetryJob
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
@@ -104,11 +138,21 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
+from mlops_agents.stats.service import StatsService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
+from mlops_agents.training.authority import PolicyAuthority
 from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.training.lifecycle import TrainingLifecycle
+from mlops_agents.training.linking import RequestLinker
+from mlops_agents.training.outcomes import FixOutcomeObserver
+from mlops_agents.training.policies import TrainingPolicyKind
+from mlops_agents.training.queries import (
+    FixesQueryProvider,
+    PoliciesQueryProvider,
+    TrainingRequestsQueryProvider,
+)
 from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -157,13 +201,19 @@ class Services:
     promotions: Promotions
     hooks: HooksService
     incidents: IncidentsService
+    maintenance_windows: MaintenanceWindows
     verdicts: SqliteVerdicts
+    baseline: SqliteBaseline
     waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    notification_channels: Mapping[str, Channel]
+    expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
+    stats: StatsService
+    morning_reports: MorningReports
 
 
 async def _app_secrets(
@@ -239,6 +289,7 @@ async def build_services(
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
     integration_settings = IntegrationSettings(databases, keystore)
+    await integration_settings.init_cache()
 
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings, integration_settings)
@@ -287,6 +338,15 @@ async def build_services(
     on_call = SqliteOnCallPeople(databases)
     on_call_seeder = OnCallSeeder(on_call, handoffs, databases)
     handoffs.add_observer(on_call_seeder)
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+        on_call=on_call,
+    )
     hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
@@ -300,6 +360,13 @@ async def build_services(
         keystore=keystore,
     )
     hooks.add_runner(command_runner)
+    ci_dispatcher = GitHubCiDispatcher(http=http, github=github, workspace=workspace, git=git)
+    ci_runner = CiDispatchRunner(dispatcher=ci_dispatcher, github=github)
+    hooks.add_runner(ci_runner)
+    pinner = GitHookPinner(workspace, git)
+    hooks.set_pinner(pinner)
+    gate_facts = HandoffGateFacts(hooks, handoffs)
+    authorities.set_facts(gate_facts)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
@@ -307,28 +374,51 @@ async def build_services(
 
     query_providers = QueryProviders()
     query_providers.register(HooksQueryProvider(hooks))
-    maintenance = NeverSuspended()
+    query_providers.register(SignalsQueryProvider(databases))
+    query_providers.register(IncidentsQueryProvider(databases))
 
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
+
+    maintenance_windows = MaintenanceWindows(databases=databases, clock=clock)
+    maintenance = maintenance_windows
     results = ResultsService(
         databases=databases,
         handoffs=handoffs,
         connections=connections,
         events=events,
+        maintenance=maintenance,
     )
+    severity = RuleSeverity(handoffs=handoffs)
     incidents = IncidentsService(
         databases=databases,
         events=events,
         results=results,
-        severity=MediumSeverity(),
+        severity=severity,
         maintenance=maintenance,
         clock=clock,
+        handoffs=handoffs,
     )
+    severity.bind_incidents(incidents)
+    results.bind_incidents(incidents)
+    results.bind_maintenance(maintenance)
     verdicts = SqliteVerdicts(databases, incidents, results, events, clock)
     incidents.bind_verdicts(verdicts)
     query_providers.register(VerdictsQueryProvider(verdicts))
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
-    results.add_observer(SignalsFromResults(incidents, maintenance))
+    signals_from_results = SignalsFromResults(incidents, maintenance, results)
+    results.add_observer(signals_from_results)
+    # After SignalsFromResults, so an incident an agent fire opens in the same batch exists.
+    baseline = SqliteBaseline(databases, results, incidents, events, clock)
+    results.add_observer(BaselineResultsObserver(baseline))
+    incidents.add_observer(BaselineIncidentObserver(baseline))
 
     tracking = TrackingService(
         databases=databases,
@@ -339,6 +429,7 @@ async def build_services(
         github_token=github.token,
         handoffs=handoffs,
     )
+    results.bind_tracking(tracking)
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
@@ -361,11 +452,55 @@ async def build_services(
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
-    fixes = SqliteFixes(databases, incidents, waker, events, clock, handoffs=handoffs)
-    training = SqliteTraining(databases, events, clock)
+    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
+
+    router = OnCallRouter(on_call=on_call, databases=databases)
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=on_call,
+        notifier=notifier,
+        dispatch=diagnosis_dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=events,
+        clock=clock,
+    )
+    incidents.add_observer(reactor)
+    prioritization_wake = PrioritizationWake(waker=waker, events=events)
+    incidents.add_observer(prioritization_wake)
+
+    fixes = SqliteFixes(
+        databases,
+        incidents,
+        waker,
+        events,
+        clock,
+        handoffs=handoffs,
+        notifier=notifier,
+        on_call=on_call,
+    )
+    outcome_observer = FixOutcomeObserver(fixes, incidents)
+    incidents.add_observer(outcome_observer)
+    training = SqliteTraining(databases, events, clock, hooks=hooks)
     resolver = TrackerPlaceholderResolver(tracking)
     training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
     hooks.add_lifecycle(training_lifecycle)
+
+    policy_authority = PolicyAuthority(
+        policies=training.policies_store,
+        training=training,
+        tracking=tracking,
+        hooks=hooks,
+        clock=clock,
+        rules=None,
+    )
+    authorities.register("policy", policy_authority)
+    fixes.bind_policy_authority(policy_authority)
+
+    # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
+    data_summaries = DataSummaries(connections, ProfileCache(paths))
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -384,7 +519,12 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        severity=severity,
         fixes=fixes,
+        query_providers=query_providers,
+        data_summaries=data_summaries,
+        connections=connections,
+        clock=clock,
         surfaces=surfaces,
         pr_sync=pr_sync,
     )
@@ -394,8 +534,6 @@ async def build_services(
     status_board_hook = StatusBoardHook()
     turn_hooks.register(status_board_hook)
     turn_hooks.register(KnowledgeHook(knowledge))
-    # One instance for the hook and the table-detail route: they share one cache lock.
-    data_summaries = DataSummaries(connections, ProfileCache(paths))
     turn_hooks.register(DataSummaryHook(connections, data_summaries))
     turn_hooks.register(TrackingSummaryHook(tracking))
     catalog = await asyncio.to_thread(
@@ -454,6 +592,8 @@ async def build_services(
         )
     )
     proposal_kinds.register(PromotionKind(promotions))
+    proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=None))
+    proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))
 
     approvals = ApprovalsService(
         databases=databases,
@@ -481,11 +621,84 @@ async def build_services(
     )
     scheduler.register(SyncTrackingJob(tracking))
     scheduler.register(SyncPrsJob(databases, pr_sync))
+    scheduler.register(CollectResultsJob(databases, results))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
     scheduler.add_sync_observer(LabelConfirmation(verdicts))
 
-    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
-    incidents.add_observer(diagnosis_dispatch)
+    retry_notifications_job = RetryJob(databases, notifier, clock)
+    scheduler.register(retry_notifications_job)
+    follow_ups_job = FollowUpsJob(
+        databases=databases,
+        waker=waker,
+        handoffs=handoffs,
+        data_summaries=data_summaries,
+        connections=connections,
+        clock=clock,
+    )
+    scheduler.register(follow_ups_job)
+
+    suspect_linker = SuspectLinker(
+        databases=databases,
+        incidents=incidents,
+        tracking=tracking,
+        events=events,
+        clock=clock,
+    )
+    scheduler.add_sync_observer(suspect_linker)
+    pr_sync.add_observer(suspect_linker)
+
+    expectations = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        tracking=tracking,
+        maintenance=maintenance,
+        clock=clock,
+    )
+    incidents.bind_expectations(expectations)
+    handoffs.add_observer(expectations.handoff_observer)
+    results.add_observer(expectations.results_observer)
+    scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
+    query_providers.register(ResultsQueryProvider(results))
+    query_providers.register(ExpectationsQueryProvider(expectations))
+    query_providers.register(FixesQueryProvider(fixes))
+    query_providers.register(TrainingRequestsQueryProvider(training))
+    query_providers.register(PoliciesQueryProvider(training))
+    query_providers.register(WindowsQueryProvider(windows=maintenance_windows))
+    training_lifecycle.bind_expectations(expectations)
+    pin_observer = PinCheckObserver(hooks, workspace, git, training=training)
+    scheduler.add_sync_observer(pin_observer)
+    pr_sync.add_observer(pin_observer)
+    verifier = HookAliasVerifier(
+        tracking=tracking,
+        handoffs=handoffs,
+        training=training,
+        hooks=hooks,
+        workspace=workspace,
+        git=git,
+    )
+    linker = RequestLinker(
+        training=training,
+        fixes=fixes,
+        tracking=tracking,
+        expectations=expectations,
+        events=events,
+        waker=waker,
+        hooks=hooks,
+        incidents=incidents,
+        verifier=verifier,
+    )
+    scheduler.add_sync_observer(linker)
+    stats = StatsService(
+        databases=databases,
+        incidents=incidents,
+        verdicts=verdicts,
+        baseline=baseline,
+        results=results,
+        hooks=hooks,
+        models=providers,
+    )
     approval_store.add_observer(PromotionRejectObserver(promotions, proposals, workspace))
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -499,9 +712,13 @@ async def build_services(
     await kickoff.resume()
 
     # Resume pending wakes before starting the scheduler, so a wake fired by a job that has
-    # inserted its row but not posted yet cannot be posted twice.
+    # inserted its row but not posted yet cannot be posted twice. Results stored but not
+    # delivered before a restart are delivered here too, once every results observer is
+    # registered and before the scheduler's first collection.
+    startup_now = clock.now()
     for project in await workspace.list_projects():
         await waker.resume(project.id)
+        await results.deliver_undelivered(project.id, startup_now)
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
@@ -512,21 +729,52 @@ async def build_services(
         channels=notification_channels,
         events=events,
         clock=clock,
+        run_mode=settings.mode,
+        on_call=on_call,
     )
+    notifier.bind_incidents(incidents)
     retry_notifications_job = RetryJob(databases, notifier, clock)
     scheduler.register(retry_notifications_job)
+    escalation_job = EscalationJob(
+        databases=databases,
+        incidents=incidents,
+        on_call=on_call,
+        notifier=notifier,
+        clock=clock,
+    )
+    scheduler.register(escalation_job)
+    morning_reports = SqliteMorningReports(
+        databases=databases,
+        incidents=incidents,
+        hooks=hooks,
+        approvals=approvals,
+        expectations=expectations,
+        events=events,
+    )
+    morning_report_job = MorningReportJob(
+        databases=databases,
+        on_call=on_call,
+        notifier=notifier,
+        reports=morning_reports,
+        clock=clock,
+        incidents=incidents,
+        settings=integration_settings,
+    )
+    scheduler.register(morning_report_job)
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
-    # Deliver undelivered results across restarts, after all observers and services are registered and ready.
-    startup_now = clock.now()
+    # Reconcile on-call and expectations across existing projects
     for project in await workspace.list_projects():
-        await results.deliver_undelivered(project.id, startup_now)
         try:
             await on_call_seeder.reconcile(project.id)
         except Exception:
             logger.exception("Failed to reconcile on-call for project %s", project.id)
+        try:
+            await expectations.reconcile(project.id)
+        except Exception:
+            logger.exception("Failed to reconcile expectations for project %s", project.id)
 
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
@@ -572,11 +820,17 @@ async def build_services(
         promotions=promotions,
         hooks=hooks,
         incidents=incidents,
+        maintenance_windows=maintenance_windows,
         verdicts=verdicts,
+        baseline=baseline,
         waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        notification_channels=notification_channels,
+        expectations=expectations,
         fixes=fixes,
         training=training,
+        stats=stats,
+        morning_reports=morning_reports,
     )

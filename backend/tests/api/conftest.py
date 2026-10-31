@@ -17,6 +17,7 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, SessionSigner
 from mlops_agents.config import DEFAULT_PORT, RunMode, load_settings
 from mlops_agents.errors import DomainError
+from mlops_agents.providers.failover import Clock
 from mlops_agents.sandbox.docker import DockerRunner
 from tests.conftest import MemoryKeyStore, make_repo
 from tests.sandbox.fakes import FakeDockerRunner
@@ -54,12 +55,15 @@ def build_app(
     port: int = DEFAULT_PORT,
     settings_env: Mapping[str, str] | None = None,
     docker_runner: DockerRunner | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """The app every fixture tests: data folder `home`, a memory key store, no `gh`."""
     env = {"MLOPS_AGENTS_HOME": str(home), **(settings_env or {})}
     settings = load_settings(mode, port=port, env=env)
     runner = docker_runner if docker_runner is not None else FakeDockerRunner()
-    return create_app(settings, keystore=MemoryKeyStore(), gh=NoGh(), docker_runner=runner)
+    return create_app(
+        settings, keystore=MemoryKeyStore(), gh=NoGh(), docker_runner=runner, clock=clock
+    )
 
 
 @asynccontextmanager
@@ -68,9 +72,11 @@ async def started_app(
     mode: RunMode = RunMode.LOCAL,
     settings_env: Mapping[str, str] | None = None,
     docker_runner: DockerRunner | None = None,
+    *,
+    clock: Clock | None = None,
 ) -> AsyncGenerator[FastAPI]:
     """`build_app` with its lifespan running, called in process."""
-    app = build_app(home, mode, settings_env=settings_env, docker_runner=docker_runner)
+    app = build_app(home, mode, settings_env=settings_env, docker_runner=docker_runner, clock=clock)
     async with app.router.lifespan_context(app):
         yield app
 

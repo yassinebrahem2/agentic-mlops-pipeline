@@ -19,7 +19,7 @@ from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
-from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
+from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools import default_registry
@@ -118,6 +118,7 @@ async def build_inbound_env(
     git_env: dict[str, str],
     *,
     gate: Gate | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> tuple[BusEnv, SqliteInboundSource]:
     defs = tmp_path / "defs"
     defs.mkdir()
@@ -152,7 +153,7 @@ async def build_inbound_env(
         bus=bus,
         gate=gate,
         inbound=inbound,
-        observers=[inbound],
+        observers=[inbound, *observers],
     )
     inbound.bind(session.manager)
 
