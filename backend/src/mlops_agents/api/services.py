@@ -56,6 +56,7 @@ from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
@@ -102,6 +103,8 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.training.fixes import SqliteFixes
+from mlops_agents.training.lifecycle import TrainingLifecycle
+from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -153,6 +156,7 @@ class Services:
     notifier: Notifier
     on_call: OnCallPeople
     fixes: SqliteFixes
+    training: SqliteTraining
 
 
 async def _app_secrets(
@@ -338,6 +342,10 @@ async def build_services(
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
     fixes = SqliteFixes(databases, incidents, waker, events, clock, handoffs=handoffs)
+    training = SqliteTraining(databases, events, clock)
+    resolver = TrackerPlaceholderResolver(tracking)
+    training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
+    hooks.add_lifecycle(training_lifecycle)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -545,4 +553,5 @@ async def build_services(
         notifier=notifier,
         on_call=on_call,
         fixes=fixes,
+        training=training,
     )
