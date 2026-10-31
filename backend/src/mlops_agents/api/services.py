@@ -54,6 +54,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
+from mlops_agents.monitoring.dashboard import DashboardBuilder
 from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
 from mlops_agents.monitoring.expectations.query import (
     ExpectationsQueryProvider,
@@ -215,6 +216,7 @@ class Services:
     fixes: SqliteFixes
     training: SqliteTraining
     rules: SqliteRules
+    dashboard: DashboardBuilder
     stats: StatsService
     morning_reports: MorningReports
 
@@ -775,6 +777,17 @@ async def build_services(
         except Exception:
             logger.exception("Failed to reconcile expectations for project %s", project.id)
 
+    dashboard = DashboardBuilder(
+        handoffs=handoffs,
+        tracking=tracking,
+        incidents=incidents,
+        expectations=expectations,
+        results=results,
+        baseline=baseline,
+        status_board=status_board,
+        mode=settings.mode,
+    )
+
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
@@ -830,6 +843,7 @@ async def build_services(
         fixes=fixes,
         training=training,
         rules=rules,
+        dashboard=dashboard,
         stats=stats,
         morning_reports=morning_reports,
     )

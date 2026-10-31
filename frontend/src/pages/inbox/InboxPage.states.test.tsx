@@ -10,6 +10,7 @@ import { InboxPage } from "./InboxPage";
 const APPROVALS = "/api/projects/{project_id}/approvals";
 const REVIEWS = "/api/projects/{project_id}/reviews";
 const ACTIVITY = "/api/projects/{project_id}/github/activity";
+const INCIDENTS = "/api/projects/{project_id}/incidents";
 
 function renderInbox(path: string, routePath: string) {
   const router = createMemoryRouter([{ path: routePath, element: <InboxPage /> }], {
@@ -24,13 +25,14 @@ function renderInbox(path: string, routePath: string) {
 }
 
 function stubGet(failing: string, error: Error): MockInstance {
-  return vi
-    .spyOn(api, "GET")
-    .mockImplementation((path: string) =>
-      path === failing
-        ? Promise.reject(error)
-        : Promise.resolve({ data: [], response: new Response(null, { status: 200 }) }),
-    );
+  return vi.spyOn(api, "GET").mockImplementation((path: string) =>
+    path === failing
+      ? Promise.reject(error)
+      : Promise.resolve({
+          data: path === INCIDENTS ? { rows: [], total: 0, truncated: false } : [],
+          response: new Response(null, { status: 200 }),
+        }),
+  );
 }
 
 describe("InboxPage states", () => {
