@@ -28,11 +28,14 @@ class HandoffGateFacts(GateFacts):
         if hook is None:
             return (None, None, None)
 
+        is_suspended = hook.status == "suspended"
         handoff = await self._handoffs.current(project_id)
         if handoff is None:
+            if is_suspended:
+                return (True, None, None)
             return (None, None, None)
 
-        deploys = True if hook.status == "suspended" else hook.spec.deploys
+        deploys = True if is_suspended else hook.spec.deploys
         model_spec = (
             next((m for m in handoff.payload.models if m.name == hook.model), None)
             if hook.model

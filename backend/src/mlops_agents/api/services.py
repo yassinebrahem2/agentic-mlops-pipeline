@@ -470,7 +470,7 @@ async def build_services(
     )
     outcome_observer = FixOutcomeObserver(fixes, incidents)
     incidents.add_observer(outcome_observer)
-    training = SqliteTraining(databases, events, clock)
+    training = SqliteTraining(databases, events, clock, hooks=hooks)
     resolver = TrackerPlaceholderResolver(tracking)
     training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
     hooks.add_lifecycle(training_lifecycle)

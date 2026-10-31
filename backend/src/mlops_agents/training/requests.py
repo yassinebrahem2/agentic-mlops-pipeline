@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlalchemy import ColumnElement, desc, func, insert, select, update
 
 from mlops_agents.clock import to_iso
+from mlops_agents.errors import DomainError
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import training_requests
 from mlops_agents.tracking.contract import Page
@@ -22,6 +23,7 @@ from mlops_agents.training.policies import SqliteTrainingPolicies
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
+    from mlops_agents.monitoring.hooks.contract import Hooks
     from mlops_agents.providers.failover import Clock
 
 
@@ -34,11 +36,16 @@ class SqliteTraining(Training):
         events: EventLog,
         clock: Clock,
         policies: SqliteTrainingPolicies | None = None,
+        hooks: Hooks | None = None,
     ) -> None:
         self._databases = databases
         self._events = events
         self._clock = clock
         self._policies = policies or SqliteTrainingPolicies(databases, clock, events)
+        self._hooks = hooks
+
+    def bind_hooks(self, hooks: Hooks) -> None:
+        self._hooks = hooks
 
     @property
     def policies_store(self) -> SqliteTrainingPolicies:
@@ -53,6 +60,26 @@ class SqliteTraining(Training):
     async def set_policy_enabled(
         self, project_id: str, policy_id: str, enabled: bool
     ) -> TrainingPolicyView:
+        if enabled:
+            policy = await self._policies.get(project_id, policy_id)
+            if policy is None:
+                raise KeyError(policy_id)
+            if self._hooks is not None:
+                hook = await self._hooks.get(project_id, policy.payload.train_hook_id)
+                if hook and hook.status == "suspended":
+                    raise DomainError(
+                        "hook_suspended",
+                        f"Cannot enable policy '{policy_id}' while hook '{hook.id}' is suspended.",
+                        status=409,
+                    )
+                if policy.payload.evaluate_hook_id:
+                    eval_hook = await self._hooks.get(project_id, policy.payload.evaluate_hook_id)
+                    if eval_hook and eval_hook.status == "suspended":
+                        raise DomainError(
+                            "hook_suspended",
+                            f"Cannot enable policy '{policy_id}' while hook '{eval_hook.id}' is suspended.",
+                            status=409,
+                        )
         status = "active" if enabled else "disabled"
         return await self._policies.set_status(project_id, policy_id, status)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -226,10 +227,27 @@ async def test_changed_pinned_file_suspends_hook(
     git_env: dict[str, str],
     service: HooksService,
 ) -> None:
-    repo_dir = make_repo(tmp_path / "repo", {"train.py": "print('v1')\r\n"}, git_env)
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
     git = GitRunner(tmp_path / "bin")
-    # Set autocrlf in repo to test CRLF consistency
+    await git.run(["init", "-b", "main"], cwd=repo_dir, extra_env=git_env)
     await git.run(["config", "core.autocrlf", "true"], cwd=repo_dir)
+
+    # Commit LF content with autocrlf=true
+    (repo_dir / "train.py").write_bytes(b"print('v1')\n")
+    await git.run(["add", "train.py"], cwd=repo_dir, extra_env=git_env)
+    await git.run(["commit", "-m", "init"], cwd=repo_dir, extra_env=git_env)
+
+    # Check it out so working tree is CRLF
+    (repo_dir / "train.py").unlink()
+    await git.run(["checkout", "HEAD", "--", "train.py"], cwd=repo_dir)
+    working_tree_bytes = (repo_dir / "train.py").read_bytes()
+    assert working_tree_bytes == b"print('v1')\r\n"
+
+    blob_bytes = b"print('v1')\n"
+    blob_sha = hashlib.sha256(blob_bytes).hexdigest()
+    working_tree_sha = hashlib.sha256(working_tree_bytes).hexdigest()
+    assert blob_sha != working_tree_sha
 
     project = Project(
         id="prj_4",
@@ -250,6 +268,10 @@ async def test_changed_pinned_file_suspends_hook(
     spec = _make_spec(entry_files=["train.py"])
     hook = await service.register(project.id, spec, "train", "churn", "handoff")
     assert hook.status == "active"
+    pins_by_path = {p.path: p.sha256 for p in hook.pins}
+    # Assert the pin equals the sha256 of the blob bytes, NOT the CRLF working tree bytes
+    assert pins_by_path["train.py"] == blob_sha
+    assert pins_by_path["train.py"] != working_tree_sha
 
     # Run observer: head unchanged, passes
     observer = PinCheckObserver(service, workspace, git)

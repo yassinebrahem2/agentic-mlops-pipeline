@@ -430,3 +430,31 @@ async def test_policies_routes(
         json={"enabled": True},
     )
     assert resp_404.status_code == 404
+
+    # 5. Refuses re-enabling when cited hook is suspended (409)
+    hook_spec = CommandSpec(
+        kind="train",
+        type="command",
+        workflow=None,
+        template="python train.py",
+        inputs={},
+        placeholders=[],
+        entry_files=["train.py"],
+        deploys=False,
+    )
+    hook = await services.hooks.register(project_id, hook_spec, "train", "churn_risk", "handoff")
+    pol_with_hook = await services.training.policies_store.store(
+        project_id, _make_payload(train_hook=hook.id, eval_hook=None), proposal_id="prop_hook"
+    )
+    await client.put(
+        f"/api/projects/{project_id}/training/policies/{pol_with_hook.id}/enabled",
+        json={"enabled": False},
+    )
+    await services.hooks.suspend(project_id, hook.id, "Pins changed")
+
+    resp_409 = await client.put(
+        f"/api/projects/{project_id}/training/policies/{pol_with_hook.id}/enabled",
+        json={"enabled": True},
+    )
+    assert resp_409.status_code == 409
+    assert resp_409.json()["code"] == "hook_suspended"

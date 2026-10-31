@@ -129,3 +129,22 @@ async def test_gate_facts_suspended_hook_returns_deploys_true(
     # While suspended, deploys is treated as True
     facts = await gate_facts.facts(project_id, hook.id)
     assert facts == (True, True, True)
+
+
+@pytest.mark.asyncio
+async def test_gate_facts_suspended_hook_without_handoff_returns_deploys_true(
+    service: HooksService,
+    handoffs: SqliteHandoffs,
+) -> None:
+    project_id = new_id("prj")
+    gate_facts = HandoffGateFacts(service, handoffs)
+
+    hook = await service.register(project_id, _spec(deploys=False), "train", "churn", "handoff")
+    await service.suspend(project_id, hook.id, "Pins changed")
+
+    # No handoff stored in project
+    assert await handoffs.current(project_id) is None
+
+    # Even with no handoff, a suspended hook takes the deploy column
+    facts = await gate_facts.facts(project_id, hook.id)
+    assert facts == (True, None, None)

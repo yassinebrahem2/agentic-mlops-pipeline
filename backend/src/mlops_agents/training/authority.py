@@ -103,6 +103,14 @@ class PolicyAuthority(ActionAuthority):
                 evidence=[],
             )
 
+        if hook.status != "active":
+            return Authority(
+                basis="none",
+                ref=call.policy_id,
+                reason=f"Hook '{hook_id}' is not active ({hook.status})",
+                evidence=[],
+            )
+
         now = _to_utc(self._clock.now())
         run_times: list[datetime] = []
 

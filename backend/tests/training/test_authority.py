@@ -15,6 +15,7 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.hooks.contract import (
     HookCall,
     HookResult,
+    HookStatus,
     HookView,
 )
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
@@ -146,6 +147,8 @@ def _make_hook(
     hook_type: str = "ci_dispatch",
     workflow: str | None = ".github/workflows/train.yml",
     deploys: bool = False,
+    status: HookStatus = "active",
+    suspended_reason: str | None = None,
 ) -> HookView:
     spec = CommandSpec(
         kind=kind,  # type: ignore[arg-type]
@@ -164,8 +167,8 @@ def _make_hook(
         spec=spec,
         pins=[],
         credential_set=False,
-        status="active",
-        suspended_reason=None,
+        status=status,
+        suspended_reason=suspended_reason,
         approved_commit="abc1234",
         deploys_verified=None,
         source="proposal",
@@ -302,6 +305,27 @@ async def test_policy_authority_rejections(tmp_path: Path) -> None:
     auth5 = await authority.authorize(c5)
     assert auth5.basis == "none"
     assert "suspended" in auth5.reason
+
+    # 5b. Hook itself suspended
+    suspended_hook = _make_hook(
+        "hok_train",
+        deploys=False,
+        status="suspended",
+        suspended_reason="Pins changed",
+    )
+    hooks_susp: Any = FakeHooks([suspended_hook])
+    authority_with_suspended_hook = PolicyAuthority(
+        policies=training.policies_store,
+        training=training,
+        tracking=tracking,
+        hooks=hooks_susp,
+        clock=clock,
+    )
+    auth_hook_susp = await authority_with_suspended_hook.authorize(
+        ActionCall(project_id="prj_1", agent="retraining", kind="train", policy_id=pol.id)
+    )
+    assert auth_hook_susp.basis == "none"
+    assert "not active (suspended)" in auth_hook_susp.reason
 
     # Re-activate policy for rate limit checks
     await training.policies_store.set_status("prj_1", pol.id, "active")
