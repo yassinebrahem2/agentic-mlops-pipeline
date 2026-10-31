@@ -42,6 +42,7 @@ from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.proposals.contract import Handoffs, HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import reports as reports_table
 from mlops_agents.tracking.contract import (
     DeploymentRow,
     ModelVersionRow,
@@ -82,8 +83,19 @@ class FakeTracking:
         if q.what == "versions":
             rows = [v for v in self.versions if q.model is None or v.model == q.model]
         elif q.what == "deployments":
-            rows = [d for d in self.deployments if q.model is None or d.model == q.model]
-        return Page(rows=rows, total=len(rows), truncated=False)
+            # As the tracker answers: newest first, filtered by model and since, one page.
+            rows = sorted(
+                (
+                    d
+                    for d in self.deployments
+                    if (q.model is None or d.model == q.model)
+                    and (q.since is None or d.seen_at >= q.since)
+                ),
+                key=lambda d: d.seen_at,
+                reverse=True,
+            )
+        page = rows[q.offset : q.offset + q.limit]
+        return Page(rows=page, total=len(rows), truncated=q.offset + len(page) < len(rows))
 
 
 class FakePromotions:
@@ -110,13 +122,20 @@ class FakeHooks:
 
 
 class RepoTasks(FakeTasks):
+    def __init__(self, tasks: list[TaskView] | None, repo: RepoRef | None) -> None:
+        super().__init__(tasks)
+        self.repo = repo
+
     async def repo_ref(self, project_id: str) -> RepoRef | None:
-        return REPO
+        return self.repo
 
 
 class FakeGitHubAuth:
+    def __init__(self, token: str | None) -> None:
+        self.value = token
+
     async def token(self) -> str | None:
-        return TOKEN
+        return self.value
 
 
 class NoEvaluations:
@@ -137,14 +156,16 @@ def _service(
     promotions: list[PromotionView] | None = None,
     runs: list[HookRunView] | None = None,
     tasks: list[TaskView] | None = None,
+    repo: RepoRef | None = REPO,
+    token: str | None = TOKEN,
 ) -> DeploymentsService:
     return DeploymentsService(
         handoffs=cast(Handoffs, FakeHandoffs(handoff)),
         tracking=cast(Tracking, tracking or FakeTracking()),
         promotions=cast(Promotions, FakePromotions(promotions)),
         hooks=cast(Hooks, FakeHooks(runs)),
-        tasks=cast(Tasks, RepoTasks(tasks)),
-        github=cast(GitHubAuth, FakeGitHubAuth()),
+        tasks=cast(Tasks, RepoTasks(tasks, repo)),
+        github=cast(GitHubAuth, FakeGitHubAuth(token)),
         http=http,
     )
 
@@ -259,22 +280,20 @@ async def test_environments_from_a_two_alias_handoff() -> None:
             model=MODEL,
             version="v2",
             run_key="run_1",
-            aliases=["production"],
+            aliases=["champion"],
             created=T0,
             evaluation="present",
         )
     )
-    handoff = _handoff({"production": "production", "staging": "staging"})
+    handoff = _handoff({"champion": "production", "challenger": "staging"})
 
     async with httpx2.AsyncClient() as http:
         view = await _service(http, handoff=handoff, tracking=tracking).get_deployments(PROJECT_ID)
 
-    rows = {e.alias: e for e in view.environments}
-    assert set(rows) == {"production", "staging"}
-    assert (rows["production"].model, rows["production"].environment) == (MODEL, "production")
-    assert rows["production"].version == "v2"
-    assert rows["staging"].environment == "staging"
-    assert rows["staging"].version is None
+    assert sorted((e.model, e.alias, e.environment, e.version) for e in view.environments) == [
+        (MODEL, "challenger", "staging", None),
+        (MODEL, "champion", "production", "v2"),
+    ]
 
 
 @pytest.mark.anyio
@@ -318,13 +337,14 @@ async def test_decisions_newest_first_with_who_decided() -> None:
 
 @pytest.mark.anyio
 async def test_hook_run_versions_come_from_the_next_unclaimed_production_move() -> None:
-    # The handoff maps the tracker alias "live" to production; "staging" is not production.
-    handoff = _handoff({"live": "production", "staging": "staging"})
+    # The handoff maps the tracker alias "live" to production; "canary" is not production.
+    handoff = _handoff({"live": "production", "canary": "staging"})
     first, later = T0 + timedelta(minutes=10), T0 + timedelta(minutes=30)
     tracking = FakeTracking()
     tracking.deployments += [
         _move("live", "v3", "v4", first - timedelta(minutes=1)),  # before every run
-        _move("staging", "v9", "v8", first + timedelta(seconds=10)),  # not a production alias
+        _move("live", "v4", None, first + timedelta(seconds=5)),  # an alias removal
+        _move("canary", "v9", "v8", first + timedelta(seconds=10)),  # not a production alias
         _move("live", "v4", "v3", first + timedelta(seconds=20)),
         _move("live", "v3", "v2", first + timedelta(seconds=40)),
     ]
@@ -345,6 +365,35 @@ async def test_hook_run_versions_come_from_the_next_unclaimed_production_move() 
         "rul_2": ("v3", "v2"),
         "rul_3": (None, None),
     }
+    assert sorted((e.alias, e.environment, e.version) for e in view.environments) == [
+        ("canary", "staging", None),
+        ("live", "production", None),
+    ]
+
+
+@pytest.mark.anyio
+async def test_hook_runs_get_no_versions_when_the_moves_since_them_overflow_a_page(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracking = FakeTracking()
+    tracking.deployments.append(_move("production", "v1", "v0", T0 + timedelta(seconds=1)))
+    # More moves after the run than one tracker page holds: the run's own move is cut off.
+    tracking.deployments += [
+        _move("production", f"v{i}", f"v{i + 1}", T0 + timedelta(minutes=1, seconds=i))
+        for i in range(500)
+    ]
+    runs = [
+        _run("hrun_old", "rollback", T0, rule_id="rul_old"),
+        _run("hrun_new", "rollback", T0 + timedelta(minutes=1), rule_id="rul_new"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="mlops_agents.promotion.deployments"):
+        async with httpx2.AsyncClient() as http:
+            view = await _service(http, tracking=tracking, runs=runs).get_deployments(PROJECT_ID)
+
+    versions = {d.decided_by_ref: (d.from_version, d.to_version) for d in view.decisions}
+    assert versions == {"rul_old": (None, None), "rul_new": (None, None)}
+    assert any(MODEL in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.anyio
@@ -419,6 +468,30 @@ async def test_open_prs_answer_without_labels_when_github_fails(
     assert all(TOKEN not in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(("token", "repo"), [(None, REPO), (TOKEN, None)])
+async def test_open_prs_answer_without_labels_with_no_token_or_no_repository(
+    fake_github: RunningFakeGitHub, token: str | None, repo: RepoRef | None
+) -> None:
+    tracking = FakeTracking()
+    tracking.deployments.append(_move("production", "v2", "v1", T0 + timedelta(seconds=1)))
+    runs = [_run("hrun_rb", "rollback", T0, rule_id="rul_1")]
+
+    async with httpx2.AsyncClient() as http:
+        view = await _service(
+            http,
+            tracking=tracking,
+            runs=runs,
+            tasks=[_task("tsk_1", 42, "github")],
+            repo=repo,
+            token=token,
+        ).get_deployments(PROJECT_ID)
+
+    assert [(p.number, p.labels) for p in view.open_prs] == [(42, [])]
+    assert [(d.from_version, d.to_version) for d in view.decisions] == [("v2", "v1")]
+    assert fake_github.state.requests == []
+
+
 async def _save_reports(databases: Databases, count: int) -> tuple[SqliteReports, list[ReportView]]:
     store = SqliteReports(
         databases, cast(EvaluationReader, NoEvaluations()), SqliteEventLog(databases)
@@ -462,6 +535,26 @@ async def test_reports_provider_pages_with_limit_and_offset(databases: Databases
     assert [r.id for r in by_id.rows] == [report.id]
 
 
+@pytest.mark.anyio
+async def test_reports_provider_filters_by_since(databases: Databases) -> None:
+    store, saved = await _save_reports(databases, 3)
+    engine = await databases.project(PROJECT_ID)
+    async with engine.begin() as conn:
+        await conn.execute(
+            reports_table.update()
+            .where(reports_table.c.id == saved[0].id)
+            .values(created="2026-01-01T00:00:00.000Z")
+        )
+    provider = ReportsQueryProvider(databases, store)
+
+    page = await provider.query(
+        PROJECT_ID, MonitoringQuery(what="reports", since=datetime(2026, 6, 1, tzinfo=UTC))
+    )
+
+    assert page.total == 2
+    assert sorted(r.id for r in page.rows) == sorted(r.id for r in saved[1:])
+
+
 def _refused(i: int) -> PromotionView:
     return PromotionView.model_validate(
         {
@@ -494,6 +587,25 @@ async def test_promotions_provider_pages_with_limit_and_offset() -> None:
     assert (last.total, last.truncated) == (5, False)
     assert last.rows == items[4:5]
     assert items[0].refusals == ["<data>refusal 0"]
+
+
+@pytest.mark.anyio
+async def test_promotions_provider_filters_by_id_status_and_since() -> None:
+    applied = _promotion("prm_applied", T0 + timedelta(minutes=2), "person", "v9", "v1")
+    items = [*(_refused(i) for i in range(5)), applied]
+    provider = PromotionsQueryProvider(cast(Promotions, FakePromotions(items)))
+
+    async def ids(**filters: Any) -> list[str]:
+        page = await provider.query(
+            PROJECT_ID, MonitoringQuery.model_validate({"what": "promotions", **filters})
+        )
+        assert page.total == len(page.rows)
+        return [p.id for p in page.rows]
+
+    assert await ids(id="prm_2") == ["prm_2"]
+    assert await ids(status="applied") == ["prm_applied"]
+    assert await ids(since=T0 + timedelta(minutes=3)) == ["prm_3", "prm_4"]
+    assert await ids(status="refused", since=T0 + timedelta(minutes=4)) == ["prm_4"]
 
 
 def _ctx() -> ToolContext:

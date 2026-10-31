@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -133,19 +133,50 @@ class DeploymentsService:
         production_aliases = await resolve_candidate_aliases_fn(
             self._handoffs, project_id, self._handoff_error_logged
         )
-        page = await self._tracking.query(
-            project_id, TrackingQuery(what="deployments", limit=_TRACKER_LIMIT)
-        )
-        moves = sorted(
-            (r for r in page.rows if isinstance(r, DeploymentRow)), key=lambda r: _utc(r.seen_at)
-        )
-        claimed: set[int] = set()
-        decisions: list[DecisionRow] = []
+        by_model: dict[str, list[HookRunView]] = {}
         for run in succeeded:
-            decision = _hook_decision(run, moves, claimed, production_aliases)
-            if decision is not None:
-                decisions.append(decision)
+            if run.model is not None:
+                by_model.setdefault(run.model, []).append(run)
+        decisions: list[DecisionRow] = []
+        for model, model_runs in by_model.items():
+            moves = await self._production_moves(
+                project_id, model, production_aliases(model), since=model_runs[0].started
+            )
+            claimed: set[int] = set()
+            for run in model_runs:
+                decision = _hook_decision(run, model, moves, claimed)
+                if decision is not None:
+                    decisions.append(decision)
         return decisions
+
+    async def _production_moves(
+        self, project_id: str, model: str, aliases: Sequence[str], *, since: datetime
+    ) -> list[DeploymentRow]:
+        """The model's production alias moves (removals left out) since its oldest run, oldest
+        first; empty when they overflow one tracker page."""
+        page = await self._tracking.query(
+            project_id,
+            TrackingQuery(what="deployments", model=model, since=since, limit=_TRACKER_LIMIT),
+        )
+        if page.truncated:
+            # The page holds the newest moves, so the oldest runs' moves are cut off; and each
+            # run claims the first free move after it, so one missing move shifts every later
+            # run onto another event's move. No versions beat wrong versions.
+            logger.warning(
+                "More than %d alias moves of model %s since its oldest rollback or fall-back: "
+                "their versions are left out of the deployment decisions.",
+                _TRACKER_LIMIT,
+                model,
+            )
+            return []
+        return sorted(
+            (
+                r
+                for r in page.rows
+                if isinstance(r, DeploymentRow) and r.alias in aliases and r.to_version is not None
+            ),
+            key=lambda r: _utc(r.seen_at),
+        )
 
     async def _open_prs(self, project_id: str) -> list[OpenPipelinePr]:
         agent_prs = [
@@ -183,21 +214,16 @@ class DeploymentsService:
 
 
 def _hook_decision(
-    run: HookRunView,
-    moves: Sequence[DeploymentRow],
-    claimed: set[int],
-    production_aliases: Callable[[str], Sequence[str]],
+    run: HookRunView, model: str, moves: Sequence[DeploymentRow], claimed: set[int]
 ) -> DecisionRow | None:
-    """One rollback or fall-back as a decision; its versions are the first production alias
-    move of its model at or after the run started that no earlier run has claimed."""
+    """One rollback or fall-back of `model` as a decision; its versions are the first of the
+    model's production moves at or after the run started that no earlier run has claimed."""
     kind: Literal["rollback", "fall_back"]
     if run.kind == "rollback":
         kind = "rollback"
     elif run.kind == "fall_back":
         kind = "fall_back"
     else:
-        return None
-    if run.model is None:
         return None
     decided_by: Literal["rule", "person", "agent_bypass"]
     ref: str | None
@@ -218,16 +244,8 @@ def _hook_decision(
         return None
 
     started = _utc(run.started)
-    aliases = production_aliases(run.model)
     index = next(
-        (
-            i
-            for i, move in enumerate(moves)
-            if i not in claimed
-            and move.model == run.model
-            and move.alias in aliases
-            and _utc(move.seen_at) >= started
-        ),
+        (i for i, move in enumerate(moves) if i not in claimed and _utc(move.seen_at) >= started),
         None,
     )
     move = None if index is None else moves[index]
@@ -235,7 +253,7 @@ def _hook_decision(
         claimed.add(index)
     return DecisionRow(
         at=_utc(run.ended or run.started),
-        model=run.model,
+        model=model,
         kind=kind,
         from_version=None if move is None else move.from_version,
         to_version=None if move is None else move.to_version,
