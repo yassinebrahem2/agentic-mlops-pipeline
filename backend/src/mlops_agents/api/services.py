@@ -69,6 +69,11 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncTrackingJob,
 )
 from mlops_agents.monitoring.waker import Waker
+from mlops_agents.notifications.channels import default_channels
+from mlops_agents.notifications.contract import Notifier
+from mlops_agents.notifications.notifier import SqliteNotifier
+from mlops_agents.notifications.retries import RetryJob
+from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
@@ -136,12 +141,15 @@ class Services:
     hooks: HooksService
     incidents: IncidentsService
     waker: Waker
+    integration_settings: IntegrationSettings
+    notifier: Notifier
 
 
 async def _app_secrets(
     providers: ProvidersService,
     github: GitHubAuth,
     settings: Settings,
+    integration_settings: IntegrationSettings | None = None,
 ) -> list[str]:
     secrets: list[str] = []
     if settings.password:
@@ -152,6 +160,8 @@ async def _app_secrets(
         secrets.append(settings.master_key)
 
     secrets.extend(await providers.secret_values())
+    if integration_settings is not None:
+        secrets.extend(await integration_settings.secret_values())
 
     try:
         gh_token = await github.token()
@@ -207,9 +217,10 @@ async def build_services(
     failover = KeyFailover(clock=clock, on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
+    integration_settings = IntegrationSettings(databases, keystore)
 
     async def secret_source() -> list[str]:
-        return await _app_secrets(providers, github, settings)
+        return await _app_secrets(providers, github, settings, integration_settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
@@ -443,6 +454,17 @@ async def build_services(
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
+    retry_notifications_job = RetryJob(databases, notifier, clock)
+    scheduler.register(retry_notifications_job)
+
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
@@ -495,4 +517,6 @@ async def build_services(
         hooks=hooks,
         incidents=incidents,
         waker=waker,
+        integration_settings=integration_settings,
+        notifier=notifier,
     )
