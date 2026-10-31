@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@/api/schema";
 import { QueryStatus } from "@/components/QueryStatus";
 import { Button } from "@/components/ui/button";
-import { api, errorText, unwrap } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
+import { ActionError } from "@/pages/incidents/ActionError";
 import { formatTime } from "@/lib/format";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { enableLabel } from "./lifecycleActions";
@@ -15,7 +16,7 @@ type Window = Policy["payload"]["window"];
 function windowText(window: Window): string {
   switch (window.kind) {
     case "trailing_days":
-      return `Trailing ${String(window.days)} days`;
+      return window.days ? `Trailing ${String(window.days)} days` : "Trailing days";
     case "since_last_run":
       return "Since the last run";
     case "fixed":
@@ -113,11 +114,7 @@ function PolicyRow({ projectId, policy }: { projectId: string; policy: Policy })
           </dd>
         </div>
       </dl>
-      {setEnabled.error && (
-        <p role="alert" className="text-destructive">
-          {errorText(setEnabled.error)}
-        </p>
-      )}
+      <ActionError error={setEnabled.error} />
     </li>
   );
 }

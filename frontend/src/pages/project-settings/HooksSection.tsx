@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QueryStatus } from "@/components/QueryStatus";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, errorText, unwrap } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
+import { ActionError } from "@/pages/incidents/ActionError";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { HookCredential } from "./HookCredential";
 import { hooksKey, replaceHook, type Hook } from "./hooksCache";
@@ -11,6 +12,17 @@ import { LifecycleBadge } from "./LifecycleBadge";
 import { policiesKey } from "./policiesKey";
 
 const SHORT_SHA = 12;
+
+// Exhaustive over the generated union, so a kind the backend adds fails to compile here.
+const KIND_LABELS: Record<Hook["spec"]["kind"], string> = {
+  train: "Train",
+  evaluate: "Evaluate",
+  deploy: "Deploy",
+  rollback: "Roll back",
+  rerun: "Re-run",
+  hold: "Hold",
+  fall_back: "Fall back",
+};
 
 function verifiedText(verified: boolean | null | undefined): string {
   if (verified === null || verified === undefined) return "Not verified";
@@ -84,7 +96,7 @@ function HookRow({ projectId, hook }: { projectId: string; hook: Hook }) {
     <li aria-label={hook.name} className="space-y-3 rounded-md border p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{hook.name}</span>
-        <Badge variant="outline">{hook.spec.kind}</Badge>
+        <Badge variant="outline">{KIND_LABELS[hook.spec.kind]}</Badge>
         <LifecycleBadge status={hook.status} />
         <div className="ml-auto flex flex-wrap gap-2">
           {hook.status === "suspended" && (
@@ -137,11 +149,7 @@ function HookRow({ projectId, hook }: { projectId: string; hook: Hook }) {
           </ul>
         </div>
       )}
-      {refused && (
-        <p role="alert" className="text-destructive">
-          {errorText(refused)}
-        </p>
-      )}
+      <ActionError error={refused} />
       <HookCredential projectId={projectId} hook={hook} />
     </li>
   );

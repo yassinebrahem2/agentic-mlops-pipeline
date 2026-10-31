@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
+import { ActionError } from "@/pages/incidents/ActionError";
 import { formatTime } from "@/lib/format";
 
 type MaintenanceWindow = components["schemas"]["MaintenanceWindowView"];
@@ -126,7 +127,7 @@ function DeleteWindowDialog({
             report again. This cannot be undone.
           </DialogDescription>
         </DialogHeader>
-        {remove.isError && <p className="text-destructive">{errorText(remove.error)}</p>}
+        <ActionError error={remove.error} />
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
@@ -172,7 +173,6 @@ function WindowForm({ projectId }: { projectId: string }) {
   const endAt = new Date(end);
   const ready =
     !Number.isNaN(startAt.getTime()) && !Number.isNaN(endAt.getTime()) && reason.trim() !== "";
-  const serverErrors = Object.entries(fieldErrors(create.error));
 
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -244,18 +244,7 @@ function WindowForm({ projectId }: { projectId: string }) {
           }}
         />
       </div>
-      {create.error && (
-        <div role="alert" className="text-sm text-destructive">
-          <p>{errorText(create.error)}</p>
-          {serverErrors.length > 0 && (
-            <ul className="list-disc pl-4">
-              {serverErrors.map(([field, message]) => (
-                <li key={field}>{`${field}: ${message}`}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      <ActionError error={create.error} />
       <Button type="submit" disabled={!ready || create.isPending}>
         {create.isPending ? "Adding..." : "Add window"}
       </Button>

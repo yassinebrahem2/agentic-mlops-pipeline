@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, type SubmitEvent } from "react";
+import { useRef, useState, type SubmitEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,22 +13,38 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, errorText, unwrap } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
+import { ActionError } from "@/pages/incidents/ActionError";
 import { replaceHook, type Hook } from "./hooksCache";
 
 /**
- * The credential is write-only: it is typed into a password field, sent once, and cleared at once.
- * It never goes through useMutation, whose variables the cache keeps for minutes, so no query or
- * mutation entry, error text or rendered node can hold it. Only `credential_set` comes back.
+ * The credential is write-only: typed into a password field, sent once, cleared at once. As in
+ * the email section it never becomes a mutation variable (TanStack keeps those in its cache), and
+ * a retry would find it consumed, so there is none. Only `credential_set` comes back.
  */
 export function HookCredential({ projectId, hook }: { projectId: string; hook: Hook }) {
   const queryClient = useQueryClient();
   const [value, setValue] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>(null);
+  const pendingCredential = useRef<string | null>(null);
   const params = { path: { project_id: projectId, hook_id: hook.id } };
   const inputId = `credential-${hook.id}`;
 
+  const save = useMutation({
+    retry: false,
+    mutationFn: async () => {
+      const credential = pendingCredential.current ?? "";
+      pendingCredential.current = null;
+      return unwrap(
+        await api.PUT("/api/projects/{project_id}/hooks/{hook_id}/credential", {
+          params,
+          body: { credential },
+        }),
+      );
+    },
+    onSuccess: (saved) => {
+      replaceHook(queryClient, projectId, saved);
+    },
+  });
   const remove = useMutation({
     mutationFn: async () =>
       unwrap(await api.DELETE("/api/projects/{project_id}/hooks/{hook_id}/credential", { params })),
@@ -37,26 +53,12 @@ export function HookCredential({ projectId, hook }: { projectId: string; hook: H
     },
   });
 
-  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
+  const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const credential = value;
-    if (credential === "" || pending) return;
+    if (value === "" || save.isPending) return;
+    pendingCredential.current = value;
     setValue("");
-    setPending(true);
-    setError(null);
-    try {
-      const saved = unwrap(
-        await api.PUT("/api/projects/{project_id}/hooks/{hook_id}/credential", {
-          params,
-          body: { credential },
-        }),
-      );
-      replaceHook(queryClient, projectId, saved);
-    } catch (failure: unknown) {
-      setError(failure);
-    } finally {
-      setPending(false);
-    }
+    save.mutate();
   };
 
   return (
@@ -64,12 +66,7 @@ export function HookCredential({ projectId, hook }: { projectId: string; hook: H
       <p data-testid="hook-credential">
         {hook.credential_set ? "Credential set" : "No credential"}
       </p>
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(event) => {
-          void submit(event);
-        }}
-      >
+      <form className="flex flex-wrap items-end gap-2" onSubmit={submit}>
         <div className="space-y-1">
           <Label htmlFor={inputId}>Credential</Label>
           <Input
@@ -77,14 +74,14 @@ export function HookCredential({ projectId, hook }: { projectId: string; hook: H
             type="password"
             autoComplete="new-password"
             className="w-full sm:w-64"
-            disabled={pending}
+            disabled={save.isPending}
             value={value}
             onChange={(event) => {
               setValue(event.target.value);
             }}
           />
         </div>
-        <Button type="submit" size="sm" disabled={value === "" || pending}>
+        <Button type="submit" size="sm" disabled={value === "" || save.isPending}>
           Set credential
         </Button>
         {hook.credential_set && (
@@ -106,7 +103,7 @@ export function HookCredential({ projectId, hook }: { projectId: string; hook: H
                   set. The stored value cannot be recovered.
                 </DialogDescription>
               </DialogHeader>
-              {remove.isError && <p className="text-destructive">{errorText(remove.error)}</p>}
+              <ActionError error={remove.error} />
               <DialogFooter>
                 <DialogClose asChild>
                   <Button variant="outline">Cancel</Button>
@@ -125,11 +122,7 @@ export function HookCredential({ projectId, hook }: { projectId: string; hook: H
           </Dialog>
         )}
       </form>
-      {error !== null && (
-        <p role="alert" className="text-sm text-destructive">
-          {errorText(error)}
-        </p>
-      )}
+      <ActionError error={save.error} />
     </div>
   );
 }

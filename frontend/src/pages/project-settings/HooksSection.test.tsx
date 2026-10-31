@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
@@ -86,7 +86,7 @@ describe("HooksSection", () => {
     setup();
 
     const train = within(await screen.findByRole("listitem", { name: "Train churn" }));
-    expect(train.getByText("train")).toBeInTheDocument();
+    expect(train.getByText("Train")).toBeInTheDocument();
     expect(train.getByText("churn")).toBeInTheDocument();
     expect(train.getByText("Active")).toBeInTheDocument();
     expect(train.getByTestId("hook-deploys")).toHaveTextContent("No");
@@ -237,6 +237,38 @@ describe("HooksSection", () => {
     expect(put).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a 422 with its field details and never the secret", async () => {
+    const put = vi.fn<(body: unknown) => Response>(() =>
+      json(
+        {
+          code: "invalid_request",
+          message: "Some fields are missing or invalid.",
+          detail: {
+            errors: [{ field: "body.credential", message: "Credential must be plain text" }],
+          },
+        },
+        422,
+      ),
+    );
+    const { user, client } = setup({ routes: { [`PUT ${BASE}/hook_train/credential`]: put } });
+
+    const train = await screen.findByRole("listitem", { name: "Train churn" });
+    await user.type(within(train).getByLabelText("Credential"), SECRET);
+    await user.click(within(train).getByRole("button", { name: "Set credential" }));
+
+    expect(await screen.findByText("Some fields are missing or invalid.")).toBeInTheDocument();
+    expect(screen.getByText("credential: Credential must be plain text")).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(SECRET);
+    expect(
+      JSON.stringify(
+        client
+          .getMutationCache()
+          .getAll()
+          .map((m) => m.state),
+      ),
+    ).not.toContain(SECRET);
+  });
+
   it("removes a credential only after a confirmation", async () => {
     const del = vi.fn(() => json({ ...SUSPENDED, credential_set: false }));
     const { user } = setup({ routes: { [`DELETE ${BASE}/hook_deploy/credential`]: del } });
@@ -285,6 +317,5 @@ describe("HooksSection", () => {
     });
 
     expect(await screen.findByText("Pins changed.")).toBeInTheDocument();
-    fireEvent.blur(document.body);
   });
 });
