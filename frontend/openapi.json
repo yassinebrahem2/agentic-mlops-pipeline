@@ -6475,6 +6475,40 @@
         "title": "RuleTerm",
         "type": "object"
       },
+      "RuleView": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "format": "date-time",
+            "title": "Approved",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "title": "Proposal Id",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuleSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "enabled",
+          "proposal_id",
+          "approved"
+        ],
+        "title": "RuleView",
+        "type": "object"
+      },
       "RunRow": {
         "properties": {
           "datasets": {
@@ -12135,6 +12169,129 @@
         "summary": "Decide Review",
         "tags": [
           "github-work"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/rules": {
+      "get": {
+        "operationId": "list_rules_api_projects__project_id__rules_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RuleView"
+                  },
+                  "title": "Response List Rules Api Projects  Project Id  Rules Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Rules",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/rules/{rule_id}/enabled": {
+      "put": {
+        "operationId": "set_rule_enabled_api_projects__project_id__rules__rule_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Rule Enabled",
+        "tags": [
+          "rules"
         ]
       }
     },

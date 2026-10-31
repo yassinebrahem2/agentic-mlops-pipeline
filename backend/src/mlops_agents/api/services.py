@@ -73,6 +73,8 @@ from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.monitoring.rules.kind import RuleKind
+from mlops_agents.monitoring.rules.store import SqliteRules
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
     AfterSyncJob,
@@ -176,6 +178,7 @@ class Services:
     expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
+    rules: SqliteRules
 
 
 async def _app_secrets(
@@ -462,6 +465,8 @@ async def build_services(
         )
     )
     proposal_kinds.register(HooksKind(hooks=hooks))
+    rules = SqliteRules(databases, clock=clock)
+    proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
 
     approvals = ApprovalsService(
         databases=databases,
@@ -607,4 +612,5 @@ async def build_services(
         expectations=expectations,
         fixes=fixes,
         training=training,
+        rules=rules,
     )
