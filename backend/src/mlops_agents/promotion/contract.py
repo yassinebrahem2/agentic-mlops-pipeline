@@ -43,7 +43,7 @@ class EvaluationPayload(BaseModel):
     gate_config_version: str
     champion_version: str | None = None
     decision: Literal["promote", "hold", "reject"] | None = None
-    reasons: list[str] = []
+    reasons: list[str] | None = None
     parity: ParityResult | None = None
     champion_metrics: MetricSet | None = None
     challenger_metrics: MetricSet | None = None
