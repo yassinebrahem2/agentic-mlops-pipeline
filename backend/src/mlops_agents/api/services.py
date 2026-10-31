@@ -122,6 +122,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.contract import EvaluationReader, Promotions, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
 from mlops_agents.promotion.kind import PromotionKind
+from mlops_agents.promotion.post_deploy import PostDeployObserver
 from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
 from mlops_agents.promotion.promotions import PromotionRejectObserver, SqlitePromotions
 from mlops_agents.promotion.reports import SqliteReports
@@ -690,6 +691,9 @@ async def build_services(
         verifier=verifier,
     )
     scheduler.add_sync_observer(linker)
+    scheduler.add_sync_observer(
+        PostDeployObserver(databases, tracking, handoffs, promotions, waker)
+    )
     stats = StatsService(
         databases=databases,
         incidents=incidents,
