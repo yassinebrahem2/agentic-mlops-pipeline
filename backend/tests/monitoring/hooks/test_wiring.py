@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from mlops_agents.agents.tools.hold import HoldTool
+from mlops_agents.agents.tools.run_hook import RunHookTool
 from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.ids import new_id
+from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.proposals.payloads import HandoffPayload
 from tests.api.conftest import NoGh
@@ -42,6 +45,13 @@ async def test_build_services_hooks_wiring(
 
         # Verify hooks exists on services
         assert isinstance(services.hooks, HooksService)
+
+        # Verify RunHook and Hold in services.tools
+        assert isinstance(services.tools.get("RunHook"), RunHookTool)
+        assert isinstance(services.tools.get("Hold"), HoldTool)
+
+        # Verify hooks query provider is registered
+        assert isinstance(services.query_providers.get("hooks"), HooksQueryProvider)
 
         # Create a project directly
         project_id = new_id("prj")

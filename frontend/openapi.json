@@ -2313,6 +2313,111 @@
         "title": "HeartbeatView",
         "type": "object"
       },
+      "HookView": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Commit"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "credential_set": {
+            "title": "Credential Set",
+            "type": "boolean"
+          },
+          "deploys_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deploys Verified"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pins": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PinnedFile"
+            },
+            "title": "Pins",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "handoff",
+              "proposal"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/CommandSpec"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suspended_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suspended Reason"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "spec",
+          "status",
+          "credential_set",
+          "source",
+          "created"
+        ],
+        "title": "HookView",
+        "type": "object"
+      },
       "IncidentView": {
         "additionalProperties": false,
         "properties": {
@@ -4057,6 +4162,25 @@
         "title": "PermissionsSettings",
         "type": "object"
       },
+      "PinnedFile": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "title": "PinnedFile",
+        "type": "object"
+      },
       "PipelineEdge": {
         "additionalProperties": false,
         "properties": {
@@ -5179,6 +5303,20 @@
         "title": "SetCredentialBody",
         "type": "object"
       },
+      "SetEnabledBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetEnabledBody",
+        "type": "object"
+      },
       "SetGitHubToken": {
         "additionalProperties": false,
         "properties": {
@@ -5191,6 +5329,21 @@
           "token"
         ],
         "title": "SetGitHubToken",
+        "type": "object"
+      },
+      "SetHookCredentialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "minLength": 1,
+            "title": "Credential",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "title": "SetHookCredentialBody",
         "type": "object"
       },
       "SetPrice": {
@@ -8310,6 +8463,239 @@
         "summary": "Get Current Handoff",
         "tags": [
           "proposals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/hooks": {
+      "get": {
+        "operationId": "list_hooks_api_projects__project_id__hooks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HookView"
+                  },
+                  "title": "Response List Hooks Api Projects  Project Id  Hooks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Hooks",
+        "tags": [
+          "hooks"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/hooks/{hook_id}/credential": {
+      "delete": {
+        "operationId": "delete_hook_credential_api_projects__project_id__hooks__hook_id__credential_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "title": "Hook Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Hook Credential",
+        "tags": [
+          "hooks"
+        ]
+      },
+      "put": {
+        "operationId": "set_hook_credential_api_projects__project_id__hooks__hook_id__credential_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "title": "Hook Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHookCredentialBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Hook Credential",
+        "tags": [
+          "hooks"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/hooks/{hook_id}/enabled": {
+      "put": {
+        "operationId": "set_hook_enabled_api_projects__project_id__hooks__hook_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "title": "Hook Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Hook Enabled",
+        "tags": [
+          "hooks"
         ]
       }
     },

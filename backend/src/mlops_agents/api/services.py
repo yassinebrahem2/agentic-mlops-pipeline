@@ -54,7 +54,9 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
@@ -94,7 +96,7 @@ from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import Clock, KeyFailover, SystemClock
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
-from mlops_agents.sandbox.docker import DockerRunner
+from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
@@ -250,9 +252,11 @@ async def build_services(
     kind_registry = KindRegistry([LocalFolderKind(paths.root)])
     connections = ConnectionsService(databases, events, kind_registry)
 
+    runner = docker_runner if docker_runner is not None else CliDockerRunner()
+    sandbox_projects = DatabaseSandboxProjects(databases, workspace, connections)
     sandbox = SandboxService(
-        docker_runner,
-        projects=DatabaseSandboxProjects(databases, workspace, connections),
+        runner,
+        projects=sandbox_projects,
         events=events,
     )
     await sandbox.cleanup_orphans()
@@ -277,12 +281,39 @@ async def build_services(
         events=events,
         clock=clock,
     )
+    command_runner = CommandRunner(
+        sandbox=sandbox,
+        projects=sandbox_projects,
+        docker_runner=runner,
+        keystore=keystore,
+    )
+    hooks.add_runner(command_runner)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
+    query_providers.register(HooksQueryProvider(hooks))
+    maintenance = NeverSuspended()
+
+    results = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     tracking = TrackingService(
         databases=databases,
@@ -315,6 +346,8 @@ async def build_services(
         tracking=tracking,
         handoffs=handoffs,
         reports=reports,
+        hooks=hooks,
+        incidents=incidents,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -472,7 +505,6 @@ async def build_services(
     )
     scheduler.add_sync_observer(suspect_linker)
     pr_sync.add_observer(suspect_linker)
-
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
