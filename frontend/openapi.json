@@ -3699,6 +3699,48 @@
         "title": "OnCallHours",
         "type": "object"
       },
+      "OnCallPerson": {
+        "additionalProperties": false,
+        "properties": {
+          "contacts": {
+            "items": {
+              "$ref": "#/components/schemas/Contact"
+            },
+            "minItems": 1,
+            "title": "Contacts",
+            "type": "array"
+          },
+          "escalation_order": {
+            "title": "Escalation Order",
+            "type": "integer"
+          },
+          "hours": {
+            "$ref": "#/components/schemas/OnCallHours"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "contacts",
+          "hours",
+          "timezone",
+          "escalation_order",
+          "id"
+        ],
+        "title": "OnCallPerson",
+        "type": "object"
+      },
       "Operations": {
         "additionalProperties": false,
         "properties": {
@@ -8982,6 +9024,110 @@
         "summary": "Patch Note",
         "tags": [
           "notes"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/on-call": {
+      "get": {
+        "operationId": "list_on_call_api_projects__project_id__on_call_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OnCallPerson"
+                  },
+                  "title": "Response List On Call Api Projects  Project Id  On Call Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List On Call",
+        "tags": [
+          "on_call"
+        ]
+      },
+      "put": {
+        "operationId": "replace_on_call_api_projects__project_id__on_call_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/OnCall"
+                },
+                "title": "Body",
+                "type": "array"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OnCallPerson"
+                  },
+                  "title": "Response Replace On Call Api Projects  Project Id  On Call Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace On Call",
+        "tags": [
+          "on_call"
         ]
       }
     },
