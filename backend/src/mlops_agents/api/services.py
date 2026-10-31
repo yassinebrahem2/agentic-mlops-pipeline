@@ -70,7 +70,11 @@ from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.collect_job import CollectResultsJob
+from mlops_agents.monitoring.results.contract import Parsers
+from mlops_agents.monitoring.results.parser_kind import ParserKind
+from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
@@ -156,6 +160,7 @@ class Services:
     clock: Clock
     scheduler: AppScheduler
     results: ResultsService
+    parsers: Parsers
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
@@ -314,11 +319,19 @@ async def build_services(
     query_providers.register(HooksQueryProvider(hooks))
     maintenance = NeverSuspended()
 
+    code_runner = CodeParserRunner(
+        sandbox=sandbox,
+        docker_runner=runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=code_runner)
+
     results = ResultsService(
         databases=databases,
         handoffs=handoffs,
         connections=connections,
         events=events,
+        parsers=parsers,
     )
     incidents = IncidentsService(
         databases=databases,
@@ -437,6 +450,7 @@ async def build_services(
     kickoff = Kickoff(databases, sessions, handoffs)
     # Before recovery: it re-applies an approved proposal that has no result yet.
     proposal_kinds.register(ConnectionsKind(connections, secret_source))
+    proposal_kinds.register(ParserKind(parsers))
     proposal_kinds.register(
         HandoffKind(
             databases=databases,
@@ -581,6 +595,7 @@ async def build_services(
         clock=clock,
         scheduler=scheduler,
         results=results,
+        parsers=parsers,
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
