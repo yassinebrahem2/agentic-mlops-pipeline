@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,9 +21,12 @@ from mlops_agents.connections.contract import (
 )
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.results.contract import (
+    ResultRecord,
     ResultsObserver,
+    SourceState,
     StoredResult,
 )
+from mlops_agents.monitoring.results.store import ResultsStore
 from mlops_agents.proposals.contract import HandoffObserver, HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.databases import Databases
@@ -39,6 +43,74 @@ class FakeObserver(ResultsObserver):
         if self.should_raise is not None:
             raise self.should_raise
         self.batches.append(list(results))
+
+
+class HoldingObserver(ResultsObserver):
+    """Records every batch; holds its first call for `hold_project` until `release` is set."""
+
+    def __init__(self, hold_project: str) -> None:
+        self._hold_project = hold_project
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.batches: list[tuple[str, list[str]]] = []
+
+    async def stored(self, project_id: str, results: Sequence[StoredResult]) -> None:
+        self.batches.append((project_id, [r.id for r in results]))
+        if project_id == self._hold_project and not self.entered.is_set():
+            self.entered.set()
+            await self.release.wait()
+
+
+class InMemoryResultsStore(ResultsStore):
+    """Results rows and source states in memory. No method awaits, so the only suspension
+    points in a delivery are the service's own and the observer's."""
+
+    def __init__(self, databases: Databases) -> None:
+        super().__init__(databases)
+        self.undelivered: dict[str, list[StoredResult]] = {}
+        self.mark_calls: list[tuple[str, list[str]]] = []
+        self.states: dict[tuple[str, str], SourceState] = {}
+
+    async def fetch_undelivered(self, project_id: str) -> list[StoredResult]:
+        return list(self.undelivered.get(project_id, []))
+
+    async def mark_delivered(
+        self, project_id: str, ids: Sequence[str], delivered_at: datetime
+    ) -> None:
+        if not ids:
+            return
+        self.mark_calls.append((project_id, list(ids)))
+        marked = set(ids)
+        rows = self.undelivered.get(project_id, [])
+        self.undelivered[project_id] = [r for r in rows if r.id not in marked]
+
+    async def get_source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        return self.states.get((project_id, source_id))
+
+    async def save_source_state(self, project_id: str, state: SourceState) -> None:
+        self.states[(project_id, state.source_id)] = state
+
+    async def save_items_and_state(
+        self,
+        project_id: str,
+        source_id: str,
+        items: Sequence[tuple[str, ResultRecord]],
+        seen_at: datetime,
+        state: SourceState,
+    ) -> list[StoredResult]:
+        inserted = [
+            StoredResult(
+                **record.model_dump(),
+                id=f"res_{source_key}",
+                source_id=source_id,
+                source_key=source_key,
+                seen_at=seen_at,
+            )
+            for source_key, record in items
+        ]
+        self.undelivered.setdefault(project_id, []).extend(inserted)
+        self.states[(project_id, source_id)] = state
+        return inserted
 
 
 class FakeHandoffs:

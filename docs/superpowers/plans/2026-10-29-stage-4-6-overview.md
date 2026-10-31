@@ -391,6 +391,7 @@ class Verdicts(Protocol):               # verdicts (stats task 1)
     async def confirm_by_labels(self, project_id: str) -> list[VerdictView]: ...                        # model performance incidents, past the minimum sample, from Model Performance's label-based results
     async def report_miss(self, project_id: str, miss: MissReport) -> None: ...
     async def list(self, project_id: str, since: datetime | None = None) -> list[VerdictView]: ...
+    async def list_misses(self, project_id: str, since: datetime | None = None) -> list[MissReport]: ...   # stats task 3 (Decision #568): Stats' misses
 class Baseline(Protocol):               # stats task 2; never notifies and never opens an incident
     async def available(self, project_id: str) -> bool: ...   # true once a `team`-origin result is stored; the Dashboard and Stats read it
     async def links(self, project_id: str, incident_id: str) -> list[BaselineLink]: ...
@@ -582,7 +583,7 @@ STAT_METRICS: Final[Mapping[StatGroup, tuple[str, ...]]]        # the one list o
 class StatValue(BaseModel): value: float | None; n: int; collecting: bool          # n: the verdicts (or incidents, for counts) it rests on; collecting: n < STATS_MIN_VERDICTS for a verdict-based number
 class StatsView(BaseModel): window: StatsWindow; category: ResultCategory | None; baseline_available: bool; groups: dict[StatGroup, dict[str, StatValue]]
 class Stats(Protocol):                  # stats
-    async def compute(self, project_id: str, window: StatsWindow, category: ResultCategory | None, now: datetime) -> StatsView: ...   # computed on read from incidents, verdicts, baseline links, approvals, PRs, llm_calls, hook runs; nothing stored twice
+    async def compute(self, project_id: str, window: StatsWindow, category: ResultCategory | None, now: datetime) -> StatsView: ...   # computed on read from incidents, verdicts, `Baseline.matched_incidents` and `judged_silent_alerts` (never the stored links), approvals, PRs, llm_calls, hook runs; nothing stored twice
 ```
 
 - `GET /api/projects/{id}/stats?window=&category=` returns `StatsView`. Without readable team monitoring `baseline_available` is false and the page says so (S4 §10); the detection numbers that need the baseline are then `None`, never 0.

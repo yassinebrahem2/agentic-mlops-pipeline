@@ -8,6 +8,7 @@ from mlops_agents.monitoring.expectations.contract import ExpectationKey, Expect
 from mlops_agents.monitoring.expectations.store import SqliteExpectationsStore
 from mlops_agents.proposals.payloads import Cadence
 from mlops_agents.storage.databases import Databases
+from tests.providers.fake_clock import FakeClock
 
 
 @pytest.fixture
@@ -33,18 +34,20 @@ def _make_spec(
 
 
 async def test_register_and_get(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    clock = FakeClock()
+    store = SqliteExpectationsStore(databases, clock)
     spec = _make_spec("sales_feed")
     await store.register(project_id, spec)
 
     record = await store.get(project_id, spec.key)
     assert record is not None
-    loaded_spec, active, last_seen, signalled_first, signalled_second = record
+    loaded_spec, active, last_seen, signalled_first, signalled_second, registered_at = record
     assert loaded_spec.key == spec.key
     assert active is True
     assert last_seen is None
     assert signalled_first is None
     assert signalled_second is None
+    assert registered_at == clock.now()
 
     # Update spec
     updated_spec = _make_spec("sales_feed")
@@ -56,7 +59,7 @@ async def test_register_and_get(databases: Databases, project_id: str) -> None:
 
 
 async def test_retire_and_activate(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     spec = _make_spec("churn_check", kind="check", source="check", activates_on_pr=42)
     # Spec with activates_on_pr registers as inactive
     await store.register(project_id, spec)
@@ -77,7 +80,7 @@ async def test_retire_and_activate(databases: Databases, project_id: str) -> Non
 
 
 async def test_note_seen_and_signalled(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     spec = _make_spec("job_eval", kind="job")
     await store.register(project_id, spec)
 
@@ -110,7 +113,7 @@ async def test_note_seen_and_signalled(databases: Databases, project_id: str) ->
 
 
 async def test_retire_handoff_keys_not_in(databases: Databases, project_id: str) -> None:
-    store = SqliteExpectationsStore(databases)
+    store = SqliteExpectationsStore(databases, FakeClock())
     handoff_spec1 = _make_spec("f1", source="handoff")
     handoff_spec2 = _make_spec("f2", source="handoff")
     check_spec = _make_spec("chk_custom", kind="check", source="check")

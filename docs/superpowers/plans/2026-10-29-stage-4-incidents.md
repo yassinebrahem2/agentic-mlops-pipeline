@@ -178,10 +178,10 @@ Added 2026-10-31 for ui task 3: the Inbox must show the incidents that need a pe
 **Files:** `monitoring/incidents/store.py` and `service.py` (the rule, once), `api/routers/incidents.py` (the `inbox` query parameter); tests; regenerated `frontend/openapi.json`.
 
 **Notes:**
-- `GET .../incidents?inbox=true` returns `ACTIVE_STATUSES` plus `resolved` incidents with no verdict yet (a verdict on a resolved incident closes it, so the Inbox's verdict buttons must reach those), ranked as the list already is. The rule lives in one place in the incidents service or store, using the verdict binding it has (`bind_verdicts`); `status` and `inbox` together is a 422.
+- `GET .../incidents?inbox=true` returns `ACTIVE_STATUSES` plus `resolved` incidents with no verdict yet (a verdict on a resolved incident closes it, so the Inbox's verdict buttons must reach those), ranked as the list already is. The rule lives in one place in the incidents service or store, using the verdict binding it has (`bind_verdicts`), and is applied in the query, so `limit`, `offset` and `total` stay right (never filter a fetched page); `status` and `inbox` together is a 422.
 - Without `inbox`, the list behaves as today.
 
-**Tests (stop condition):** each active status and a resolved incident without a verdict are returned; a resolved one with a verdict, a closed and a merged one are not; ranking is kept; `status` with `inbox` is 422; backend suite, ruff, pyright, openapi check; CI green.
+**Tests (stop condition):** each active status and a resolved incident without a verdict are returned; a resolved one with a verdict, a closed and a merged one are not; ranking is kept; paging with `inbox` returns the right `total` and pages; `status` with `inbox` is 422; backend suite, ruff, pyright, openapi check; CI green.
 
 **PR:** its own PR into `main` from `plan/stage-4-incidents-task8`, created at this task's last commit (ui task 3 consumes it).
 
