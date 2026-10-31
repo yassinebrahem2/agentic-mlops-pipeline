@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPage } from "@/test/render";
@@ -11,6 +11,7 @@ import {
   INCIDENTS,
   ok,
   pageOf,
+  SNOOZE,
   stubGet,
   stubPost,
   stubStream,
@@ -116,6 +117,55 @@ describe("Inbox incidents section", () => {
     await user.click(await screen.findByRole("button", { name: "Acknowledge" }));
 
     expect(await screen.findByText("The incident is closed.")).toBeInTheDocument();
+  });
+
+  it("snoozes an incident until the chosen time and shows the snooze on the row", async () => {
+    const user = userEvent.setup();
+    stubStream();
+    let snoozedUntil: string | null = null;
+    stubGet({
+      [INCIDENTS]: () => ok(pageOf([incident("inc_1", { snoozed_until: snoozedUntil })])),
+    });
+    const post = stubPost({
+      [SNOOZE]: (init) => {
+        snoozedUntil = (init as { body: { until: string } }).body.until;
+        return ok(incident("inc_1", { snoozed_until: snoozedUntil }));
+      },
+    });
+
+    renderPage("/projects/prj_1/inbox");
+    const row = await screen.findByTestId("incident-row-inc_1");
+    await user.click(within(row).getByRole("button", { name: "Snooze" }));
+    const send = within(row).getByRole("button", { name: "Snooze until chosen time" });
+    expect(send).toBeDisabled();
+    fireEvent.change(within(row).getByLabelText("Snooze until"), {
+      target: { value: "2026-11-02T10:00" },
+    });
+    await user.click(send);
+
+    const until = new Date("2026-11-02T10:00").toISOString();
+    await waitFor(() => {
+      expect(bodyOf(post, SNOOZE)).toEqual({ until });
+    });
+    expect(
+      await within(screen.getByTestId("incident-row-inc_1")).findByText(/Snoozed until/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the server's refusal when snoozing fails", async () => {
+    const user = userEvent.setup();
+    stubStream();
+    stubGet({ [INCIDENTS]: () => ok(pageOf([incident("inc_1")])) });
+    stubPost({ [SNOOZE]: () => failure("invalid_until", "The end time is in the past.", 422) });
+
+    renderPage("/projects/prj_1/inbox");
+    await user.click(await screen.findByRole("button", { name: "Snooze" }));
+    fireEvent.change(screen.getByLabelText("Snooze until"), {
+      target: { value: "2020-01-01T10:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "Snooze until chosen time" }));
+
+    expect(await screen.findByText("The end time is in the past.")).toBeInTheDocument();
   });
 
   it("refetches when an incident.opened event arrives", async () => {

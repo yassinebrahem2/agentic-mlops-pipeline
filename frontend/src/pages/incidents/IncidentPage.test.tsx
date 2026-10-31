@@ -1,8 +1,9 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPage } from "@/test/render";
 import {
+  bodyOf,
   CLOSE,
   emitEvent,
   eventRecord,
@@ -12,6 +13,7 @@ import {
   ok,
   signal,
   SIGNALS,
+  SNOOZE,
   stubGet,
   stubPost,
   stubStream,
@@ -266,6 +268,38 @@ describe("IncidentPage", () => {
       );
     },
   );
+
+  it("snoozes the incident from its page", async () => {
+    const user = userEvent.setup();
+    stubStream();
+    stubGet({
+      [INCIDENT]: () => ok(incident("inc_1", { cause: "Open one" })),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+    const post = stubPost({ [SNOOZE]: () => ok(incident("inc_1", { cause: "Open one" })) });
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+    await user.click(await screen.findByRole("button", { name: "Snooze" }));
+    fireEvent.change(screen.getByLabelText("Snooze until"), {
+      target: { value: "2026-11-02T10:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "Snooze until chosen time" }));
+
+    await waitFor(() => {
+      expect(bodyOf(post, SNOOZE)).toEqual({ until: new Date("2026-11-02T10:00").toISOString() });
+    });
+  });
+
+  it("offers no Snooze on a merged incident", async () => {
+    stubStream();
+    stubPage();
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+    await screen.findByText("Upstream renamed a column");
+
+    expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
+  });
 
   it("shows a verdict note holding markup as plain text", async () => {
     stubStream();
