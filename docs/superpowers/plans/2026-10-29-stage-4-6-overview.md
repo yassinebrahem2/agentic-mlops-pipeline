@@ -114,7 +114,7 @@ class ParseOutcome(BaseModel): records: list[tuple[str, ResultRecord]]; errors: 
 class Parsers(Protocol):                # results
     async def store(self, project_id: str, spec: ParserSpec, proposal_id: str) -> ParserVersion: ...   # idempotent per proposal
     async def current(self, project_id: str, source_id: str) -> ParserVersion | None: ...
-    async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str) -> ParseOutcome: ...   # validates against ResultRecord; a failure is a signal about the source, never a skip
+    async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str, *, start_offset: int = 0, csv_header: list[str] | None = None) -> ParseOutcome: ...   # validates against ResultRecord; a failure is a signal about the source, never a skip. start_offset and csv_header added at #609's merge: a chunk's byte offset in its file (record keys use it) and the header a later csv chunk lacks. What a code parser's script receives (whole lines of one bounded chunk on stdin, its start offset and the file's first line) is CODE_PARSER_CONTRACT in monitoring/results/parser_kind.py, its one source
 
 class EvaluationCopies(Protocol):      # results task 4: the one write path of the evaluation copy into stage 3's `evaluations` table (I16 has none; I16 is untouched)
     async def store_copy(self, project_id: str, record: EvaluationRecord) -> bool: ...   # False when the tracker sync already stored (source, model, version)

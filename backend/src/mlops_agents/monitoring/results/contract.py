@@ -198,7 +198,14 @@ class Parsers(Protocol):
     async def current(self, project_id: str, source_id: str) -> ParserVersion | None: ...
 
     async def parse(
-        self, project_id: str, source_id: str, raw: str, origin_ref: str
+        self,
+        project_id: str,
+        source_id: str,
+        raw: str,
+        origin_ref: str,
+        *,
+        start_offset: int = 0,
+        csv_header: list[str] | None = None,
     ) -> ParseOutcome: ...
 
 
