@@ -41,6 +41,14 @@ async def test_fired_result_through_build_services_opens_an_incident(
         assert incident.model == "churn"
 
 
+async def test_services_wires_maintenance_to_results(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    async with started_app(tmp_path / "data") as app:
+        services: Services = app.state.services
+        assert services.results.maintenance is services.maintenance_windows
+
+
 async def test_incidents_bind_expectations_wired_in_services(
     tmp_path: Path, git_env: dict[str, str]
 ) -> None:
