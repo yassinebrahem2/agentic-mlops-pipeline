@@ -45,6 +45,9 @@ class FakeGitHubState:
     workflow_runs: dict[str, list[dict[str, Any]]] = field(
         default_factory=dict[str, list[dict[str, Any]]]
     )
+    check_runs: dict[tuple[str, str], list[dict[str, Any]]] = field(
+        default_factory=dict[tuple[str, str], list[dict[str, Any]]]
+    )
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
     def merge_pull(self, repo: str, number: int) -> dict[str, Any]:
@@ -82,6 +85,7 @@ class FakeGitHubState:
         self.comment_counter = 0
         self.labels.clear()
         self.workflow_runs.clear()
+        self.check_runs.clear()
         self.requests.clear()
 
 
@@ -136,10 +140,11 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
             "state": "open",
             "merged": False,
             "merged_at": None,
-            "changed_files": len(state.pr_files.get(key, [])),
         }
         state.prs[key] = pr
-        return JSONResponse(pr, status_code=201)
+        resp = dict(pr)
+        resp["changed_files"] = len(state.pr_files.get(key, []))
+        return JSONResponse(resp, status_code=201)
 
     @app.get("/repos/{owner}/{repo}/pulls/{number}")
     async def get_pull(owner: str, repo: str, number: int, request: Request) -> Response:
@@ -152,9 +157,19 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         key = (full_name, number)
         if key not in state.prs:
             return JSONResponse({"message": "Not Found"}, status_code=404)
-        pr = state.prs[key]
-        if key in state.pr_files:
-            pr["changed_files"] = len(state.pr_files[key])
+        pr = dict(state.prs[key])
+        if "changed_files" not in pr:
+            pr["changed_files"] = len(state.pr_files.get(key, []))
+        if "mergeable" not in pr:
+            pr["mergeable"] = True
+        if "mergeable_state" not in pr:
+            pr["mergeable_state"] = "clean"
+        if "head" not in pr:
+            pr["head"] = {"sha": pr.get("head_sha", "fake_head_sha"), "ref": "branch"}
+        elif isinstance(pr["head"], str):
+            pr["head"] = {"sha": pr.get("head_sha", "fake_head_sha"), "ref": pr["head"]}
+        elif isinstance(pr["head"], dict) and "sha" not in pr["head"]:
+            pr["head"]["sha"] = pr.get("head_sha", "fake_head_sha")
         return JSONResponse(pr)
 
     @app.get("/repos/{owner}/{repo}/pulls/{number}/files")
@@ -216,6 +231,24 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         key = (full_name, number)
         if key not in state.prs:
             return JSONResponse({"message": "Not Found"}, status_code=404)
+        pr = state.prs[key]
+        raw_body = await request.body()
+        body: dict[str, Any] = await request.json() if raw_body else {}
+        expected_sha = body.get("sha")
+        actual_sha = pr.get("head_sha")
+        if actual_sha is None:
+            pr_head: Any = pr.get("head")
+            if isinstance(pr_head, dict):
+                actual_sha = cast(dict[str, Any], pr_head).get("sha")
+            elif isinstance(pr_head, str):
+                actual_sha = "fake_head_sha"
+            else:
+                actual_sha = "fake_head_sha"
+        if expected_sha is not None and actual_sha is not None and expected_sha != actual_sha:
+            return JSONResponse(
+                {"message": "Head branch was modified. Review and try the merge again."},
+                status_code=409,
+            )
         state.prs[key]["merged"] = True
         state.prs[key]["state"] = "closed"
         state.prs[key]["merged_at"] = datetime.now(UTC).isoformat()
@@ -424,6 +457,21 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
                 "workflow_runs": filtered_runs[start:end],
             }
         )
+
+    @app.get("/repos/{owner}/{repo}/commits/{ref}/check-runs")
+    async def list_check_runs(owner: str, repo: str, ref: str, request: Request) -> Response:
+        full_name = f"{owner}/{repo}"
+        state.requests.append(
+            {"method": "GET", "path": f"/repos/{full_name}/commits/{ref}/check-runs"}
+        )
+        err = _check_common(request)
+        if err is not None:
+            return err
+
+        runs = state.check_runs.get((full_name, ref))
+        if runs is None:
+            runs = state.check_runs.get((repo, ref), [])
+        return JSONResponse({"total_count": len(runs), "check_runs": runs})
 
     return app
 

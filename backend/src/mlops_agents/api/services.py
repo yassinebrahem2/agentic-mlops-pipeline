@@ -77,7 +77,9 @@ from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.contract import EvaluationReader, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
 from mlops_agents.promotion.reports import SqliteReports
+from mlops_agents.promotion.surfaces import GithubProtectionSurfaces
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -284,6 +286,12 @@ async def build_services(
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
 
+    surfaces = GithubProtectionSurfaces(hooks, http, github, tasks)
+    pr_sync = PrSyncObserver(tasks, github, http, events)
+    stack.push_async_callback(pr_sync.close)
+    closed_unmerged = ClosedUnmergedObserver(knowledge, http, github, tasks)
+    pr_sync.add_observer(closed_unmerged)
+
     wakeups = WakeupService(databases, events=events)
     tools = default_registry(
         tasks=tasks,
@@ -301,6 +309,8 @@ async def build_services(
         tracking=tracking,
         handoffs=handoffs,
         reports=reports,
+        surfaces=surfaces,
+        pr_sync=pr_sync,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -325,8 +335,6 @@ async def build_services(
         list_agents.bind(catalog, status_board)
     turn_observer = EventTurnObserver(events)
     inbound = SqliteInboundSource(databases)
-    pr_sync = PrSyncObserver(tasks, github, http, events)
-    stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
         databases=databases,
