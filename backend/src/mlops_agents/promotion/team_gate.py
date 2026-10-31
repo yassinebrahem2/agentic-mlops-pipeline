@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from sqlalchemy import select
+from pydantic import AwareDatetime, TypeAdapter
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mlops_agents.clock import to_iso, utc_now
 from mlops_agents.monitoring.scheduler.contract import SyncObserver
@@ -21,16 +23,42 @@ from mlops_agents.storage.tables import project_settings
 from mlops_agents.tracking.contract import ModelVersionRow, RunRow, Tracking, TrackingQuery
 from mlops_agents.training.constants import REQUEST_TAG
 
-if TYPE_CHECKING:
-    pass
-
-logger = logging.getLogger(__name__)
-
+# {model name: time the model's candidates were last fully handled}
 CURSOR_KEY = "promotion_gate_cursor"
+# One row per team_gate model, key = prefix + the exact model name: {version: time first seen}
+SEEN_KEY_PREFIX = "promotion_gate_seen:"
+
+_TIMES: TypeAdapter[dict[str, AwareDatetime]] = TypeAdapter(dict[str, AwareDatetime])
+
+
+def _seen_key(model: str) -> str:
+    return SEEN_KEY_PREFIX + model
+
+
+async def _read_times(conn: AsyncConnection, key: str) -> dict[str, datetime]:
+    raw = (
+        await conn.execute(select(project_settings.c.value).where(project_settings.c.key == key))
+    ).scalar_one_or_none()
+    if raw is None:
+        return {}
+    return {name: at.astimezone(UTC) for name, at in _TIMES.validate_json(str(raw)).items()}
+
+
+async def _write_times(conn: AsyncConnection, key: str, times: dict[str, datetime]) -> None:
+    value = json.dumps({name: to_iso(at) for name, at in times.items()})
+    await conn.execute(
+        sqlite_insert(project_settings)
+        .values(key=key, value=value)
+        .on_conflict_do_update(index_elements=["key"], set_={"value": value})
+    )
 
 
 class TeamGateObserver(SyncObserver):
     """SyncObserver that checks team_gate decisions for candidate model versions.
+
+    Each team_gate model has its own cursor, seeded when the model enters team_gate, so a
+    model newly added or switched never treats its older versions as candidates, and one
+    model's waiting candidate never holds another model back.
 
     The app never deploys here: no hook call exists in this observer or module.
     """
@@ -57,71 +85,6 @@ class TeamGateObserver(SyncObserver):
         self._on_call = on_call
         self._clock = clock
 
-    async def _get_cursor(self, project_id: str) -> datetime | None:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    select(project_settings.c.value).where(project_settings.c.key == CURSOR_KEY)
-                )
-            ).scalar_one_or_none()
-        if row is None:
-            return None
-        val = str(row)
-        dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
-
-    async def _set_cursor(self, project_id: str, cursor: datetime) -> None:
-        engine = await self._databases.project(project_id)
-        stmt = (
-            sqlite_insert(project_settings)
-            .values(key=CURSOR_KEY, value=to_iso(cursor))
-            .on_conflict_do_update(
-                index_elements=["key"],
-                set_={"value": to_iso(cursor)},
-            )
-        )
-        async with engine.begin() as conn:
-            await conn.execute(stmt)
-
-    async def _get_all_seen(self, project_id: str) -> dict[tuple[str, str], datetime]:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            rows = (
-                await conn.execute(
-                    select(project_settings.c.key, project_settings.c.value).where(
-                        project_settings.c.key.like("promotion_gate_seen:%")
-                    )
-                )
-            ).all()
-        res: dict[tuple[str, str], datetime] = {}
-        for k, v in rows:
-            parts = str(k).split(":", 2)
-            if len(parts) == 3:
-                dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=UTC)
-                res[(parts[1], parts[2])] = dt.astimezone(UTC)
-        return res
-
-    async def _record_seen_versions(
-        self, project_id: str, new_seen: list[tuple[str, str, datetime]]
-    ) -> None:
-        if not new_seen:
-            return
-        engine = await self._databases.project(project_id)
-        async with engine.begin() as conn:
-            for model, version, seen_at in new_seen:
-                k = f"promotion_gate_seen:{model}:{version}"
-                stmt = (
-                    sqlite_insert(project_settings)
-                    .values(key=k, value=to_iso(seen_at))
-                    .on_conflict_do_nothing()
-                )
-                await conn.execute(stmt)
-
     async def synced(self, project_id: str, now: datetime | None = None) -> None:
         if now is None:
             now_dt = (
@@ -134,140 +97,147 @@ class TeamGateObserver(SyncObserver):
         else:
             now_dt = now.astimezone(UTC)
 
-        cursor = await self._get_cursor(project_id)
-        if cursor is None:
-            # Seed cursor and record existing versions as seen at now_dt
-            seen_existing: list[tuple[str, str, datetime]] = []
-            v_page = await self._tracking.query(
-                project_id, TrackingQuery(what="versions", limit=500)
-            )
-            for v in v_page.rows:
-                if isinstance(v, ModelVersionRow):
-                    seen_existing.append((v.model, v.version, now_dt))
-            await self._record_seen_versions(project_id, seen_existing)
-            await self._set_cursor(project_id, now_dt)
-            return
-
         handoff = await self._handoffs.current(project_id)
-        if handoff is None:
-            await self._set_cursor(project_id, now_dt)
-            return
+        gate_models = (
+            [m.name for m in handoff.payload.models if m.promotion == "team_gate"]
+            if handoff is not None
+            else []
+        )
 
-        # Track seen_at for all models currently in handoff so mode switches do not replay
-        seen_map = await self._get_all_seen(project_id)
-        newly_seen: list[tuple[str, str, datetime]] = []
-        for model_spec in handoff.payload.models:
-            v_page = await self._tracking.query(
-                project_id,
-                TrackingQuery(what="versions", model=model_spec.name, limit=500),
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            cursors = await _read_times(conn, CURSOR_KEY)
+
+        # A model that left team_gate (or the handoff) loses its state, so it is seeded again
+        # if it re-enters.
+        dropped = [name for name in cursors if name not in gate_models]
+        next_cursors = {name: at for name, at in cursors.items() if name in gate_models}
+
+        for model in gate_models:
+            versions = await self._model_versions(project_id, model)
+            cursor = cursors.get(model)
+            if cursor is None:
+                async with engine.begin() as conn:
+                    await _write_times(
+                        conn, _seen_key(model), {v.version: now_dt for v in versions}
+                    )
+                next_cursors[model] = now_dt
+                continue
+
+            async with engine.connect() as conn:
+                seen = await _read_times(conn, _seen_key(model))
+            unseen = {v.version: now_dt for v in versions if v.version not in seen}
+            if unseen:
+                seen.update(unseen)
+                async with engine.begin() as conn:
+                    await _write_times(conn, _seen_key(model), seen)
+
+            # Candidates are the versions the app first saw after the cursor, oldest first.
+            candidates = sorted(
+                (v for v in versions if seen[v.version] > cursor),
+                key=lambda v: (seen[v.version], v.version),
             )
-            for v in v_page.rows:
-                if isinstance(v, ModelVersionRow) and (model_spec.name, v.version) not in seen_map:
-                    seen_map[(model_spec.name, v.version)] = now_dt
-                    newly_seen.append((model_spec.name, v.version, now_dt))
-        await self._record_seen_versions(project_id, newly_seen)
-
-        gate_models = [m for m in handoff.payload.models if m.promotion == "team_gate"]
-        if not gate_models:
-            await self._set_cursor(project_id, now_dt)
-            return
-
-        waiting = False
-
-        for model_spec in gate_models:
-            page = await self._tracking.query(
-                project_id,
-                TrackingQuery(what="versions", model=model_spec.name, limit=500),
-            )
-            # Candidate versions are those first seen by the app after cursor
-            candidate_rows = [
-                r
-                for r in page.rows
-                if isinstance(r, ModelVersionRow)
-                and seen_map.get((model_spec.name, r.version), now_dt) > cursor
-            ]
-            candidate_rows.sort(key=lambda r: seen_map.get((model_spec.name, r.version), now_dt))
-
-            for v in candidate_rows:
-                if v.run_key is None:
+            waiting = False
+            for version in candidates:
+                if await self._handle_candidate(project_id, model, version, now_dt):
                     waiting = True
-                    continue
+            if not waiting:
+                next_cursors[model] = now_dt
 
-                runs_page = await self._tracking.query(
-                    project_id,
-                    TrackingQuery(what="runs", run_key=v.run_key),
+        async with engine.begin() as conn:
+            for model in dropped:
+                await conn.execute(
+                    delete(project_settings).where(project_settings.c.key == _seen_key(model))
                 )
-                run_row = next(
-                    (
-                        row
-                        for row in runs_page.rows
-                        if isinstance(row, RunRow) and row.key == v.run_key
-                    ),
-                    None,
-                )
-                if run_row is None:
-                    # Run row not synced yet: treat as waiting so cursor is held
-                    waiting = True
-                    continue
+            await _write_times(conn, CURSOR_KEY, next_cursors)
 
-                if REQUEST_TAG not in run_row.tags:
-                    # Run was not requested by app (team's own run); ignore
-                    continue
+    async def _model_versions(self, project_id: str, model: str) -> list[ModelVersionRow]:
+        # The one query for a model's versions, used for seeding and processing alike, so the
+        # seeded set and the processed set cannot diverge.
+        page = await self._tracking.query(
+            project_id, TrackingQuery(what="versions", model=model, limit=500)
+        )
+        return [row for row in page.rows if isinstance(row, ModelVersionRow)]
 
-                eval_view = await self._reader.for_candidate(project_id, model_spec.name, v.version)
-                if eval_view is None or eval_view.payload.decision is None:
-                    # A record with no decision waits for the next sync
-                    waiting = True
-                    continue
+    async def _handle_candidate(
+        self, project_id: str, model: str, version: ModelVersionRow, now_dt: datetime
+    ) -> bool:
+        """Decide one candidate if its gate decision is in; return True when it must wait."""
+        # A version already decided in any mode is never re-decided, whatever the cursor says.
+        if await self._promotions.has_record(project_id, model, version.version):
+            return False
 
-                decision = eval_view.payload.decision
-                reasons = eval_view.payload.reasons
-                champion_version = eval_view.payload.champion_version
+        # Every app-requested version has its run, so one without a run key is the team's.
+        if version.run_key is None:
+            return False
 
-                report = await self._reports.for_candidate(project_id, model_spec.name, v.version)
-                report_id = report.id if report is not None else None
+        runs_page = await self._tracking.query(
+            project_id, TrackingQuery(what="runs", run_key=version.run_key)
+        )
+        run_row = next(
+            (
+                row
+                for row in runs_page.rows
+                if isinstance(row, RunRow) and row.key == version.run_key
+            ),
+            None,
+        )
+        if run_row is None:
+            # The run row has not synced yet: wait for it.
+            return True
 
-                promo_view = await self._promotions.record_team_gate(
-                    project_id,
-                    model=model_spec.name,
-                    candidate_version=v.version,
-                    champion_version=champion_version,
-                    decision=decision,
-                    reasons=reasons,
-                    report_id=report_id,
-                    created=now_dt,
-                )
+        if REQUEST_TAG not in run_row.tags:
+            # The team's own run: the team's to decide.
+            return False
 
-                if promo_view is not None:
-                    # Row was newly recorded: notify first on-call person
-                    people = await self._on_call.list(project_id)
-                    if people:
-                        first_person = min(people, key=lambda p: (p.escalation_order, p.id))
-                        gate_reasons = reasons or []
-                        model_text = untrusted(model_spec.name, source="tracking")
-                        ver_text = untrusted(v.version, source="tracking")
-                        msg_lines = [
-                            f"Model: {model_text}",
-                            f"Candidate version: {ver_text}",
-                            f"Decision: {decision}",
-                        ]
-                        if gate_reasons:
-                            msg_lines.extend(
-                                untrusted(r, source="evaluation") for r in gate_reasons
-                            )
-                        message = Message(
-                            title=f"Team gate {decision}: {model_text} {ver_text}",
-                            severity="low",
-                            lines=msg_lines,
-                            urgent=False,
-                        )
-                        await self._notifier.notify(
-                            project_id,
-                            first_person,
-                            message,
-                            kind="promotion",
-                            incident_id=None,
-                        )
+        eval_view = await self._reader.for_candidate(project_id, model, version.version)
+        if eval_view is None or eval_view.payload.decision is None:
+            # A record with no decision waits for the next sync.
+            return True
 
-        if not waiting:
-            await self._set_cursor(project_id, now_dt)
+        decision = eval_view.payload.decision
+        reasons = eval_view.payload.reasons
+
+        report = await self._reports.for_candidate(project_id, model, version.version)
+        report_id = report.id if report is not None else None
+
+        promo_view = await self._promotions.record_team_gate(
+            project_id,
+            model=model,
+            candidate_version=version.version,
+            champion_version=eval_view.payload.champion_version,
+            decision=decision,
+            reasons=reasons,
+            report_id=report_id,
+            created=now_dt,
+        )
+        if promo_view is None:
+            return False
+
+        # Row was newly recorded: notify the first on-call person.
+        people = await self._on_call.list(project_id)
+        if not people:
+            return False
+        first_person = min(people, key=lambda p: (p.escalation_order, p.id))
+        model_text = untrusted(model, source="tracking")
+        ver_text = untrusted(version.version, source="tracking")
+        msg_lines = [
+            f"Model: {model_text}",
+            f"Candidate version: {ver_text}",
+            f"Decision: {decision}",
+        ]
+        msg_lines.extend(untrusted(r, source="evaluation") for r in reasons or [])
+        message = Message(
+            title=f"Team gate {decision}: {model_text} {ver_text}",
+            severity="low",
+            lines=msg_lines,
+            urgent=False,
+        )
+        await self._notifier.notify(
+            project_id,
+            first_person,
+            message,
+            kind="promotion",
+            incident_id=None,
+        )
+        return False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -36,6 +37,7 @@ from mlops_agents.proposals.contract import Handoffs, HandoffView
 from mlops_agents.proposals.payloads import Contact, HandoffPayload, OnCallHours
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import project_settings
+from mlops_agents.storage.tables import promotions as promotions_table
 from mlops_agents.tracking.contract import (
     EvaluationRecord,
     ModelVersionRow,
@@ -278,6 +280,150 @@ async def databases(tmp_path: Path):
         await dbs.dispose()
 
 
+async def preset_gate_cursor(databases: Databases, cursors: dict[str, datetime]) -> None:
+    """Store the per-model team_gate cursor map, as if each model had been seeded then."""
+    engine = await databases.project(PROJECT_ID)
+    value = json.dumps({name: to_iso(at) for name, at in cursors.items()})
+    async with engine.begin() as conn:
+        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=value))
+
+
+async def stored_gate_cursor(databases: Databases) -> str:
+    """The stored team_gate cursor value, unparsed."""
+    engine = await databases.project(PROJECT_ID)
+    async with engine.connect() as conn:
+        raw = (
+            await conn.execute(
+                select(project_settings.c.value).where(project_settings.c.key == CURSOR_KEY)
+            )
+        ).scalar_one_or_none()
+    assert raw is not None, f"{CURSOR_KEY} is not set"
+    return str(raw)
+
+
+def parse_gate_cursors(raw: str) -> dict[str, datetime]:
+    assert raw.startswith("{"), f"{CURSOR_KEY} is not a per-model map: {raw!r}"
+    parsed = cast(dict[str, str], json.loads(raw))
+    return {name: datetime.fromisoformat(at) for name, at in parsed.items()}
+
+
+async def gate_cursors(databases: Databases) -> dict[str, datetime]:
+    """Read the per-model team_gate cursor map."""
+    return parse_gate_cursors(await stored_gate_cursor(databases))
+
+
+def gate_model(
+    name: str, promotion: Literal["team_gate", "person"] = "team_gate"
+) -> dict[str, Any]:
+    return sample_model(
+        name,
+        promotion=promotion,
+        environments={"production": "production"},
+        production_signal={"kind": "tracker_alias", "ref": "production"},
+    )
+
+
+def add_candidate(
+    tracking: FakeTracking,
+    model: str,
+    version: str,
+    run_key: str | None,
+) -> None:
+    """Add a model version and, when it has a run key, its run, tagged as app-requested."""
+    created = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version=version,
+            run_key=run_key,
+            aliases=[],
+            created=created,
+            evaluation="present",
+        )
+    )
+    if run_key is not None:
+        tracking.runs.append(
+            RunRow(
+                source_id="src_1",
+                key=run_key,
+                experiment="exp_1",
+                status="succeeded",
+                start=created - timedelta(minutes=10),
+                end=created,
+                params={},
+                tags={REQUEST_TAG: f"tr_{run_key}"},
+                git_commit="sha123",
+                datasets=[],
+            )
+        )
+
+
+async def insert_person_promotion(databases: Databases, model: str, version: str) -> None:
+    """A promotion a person already decided (mode person, through a proposal)."""
+    engine = await databases.project(PROJECT_ID)
+    async with engine.begin() as conn:
+        await conn.execute(
+            promotions_table.insert().values(
+                id=f"prm_person_{model}_{version}",
+                model=model,
+                candidate_version=version,
+                champion_version="v0",
+                mode="person",
+                decided_by="person",
+                status="rejected",
+                report_id=None,
+                refusals="[]",
+                created=to_iso(datetime(2026, 10, 31, 9, 0, tzinfo=UTC)),
+                applied_at=None,
+                proposal_id=f"prp_{model}_{version}",
+            )
+        )
+
+
+class Gate:
+    """One observer and its promotions service over shared fakes."""
+
+    def __init__(self, databases: Databases, handoff: HandoffView) -> None:
+        self.tracking = FakeTracking()
+        self.handoffs = FakeHandoffs(handoff)
+        self.reader = FakeEvaluationReader()
+        self.notifier = RecordingNotifier()
+        self.promotions = SqlitePromotions(
+            databases=databases,
+            tracking=self.tracking,
+            handoffs=self.handoffs,
+            reader=self.reader,
+            reports=FakeReports(),
+            hooks=cast(Hooks, FailingHooks()),
+            events=SqliteEventLog(databases),
+        )
+        self.observer = TeamGateObserver(
+            databases=databases,
+            tracking=self.tracking,
+            handoffs=self.handoffs,
+            reader=self.reader,
+            reports=FakeReports(),
+            promotions=self.promotions,
+            notifier=self.notifier,
+            on_call=FakeOnCallPeople([make_on_call_person()]),
+        )
+
+    def decide(
+        self,
+        model: str,
+        version: str,
+        run_key: str,
+        decision: Literal["promote", "hold", "reject"] | None = "promote",
+    ) -> None:
+        self.reader.views = [
+            v
+            for v in self.reader.views
+            if not (v.record.model == model and v.record.version == version)
+        ]
+        self.reader.views.append(make_eval_view(model, version, run_key, decision=decision))
+
+
 @pytest.mark.anyio
 async def test_first_run_seeds_cursor(databases: Databases) -> None:
     t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
@@ -310,15 +456,8 @@ async def test_first_run_seeds_cursor(databases: Databases) -> None:
 
     await observer.synced(PROJECT_ID, now=t0)
 
-    # Check cursor was set to t0
-    engine = await databases.project(PROJECT_ID)
-    async with engine.connect() as conn:
-        val = (
-            await conn.execute(
-                select(project_settings.c.value).where(project_settings.c.key == CURSOR_KEY)
-            )
-        ).scalar_one_or_none()
-    assert val == to_iso(t0)
+    # The team_gate model's cursor is seeded at t0
+    assert await gate_cursors(databases) == {"fraud_detection": t0}
     assert len(notifier.calls) == 0
 
 
@@ -331,9 +470,7 @@ async def test_promote_decision_records_applied_and_notifies(databases: Database
     run_key = "run_123"
 
     # Pre-set cursor
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -436,9 +573,7 @@ async def test_reject_and_hold_record_refused_with_reasons(databases: Databases)
     t2 = t0 + timedelta(minutes=10)
     model = "fraud_detection"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     # Candidate 1: reject
@@ -572,9 +707,7 @@ async def test_run_without_request_tag_records_nothing(databases: Databases) -> 
     candidate_version = "v_team"
     run_key = "run_team"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -646,9 +779,7 @@ async def test_second_sync_adds_nothing(databases: Databases) -> None:
     candidate_version = "v2"
     run_key = "run_123"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -722,9 +853,7 @@ async def test_person_mode_model_ignored(databases: Databases) -> None:
     candidate_version = "v_person"
     run_key = "run_person"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -806,9 +935,7 @@ async def test_no_hook_is_ever_run(databases: Databases) -> None:
     candidate_version = "v_hooktest"
     run_key = "run_hooktest"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -877,9 +1004,7 @@ async def test_evaluation_with_no_decision_waits_for_next_sync(databases: Databa
     candidate_version = "v_waiting"
     run_key = "run_waiting"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -940,14 +1065,8 @@ async def test_evaluation_with_no_decision_waits_for_next_sync(databases: Databa
     assert len(await promotions_service.history(PROJECT_ID, model=model)) == 0
     assert len(notifier.calls) == 0
 
-    # Cursor is still t0 because candidate was waiting
-    async with engine.connect() as conn:
-        cur = (
-            await conn.execute(
-                select(project_settings.c.value).where(project_settings.c.key == CURSOR_KEY)
-            )
-        ).scalar_one_or_none()
-    assert cur == to_iso(t0)
+    # The model's cursor is still t0 because its candidate was waiting
+    assert await gate_cursors(databases) == {"fraud_detection": t0}
 
     # Now decision arrives: promote
     reader.views = [make_eval_view(model, candidate_version, run_key, decision="promote")]
@@ -968,9 +1087,7 @@ async def test_notification_sent_to_first_on_call_person(databases: Databases) -
     candidate_version = "v_order"
     run_key = "run_order"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -1056,9 +1173,7 @@ async def test_gate_reasons_and_titles_wrapped_with_untrusted(databases: Databas
     candidate_version = "v_injected"
     run_key = "run_inj"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -1454,10 +1569,11 @@ async def test_version_syncing_before_run_row_waits_and_is_not_dropped(
 
     await observer.synced(PROJECT_ID, now=t1)
 
-    # Nothing should be recorded yet, and cursor should be held (waiting)
+    # Nothing should be recorded yet, and the model's cursor should be held (waiting)
     history = await promotions_service.history(PROJECT_ID, model=model)
     assert len(history) == 0
     assert len(notifier.calls) == 0
+    assert await gate_cursors(databases) == {model: t0}
 
     # At t2: run_row is now synced into tracking with REQUEST_TAG
     tracking.runs.append(
@@ -1493,9 +1609,7 @@ async def test_reasons_none_handled_through_observer(databases: Databases) -> No
     candidate_version = "v_noreasons"
     run_key = "run_noreasons"
 
-    engine = await databases.project(PROJECT_ID)
-    async with engine.begin() as conn:
-        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+    await preset_gate_cursor(databases, {"fraud_detection": t0})
 
     tracking = FakeTracking()
     tracking.versions.append(
@@ -1560,3 +1674,182 @@ async def test_reasons_none_handled_through_observer(databases: Databases) -> No
     assert history[0].status == "refused"
     assert history[0].refusals == []
     assert len(notifier.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_person_decision_is_not_replayed_after_cursor_pin_and_switch(
+    databases: Databases,
+) -> None:
+    """A waiting team_gate candidate must not let a person's decision be re-decided later."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    gate = Gate(databases, make_handoff([gate_model("model_a"), gate_model("model_b", "person")]))
+
+    await gate.observer.synced(PROJECT_ID, now=t0)
+
+    # A's requested candidate has no decision yet: it waits.
+    add_candidate(gate.tracking, "model_a", "a1", "run_a1")
+    gate.decide("model_a", "a1", "run_a1", decision=None)
+    # B (person mode) gets v1, which a person already decided.
+    add_candidate(gate.tracking, "model_b", "b1", "run_b1")
+    gate.decide("model_b", "b1", "run_b1", decision="promote")
+    await insert_person_promotion(databases, "model_b", "b1")
+
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=5))
+
+    gate.handoffs.set_current(make_handoff([gate_model("model_a"), gate_model("model_b")]))
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=10))
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=15))
+
+    history = await gate.promotions.history(PROJECT_ID, model="model_b")
+    assert [(p.candidate_version, p.mode) for p in history] == [("b1", "person")]
+    assert gate.notifier.calls == []
+
+
+@pytest.mark.anyio
+async def test_already_decided_candidate_is_skipped_and_does_not_hold_cursor(
+    databases: Databases,
+) -> None:
+    """A version that already has a promotion row in any mode is never a team_gate candidate."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    gate = Gate(databases, make_handoff([gate_model("model_b")]))
+
+    await gate.observer.synced(PROJECT_ID, now=t0)
+
+    # Seen after B's cursor, already decided by a person, and its evaluation has no decision yet.
+    add_candidate(gate.tracking, "model_b", "b1", "run_b1")
+    gate.decide("model_b", "b1", "run_b1", decision=None)
+    await insert_person_promotion(databases, "model_b", "b1")
+
+    await gate.observer.synced(PROJECT_ID, now=t1)
+    cursor_after_first_look = await stored_gate_cursor(databases)
+
+    # The team's gate later reports a decision for it: still not recorded.
+    gate.decide("model_b", "b1", "run_b1", decision="promote")
+    await gate.observer.synced(PROJECT_ID, now=t1 + timedelta(minutes=5))
+
+    history = await gate.promotions.history(PROJECT_ID, model="model_b")
+    assert [(p.candidate_version, p.mode) for p in history] == [("b1", "person")]
+    assert gate.notifier.calls == []
+    assert parse_gate_cursors(cursor_after_first_look)["model_b"] == t1
+
+
+@pytest.mark.anyio
+async def test_version_without_run_key_does_not_block_other_models(databases: Databases) -> None:
+    """A version with no run key is not app-requested: skipped, it holds no model's cursor."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    t2 = t0 + timedelta(minutes=10)
+    gate = Gate(databases, make_handoff([gate_model("model_a"), gate_model("model_b")]))
+
+    await gate.observer.synced(PROJECT_ID, now=t0)
+
+    add_candidate(gate.tracking, "model_a", "a1", None)
+    add_candidate(gate.tracking, "model_b", "b1", "run_b1")
+    gate.decide("model_b", "b1", "run_b1", decision="promote")
+
+    await gate.observer.synced(PROJECT_ID, now=t1)
+
+    assert [p.candidate_version for p in await gate.promotions.history(PROJECT_ID)] == ["b1"]
+    assert len(gate.notifier.calls) == 1
+    cursors = await gate_cursors(databases)
+    assert cursors["model_a"] == t1
+    assert cursors["model_b"] == t1
+
+    add_candidate(gate.tracking, "model_a", "a2", "run_a2")
+    gate.decide("model_a", "a2", "run_a2", decision="reject")
+
+    await gate.observer.synced(PROJECT_ID, now=t2)
+
+    history_a = await gate.promotions.history(PROJECT_ID, model="model_a")
+    assert [(p.candidate_version, p.status) for p in history_a] == [("a2", "refused")]
+    assert len(gate.notifier.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_model_reentering_team_gate_is_seeded_again(databases: Databases) -> None:
+    """Versions that arrive while a model is in person mode are not decided when it re-enters team_gate."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    gate = Gate(databases, make_handoff([gate_model("model_a"), gate_model("model_pin")]))
+
+    await gate.observer.synced(PROJECT_ID, now=t0)
+
+    # Another team_gate model keeps a candidate waiting the whole time.
+    add_candidate(gate.tracking, "model_pin", "p1", "run_p1")
+    gate.decide("model_pin", "p1", "run_p1", decision=None)
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=5))
+
+    # A leaves team_gate and gets requested, decided versions while in person mode.
+    gate.handoffs.set_current(
+        make_handoff([gate_model("model_a", "person"), gate_model("model_pin")])
+    )
+    add_candidate(gate.tracking, "model_a", "a1", "run_a1")
+    gate.decide("model_a", "a1", "run_a1", decision="promote")
+    add_candidate(gate.tracking, "model_a", "a2", "run_a2")
+    gate.decide("model_a", "a2", "run_a2", decision="reject")
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=10))
+
+    # A re-enters team_gate.
+    gate.handoffs.set_current(make_handoff([gate_model("model_a"), gate_model("model_pin")]))
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=15))
+
+    assert await gate.promotions.history(PROJECT_ID, model="model_a") == []
+    assert gate.notifier.calls == []
+
+    # A version arriving after re-entry is decided.
+    add_candidate(gate.tracking, "model_a", "a3", "run_a3")
+    gate.decide("model_a", "a3", "run_a3", decision="promote")
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=20))
+
+    history = await gate.promotions.history(PROJECT_ID, model="model_a")
+    assert [(p.candidate_version, p.status) for p in history] == [("a3", "applied")]
+    assert len(gate.notifier.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_model_and_version_names_containing_colons(databases: Databases) -> None:
+    """Seen state and cursor are keyed by the exact model name, never parsed from a joined key."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    model = "team:model"
+    gate = Gate(databases, make_handoff([gate_model(model)]))
+
+    # Exists before the first sync: seeded, never a candidate.
+    add_candidate(gate.tracking, model, "v:1", "run:1")
+    gate.decide(model, "v:1", "run:1", decision="promote")
+
+    await gate.observer.synced(PROJECT_ID, now=t0)
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=5))
+
+    assert await gate.promotions.history(PROJECT_ID, model=model) == []
+    assert gate.notifier.calls == []
+
+    add_candidate(gate.tracking, model, "v:2", "run:2")
+    gate.decide(model, "v:2", "run:2", decision="promote")
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=10))
+    await gate.observer.synced(PROJECT_ID, now=t0 + timedelta(minutes=15))
+
+    history = await gate.promotions.history(PROJECT_ID, model=model)
+    assert [p.candidate_version for p in history] == ["v:2"]
+    assert len(gate.notifier.calls) == 1
+    assert set(await gate_cursors(databases)) == {model}
+
+
+@pytest.mark.anyio
+async def test_record_team_gate_refuses_a_version_a_person_decided(databases: Databases) -> None:
+    """record_team_gate's own guard covers rows in any mode, not only team_gate rows."""
+    gate = Gate(databases, make_handoff([gate_model("model_b")]))
+    await insert_person_promotion(databases, "model_b", "b1")
+
+    recorded = await gate.promotions.record_team_gate(
+        PROJECT_ID,
+        model="model_b",
+        candidate_version="b1",
+        champion_version="v0",
+        decision="promote",
+        reasons=None,
+        report_id=None,
+    )
+
+    assert recorded is None
+    history = await gate.promotions.history(PROJECT_ID, model="model_b")
+    assert [(p.candidate_version, p.mode) for p in history] == [("b1", "person")]
