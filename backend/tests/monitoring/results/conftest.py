@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import os
+import subprocess
+import sys
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,17 +22,34 @@ from mlops_agents.connections.contract import (
     Mount,
     TableRef,
 )
+from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
+from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.contract import (
+    ParserCode,
+    ParserSpec,
     ResultRecord,
     ResultsObserver,
     SourceState,
     StoredResult,
 )
+from mlops_agents.monitoring.results.parsers import SqliteParsers
+from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.results.store import ResultsStore
 from mlops_agents.proposals.contract import HandoffObserver, HandoffView
-from mlops_agents.proposals.payloads import HandoffPayload
+from mlops_agents.proposals.payloads import (
+    Cadence,
+    Feed,
+    FileResults,
+    HandoffPayload,
+    JobFeedRef,
+    Operations,
+)
+from mlops_agents.sandbox.contract import EnvironmentStatus
+from mlops_agents.sandbox.docker import DockerResult, StreamCapture
 from mlops_agents.storage.databases import Databases
+from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
 
 
@@ -209,3 +229,225 @@ def events(databases: Databases) -> SqliteEventLog:
 @pytest.fixture
 def fake_observer() -> FakeObserver:
     return FakeObserver()
+
+
+class FakeIncidents:
+    def __init__(self) -> None:
+        self.signals: list[tuple[str, SignalDraft, datetime]] = []
+
+    async def raise_signal(
+        self, project_id: str, draft: SignalDraft, seen_at: datetime
+    ) -> SignalOutcome:
+        self.signals.append((project_id, draft, seen_at))
+        return SignalOutcome(
+            signal_id=f"sig_{len(self.signals)}",
+            incident_id="inc_1",
+            change="opened",
+            severity="medium",
+        )
+
+
+class FakeSandbox:
+    def __init__(self, tag: str = "img:test", ready: bool = True) -> None:
+        self.tag = tag
+        self.ready = ready
+        self.rebuilds = 0
+
+    async def rebuild(self, project_id: str) -> EnvironmentStatus:
+        self.rebuilds += 1
+        return EnvironmentStatus(
+            state="ready" if self.ready else "failed",
+            tag=self.tag if self.ready else None,
+            detail=None if self.ready else "Sandbox build failed",
+        )
+
+
+def build_feed_handoff(
+    conn_name: str,
+    pattern: str,
+) -> HandoffView:
+    feed = Feed(
+        name="feed_test",
+        kind="job",
+        ref=JobFeedRef(
+            file=FileResults(connection=conn_name, path_pattern=pattern),
+            ci_workflow=None,
+        ),
+        cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+        grace_minutes=30,
+        timezone="UTC",
+    )
+    ops = Operations(
+        scheduler=None,
+        feeds=[feed],
+        on_call=[],
+        checks=[],
+        results_location=FileResults(connection=conn_name, path_pattern="standard/*.jsonl"),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    return HandoffView(
+        proposal_id="prop_h1",
+        version=1,
+        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+        payload=payload,
+    )
+
+
+def mapping_feed_service(
+    databases: Databases,
+    events: SqliteEventLog,
+    data_dir: Path,
+    pattern: str,
+    parsers: SqliteParsers,
+    incidents: FakeIncidents | None = None,
+) -> ResultsService:
+    connections = FakeConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    return ResultsService(
+        databases,
+        FakeHandoffs(build_feed_handoff("conn_feed", pattern)),
+        connections,
+        events,
+        parsers=parsers,
+        incidents=incidents,
+    )
+
+
+class LocalExecDockerRunner:
+    """Runs the parser container's command on the host, so a code parser really executes.
+
+    Container paths under a mount are translated back to the mount's host folder. Output is
+    bounded by the production capture, so a run that prints too much is truncated as it is
+    in a real container."""
+
+    def __init__(self, image_tag: str, mounts: list[Mount]) -> None:
+        self._image_tag = image_tag
+        self._mounts = mounts
+        self.calls: list[list[str]] = []
+
+    def _to_host(self, arg: str) -> str:
+        for mount in self._mounts:
+            prefix = f"{mount.container_path}/"
+            if arg.startswith(prefix):
+                return str(mount.host_path / arg[len(prefix) :])
+        return arg
+
+    async def run(
+        self,
+        args: Sequence[str],
+        *,
+        timeout_s: float | None = None,
+        secrets: Iterable[str] = (),
+    ) -> DockerResult:
+        arg_list = list(args)
+        self.calls.append(arg_list)
+        command = arg_list[arg_list.index(self._image_tag) + 1 :]
+        assert command[0] == "python"
+        host_command = [sys.executable, *(self._to_host(a) for a in command[1:])]
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            host_command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=timeout_s,
+            check=False,
+        )
+        stdout, stderr, combined = StreamCapture(), StreamCapture(), StreamCapture()
+        stdout.feed(proc.stdout)
+        stderr.feed(proc.stderr)
+        combined.feed(proc.stdout)
+        combined.feed(proc.stderr)
+        return DockerResult(
+            stdout=stdout.get_output(),
+            stderr=stderr.get_output(),
+            exit_code=proc.returncode,
+            output=combined.get_output(),
+            truncated=combined.truncated,
+        )
+
+
+# Reads only its stdin and emits one record per non-empty line, its subject the origin_ref argv.
+STDIN_LINES_SCRIPT = """
+import json, sys
+for line in sys.stdin.read().splitlines():
+    if line.strip():
+        print(json.dumps({
+            "check_id": line.strip(),
+            "ran_at": "2026-10-30T10:00:00Z",
+            "fired": False,
+            "category": "data_quality",
+            "subject": sys.argv[1],
+            "detail": {},
+        }))
+"""
+
+
+class MountsConnections(FakeConnections):
+    """Connections whose mounts are `mounts`, counting the lookups; with `mounts_error` set,
+    every lookup raises it."""
+
+    def __init__(self, mounts: list[Mount], mounts_error: str | None = None) -> None:
+        super().__init__()
+        self._mounts = mounts
+        self._mounts_error = mounts_error
+        self.mount_lookups = 0
+
+    async def mounts(self, project_id: str) -> list[Mount]:
+        self.mount_lookups += 1
+        if self._mounts_error is not None:
+            raise RuntimeError(self._mounts_error)
+        return self._mounts
+
+
+def feed_mount(data_dir: Path) -> Mount:
+    """The conn_feed connection's mount of `data_dir`."""
+    return Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
+
+
+async def code_feed_service(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    data_dir: Path,
+    filename: str,
+    script: str,
+    incidents: FakeIncidents | None = None,
+    *,
+    sandbox: FakeSandbox | None = None,
+    connections: MountsConnections | None = None,
+) -> tuple[ResultsService, LocalExecDockerRunner]:
+    mount = feed_mount(data_dir)
+    if connections is None:
+        connections = MountsConnections([mount])
+    connections.add_local_folder("conn_feed", data_dir)
+    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
+    runner = CodeParserRunner(
+        sandbox=sandbox or FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=docker_runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=runner)
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id=f"file:conn_feed:{filename}",
+            code=ParserCode(script=script, timeout_s=60),
+        ),
+        proposal_id="prop_code",
+    )
+    service = ResultsService(
+        databases,
+        FakeHandoffs(build_feed_handoff("conn_feed", filename)),
+        connections,
+        events,
+        parsers=parsers,
+        incidents=incidents,
+    )
+    return service, docker_runner
+
+
+def set_mtime(path: Path, when: datetime) -> None:
+    """Sets the file's modification time, so a test decides how long it has been unchanged."""
+    stamp = when.timestamp()
+    os.utime(path, (stamp, stamp))
