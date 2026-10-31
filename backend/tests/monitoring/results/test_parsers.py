@@ -653,6 +653,59 @@ async def test_code_parser_runs_through_docker_runner(
     assert len(mount_args) > 0
 
 
+async def test_code_parser_ignores_stderr_in_combined_output(
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    mount_folder = tmp_path / "conn_mount"
+    mount_folder.mkdir()
+    conn_mount = Mount(host_path=mount_folder, container_path="/workspace/data")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [conn_mount]
+
+    record_line = '{"check_id": "code_chk_1", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "operational", "subject": "job_1", "detail": {}, "source_ref": "ref_1"}\n'
+    warning_line = "WARNING: deprecated pandas call\n"
+
+    class InterleavedDockerRunner(FakeDockerRunner):
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            res = await super().run(args, timeout_s=timeout_s, secrets=secrets)
+            if list(args) and args[0] == "run":
+                # CliDockerRunner always sets `output`: stdout and stderr interleaved.
+                return DockerResult(
+                    stdout=record_line,
+                    stderr=warning_line,
+                    exit_code=0,
+                    output=warning_line + record_line,
+                    truncated=False,
+                )
+            return res
+
+    runner = CodeParserRunner(
+        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=InterleavedDockerRunner(),
+        connections=MountsConnections(),
+    )
+
+    outcome = await runner.run(
+        project_id=project_id,
+        code=ParserCode(script="print('parsed')", timeout_s=15),
+        raw="raw data to parse",
+        origin_ref="data/test.raw",
+        connection_name="conn_mount",
+    )
+
+    assert outcome.errors == []
+    assert len(outcome.records) == 1
+
+
 async def test_file_appends_for_all_formats(
     databases: Databases,
     events: SqliteEventLog,

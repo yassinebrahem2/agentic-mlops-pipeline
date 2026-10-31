@@ -124,9 +124,11 @@ class CodeParserRunner:
             err_msg = res.stderr or output or f"Container exited with code {res.exit_code}"
             raise RuntimeError(f"Code parser execution failed: {err_msg}")
 
-        stdout, truncated = res.command_output()
-        if res.truncated or truncated:
+        # Records come from stdout alone: the combined `output` interleaves stderr, so a
+        # warning line would be read as bad JSON. `truncated` flags the combined capture.
+        if res.truncated:
             raise RuntimeError("Code parser output was truncated")
+        stdout = res.stdout
 
         records: list[tuple[str, ResultRecord]] = []
         errors: list[str] = []
