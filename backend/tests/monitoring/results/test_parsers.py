@@ -1610,7 +1610,8 @@ async def test_unclosed_quote_at_the_end_raises_parser_failure_with_its_offset(
 
 
 # Reads its chunk with csv.DictReader. On an append the chunk has no header row, so the
-# fieldnames come from the file's first line, the third argument.
+# fieldnames come from the file's first line, the third argument. Each record carries the
+# chunk's start offset, the second argument, so the test can check it.
 _DICT_READER_SCRIPT = """
 import csv, json, sys
 if len(sys.argv) > 3 and sys.argv[3]:
@@ -1624,7 +1625,7 @@ for row in rows:
         "fired": False,
         "category": "data_quality",
         "subject": row["table"],
-        "detail": {},
+        "detail": {"start": int(sys.argv[2])},
     }))
 """
 
@@ -1680,7 +1681,8 @@ async def test_header_reading_code_parser_reads_an_appended_row(
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     target = data_dir / "feed.csv"
-    target.write_bytes(b"check,table\nc1,t1\n")
+    first = b"check,table\nc1,t1\n"
+    target.write_bytes(first)
     service, _runner = await _code_feed_service(
         databases, events, project_id, data_dir, "feed.csv", _DICT_READER_SCRIPT
     )
@@ -1700,6 +1702,9 @@ async def test_header_reading_code_parser_reads_an_appended_row(
     async with engine.connect() as conn:
         rows = (await conn.execute(select(results))).mappings().all()
     assert {r["check_id"]: r["subject"] for r in rows} == {"c1": "t1", "c2": "t2"}
+    # The script gets each chunk's start byte offset: 0 on the first read, then the append's
+    starts = {r["check_id"]: json.loads(r["detail"])["start"] for r in rows}
+    assert starts == {"c1": 0, "c2": len(first)}
 
 
 async def test_two_bad_files_in_one_cycle_count_one_failure(
