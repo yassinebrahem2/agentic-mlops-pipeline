@@ -146,14 +146,16 @@ function Knowledge({ projectId }: { projectId: string }) {
         </ul>
       )}
 
-      {notes.length >= limit && (
+      {(notes.length >= limit || query.isPlaceholderData) && (
         <div className="flex justify-center">
           <Button
             variant="outline"
+            disabled={query.isPlaceholderData}
             onClick={() => {
               setLimit(limit + NOTES_PAGE_SIZE);
             }}
           >
+            {query.isPlaceholderData && <Loader2 className="size-4 animate-spin" />}
             Show more
           </Button>
         </div>

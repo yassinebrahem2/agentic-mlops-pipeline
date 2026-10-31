@@ -334,6 +334,7 @@ describe("KnowledgePage", () => {
     });
     expect(screen.getByTestId("note-kno_1")).toBeInTheDocument();
     expect(screen.queryByText("Loading notes...")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show more" })).toBeDisabled();
 
     act(() => {
       release?.();
@@ -397,6 +398,31 @@ describe("KnowledgePage", () => {
     await user.click(within(row).getByRole("button", { name: "Save" }));
 
     expect(await within(row).findByText("Edited late")).toBeInTheDocument();
+  });
+
+  it("deletes a row beyond the first page", async () => {
+    const user = userEvent.setup();
+    const lastId = `kno_${String(NOTES_PAGE_SIZE + 1)}`;
+    let deleted = false;
+    stubNotes((query) => {
+      const all = manyNotes(Number(query.limit)).filter((n) => !(deleted && n.id === lastId));
+      return ok(result(all));
+    });
+    deleteSpy = vi.spyOn(api, "DELETE").mockImplementation((() => {
+      deleted = true;
+      return Promise.resolve({ data: undefined, response: new Response(null, { status: 204 }) });
+    }) as never);
+    renderPage("/projects/prj_1/knowledge");
+    await screen.findByTestId("note-kno_1");
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    const row = await screen.findByTestId(`note-${lastId}`);
+
+    await user.click(within(row).getByRole("button", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Delete note" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`note-${lastId}`)).toBeNull();
+    });
   });
 
   it("refetches when a note.deleted event arrives", async () => {
