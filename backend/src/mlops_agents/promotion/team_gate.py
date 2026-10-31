@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.clock import to_iso, utc_now
 from mlops_agents.monitoring.scheduler.contract import SyncObserver
+from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.notifications.contract import Message, Notifier, OnCallPeople
 from mlops_agents.promotion.contract import EvaluationReader, Reports
 from mlops_agents.promotion.promotions import SqlitePromotions
@@ -85,6 +86,42 @@ class TeamGateObserver(SyncObserver):
         async with engine.begin() as conn:
             await conn.execute(stmt)
 
+    async def _get_all_seen(self, project_id: str) -> dict[tuple[str, str], datetime]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(project_settings.c.key, project_settings.c.value).where(
+                        project_settings.c.key.like("promotion_gate_seen:%")
+                    )
+                )
+            ).all()
+        res: dict[tuple[str, str], datetime] = {}
+        for k, v in rows:
+            parts = str(k).split(":", 2)
+            if len(parts) == 3:
+                dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                res[(parts[1], parts[2])] = dt.astimezone(UTC)
+        return res
+
+    async def _record_seen_versions(
+        self, project_id: str, new_seen: list[tuple[str, str, datetime]]
+    ) -> None:
+        if not new_seen:
+            return
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            for model, version, seen_at in new_seen:
+                k = f"promotion_gate_seen:{model}:{version}"
+                stmt = (
+                    sqlite_insert(project_settings)
+                    .values(key=k, value=to_iso(seen_at))
+                    .on_conflict_do_nothing()
+                )
+                await conn.execute(stmt)
+
     async def synced(self, project_id: str, now: datetime | None = None) -> None:
         if now is None:
             now_dt = (
@@ -99,47 +136,61 @@ class TeamGateObserver(SyncObserver):
 
         cursor = await self._get_cursor(project_id)
         if cursor is None:
+            # Seed cursor and record existing versions as seen at now_dt
+            seen_existing: list[tuple[str, str, datetime]] = []
+            v_page = await self._tracking.query(
+                project_id, TrackingQuery(what="versions", limit=500)
+            )
+            for v in v_page.rows:
+                if isinstance(v, ModelVersionRow):
+                    seen_existing.append((v.model, v.version, now_dt))
+            await self._record_seen_versions(project_id, seen_existing)
             await self._set_cursor(project_id, now_dt)
             return
 
         handoff = await self._handoffs.current(project_id)
         if handoff is None:
+            await self._set_cursor(project_id, now_dt)
             return
+
+        # Track seen_at for all models currently in handoff so mode switches do not replay
+        seen_map = await self._get_all_seen(project_id)
+        newly_seen: list[tuple[str, str, datetime]] = []
+        for model_spec in handoff.payload.models:
+            v_page = await self._tracking.query(
+                project_id,
+                TrackingQuery(what="versions", model=model_spec.name, limit=500),
+            )
+            for v in v_page.rows:
+                if isinstance(v, ModelVersionRow) and (model_spec.name, v.version) not in seen_map:
+                    seen_map[(model_spec.name, v.version)] = now_dt
+                    newly_seen.append((model_spec.name, v.version, now_dt))
+        await self._record_seen_versions(project_id, newly_seen)
 
         gate_models = [m for m in handoff.payload.models if m.promotion == "team_gate"]
         if not gate_models:
+            await self._set_cursor(project_id, now_dt)
             return
 
-        all_seen_created: list[datetime] = []
         waiting = False
 
         for model_spec in gate_models:
             page = await self._tracking.query(
                 project_id,
-                TrackingQuery(what="versions", model=model_spec.name, since=cursor, limit=500),
+                TrackingQuery(what="versions", model=model_spec.name, limit=500),
             )
-            version_rows = [
+            # Candidate versions are those first seen by the app after cursor
+            candidate_rows = [
                 r
                 for r in page.rows
                 if isinstance(r, ModelVersionRow)
-                and (
-                    r.created.astimezone(UTC) if r.created.tzinfo else r.created.replace(tzinfo=UTC)
-                )
-                > cursor
+                and seen_map.get((model_spec.name, r.version), now_dt) > cursor
             ]
-            version_rows.sort(
-                key=lambda r: (
-                    r.created.astimezone(UTC) if r.created.tzinfo else r.created.replace(tzinfo=UTC)
-                )
-            )
+            candidate_rows.sort(key=lambda r: seen_map.get((model_spec.name, r.version), now_dt))
 
-            for v in version_rows:
-                v_created = (
-                    v.created.astimezone(UTC) if v.created.tzinfo else v.created.replace(tzinfo=UTC)
-                )
-                all_seen_created.append(v_created)
-
+            for v in candidate_rows:
                 if v.run_key is None:
+                    waiting = True
                     continue
 
                 runs_page = await self._tracking.query(
@@ -154,7 +205,12 @@ class TeamGateObserver(SyncObserver):
                     ),
                     None,
                 )
-                if run_row is None or REQUEST_TAG not in run_row.tags:
+                if run_row is None:
+                    # Run row not synced yet: treat as waiting so cursor is held
+                    waiting = True
+                    continue
+
+                if REQUEST_TAG not in run_row.tags:
                     # Run was not requested by app (team's own run); ignore
                     continue
 
@@ -188,15 +244,19 @@ class TeamGateObserver(SyncObserver):
                     if people:
                         first_person = min(people, key=lambda p: (p.escalation_order, p.id))
                         gate_reasons = reasons or []
+                        model_text = untrusted(model_spec.name, source="tracking")
+                        ver_text = untrusted(v.version, source="tracking")
                         msg_lines = [
-                            f"Model: {model_spec.name}",
-                            f"Candidate version: {v.version}",
+                            f"Model: {model_text}",
+                            f"Candidate version: {ver_text}",
                             f"Decision: {decision}",
                         ]
                         if gate_reasons:
-                            msg_lines.extend(gate_reasons)
+                            msg_lines.extend(
+                                untrusted(r, source="evaluation") for r in gate_reasons
+                            )
                         message = Message(
-                            title=f"Team gate {decision}: {model_spec.name} {v.version}",
+                            title=f"Team gate {decision}: {model_text} {ver_text}",
                             severity="low",
                             lines=msg_lines,
                             urgent=False,
@@ -209,6 +269,5 @@ class TeamGateObserver(SyncObserver):
                             incident_id=None,
                         )
 
-        if all_seen_created and not waiting:
-            new_cursor = max(all_seen_created)
-            await self._set_cursor(project_id, new_cursor)
+        if not waiting:
+            await self._set_cursor(project_id, now_dt)

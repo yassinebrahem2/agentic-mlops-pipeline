@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
 from mlops_agents.clock import now_iso, to_iso, utc_now
@@ -468,7 +469,7 @@ class SqlitePromotions(Promotions):
                         proposal_id=None,
                     )
                 )
-        except Exception:
+        except IntegrityError:
             logger.debug(
                 "team_gate promotion row for (%s, %s) already inserted concurrently",
                 model,

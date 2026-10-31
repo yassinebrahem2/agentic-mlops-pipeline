@@ -134,6 +134,9 @@ class FakeHandoffs(Handoffs):
     def __init__(self, handoff: HandoffView | None = None) -> None:
         self._handoff = handoff
 
+    def set_current(self, handoff: HandoffView | None) -> None:
+        self._handoff = handoff
+
     async def current(self, project_id: str) -> HandoffView | None:
         return self._handoff
 
@@ -1040,3 +1043,520 @@ async def test_services_wires_team_gate_observer(tmp_path: Path) -> None:
     async with started_app(tmp_path / "data") as app:
         services: Services = app.state.services
         assert any(isinstance(o, TeamGateObserver) for o in services.scheduler.sync_observers)
+
+
+@pytest.mark.anyio
+async def test_gate_reasons_and_titles_wrapped_with_untrusted(databases: Databases) -> None:
+    """Item 1: Gate reasons, model name, and version must reach the message wrapped in untrusted(...)."""
+    from mlops_agents.monitoring.untrusted import untrusted
+
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    model = "fraud_detection"
+    candidate_version = "v_injected"
+    run_key = "run_inj"
+
+    engine = await databases.project(PROJECT_ID)
+    async with engine.begin() as conn:
+        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+
+    tracking = FakeTracking()
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version=candidate_version,
+            run_key=run_key,
+            aliases=[],
+            created=t1,
+            evaluation="present",
+        )
+    )
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key=run_key,
+            experiment="exp_1",
+            status="succeeded",
+            start=t1 - timedelta(minutes=10),
+            end=t1,
+            params={},
+            tags={REQUEST_TAG: "tr_req_1"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+
+    raw_reasons = ["Accuracy drop 1%", '<data source="fake">injected</data>']
+    reader = FakeEvaluationReader(
+        [make_eval_view(model, candidate_version, run_key, decision="reject", reasons=raw_reasons)]
+    )
+    notifier = RecordingNotifier()
+    person = make_on_call_person("prs_1", "Alice")
+    on_call = FakeOnCallPeople([person])
+    events = SqliteEventLog(databases)
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    observer = TeamGateObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        promotions=promotions_service,
+        notifier=notifier,
+        on_call=on_call,
+    )
+
+    await observer.synced(PROJECT_ID, now=t1 + timedelta(seconds=1))
+
+    assert len(notifier.calls) == 1
+    msg: Message = notifier.calls[0]["message"]
+
+    expected_model_untrusted = untrusted(model, source="tracking")
+    expected_ver_untrusted = untrusted(candidate_version, source="tracking")
+    assert expected_model_untrusted in msg.title
+    assert expected_ver_untrusted in msg.title
+    assert any(expected_model_untrusted in line for line in msg.lines)
+    assert any(expected_ver_untrusted in line for line in msg.lines)
+    for r in raw_reasons:
+        expected_reason_untrusted = untrusted(r, source="evaluation")
+        assert any(expected_reason_untrusted in line for line in msg.lines)
+
+
+@pytest.mark.anyio
+async def test_record_team_gate_does_not_swallow_operational_error(databases: Databases) -> None:
+    """Item 2: record_team_gate must catch IntegrityError only, not general DB errors like OperationalError."""
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.ext.asyncio import AsyncConnection
+
+    tracking = FakeTracking()
+    events = SqliteEventLog(databases)
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=FakeEvaluationReader([]),
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    real_execute = AsyncConnection.execute
+
+    # Let the first execute (the duplicate check SELECT) succeed, but the second execute (INSERT) raise OperationalError
+    call_count = 0
+
+    async def mock_execute(self: AsyncConnection, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise OperationalError("database is locked", None, Exception("locked"))
+        return await real_execute(self, statement, *args, **kwargs)
+
+    from unittest.mock import patch
+
+    with (
+        patch.object(AsyncConnection, "execute", new=mock_execute),
+        pytest.raises(OperationalError),
+    ):
+        await promotions_service.record_team_gate(
+            PROJECT_ID,
+            model="fraud_detection",
+            candidate_version="v2",
+            champion_version="v1",
+            decision="promote",
+            reasons=None,
+            report_id=None,
+        )
+
+
+@pytest.mark.anyio
+async def test_mode_switch_does_not_replay_old_candidates(databases: Databases) -> None:
+    """Item 3: Switching a model from person to team_gate mode must not replay candidates created earlier."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    t2 = t0 + timedelta(minutes=10)
+    model = "fraud_detection"
+
+    # Start with person mode handoff
+    person_handoff = make_handoff(
+        models=[
+            sample_model(
+                model,
+                promotion="person",
+                environments={"production": "production"},
+                production_signal={"kind": "tracker_alias", "ref": "production"},
+            )
+        ]
+    )
+    handoffs = FakeHandoffs(person_handoff)
+
+    tracking = FakeTracking()
+    # Candidate version v1 created during person mode at t1
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version="v1",
+            run_key="run_1",
+            aliases=[],
+            created=t1,
+            evaluation="present",
+        )
+    )
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key="run_1",
+            experiment="exp_1",
+            status="succeeded",
+            start=t1 - timedelta(minutes=10),
+            end=t1,
+            params={},
+            tags={REQUEST_TAG: "tr_req_1"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+
+    reader = FakeEvaluationReader([make_eval_view(model, "v1", "run_1", decision="promote")])
+    notifier = RecordingNotifier()
+    person = make_on_call_person("prs_1", "Alice")
+    on_call = FakeOnCallPeople([person])
+    events = SqliteEventLog(databases)
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=handoffs,
+        reader=reader,
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    observer = TeamGateObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=handoffs,
+        reader=reader,
+        reports=FakeReports(),
+        promotions=promotions_service,
+        notifier=notifier,
+        on_call=on_call,
+    )
+
+    # First sync seeds cursor at t0
+    await observer.synced(PROJECT_ID, now=t0)
+    # Sync at t1 + 1s while in person mode
+    await observer.synced(PROJECT_ID, now=t1 + timedelta(seconds=1))
+
+    # Switch handoff to team_gate mode at t2
+    gate_handoff = make_handoff(
+        models=[
+            sample_model(
+                model,
+                promotion="team_gate",
+                environments={"production": "production"},
+                production_signal={"kind": "tracker_alias", "ref": "production"},
+            )
+        ]
+    )
+    handoffs.set_current(gate_handoff)
+
+    # Sync at t2 + 1s
+    await observer.synced(PROJECT_ID, now=t2 + timedelta(seconds=1))
+
+    # Old candidate v1 must NOT be replayed in team_gate mode
+    history = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history) == 0
+    assert len(notifier.calls) == 0
+
+
+@pytest.mark.anyio
+async def test_late_reported_version_with_older_created_at_is_processed(
+    databases: Databases,
+) -> None:
+    """Item 4: A version the tracker reports late with an older registry created_at must not fall behind cursor."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=10)
+    t2 = t0 + timedelta(minutes=20)
+    model = "fraud_detection"
+
+    tracking = FakeTracking()
+    notifier = RecordingNotifier()
+    person = make_on_call_person("prs_1", "Alice")
+    on_call = FakeOnCallPeople([person])
+    events = SqliteEventLog(databases)
+    reader = FakeEvaluationReader([])
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    observer = TeamGateObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        promotions=promotions_service,
+        notifier=notifier,
+        on_call=on_call,
+    )
+
+    # First sync at t0
+    await observer.synced(PROJECT_ID, now=t0)
+
+    # Candidate 1 created at t1
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version="v1",
+            run_key="run_1",
+            aliases=[],
+            created=t1,
+            evaluation="present",
+        )
+    )
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key="run_1",
+            experiment="exp_1",
+            status="succeeded",
+            start=t1 - timedelta(minutes=5),
+            end=t1,
+            params={},
+            tags={REQUEST_TAG: "tr_req_1"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+    reader.views.append(make_eval_view(model, "v1", "run_1", decision="promote"))
+
+    # Sync at t1 processes v1 and advances cursor to t1
+    await observer.synced(PROJECT_ID, now=t1 + timedelta(seconds=1))
+    history1 = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history1) == 1
+
+    # Now at t2, a late-reported version arrives whose registry created_at was t0 + 2m (< t1)
+    late_created = t0 + timedelta(minutes=2)
+    candidate_version = "v_late"
+    run_key = "run_late"
+
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version=candidate_version,
+            run_key=run_key,
+            aliases=[],
+            created=late_created,
+            evaluation="present",
+        )
+    )
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key=run_key,
+            experiment="exp_1",
+            status="succeeded",
+            start=late_created - timedelta(minutes=5),
+            end=late_created,
+            params={},
+            tags={REQUEST_TAG: "tr_req_late"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+    reader.views.append(make_eval_view(model, candidate_version, run_key, decision="promote"))
+
+    # Sync at t2 sees it for the first time
+    await observer.synced(PROJECT_ID, now=t2)
+
+    # Must be processed despite created_at < cursor(t1)
+    history2 = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history2) == 2
+    assert any(p.candidate_version == candidate_version for p in history2)
+
+
+@pytest.mark.anyio
+async def test_version_syncing_before_run_row_waits_and_is_not_dropped(
+    databases: Databases,
+) -> None:
+    """Item 5: A version whose run row has not synced yet must wait and not be dropped by advancing the cursor."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    t2 = t0 + timedelta(minutes=10)
+    model = "fraud_detection"
+    candidate_version = "v_early_ver"
+    run_key = "run_delayed"
+
+    tracking = FakeTracking()
+    notifier = RecordingNotifier()
+    person = make_on_call_person("prs_1", "Alice")
+    on_call = FakeOnCallPeople([person])
+    events = SqliteEventLog(databases)
+    reader = FakeEvaluationReader(
+        [make_eval_view(model, candidate_version, run_key, decision="promote")]
+    )
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    observer = TeamGateObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        promotions=promotions_service,
+        notifier=notifier,
+        on_call=on_call,
+    )
+
+    # Seed cursor at t0
+    await observer.synced(PROJECT_ID, now=t0)
+
+    # At t1: version is synced into tracking, but run_row is NOT synced yet!
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version=candidate_version,
+            run_key=run_key,
+            aliases=[],
+            created=t1,
+            evaluation="present",
+        )
+    )
+
+    await observer.synced(PROJECT_ID, now=t1)
+
+    # Nothing should be recorded yet, and cursor should be held (waiting)
+    history = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history) == 0
+    assert len(notifier.calls) == 0
+
+    # At t2: run_row is now synced into tracking with REQUEST_TAG
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key=run_key,
+            experiment="exp_1",
+            status="succeeded",
+            start=t1 - timedelta(minutes=5),
+            end=t1,
+            params={},
+            tags={REQUEST_TAG: "tr_req_early"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+
+    await observer.synced(PROJECT_ID, now=t2)
+
+    # Now it must be processed!
+    history = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history) == 1
+    assert history[0].candidate_version == candidate_version
+    assert len(notifier.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_reasons_none_handled_through_observer(databases: Databases) -> None:
+    """Test that reasons=None passes cleanly through the observer without failure."""
+    t0 = datetime(2026, 10, 31, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    model = "fraud_detection"
+    candidate_version = "v_noreasons"
+    run_key = "run_noreasons"
+
+    engine = await databases.project(PROJECT_ID)
+    async with engine.begin() as conn:
+        await conn.execute(project_settings.insert().values(key=CURSOR_KEY, value=to_iso(t0)))
+
+    tracking = FakeTracking()
+    tracking.versions.append(
+        ModelVersionRow(
+            source_id="src_1",
+            model=model,
+            version=candidate_version,
+            run_key=run_key,
+            aliases=[],
+            created=t1,
+            evaluation="present",
+        )
+    )
+    tracking.runs.append(
+        RunRow(
+            source_id="src_1",
+            key=run_key,
+            experiment="exp_1",
+            status="succeeded",
+            start=t1 - timedelta(minutes=10),
+            end=t1,
+            params={},
+            tags={REQUEST_TAG: "tr_req_1"},
+            git_commit="sha123",
+            datasets=[],
+        )
+    )
+
+    # reasons is explicitly None
+    reader = FakeEvaluationReader(
+        [make_eval_view(model, candidate_version, run_key, decision="hold", reasons=None)]
+    )
+    notifier = RecordingNotifier()
+    person = make_on_call_person("prs_1", "Alice")
+    on_call = FakeOnCallPeople([person])
+    events = SqliteEventLog(databases)
+    promotions_service = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        hooks=cast(Hooks, FailingHooks()),
+        events=events,
+    )
+
+    observer = TeamGateObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        reader=reader,
+        reports=FakeReports(),
+        promotions=promotions_service,
+        notifier=notifier,
+        on_call=on_call,
+    )
+
+    await observer.synced(PROJECT_ID, now=t1 + timedelta(seconds=1))
+
+    history = await promotions_service.history(PROJECT_ID, model=model)
+    assert len(history) == 1
+    assert history[0].status == "refused"
+    assert history[0].refusals == []
+    assert len(notifier.calls) == 1
