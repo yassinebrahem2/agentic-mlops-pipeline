@@ -284,4 +284,38 @@ describe("PromotionProposalCard", () => {
       );
     });
   });
+
+  it("renders reasons as not computed when reasons is null", async () => {
+    const existingEval = sampleReport.evaluation;
+    if (!existingEval) throw new Error("Missing sample evaluation");
+
+    const reportWithNullReasons: ReportView = {
+      ...sampleReport,
+      evaluation: {
+        ...existingEval,
+        payload: {
+          ...existingEval.payload,
+          reasons: null,
+        },
+      },
+    };
+
+    vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path.includes("/proposals/")) {
+        return Promise.resolve({ data: sampleProposal, response: new Response() } as never);
+      }
+      if (path.includes("/reports/")) {
+        return Promise.resolve({ data: reportWithNullReasons, response: new Response() } as never);
+      }
+      return Promise.resolve({ data: null, response: new Response() } as never);
+    });
+
+    renderWithClient(
+      <PromotionProposalCard approval={baseApproval} projectId="prj_test" toolName="Propose" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/\(reasons: not computed\)/i)).toBeInTheDocument();
+    });
+  });
 });

@@ -216,11 +216,14 @@ export const PromotionProposalCard: ApprovalCardComponent = ({
                   <span className="font-semibold capitalize text-foreground">
                     {evaluation.payload.decision}
                   </span>
-                  {evaluation.payload.reasons.length > 0 && (
+                  {evaluation.payload.reasons != null && evaluation.payload.reasons.length > 0 && (
                     <span className="text-muted-foreground">
                       {" "}
                       ({evaluation.payload.reasons.join(", ")})
                     </span>
+                  )}
+                  {evaluation.payload.reasons === null && (
+                    <span className="italic text-muted-foreground"> (reasons: not computed)</span>
                   )}
                 </div>
               )}

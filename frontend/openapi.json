@@ -1973,12 +1973,18 @@
             ]
           },
           "reasons": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Reasons",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasons"
           },
           "schema_version": {
             "title": "Schema Version",
