@@ -28,7 +28,11 @@ class SourceReadOutcome:
 
 
 def _read_files_sync(
-    root: Path, pattern: str, secret_paths: set[str], cursor: dict[str, Any]
+    root: Path,
+    pattern: str,
+    secret_paths: set[str],
+    cursor: dict[str, Any],
+    consecutive_failures: int = 0,
 ) -> SourceReadOutcome:
     """Synchronous file scanner and reader for local folder paths."""
     candidate_files: list[tuple[str, Path]] = []
@@ -54,7 +58,6 @@ def _read_files_sync(
         candidate_files.append((rel_posix, resolved))
 
     files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
-    consecutive_failures = 0
     last_error: str | None = None
     records: list[tuple[str, ResultRecord]] = []
     evaluations: list[EvaluationRecord] = []
@@ -197,7 +200,12 @@ class FileSourceReader:
         self._connections = connections
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, Any]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, Any],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome:
         """Reads new result records from files matching source_id pattern."""
         kind, pattern, connection_name = parse_source_id(source_id)
@@ -205,7 +213,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Invalid file source_id: {source_id}",
             )
 
@@ -214,7 +222,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error="Pattern cannot be absolute or navigate with '..'",
             )
 
@@ -224,7 +232,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection {connection_name!r} not found",
             )
 
@@ -232,7 +240,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection {connection_name!r} is not a {LOCAL_FOLDER_KIND}",
             )
 
@@ -247,7 +255,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection folder {path_setting!r} does not exist",
             )
 
@@ -256,4 +264,6 @@ class FileSourceReader:
         )
         secret_paths = {f.path for f in findings.secret_files}
 
-        return await asyncio.to_thread(_read_files_sync, root, pattern, secret_paths, cursor)
+        return await asyncio.to_thread(
+            _read_files_sync, root, pattern, secret_paths, cursor, consecutive_failures
+        )

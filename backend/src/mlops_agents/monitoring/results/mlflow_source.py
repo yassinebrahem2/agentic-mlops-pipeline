@@ -34,7 +34,12 @@ class MlflowSourceReader:
         self._handoffs = handoffs
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, Any]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, Any],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome:
         """Reads metric points for the metric named in source_id."""
         try:
@@ -43,7 +48,7 @@ class MlflowSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=scrub_url_secrets(str(exc)),
             )
 
@@ -51,7 +56,7 @@ class MlflowSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Expected mlflow source_id, got: {source_id!r}",
             )
 
@@ -117,7 +122,7 @@ class MlflowSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=err,
             )
 
@@ -172,6 +177,13 @@ class MlflowSourceReader:
             except Exception as exc:
                 err = scrub_url_secrets(str(exc))
                 logger.warning("Error querying metric %s for run %s: %s", metric_name, run.key, err)
+                # Stop before this run (keep input cursor) and report the failure
+                return SourceReadOutcome(
+                    records=records,
+                    cursor=cursor,
+                    consecutive_failures=consecutive_failures + 1,
+                    last_error=err,
+                )
 
         # Running runs hold cursor at their start; when all runs finished, cursor advances
         running_starts = [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -336,3 +337,25 @@ async def test_ci_check_id_falls_back_to_source_id_when_not_in_handoff(
     outcome = await reader.read(env.project_id, "ci:deploy", cursor={})
     assert len(outcome.records) == 1
     assert outcome.records[0][1].check_id == "ci:deploy"
+
+
+async def test_ci_source_reader_scrubs_credentials_in_logs_and_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_pass = "ci_secret_token_abcdef"
+    raw_error = f"CI server error at https://ci-user:{secret_pass}@ci.example.com/runs"
+
+    class FailingTracking:
+        async def query(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError(raw_error)
+
+    handoffs = FakeHandoffs(_build_handoff_with_ci(check_id="ci_chk", workflow="test"))
+    reader = CiSourceReader(tracking=FailingTracking(), handoffs=handoffs)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await reader.read("prj_1", "ci:test", cursor={})
+
+    assert outcome.last_error is not None
+    assert secret_pass not in outcome.last_error
+    assert secret_pass not in caplog.text
+    assert "***@" in outcome.last_error

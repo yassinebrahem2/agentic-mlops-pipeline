@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -376,3 +377,133 @@ async def test_mlflow_running_run_holds_cursor_and_reread_stores_nothing_twice(
     outcome_fin = await reader.read(env.project_id, "mlflow:eval_loss", cursor=outcome_1.cursor)
     # Cursor can now advance since all runs are finished
     assert outcome_fin.cursor.get("since") == t1.isoformat()
+
+
+async def test_mlflow_metrics_query_error_stops_before_run_and_retains_cursor(
+    tracking_env: TrackingEnv,
+    tmp_path: Path,
+) -> None:
+    env = tracking_env
+    source = await env.service.create_source(
+        project_id=env.project_id,
+        type="mlflow",
+        settings={"url": "https://mlflow.example.com"},
+        auth="none",
+    )
+
+    t1 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+    t2 = datetime(2026, 10, 30, 10, 10, 0, tzinfo=UTC)
+
+    run_1 = RunRow(
+        source_id=source.id,
+        key="run_1",
+        experiment="exp_1",
+        status="succeeded",
+        start=t1,
+        end=t1,
+        params={},
+        tags={},
+        git_commit=None,
+        datasets=[],
+    )
+    run_2 = RunRow(
+        source_id=source.id,
+        key="run_2",
+        experiment="exp_1",
+        status="succeeded",
+        start=t2,
+        end=t2,
+        params={},
+        tags={},
+        git_commit=None,
+        datasets=[],
+    )
+
+    metric_p1 = MetricPoint(
+        source_id=source.id, run_key="run_1", metric="loss", step=1, value=0.5, time=t1
+    )
+    metric_p2 = MetricPoint(
+        source_id=source.id, run_key="run_2", metric="loss", step=1, value=0.3, time=t2
+    )
+
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[],
+        runs=[run_1, run_2],
+        metrics=[metric_p1, metric_p2],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, source.id)
+
+    check = CheckSpec(
+        check_id="chk_loss",
+        name="Loss Check",
+        category="model_performance",
+        cadence=Cadence(cron=None, every_minutes=60),
+        timezone="UTC",
+        results=MlflowResults(metric="loss", threshold=None, fires_when=None),
+    )
+    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks([check]))
+    reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
+
+    conn_dir = tmp_path / "dummy_conn_a"
+    conn_dir.mkdir(parents=True, exist_ok=True)
+    connections = FakeConnections()
+    connections.add_local_folder("conn_a", conn_dir)
+
+    original_query = env.service.query
+    should_fail_run_2 = True
+
+    async def flaky_query(*args: Any, **kwargs: Any) -> Any:
+        query = args[1] if len(args) > 1 else kwargs.get("query")
+        if (
+            getattr(query, "what", None) == "metrics"
+            and getattr(query, "run_key", None) == "run_2"
+            and should_fail_run_2
+        ):
+            raise RuntimeError("Transient failure fetching metrics for run_2")
+        return await original_query(*args, **kwargs)
+
+    env.service.query = flaky_query  # type: ignore[method-assign]
+
+    initial_cursor = {"since": datetime(2026, 10, 30, 9, 0, 0, tzinfo=UTC).isoformat()}
+
+    # Direct reader check:
+    outcome_direct = await reader.read(env.project_id, "mlflow:loss", cursor=initial_cursor)
+    assert len(outcome_direct.records) == 1
+    assert outcome_direct.cursor == initial_cursor
+    assert outcome_direct.consecutive_failures == 1
+    assert outcome_direct.last_error is not None
+    assert "Transient failure" in outcome_direct.last_error
+
+    # End-to-end ResultsService check:
+    results_service = ResultsService(
+        databases=env.databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=env.events,
+        tracking=env.service,
+        mlflow_reader=reader,
+    )
+
+    # Tick 1: run_1 succeeds, run_2 fails during metrics query
+    rep_1 = await results_service.collect(env.project_id, t1)
+    assert rep_1.stored == 1
+    assert "mlflow:loss" in rep_1.failures
+    st1 = await results_service.store.get_source_state(env.project_id, "mlflow:loss")
+    assert st1 is not None
+    assert st1.cursor == {}  # ResultsService started with empty cursor in DB
+    assert st1.consecutive_failures == 1
+
+    # Tick 2: Transient error resolved, re-reading with the retained cursor
+    should_fail_run_2 = False
+    rep_2 = await results_service.collect(env.project_id, t2)
+    assert rep_2.stored == 1  # Only run_2 is newly stored (run_1 deduplicated)
+    assert "mlflow:loss" not in rep_2.failures
+    st2 = await results_service.store.get_source_state(env.project_id, "mlflow:loss")
+    assert st2 is not None
+    assert st2.cursor.get("since") == t2.isoformat()
+    assert st2.consecutive_failures == 0
+    assert st2.last_error is None

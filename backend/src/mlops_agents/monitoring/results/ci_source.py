@@ -24,7 +24,12 @@ class CiSourceReader:
         self._handoffs = handoffs
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, Any]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, Any],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome:
         """Reads new finished CI runs for the workflow named in source_id."""
         try:
@@ -33,7 +38,7 @@ class CiSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=scrub_url_secrets(str(exc)),
             )
 
@@ -41,7 +46,7 @@ class CiSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Expected ci source_id, got: {source_id!r}",
             )
 
@@ -82,7 +87,7 @@ class CiSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=err,
             )
 

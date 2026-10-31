@@ -42,7 +42,12 @@ class SourceReader(Protocol):
     """Protocol for reading a source kind."""
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, object]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, object],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome: ...
 
 
@@ -233,28 +238,32 @@ class ResultsService(Results):
                 by_source[s_id] = 0
                 continue
 
+            prev_failures = state.consecutive_failures if state else 0
             try:
                 if kind == "file":
-                    outcome = await self._file_reader.read(project_id, s_id, cursor=current_cursor)
+                    outcome = await self._file_reader.read(
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                    )
                 elif kind == "ci":
                     if self._ci_reader is None:
                         raise RuntimeError("CI source reader is not configured")
-                    outcome = await self._ci_reader.read(project_id, s_id, cursor=current_cursor)
+                    outcome = await self._ci_reader.read(
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                    )
                 elif kind == "mlflow":
                     if self._mlflow_reader is None:
                         raise RuntimeError("MLflow source reader is not configured")
                     outcome = await self._mlflow_reader.read(
-                        project_id, s_id, cursor=current_cursor
+                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
                     )
                 else:
                     raise ValueError(f"Unknown source kind: {kind}")
             except Exception as exc:
                 err_msg = scrub_url_secrets(str(exc))
-                failures_count = (state.consecutive_failures + 1) if state else 1
                 outcome = SourceReadOutcome(
                     records=[],
                     cursor=current_cursor,
-                    consecutive_failures=failures_count,
+                    consecutive_failures=prev_failures + 1,
                     last_error=err_msg,
                 )
 
@@ -266,13 +275,22 @@ class ResultsService(Results):
                     except Exception:
                         logger.exception("Failed to store evaluation copy for %s", eval_rec)
 
+            if outcome.last_error is not None:
+                new_failures = (
+                    outcome.consecutive_failures
+                    if outcome.consecutive_failures > prev_failures
+                    else prev_failures + 1
+                )
+            else:
+                new_failures = 0
+
             new_state = SourceState(
                 source_id=s_id,
                 kind=kind,
                 cursor=outcome.cursor,
                 last_read=now,
                 last_error=outcome.last_error,
-                consecutive_failures=outcome.consecutive_failures,
+                consecutive_failures=new_failures,
             )
 
             new_stored = await self._store.save_items_and_state(
@@ -287,7 +305,13 @@ class ResultsService(Results):
             by_source[s_id] = len(new_stored)
             if outcome.last_error is not None:
                 failures[s_id] = outcome.last_error
-                if self._incidents is not None:
+                # Only raise source_failure when the source starts failing (was not failing previously)
+                was_failing = (
+                    state is not None
+                    and state.last_error is not None
+                    and state.consecutive_failures > 0
+                )
+                if not was_failing and self._incidents is not None:
                     try:
                         _k, _ref, conn_name = parse_source_id(s_id)
                         scope = conn_name if conn_name is not None else s_id

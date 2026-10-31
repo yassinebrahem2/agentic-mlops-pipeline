@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
 from mlops_agents.monitoring.results.contract import source_id
-from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import FileResults, HandoffPayload, Operations
 from mlops_agents.storage.databases import Databases
@@ -192,3 +195,141 @@ async def test_suspended_connection_raises_no_signal_on_source_failure(
 
     # But NO signal was raised because connection is suspended!
     assert len(incidents.signals) == 0
+
+
+async def test_consecutive_failing_ticks_raise_one_signal_until_recovery_and_new_failure(
+    databases: Databases, events: SqliteEventLog, project_id: str, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "flaky_data"
+    # Initially directory does not exist
+    connections = FakeConnections()
+    connections.add_local_folder("conn_flaky", data_dir)
+    handoffs = FakeHandoffs(_build_handoff("conn_flaky", "*.jsonl"))
+    incidents = FakeIncidents()
+    maintenance = FakeMaintenance()
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        incidents=incidents,
+        maintenance=maintenance,
+    )
+    s_id = source_id("file", "*.jsonl", "conn_flaky")
+
+    # Tick 1: failing (directory missing) -> raises signal 1
+    t1 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+    rep1 = await service.collect(project_id, t1)
+    assert s_id in rep1.failures
+    assert len(incidents.signals) == 1
+    st1 = await service.store.get_source_state(project_id, s_id)
+    assert st1 is not None
+    assert st1.consecutive_failures == 1
+    assert st1.last_error is not None
+
+    # Tick 2: still failing -> NO new signal raised
+    t2 = datetime(2026, 10, 30, 10, 5, 0, tzinfo=UTC)
+    rep2 = await service.collect(project_id, t2)
+    assert s_id in rep2.failures
+    assert len(incidents.signals) == 1
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.consecutive_failures == 2
+
+    # Tick 3: directory created and valid file added -> recovery!
+    data_dir.mkdir(parents=True, exist_ok=True)
+    valid_file = data_dir / "results.jsonl"
+    valid_file.write_bytes(
+        b'{"check_id": "c1", "origin": "agent", "ran_at": "2026-10-30T10:10:00Z", '
+        b'"fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+    t3 = datetime(2026, 10, 30, 10, 10, 0, tzinfo=UTC)
+    rep3 = await service.collect(project_id, t3)
+    assert s_id not in rep3.failures
+    assert rep3.stored == 1
+    assert len(incidents.signals) == 1
+    st3 = await service.store.get_source_state(project_id, s_id)
+    assert st3 is not None
+    assert st3.consecutive_failures == 0
+    assert st3.last_error is None
+
+    # Tick 4: directory removed -> failure again -> raises signal 2!
+    for f in data_dir.iterdir():
+        f.unlink()
+    data_dir.rmdir()
+
+    t4 = datetime(2026, 10, 30, 10, 15, 0, tzinfo=UTC)
+    rep4 = await service.collect(project_id, t4)
+    assert s_id in rep4.failures
+    assert len(incidents.signals) == 2
+    assert incidents.signals[1][1].kind == "source_failure"
+    st4 = await service.store.get_source_state(project_id, s_id)
+    assert st4 is not None
+    assert st4.consecutive_failures == 1
+    assert st4.last_error is not None
+
+
+async def test_failing_source_scrubs_url_credentials_from_error_signal_and_logs(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_pass = "super_secret_token_12345"
+    secret_param = "query_secret_token_99999"
+    raw_error = f"Connection failed to https://admin:{secret_pass}@mlops.internal/api/v1?token={secret_param}&format=json"
+
+    class FailingReader:
+        async def read(
+            self,
+            project_id: str,
+            source_id: str,
+            cursor: dict[str, Any],
+            *,
+            consecutive_failures: int = 0,
+        ) -> SourceReadOutcome:
+            raise RuntimeError(raw_error)
+
+    connections = FakeConnections()
+    handoffs = FakeHandoffs(_build_handoff("conn_sec", "*.jsonl"))
+    incidents = FakeIncidents()
+    maintenance = FakeMaintenance()
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        incidents=incidents,
+        maintenance=maintenance,
+        file_reader=FailingReader(),  # type: ignore[arg-type]
+    )
+
+    s_id = source_id("file", "*.jsonl", "conn_sec")
+    now = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+
+    with caplog.at_level(logging.WARNING):
+        rep = await service.collect(project_id, now)
+
+    assert s_id in rep.failures
+    st = await service.store.get_source_state(project_id, s_id)
+    assert st is not None
+    assert st.last_error is not None
+
+    # Verify secrets are scrubbed from DB state
+    assert secret_pass not in st.last_error
+    assert secret_param not in st.last_error
+    assert "***@" in st.last_error
+
+    # Verify secrets are scrubbed from SignalDraft detail
+    assert len(incidents.signals) == 1
+    draft = incidents.signals[0][1]
+    assert secret_pass not in str(draft.detail)
+    assert secret_param not in str(draft.detail)
+    assert secret_pass not in draft.detail["error"]
+    assert secret_param not in draft.detail["error"]
+
+    # Verify secrets are not present in logs
+    assert secret_pass not in caplog.text
+    assert secret_param not in caplog.text
