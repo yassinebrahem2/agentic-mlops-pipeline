@@ -87,3 +87,15 @@ def test_build_one_shot_run_args_with_env_file_and_mounts(tmp_path: Path) -> Non
     m2_val = args[mount_indices[1] + 1]
     assert "target=/data/conn1,readonly" in m1_val
     assert "target=/workspace,readonly" in m2_val
+
+
+def test_build_one_shot_run_args_with_name() -> None:
+    args = build_one_shot_run_args(
+        "prj_123",
+        "img:tag",
+        ["echo", "hello"],
+        name="hook-hok_test123",
+    )
+    assert "--name" in args
+    name_idx = args.index("--name")
+    assert args[name_idx + 1] == "hook-hok_test123"
