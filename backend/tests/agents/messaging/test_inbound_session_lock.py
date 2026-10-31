@@ -142,7 +142,7 @@ async def test_a_send_waits_while_a_mid_turn_take_of_the_same_session_runs(
 
     async def acquire_seen(self: AsyncRLock) -> None:
         current = asyncio.current_task()
-        owner: Any = getattr(self, "_owner")  # noqa: B009 (the lock's holder, test-only)
+        owner: Any = getattr(self, "_owner", None)
         if current in senders and owner is not None and owner is not current:
             contended.set()
         await acquire(self)
@@ -210,15 +210,15 @@ async def test_a_mid_turn_take_in_a_real_turn_holds_the_registrys_lock_and_compl
     env, _ = await build_inbound_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, gate=gate
     )
-    project_id, manager = env.session.project_id, env.session.manager
-    registry: Any = getattr(manager, "_registry")  # noqa: B009 (the lock's one owner, test-only)
+    manager = env.session.manager
+    registry: Any = getattr(manager, "_registry", None)
     held_by_taker: list[bool] = []
     take_inbound = SessionStore.take_inbound
 
     async def take_inbound_seen(
         self: SessionStore, project: str, session: str, turn: str
     ) -> list[MessageView]:
-        owner: Any = getattr(registry.lock(project, session), "_owner")  # noqa: B009
+        owner: Any = getattr(registry.lock(project, session), "_owner", None)
         held_by_taker.append(owner is asyncio.current_task())
         return await take_inbound(self, project, session, turn)
 
@@ -266,7 +266,9 @@ async def test_build_services_binds_the_inbound_source_before_anything_can_run_a
     for owner, name in ((WakeupService, "start"), (Kickoff, "resume"), (AppScheduler, "start")):
         original = getattr(owner, name)
 
-        async def step_seen(self: Any, *a: Any, _o: Any = original, _n: str = name, **k: Any) -> Any:
+        async def step_seen(
+            self: Any, *a: Any, _o: Any = original, _n: str = name, **k: Any
+        ) -> Any:
             steps.append(f"{type(self).__name__}.{_n}")
             return await _o(self, *a, **k)
 
