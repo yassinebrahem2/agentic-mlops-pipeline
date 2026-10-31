@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 from mlops_agents.monitoring.query import MonitoringQuery, QueryProvider, QueryWhat
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.tracking.contract import Page
-from mlops_agents.training.contract import FixRequestView, TrainingRequestView
+from mlops_agents.training.contract import (
+    FixRequestView,
+    TrainingPolicyView,
+    TrainingRequestView,
+)
 
 if TYPE_CHECKING:
     from mlops_agents.training.fixes import SqliteFixes
@@ -67,6 +71,26 @@ class TrainingRequestsQueryProvider(QueryProvider):
         return await self._training.page_requests(
             project_id,
             request_id=q.id,
+            model=q.model,
+            status=q.status,
+            since=q.since,
+            limit=q.limit,
+            offset=q.offset,
+        )
+
+
+class PoliciesQueryProvider(QueryProvider):
+    """Query provider serving what='policies' via SqliteTraining."""
+
+    what: QueryWhat = "policies"
+
+    def __init__(self, training: SqliteTraining) -> None:
+        self._training = training
+
+    async def query(self, project_id: str, q: MonitoringQuery) -> Page[TrainingPolicyView]:
+        return await self._training.page_policies(
+            project_id,
+            policy_id=q.id,
             model=q.model,
             status=q.status,
             since=q.since,

@@ -4,6 +4,7 @@ import type { components } from "@/api/schema";
 import { GenericApprovalCard } from "./GenericApprovalCard";
 import { ConnectionsProposalCard } from "./proposals/ConnectionsProposalCard";
 import { HandoffProposalCard } from "./proposals/HandoffProposalCard";
+import { TrainingPolicyProposalCard } from "./proposals/TrainingPolicyProposalCard";
 import { MaintenanceProposalCard } from "./proposals/MaintenanceProposalCard";
 import { StallCard } from "./StallCard";
 
@@ -30,6 +31,7 @@ export const CARD_FOR_KIND: Partial<Record<ApprovalPart["kind"], ApprovalCardCom
 export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> = {
   connections: ConnectionsProposalCard,
   handoff: HandoffProposalCard,
+  training_policy: TrainingPolicyProposalCard,
   maintenance: MaintenanceProposalCard,
 };
 
