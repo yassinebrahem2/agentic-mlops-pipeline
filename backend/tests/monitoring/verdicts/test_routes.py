@@ -12,10 +12,21 @@ import pytest
 from fastapi import FastAPI
 
 from mlops_agents.api.services import Services
+from mlops_agents.clock import to_iso
 from mlops_agents.monitoring.incidents.contract import SignalDraft
 from tests.api.conftest import LOCAL_URL, add_local_project, signed_in, started_app
 
 T0 = datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC)
+
+
+async def _until_the_clock_passes(stamp: datetime) -> None:
+    """Waits until the system clock, at the stored millisecond precision, is past `stamp`, so
+    the next record is strictly newer even where the clock ticks coarsely (Windows)."""
+    for _ in range(200):
+        if to_iso(datetime.now(UTC)) > to_iso(stamp):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("the system clock did not move past the last record")
 
 
 @pytest.fixture
@@ -88,8 +99,7 @@ async def test_verdict_routes_record_list_and_refuse(
     incident = (await client.get(f"{base}/incidents/{resolved}")).json()
     assert incident["status"] == "closed"
     assert incident["verdict"]["value"] == "real_issue"
-    # The server's clock stores milliseconds; the next verdict must be strictly newer.
-    await asyncio.sleep(0.01)
+    await _until_the_clock_passes(datetime.fromisoformat(body["created"]))
 
     res = await client.post(
         f"{base}/incidents/{still_open}/verdict",
@@ -156,8 +166,7 @@ async def test_miss_routes_store_with_the_servers_clock_and_list(
         )
         assert res.status_code == 422
 
-    # The server's clock stores milliseconds; the next miss must be strictly newer.
-    await asyncio.sleep(0.01)
+    await _until_the_clock_passes(after)
     second = await client.post(
         base, json={"description": "A second miss.", "occurred_at": occurred.isoformat()}
     )
