@@ -68,8 +68,8 @@ class ChatOpenAIWithExtraContent(ChatOpenAI):
             extra = cast(dict[str, Any] | None, rtc.get("extra_content"))
             if extra is not None:
                 extra_by_key[idx_str] = extra
-                if self._model_address:
-                    model_by_key[idx_str] = self._model_address
+            if self._model_address and rtc.get("id"):
+                model_by_key[idx_str] = self._model_address
 
         if extra_by_key:
             generation_chunk.message.additional_kwargs.setdefault(
@@ -139,11 +139,7 @@ class ChatOpenAIWithExtraContent(ChatOpenAI):
         if call_model is None:
             return True
         target = self._model_address or self.model_name
-        if call_model == target or call_model == self.model_name:
-            return True
-        if target and call_model.replace(target, "") == "":
-            return True
-        return bool(self.model_name and call_model.replace(self.model_name, "") == "")
+        return call_model == target or call_model == self.model_name
 
     def _get_request_payload(
         self,
