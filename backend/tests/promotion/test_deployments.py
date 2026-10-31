@@ -232,11 +232,16 @@ def _run(
 
 
 def _move(
-    alias: str, from_version: str | None, to_version: str | None, at: datetime
+    alias: str,
+    from_version: str | None,
+    to_version: str | None,
+    at: datetime,
+    *,
+    model: str = MODEL,
 ) -> DeploymentRow:
     return DeploymentRow(
         source_id="src_1",
-        model=MODEL,
+        model=model,
         alias=alias,
         from_version=from_version,
         to_version=to_version,
@@ -416,6 +421,50 @@ async def test_hook_runs_that_failed_name_no_model_or_cite_a_policy_are_left_out
         ("fall_back", "agent_bypass", None)
     ]
     assert any("hrun_policy" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_each_run_takes_its_own_models_move() -> None:
+    other = "churn_model"
+    tracking = FakeTracking()
+    tracking.deployments += [
+        # The other model's move falls between this model's runs, before this model's moves.
+        _move("production", "b1", "b0", T0 + timedelta(seconds=5), model=other),
+        _move("production", "a2", "a1", T0 + timedelta(seconds=20)),
+        _move("production", "a1", "a0", T0 + timedelta(seconds=30)),
+    ]
+    runs = [
+        _run("hrun_a1", "rollback", T0, rule_id="rul_a1"),
+        _run("hrun_b", "rollback", T0 + timedelta(seconds=3), rule_id="rul_b", model=other),
+        _run("hrun_a2", "rollback", T0 + timedelta(seconds=10), rule_id="rul_a2"),
+    ]
+
+    async with httpx2.AsyncClient() as http:
+        view = await _service(http, tracking=tracking, runs=runs).get_deployments(PROJECT_ID)
+
+    versions = {d.decided_by_ref: (d.model, d.from_version, d.to_version) for d in view.decisions}
+    assert versions == {
+        "rul_a1": (MODEL, "a2", "a1"),
+        "rul_a2": (MODEL, "a1", "a0"),
+        "rul_b": (other, "b1", "b0"),
+    }
+
+
+@pytest.mark.anyio
+async def test_moves_before_the_oldest_run_do_not_fill_the_page() -> None:
+    tracking = FakeTracking()
+    # A page's worth of moves before the run: read with no lower bound they would overflow it.
+    tracking.deployments += [
+        _move("production", f"old{i}", f"old{i + 1}", T0 - timedelta(hours=1, seconds=-i))
+        for i in range(500)
+    ]
+    tracking.deployments.append(_move("production", "v1", "v0", T0 + timedelta(seconds=1)))
+    runs = [_run("hrun_rb", "rollback", T0, rule_id="rul_1")]
+
+    async with httpx2.AsyncClient() as http:
+        view = await _service(http, tracking=tracking, runs=runs).get_deployments(PROJECT_ID)
+
+    assert [(d.from_version, d.to_version) for d in view.decisions] == [("v1", "v0")]
 
 
 @pytest.mark.anyio

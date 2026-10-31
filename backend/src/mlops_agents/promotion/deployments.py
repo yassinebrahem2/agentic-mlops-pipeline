@@ -173,7 +173,11 @@ class DeploymentsService:
             (
                 r
                 for r in page.rows
-                if isinstance(r, DeploymentRow) and r.alias in aliases and r.to_version is not None
+                # The model is checked here too, so a run never rests on the query filter alone.
+                if isinstance(r, DeploymentRow)
+                and r.model == model
+                and r.alias in aliases
+                and r.to_version is not None
             ),
             key=lambda r: _utc(r.seen_at),
         )
