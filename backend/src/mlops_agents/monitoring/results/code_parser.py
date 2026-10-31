@@ -24,14 +24,20 @@ logger = logging.getLogger(__name__)
 # The team's script sees only the chunk it is given, on stdin: DockerRunner has no stdin, so
 # this stdlib-only bootstrap reads the chunk's bytes from the read-only mount and runs the
 # script over them. Argv: file path, start byte offset, byte length, script, origin_ref.
+# What the script itself receives is CODE_PARSER_CONTRACT in parser_kind.py. A chunk that
+# does not start the file lacks its header line, so the bootstrap reads that line here
+# (bounded) and passes it on.
 _BOOTSTRAP = """\
 import io, sys
 path, start, length, script, origin_ref = sys.argv[1:6]
+first_line = ''
 with open(path, 'rb') as f:
+    if int(start) > 0:
+        first_line = f.readline(65536).rstrip(b'\\r\\n').decode('utf-8', errors='replace')
     f.seek(int(start))
     data = f.read(int(length))
 sys.stdin = io.TextIOWrapper(io.BytesIO(data), encoding='utf-8', errors='replace')
-sys.argv = ['<parser>', origin_ref]
+sys.argv = ['<parser>', origin_ref, start, first_line]
 exec(compile(script, '<parser>', 'exec'), {'__name__': '__main__'})
 """
 

@@ -20,6 +20,20 @@ from mlops_agents.proposals.contract import (
 
 logger = logging.getLogger(__name__)
 
+# What a code parser's script is run with, shown on its card so the script is written against
+# it. code_parser.py's bootstrap implements it.
+CODE_PARSER_CONTRACT = (
+    "The script runs once per new chunk of the file, in the project's sandbox, without network.\n"
+    "- stdin: exactly the chunk, UTF-8 text, in whole lines: the file from its start on the"
+    " first read (and after the file is rewritten), then only what was appended since.\n"
+    "- sys.argv[1]: the file's path in the connection.\n"
+    "- sys.argv[2]: the chunk's start byte offset in the file.\n"
+    "- sys.argv[3]: the file's first line (a CSV header, say) when the start offset is above 0;"
+    ' otherwise "", and the chunk itself begins with that line.\n'
+    "- stdout: the records, one JSON object per line or one JSON array, and nothing else.\n"
+    "- stderr is ignored. The script must not read the file itself."
+)
+
 
 def _payload(payload: BaseModel) -> ParserPayload:
     if isinstance(payload, ParserPayload):
@@ -53,7 +67,12 @@ class ParserKind:
             )
         elif p.spec.code is not None:
             c = p.spec.code
-            body = f"Source: {source_id}\nTimeout: {c.timeout_s}s\nScript:\n{c.script}"
+            body = (
+                f"Source: {source_id}\n"
+                f"Timeout: {c.timeout_s}s\n"
+                f"Script contract:\n{CODE_PARSER_CONTRACT}\n"
+                f"Script:\n{c.script}"
+            )
         else:
             body = f"Source: {source_id}"
 

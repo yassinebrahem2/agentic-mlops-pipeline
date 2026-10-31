@@ -27,7 +27,7 @@ from mlops_agents.monitoring.results.contract import (
     ParserSpec,
 )
 from mlops_agents.monitoring.results.mapping import evaluate_mapping
-from mlops_agents.monitoring.results.parser_kind import ParserKind
+from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT, ParserKind
 from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.settings import MonitoringSettings, set_monitoring_settings
@@ -1260,36 +1260,8 @@ async def test_code_parser_append_stores_only_the_new_record(
     data_dir.mkdir(parents=True, exist_ok=True)
     target = data_dir / "feed.raw"
     target.write_bytes(b"c1\n")
-
-    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
-
-    class MountsConnections(FakeConnections):
-        async def mounts(self, project_id: str) -> list[Mount]:
-            return [mount]
-
-    connections = MountsConnections()
-    connections.add_local_folder("conn_feed", data_dir)
-    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
-    runner = CodeParserRunner(
-        sandbox=FakeSandbox(tag="sandbox:test-tag"),
-        docker_runner=docker_runner,
-        connections=connections,
-    )
-    parsers = SqliteParsers(databases, code_runner=runner)
-    await parsers.store(
-        project_id,
-        ParserSpec(
-            source_id="file:conn_feed:feed.raw",
-            code=ParserCode(script=_STDIN_LINES_SCRIPT, timeout_s=60),
-        ),
-        proposal_id="prop_code",
-    )
-    service = ResultsService(
-        databases,
-        FakeHandoffs(_build_feed_handoff("conn_feed", "feed.raw")),
-        connections,
-        events,
-        parsers=parsers,
+    service, docker_runner = await _code_feed_service(
+        databases, events, project_id, data_dir, "feed.raw", _STDIN_LINES_SCRIPT
     )
 
     rep1 = await service.collect(project_id, clock.now())
@@ -1635,3 +1607,107 @@ async def test_unclosed_quote_at_the_end_raises_parser_failure_with_its_offset(
     async with engine.connect() as conn:
         rows = (await conn.execute(select(results))).mappings().all()
     assert sorted(r["check_id"] for r in rows) == ["c1", "c3"]
+
+
+# Reads its chunk with csv.DictReader. On an append the chunk has no header row, so the
+# fieldnames come from the file's first line, the third argument.
+_DICT_READER_SCRIPT = """
+import csv, json, sys
+if len(sys.argv) > 3 and sys.argv[3]:
+    rows = csv.DictReader(sys.stdin, fieldnames=next(csv.reader([sys.argv[3]])))
+else:
+    rows = csv.DictReader(sys.stdin)
+for row in rows:
+    print(json.dumps({
+        "check_id": row["check"],
+        "ran_at": "2026-10-30T10:00:00Z",
+        "fired": False,
+        "category": "data_quality",
+        "subject": row["table"],
+        "detail": {},
+    }))
+"""
+
+
+async def _code_feed_service(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    data_dir: Path,
+    filename: str,
+    script: str,
+) -> tuple[ResultsService, LocalExecDockerRunner]:
+    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [mount]
+
+    connections = MountsConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
+    runner = CodeParserRunner(
+        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=docker_runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=runner)
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id=f"file:conn_feed:{filename}",
+            code=ParserCode(script=script, timeout_s=60),
+        ),
+        proposal_id="prop_code",
+    )
+    service = ResultsService(
+        databases,
+        FakeHandoffs(_build_feed_handoff("conn_feed", filename)),
+        connections,
+        events,
+        parsers=parsers,
+    )
+    return service, docker_runner
+
+
+async def test_header_reading_code_parser_reads_an_appended_row(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "feed.csv"
+    target.write_bytes(b"check,table\nc1,t1\n")
+    service, _runner = await _code_feed_service(
+        databases, events, project_id, data_dir, "feed.csv", _DICT_READER_SCRIPT
+    )
+
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.failures == {}
+    assert rep1.stored == 1
+
+    with target.open("ab") as f:
+        f.write(b"c2,t2\n")
+
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.failures == {}
+    assert rep2.stored == 1
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (await conn.execute(select(results))).mappings().all()
+    assert {r["check_id"]: r["subject"] for r in rows} == {"c1": "t1", "c2": "t2"}
+
+
+def test_code_parser_preview_shows_the_script_contract(databases: Databases) -> None:
+    spec = ParserSpec(source_id="file:conn_feed:feed.csv", code=ParserCode(script="print(1)"))
+    payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
+
+    preview = ParserKind(SqliteParsers(databases)).preview(payload)
+
+    assert CODE_PARSER_CONTRACT in preview.body
+    assert "sys.argv[3]" in CODE_PARSER_CONTRACT
+    assert "print(1)" in preview.body
