@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.errors import DomainError
-from mlops_agents.promotion.contract import ReportView
+from mlops_agents.promotion.contract import DeploymentsView, ReportView
 
 router = APIRouter(tags=["promotion"])
 
@@ -24,3 +24,14 @@ async def get_report(
     if report is None:
         raise DomainError("report_not_found", f"Report {report_id} not found", status=404)
     return report
+
+
+@router.get(
+    "/projects/{project_id}/deployments",
+    response_model=DeploymentsView,
+)
+async def get_deployments(
+    project: ProjectDep,
+    services: ServicesDep,
+) -> DeploymentsView:
+    return await services.deployments.get_deployments(project.id)
