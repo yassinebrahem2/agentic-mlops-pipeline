@@ -53,7 +53,6 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
-from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
 from mlops_agents.monitoring.expectations.query import (
     ExpectationsQueryProvider,
@@ -69,6 +68,11 @@ from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.follow_ups import FollowUpsJob
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.maintenance import (
+    MaintenanceKind,
+    MaintenanceWindows,
+    WindowsQueryProvider,
+)
 from mlops_agents.monitoring.incidents.prioritization import PrioritizationWake
 from mlops_agents.monitoring.incidents.query import IncidentsQueryProvider, SignalsQueryProvider
 from mlops_agents.monitoring.incidents.reactor import Reactor
@@ -177,6 +181,7 @@ class Services:
     reports: Reports
     hooks: HooksService
     incidents: IncidentsService
+    maintenance_windows: MaintenanceWindows
     verdicts: SqliteVerdicts
     baseline: SqliteBaseline
     waker: Waker
@@ -353,13 +358,15 @@ async def build_services(
         clock=clock,
     )
 
+    maintenance_windows = MaintenanceWindows(databases=databases, clock=clock)
+    maintenance = maintenance_windows
     results = ResultsService(
         databases=databases,
         handoffs=handoffs,
         connections=connections,
         events=events,
+        maintenance=maintenance,
     )
-    maintenance = NeverSuspended()
     severity = RuleSeverity(handoffs=handoffs)
     incidents = IncidentsService(
         databases=databases,
@@ -372,6 +379,7 @@ async def build_services(
     )
     severity.bind_incidents(incidents)
     results.bind_incidents(incidents)
+    results.bind_maintenance(maintenance)
     verdicts = SqliteVerdicts(databases, incidents, results, events, clock)
     incidents.bind_verdicts(verdicts)
     query_providers.register(VerdictsQueryProvider(verdicts))
@@ -534,6 +542,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))
 
     approvals = ApprovalsService(
         databases=databases,
@@ -603,6 +612,7 @@ async def build_services(
     query_providers.register(ExpectationsQueryProvider(expectations))
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
+    query_providers.register(WindowsQueryProvider(windows=maintenance_windows))
     training_lifecycle.bind_expectations(expectations)
     linker = RequestLinker(
         training=training,
@@ -702,6 +712,7 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        maintenance_windows=maintenance_windows,
         verdicts=verdicts,
         baseline=baseline,
         waker=waker,

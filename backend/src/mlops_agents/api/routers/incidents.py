@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
+from pydantic import BaseModel, ConfigDict
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
 from mlops_agents.errors import DomainError
@@ -13,7 +15,9 @@ from mlops_agents.monitoring.incidents.contract import (
     IncidentStatus,
     IncidentView,
     SignalView,
+    WindowSpec,
 )
+from mlops_agents.monitoring.incidents.maintenance import MaintenanceWindowView
 from mlops_agents.tracking.contract import Page
 
 router = APIRouter(tags=["incidents"])
@@ -109,3 +113,59 @@ async def close_incident(
     services: ServicesDep,
 ) -> IncidentView:
     return await services.incidents.close(project.id, incident_id, by="user")
+
+
+class SnoozeIncidentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    until: datetime
+
+
+@router.post(
+    "/projects/{project_id}/incidents/{incident_id}/snooze",
+    response_model=IncidentView,
+)
+async def snooze_incident(
+    project: ProjectDep,
+    incident_id: str,
+    body: SnoozeIncidentBody,
+    services: ServicesDep,
+) -> IncidentView:
+    return await services.incidents.snooze(project.id, incident_id, until=body.until, by="user")
+
+
+@router.post(
+    "/projects/{project_id}/maintenance-windows",
+    status_code=status.HTTP_201_CREATED,
+    response_model=MaintenanceWindowView,
+)
+async def create_maintenance_window(
+    project: ProjectDep,
+    body: WindowSpec,
+    services: ServicesDep,
+) -> MaintenanceWindowView:
+    return await services.maintenance_windows.create(project.id, body, created_by="user")
+
+
+@router.get(
+    "/projects/{project_id}/maintenance-windows",
+    response_model=list[MaintenanceWindowView],
+)
+async def list_maintenance_windows(
+    project: ProjectDep,
+    services: ServicesDep,
+) -> list[MaintenanceWindowView]:
+    return await services.maintenance_windows.list(project.id)
+
+
+@router.delete(
+    "/projects/{project_id}/maintenance-windows/{window_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_maintenance_window(
+    project: ProjectDep,
+    window_id: str,
+    services: ServicesDep,
+) -> Response:
+    await services.maintenance_windows.delete(project.id, window_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

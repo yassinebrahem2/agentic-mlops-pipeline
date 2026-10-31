@@ -3452,6 +3452,67 @@
         "title": "MaintenanceProposalView",
         "type": "object"
       },
+      "MaintenanceWindowView": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end",
+          "scope",
+          "reason",
+          "created_by",
+          "created"
+        ],
+        "title": "MaintenanceWindowView",
+        "type": "object"
+      },
       "MessageCreated": {
         "description": "Every new message, the user's included.",
         "properties": {
@@ -7046,6 +7107,21 @@
           "set"
         ],
         "title": "SlotState",
+        "type": "object"
+      },
+      "SnoozeIncidentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "until": {
+            "format": "date-time",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until"
+        ],
+        "title": "SnoozeIncidentBody",
         "type": "object"
       },
       "StatValue": {
@@ -11133,6 +11209,67 @@
         ]
       }
     },
+    "/api/projects/{project_id}/incidents/{incident_id}/snooze": {
+      "post": {
+        "operationId": "snooze_incident_api_projects__project_id__incidents__incident_id__snooze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeIncidentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Incident",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
     "/api/projects/{project_id}/incidents/{incident_id}/timeline": {
       "get": {
         "operationId": "get_incident_timeline_api_projects__project_id__incidents__incident_id__timeline_get",
@@ -11274,6 +11411,146 @@
         "summary": "Record Verdict",
         "tags": [
           "verdicts"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/maintenance-windows": {
+      "get": {
+        "operationId": "list_maintenance_windows_api_projects__project_id__maintenance_windows_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MaintenanceWindowView"
+                  },
+                  "title": "Response List Maintenance Windows Api Projects  Project Id  Maintenance Windows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Maintenance Windows",
+        "tags": [
+          "incidents"
+        ]
+      },
+      "post": {
+        "operationId": "create_maintenance_window_api_projects__project_id__maintenance_windows_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WindowSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceWindowView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Maintenance Window",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/maintenance-windows/{window_id}": {
+      "delete": {
+        "operationId": "delete_maintenance_window_api_projects__project_id__maintenance_windows__window_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "window_id",
+            "required": true,
+            "schema": {
+              "title": "Window Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Maintenance Window",
+        "tags": [
+          "incidents"
         ]
       }
     },
