@@ -79,4 +79,25 @@ describe("MissReportDialog", () => {
     expect(await screen.findByText("description is too long")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
+
+  it("shows the field details of a real 422 next to the generic message", async () => {
+    const user = userEvent.setup();
+    stubPost({
+      [MISSES]: () =>
+        failure("invalid_request", "Some fields are missing or invalid.", 422, {
+          errors: [
+            { field: "body.description", message: "String should have at most 2000 characters" },
+          ],
+        }),
+    });
+    renderDialog();
+    await fill(user);
+
+    await user.click(screen.getByRole("button", { name: "Send report" }));
+
+    expect(await screen.findByText("Some fields are missing or invalid.")).toBeInTheDocument();
+    expect(
+      screen.getByText("description: String should have at most 2000 characters"),
+    ).toBeInTheDocument();
+  });
 });

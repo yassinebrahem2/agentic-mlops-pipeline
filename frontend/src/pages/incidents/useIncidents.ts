@@ -22,8 +22,13 @@ export function incidentsKey(projectId: string | undefined) {
   return ["projects", projectId, "incidents"] as const;
 }
 
+// Event families that are recorded against an incident and so show up in its timeline.
+const INCIDENT_EVENT_FAMILIES = ["incident.", "notification.", "escalation.", "hook.", "rule."];
+
 const INCIDENT_EVENTS: readonly ProjectEventType[] = [
-  ...PROJECT_EVENT_TYPES.filter((type) => type.startsWith("incident.")),
+  ...PROJECT_EVENT_TYPES.filter((type) =>
+    INCIDENT_EVENT_FAMILIES.some((family) => type.startsWith(family)),
+  ),
   "signal.raised",
   "verdict.recorded",
 ];

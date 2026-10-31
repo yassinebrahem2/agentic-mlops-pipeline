@@ -84,8 +84,8 @@ export function ok(data: unknown, status = 200) {
   return Promise.resolve({ data, response: new Response(null, { status }) });
 }
 
-export function failure(code: string, message: string, status: number) {
-  return Promise.reject(new ApiError(code, message, status));
+export function failure(code: string, message: string, status: number, detail?: unknown) {
+  return Promise.reject(new ApiError(code, message, status, detail));
 }
 
 export type Handlers = Partial<Record<string, (init: never) => Promise<unknown>>>;

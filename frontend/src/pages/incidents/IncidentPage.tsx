@@ -34,9 +34,11 @@ function Actions({ projectId, incident }: { projectId: string; incident: Inciden
   const target = { projectId, incidentId: incident.id };
   const acknowledge = useAcknowledge(target);
   const close = useCloseIncident(target);
-  // The buttons follow the incident's own timestamps, so no status list is copied here.
-  const canAcknowledge = incident.acknowledged_at === null && incident.closed_at === null;
-  const canClose = incident.closed_at === null;
+  // The buttons follow the fields the backend's own guards depend on, so no status list is copied:
+  // a merge sets merged_into (never closed_at) and a resolution sets resolved_at.
+  const live = incident.closed_at === null && incident.merged_into === null;
+  const canAcknowledge = live && incident.acknowledged_at === null && incident.resolved_at === null;
+  const canClose = live;
   if (!canAcknowledge && !canClose) return null;
   return (
     <div className="space-y-2">

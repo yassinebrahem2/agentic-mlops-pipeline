@@ -182,7 +182,11 @@ describe("IncidentPage", () => {
   it("closes the incident as a separate person action and shows a refusal as is", async () => {
     const user = userEvent.setup();
     stubStream();
-    stubPage();
+    stubGet({
+      [INCIDENT]: () => ok({ ...FULL, merged_into: null }),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
     const post = stubPost({
       [CLOSE]: () => failure("incident_open", "Record a verdict first.", 409),
     });
@@ -195,6 +199,98 @@ describe("IncidentPage", () => {
       CLOSE,
       expect.objectContaining({ params: { path: { project_id: "prj_1", incident_id: "inc_1" } } }),
     );
+  });
+
+  it("offers neither Acknowledge nor Close on a merged incident", async () => {
+    stubStream();
+    stubGet({
+      [INCIDENT]: () => ok(incident("inc_1", { status: "merged", merged_into: "inc_9" })),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+
+    await screen.findByTestId("incident-header");
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close incident" })).toBeNull();
+  });
+
+  it("offers Close but not Acknowledge on a resolved incident", async () => {
+    stubStream();
+    stubGet({
+      [INCIDENT]: () =>
+        ok(incident("inc_1", { status: "resolved", resolved_at: "2026-10-30T11:00:00Z" })),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+
+    expect(await screen.findByRole("button", { name: "Close incident" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).toBeNull();
+  });
+
+  it("offers both on an open, unacknowledged incident", async () => {
+    stubStream();
+    stubGet({
+      [INCIDENT]: () => ok(incident("inc_1")),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+
+    expect(await screen.findByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close incident" })).toBeInTheDocument();
+  });
+
+  it.each(["notification.sent", "escalation.sent", "hook.ran", "rule.satisfied"] as const)(
+    "refetches the timeline when a %s event arrives",
+    async (type) => {
+      const fake = stubStream();
+      const get = stubPage();
+      renderPage("/projects/prj_1/incidents/inc_1");
+      await screen.findByText("Upstream renamed a column");
+      const before = get.mock.calls.filter((c) => c[0] === TIMELINE).length;
+
+      act(() => {
+        emitEvent(fake, eventRecord(1, type));
+      });
+
+      await waitFor(
+        () => {
+          expect(get.mock.calls.filter((c) => c[0] === TIMELINE).length).toBeGreaterThan(before);
+        },
+        { timeout: 3000 },
+      );
+    },
+  );
+
+  it("shows a verdict note holding markup as plain text", async () => {
+    stubStream();
+    stubGet({
+      [INCIDENT]: () =>
+        ok(
+          incident("inc_1", {
+            verdict: {
+              incident_id: "inc_1",
+              value: "real_issue",
+              source: "user",
+              check_versions: {},
+              note: "<script>alert(2)</script>",
+              created: "2026-10-30T09:20:00Z",
+            },
+          }),
+        ),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+
+    const { container } = renderPage("/projects/prj_1/incidents/inc_1");
+
+    expect(await screen.findByText("<script>alert(2)</script>")).toBeInTheDocument();
+    expect(container.querySelector("script")).toBeNull();
   });
 
   it("shows not found for an unknown incident", async () => {
