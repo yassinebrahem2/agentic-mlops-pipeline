@@ -36,6 +36,8 @@ export function EmailSection() {
   // the mutation's variables (TanStack keeps those in its cache after the request settles).
   const pendingPassword = useRef<string | null>(null);
   const save = useMutation({
+    // A retry would find the secret already consumed and silently send null.
+    retry: false,
     mutationFn: async (fields: EmailFields) => {
       const password = pendingPassword.current;
       pendingPassword.current = null;
@@ -66,8 +68,8 @@ export function EmailSection() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground">
-            Waking someone means an urgent email. Whether it rings their phone depends on their
-            phone settings for their mail app.
+            By email, waking someone is an urgent email. Whether it rings their phone depends on
+            their phone settings for their mail app.
           </p>
           <QueryStatus query={settings} loading="Loading email settings..." />
           {settings.data && (

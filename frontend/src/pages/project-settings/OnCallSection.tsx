@@ -4,7 +4,7 @@ import type { components } from "@/api/schema";
 import { QueryStatus } from "@/components/QueryStatus";
 import { Button } from "@/components/ui/button";
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
-import { OnCallPersonEditor, type Draft, type OnCall } from "./OnCallPersonEditor";
+import { DAYS, OnCallPersonEditor, type Draft, type OnCall } from "./OnCallPersonEditor";
 
 type OnCallPerson = components["schemas"]["OnCallPerson"];
 
@@ -98,7 +98,7 @@ function OnCallForm({ stored, pending, saved, error, onSave }: FormProps) {
           name: "",
           contacts: [{ channel: "discord", address: "" }],
           hours: {
-            days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            days: DAYS,
             start: "09:00",
             end: "17:00",
           },

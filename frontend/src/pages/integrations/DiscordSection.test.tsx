@@ -57,7 +57,7 @@ afterEach(() => {
 it("explains waking as a mention that rings by the phone's settings", async () => {
   setup();
   await screen.findByLabelText("Discord webhook URL");
-  expect(screen.getByText(/Waking someone means a Discord mention/)).toBeInTheDocument();
+  expect(screen.getByText(/On Discord, waking someone is a mention/)).toBeInTheDocument();
   expect(screen.getByText(/phone settings/)).toBeInTheDocument();
 });
 

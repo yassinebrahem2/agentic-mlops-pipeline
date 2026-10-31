@@ -37,7 +37,7 @@ const FIELDS: { name: NumberName; label: string; help: string }[] = [
   {
     name: "escalation_timeout_minutes",
     label: "Escalation timeout (minutes)",
-    help: "How long to wait for a reply before notifying the next person on call.",
+    help: "How long before the next person on call is notified.",
   },
   {
     name: "check_grace_minutes",

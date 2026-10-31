@@ -68,7 +68,7 @@ afterEach(() => {
 it("explains waking as an urgent email that rings by the phone's settings", async () => {
   setup();
   await screen.findByLabelText("SMTP host");
-  expect(screen.getByText(/urgent email/)).toBeInTheDocument();
+  expect(screen.getByText(/waking someone is an urgent email/)).toBeInTheDocument();
   expect(screen.getByText(/phone settings/)).toBeInTheDocument();
 });
 

@@ -24,6 +24,8 @@ export function DiscordSection() {
   // in the mutation's variables (TanStack keeps those in its cache after the request settles).
   const pendingWebhook = useRef<string | null>(null);
   const save = useMutation({
+    // A retry would find the secret already consumed and silently send null.
+    retry: false,
     mutationFn: async (enabled: boolean) => {
       const webhook_url = pendingWebhook.current;
       pendingWebhook.current = null;
@@ -54,7 +56,7 @@ export function DiscordSection() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground">
-            Waking someone means a Discord mention. Whether it rings their phone depends on their
+            On Discord, waking someone is a mention. Whether it rings their phone depends on their
             phone settings for Discord.
           </p>
           <QueryStatus query={settings} loading="Loading Discord settings..." />

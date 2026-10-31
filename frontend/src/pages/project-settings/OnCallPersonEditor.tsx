@@ -23,7 +23,7 @@ const DAY_LABELS: Record<Day, string> = {
   sat: "Sat",
   sun: "Sun",
 };
-const DAYS = Object.keys(DAY_LABELS).filter((day): day is Day => day in DAY_LABELS);
+export const DAYS = Object.keys(DAY_LABELS).filter((day): day is Day => day in DAY_LABELS);
 
 const CHANNEL_LABELS: Record<Channel, string> = { discord: "Discord", email: "Email" };
 const CHANNELS = Object.keys(CHANNEL_LABELS).filter(
