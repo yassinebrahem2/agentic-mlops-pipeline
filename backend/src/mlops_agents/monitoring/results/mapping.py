@@ -6,7 +6,8 @@ import csv
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -18,6 +19,68 @@ from mlops_agents.monitoring.results.contract import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CsvRecord:
+    """One complete CSV record: its fields, or the reader's error, at its first line's offset."""
+
+    offset: int
+    fields: list[str] | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class CsvSplit:
+    records: list[CsvRecord]
+    # Text index just past the last complete record; an unfinished final record starts here.
+    end: int
+
+
+def split_csv_records(text: str, start_offset: int) -> CsvSplit:
+    """Splits CSV text into complete records, a quoted field may span lines.
+
+    Lines are cut on "\\n" only, the reader's newline rule. A final record still inside a
+    quoted field when the text ends is left out, so it can be read again once complete."""
+    pieces = text.split("\n")
+    lines = [p + "\n" for p in pieces[:-1]]
+    if pieces[-1]:
+        lines.append(pieces[-1])
+
+    # The reader pulls a line only when it needs one, so after each record these hold the
+    # byte offset and text index of the next unread line.
+    next_offset = start_offset
+    next_index = 0
+    exhausted = False
+
+    def _feed() -> Iterator[str]:
+        nonlocal next_offset, next_index, exhausted
+        for line in lines:
+            next_offset += len(line.encode("utf-8"))
+            next_index += len(line)
+            yield line
+        exhausted = True
+
+    reader = csv.reader(_feed())
+    records: list[CsvRecord] = []
+    end = 0
+    while True:
+        record_offset = next_offset
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error as exc:
+            records.append(CsvRecord(offset=record_offset, fields=None, error=str(exc)))
+            end = next_index
+            continue
+        if exhausted:
+            # The text ended inside a quoted field: the reader returned a partial record
+            break
+        end = next_index
+        if row and not (len(row) == 1 and not row[0].strip()):
+            records.append(CsvRecord(offset=record_offset, fields=row))
+    return CsvSplit(records=records, end=end)
 
 
 def _get_path_val(data: Mapping[str, Any], path: str) -> object | None:
@@ -169,44 +232,26 @@ def evaluate_mapping(
             errors.append(f"Invalid JSON: {exc}")
 
     elif fmt == "csv":
-        try:
-            lines = raw.splitlines(keepends=True)
-            if start_offset == 0:
-                if lines:
-                    header_line = lines[0]
-                    hdr_reader = csv.reader([header_line])
-                    detected_header = next(hdr_reader, None)
-                    if detected_header:
-                        csv_header = [str(c) for c in detected_header]
-                    data_lines = lines[1:]
-                    cur_offset = start_offset + len(header_line.encode("utf-8"))
-                else:
-                    data_lines = []
-                    cur_offset = start_offset
-            else:
-                data_lines = lines
-                cur_offset = start_offset
+        csv_records = split_csv_records(raw, start_offset).records
+        if start_offset == 0 and csv_records:
+            header_record, *csv_records = csv_records
+            csv_header = header_record.fields
+            if header_record.error is not None:
+                errors.append(f"Offset {header_record.offset}: {header_record.error}")
 
-            for line in data_lines:
-                line_offset = cur_offset
-                cur_offset += len(line.encode("utf-8"))
-                if not line.strip():
-                    continue
-                row_reader = csv.reader([line])
-                row_vals = next(row_reader, None)
-                if row_vals is None:
-                    continue
-                if csv_header:
-                    row_dict = dict(zip(csv_header, row_vals, strict=False))
-                else:
-                    row_dict = {f"col_{i}": v for i, v in enumerate(row_vals)}
-                try:
-                    k, rec = _map_row(row_dict, mapping, origin_ref, line_offset)
-                    records.append((k, rec))
-                except Exception as exc:
-                    errors.append(f"Offset {line_offset}: {exc}")
-        except Exception as exc:
-            errors.append(f"Invalid CSV: {exc}")
+        for csv_record in csv_records:
+            if csv_record.fields is None:
+                errors.append(f"Offset {csv_record.offset}: {csv_record.error}")
+                continue
+            if csv_header:
+                row_dict = dict(zip(csv_header, csv_record.fields, strict=False))
+            else:
+                row_dict = {f"col_{i}": v for i, v in enumerate(csv_record.fields)}
+            try:
+                k, rec = _map_row(row_dict, mapping, origin_ref, csv_record.offset)
+                records.append((k, rec))
+            except Exception as exc:
+                errors.append(f"Offset {csv_record.offset}: {exc}")
 
     elif fmt == "log":
         pattern: re.Pattern[str] | None = None

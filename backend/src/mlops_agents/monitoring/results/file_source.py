@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import csv
 import json
 import logging
 from dataclasses import dataclass, field
@@ -15,6 +13,7 @@ from typing import Any, cast
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
 from mlops_agents.monitoring.results.contract import ResultRecord, parse_source_id
+from mlops_agents.monitoring.results.mapping import split_csv_records
 from mlops_agents.tracking.contract import EvaluationRecord
 
 logger = logging.getLogger(__name__)
@@ -379,6 +378,17 @@ class FileSourceReader:
             )
 
 
+def _byte_end(data: bytes, text: str, end: int) -> int:
+    """Byte position in `data` of `end`, a text index just past a newline of `text`.
+
+    Counts newlines instead of re-encoding the text: bytes that are not UTF-8 decode to
+    U+FFFD and re-encode to a different length, but each "\\n" is exactly one 0x0A byte."""
+    position = 0
+    for _ in range(text.count("\n", 0, end)):
+        position = data.index(b"\n", position) + 1
+    return position
+
+
 def _read_raw_files_sync(
     root: Path,
     pattern: str,
@@ -510,14 +520,22 @@ def _read_raw_files_sync(
 
         raw_text = chunk_to_consume.decode("utf-8", errors="replace")
 
-        if format == "csv" and offset == 0 and saved_header is None:
-            lines = raw_text.splitlines(keepends=False)
-            if lines:
-                with contextlib.suppress(Exception):
-                    hdr_r = csv.reader([lines[0]])
-                    hdr_cols = next(hdr_r, None)
-                    if hdr_cols:
-                        saved_header = [str(c) for c in hdr_cols]
+        if format == "csv":
+            split = split_csv_records(raw_text, offset)
+            if split.end == 0:
+                # Only an unfinished quoted record so far: wait for the rest of it
+                files_cursor[rel_posix] = {
+                    "size": cur_size,
+                    "mtime": cur_mtime,
+                    "offset": offset,
+                    "csv_header": saved_header,
+                }
+                continue
+            if split.end < len(raw_text):
+                new_offset = offset + _byte_end(chunk_to_consume, raw_text, split.end)
+                raw_text = raw_text[: split.end]
+            if offset == 0 and saved_header is None and split.records:
+                saved_header = split.records[0].fields
 
         chunks.append(
             RawChunk(

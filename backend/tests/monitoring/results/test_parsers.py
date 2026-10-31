@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +15,7 @@ import pytest
 from sqlalchemy import select
 
 from mlops_agents.connections.contract import Mount
+from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
@@ -627,6 +631,7 @@ async def test_code_parser_runs_through_docker_runner(
         code=code,
         raw=raw_input,
         origin_ref="data/test.raw",
+        connection_name="conn_mount",
     )
 
     assert len(outcome.errors) == 0
@@ -836,7 +841,7 @@ async def test_code_parser_timeout_removes_container(project_id: str, tmp_path: 
     code = ParserCode(script="import time; time.sleep(10)", timeout_s=1)
 
     with pytest.raises(RuntimeError, match="Code parser execution timed out"):
-        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+        await runner.run(project_id, code, raw="", origin_ref="test.txt", connection_name="my_conn")
 
     # Assert container rm -f was called!
     assert len(runner_mock.rm_calls) == 1
@@ -880,7 +885,7 @@ async def test_code_parser_cancelled_removes_container(project_id: str, tmp_path
     code = ParserCode(script="pass", timeout_s=1)
 
     with pytest.raises(asyncio.CancelledError):
-        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+        await runner.run(project_id, code, raw="", origin_ref="test.txt", connection_name="my_conn")
 
     assert len(runner_mock.rm_calls) == 1
     rm_call = runner_mock.rm_calls[0]
@@ -913,7 +918,49 @@ async def test_code_parser_truncation_raises_runtime_error(project_id: str, tmp_
     code = ParserCode(script="pass", timeout_s=1)
 
     with pytest.raises(RuntimeError, match="Code parser output was truncated"):
-        await runner.run(project_id, code, raw="", origin_ref="test.txt")
+        await runner.run(project_id, code, raw="", origin_ref="test.txt", connection_name="my_conn")
+
+
+async def test_code_parser_failure_truncated_output_error_message(
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    class FailingDockerRunner:
+        async def run(
+            self,
+            args: Any,
+            *,
+            timeout_s: float | None = None,
+            secrets: Any = (),
+        ) -> DockerResult:
+            return DockerResult(
+                stdout="",
+                stderr="",
+                exit_code=1,
+                output="my error",
+                truncated=True,
+            )
+
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [Mount(host_path=tmp_path, container_path="/data")]
+
+    connections = MountsConnections()
+    runner = CodeParserRunner(
+        sandbox=sandbox,
+        docker_runner=FailingDockerRunner(),  # pyright: ignore[reportArgumentType]
+        connections=connections,
+    )
+    code = ParserCode(script="pass", timeout_s=1)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await runner.run(project_id, code, raw="", origin_ref="test.txt", connection_name="my_conn")
+
+    err_str = str(exc_info.value)
+    assert "True" not in err_str
+    assert "my error" in err_str
 
 
 async def test_source_derivation_preserves_needs_parser_when_merged_with_check(
@@ -1090,3 +1137,284 @@ async def test_parser_backed_source_failure_signal_on_raw_read_error(
     ]
     assert len(matching) == 1
     assert "does not exist" in str(matching[0].detail.get("error"))
+
+
+class LocalExecDockerRunner:
+    """Runs the parser container's command on the host, so a code parser really executes.
+
+    Container paths under a mount are translated back to the mount's host folder."""
+
+    def __init__(self, image_tag: str, mounts: list[Mount]) -> None:
+        self._image_tag = image_tag
+        self._mounts = mounts
+        self.calls: list[list[str]] = []
+
+    def _to_host(self, arg: str) -> str:
+        for mount in self._mounts:
+            prefix = f"{mount.container_path}/"
+            if arg.startswith(prefix):
+                return str(mount.host_path / arg[len(prefix) :])
+        return arg
+
+    async def run(
+        self,
+        args: Sequence[str],
+        *,
+        timeout_s: float | None = None,
+        secrets: Iterable[str] = (),
+    ) -> DockerResult:
+        arg_list = list(args)
+        self.calls.append(arg_list)
+        command = arg_list[arg_list.index(self._image_tag) + 1 :]
+        assert command[0] == "python"
+        host_command = [sys.executable, *(self._to_host(a) for a in command[1:])]
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            host_command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=timeout_s,
+            check=False,
+        )
+        return DockerResult(stdout=proc.stdout, stderr=proc.stderr, exit_code=proc.returncode)
+
+
+# Reads only its stdin and emits one record per non-empty line, its subject the origin_ref argv.
+_STDIN_LINES_SCRIPT = """
+import json, sys
+for line in sys.stdin.read().splitlines():
+    if line.strip():
+        print(json.dumps({
+            "check_id": line.strip(),
+            "ran_at": "2026-10-30T10:00:00Z",
+            "fired": False,
+            "category": "data_quality",
+            "subject": sys.argv[1],
+            "detail": {},
+        }))
+"""
+
+
+async def test_code_parser_append_stores_only_the_new_record(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "feed.raw"
+    target.write_bytes(b"c1\n")
+
+    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
+
+    class MountsConnections(FakeConnections):
+        async def mounts(self, project_id: str) -> list[Mount]:
+            return [mount]
+
+    connections = MountsConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
+    runner = CodeParserRunner(
+        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=docker_runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=runner)
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id="file:conn_feed:feed.raw",
+            code=ParserCode(script=_STDIN_LINES_SCRIPT, timeout_s=60),
+        ),
+        proposal_id="prop_code",
+    )
+    service = ResultsService(
+        databases,
+        FakeHandoffs(_build_feed_handoff("conn_feed", "feed.raw")),
+        connections,
+        events,
+        parsers=parsers,
+    )
+
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.failures == {}
+    assert rep1.stored == 1
+
+    with target.open("ab") as f:
+        f.write(b"c2\n")
+
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.failures == {}
+    assert rep2.stored == 1
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (await conn.execute(select(results))).mappings().all()
+    assert sorted(r["check_id"] for r in rows) == ["c1", "c2"]
+    assert len({r["source_key"] for r in rows}) == 2
+    assert {r["subject"] for r in rows} == {"feed.raw"}
+
+    # The sandbox rules still hold for the real command
+    last_args = docker_runner.calls[-1]
+    assert last_args[last_args.index("--network") + 1] == "none"
+    assert "--env-file" not in last_args
+    assert any(a.endswith(",readonly") for a in last_args if a.startswith("type=bind"))
+
+
+async def test_bad_file_beside_good_one_counts_once_per_cycle_until_disabled(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    # The bad file sorts first, so a reset after the good file would hide its failure.
+    bad_file = data_dir / "a_bad.jsonl"
+    good_file = data_dir / "b_good.jsonl"
+    bad_file.write_bytes(b"")
+    good_file.write_bytes(b"")
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    await set_monitoring_settings(databases, project_id, MonitoringSettings(parser_disable_after=3))
+
+    parsers = SqliteParsers(databases)
+    source = "file:conn_feed:*.jsonl"
+    await parsers.store(
+        project_id,
+        ParserSpec(
+            source_id=source,
+            mapping=ParserMapping(
+                format="jsonl",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
+        proposal_id="prop_counter",
+    )
+    service = ResultsService(
+        databases,
+        FakeHandoffs(_build_feed_handoff("conn_feed", "*.jsonl")),
+        connections,
+        events,
+        parsers=parsers,
+    )
+
+    for cycle in (1, 2, 3):
+        # Several bad records in one chunk of the bad file, and a new good record every cycle
+        with bad_file.open("ab") as f:
+            for n in range(3):
+                f.write(f'{{"id": "b{cycle}_{n}", "time": "not-a-date"}}\n'.encode())
+        with good_file.open("ab") as f:
+            f.write(f'{{"id": "g{cycle}", "time": "2026-10-30T10:00:00Z"}}\n'.encode())
+
+        rep = await service.collect(project_id, clock.now())
+        assert rep.stored == 1
+
+        ver = await parsers.current(project_id, source)
+        assert ver is not None
+        assert ver.consecutive_failures == cycle
+        assert ver.enabled is (cycle < 3)
+
+    disabled = [e for e in await events.page(project_id) if e.type == "parser.disabled"]
+    assert len(disabled) == 1
+
+
+def _csv_mapping() -> ParserMapping:
+    return ParserMapping(
+        format="csv",
+        fields={"check_id": "id", "ran_at": "time", "subject": "note"},
+        fired_when=Compare(op="eq", field="fired", value=True),
+        defaults={"category": "data_quality"},
+    )
+
+
+def test_mapping_csv_quoted_newline_is_one_record() -> None:
+    raw = (
+        "id,note,time\n"
+        'c1,"line one\nline two",2026-10-30T10:00:00Z\n'
+        "c2,plain,2026-10-30T10:05:00Z\n"
+    )
+    outcome = evaluate_mapping(_csv_mapping(), raw, origin_ref="feed.csv")
+
+    assert outcome.errors == []
+    assert len(outcome.records) == 2
+    (k1, r1), (k2, r2) = outcome.records
+    assert r1.check_id == "c1"
+    assert r1.subject == "line one\nline two"
+    assert k1 == f"feed.csv:{raw.index('c1,')}"
+    assert r2.check_id == "c2"
+    assert k2 == f"feed.csv:{raw.index('c2,')}"
+
+
+async def test_csv_record_cut_inside_quotes_is_read_whole_after_append(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "feed.csv"
+    first = b'id,note,time\nc1,ok,2026-10-30T10:00:00Z\nc2,"first part\n'
+    target.write_bytes(first)
+    cut_offset = first.index(b"c2,")
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+    parsers = SqliteParsers(databases)
+    source = "file:conn_feed:feed.csv"
+    await parsers.store(
+        project_id,
+        ParserSpec(source_id=source, mapping=_csv_mapping()),
+        proposal_id="prop_csv",
+    )
+    service = ResultsService(
+        databases,
+        FakeHandoffs(_build_feed_handoff("conn_feed", "feed.csv")),
+        connections,
+        events,
+        parsers=parsers,
+    )
+
+    rep1 = await service.collect(project_id, clock.now())
+    assert rep1.failures == {}
+    assert rep1.stored == 1
+    state = await service.store.get_source_state(project_id, source)
+    assert state is not None
+    assert state.cursor["files"]["feed.csv"]["offset"] == cut_offset
+
+    with target.open("ab") as f:
+        f.write(b'second part",2026-10-30T10:05:00Z\n')
+
+    rep2 = await service.collect(project_id, clock.now())
+    assert rep2.failures == {}
+    assert rep2.stored == 1
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (await conn.execute(select(results))).mappings().all()
+    by_check = {r["check_id"]: r for r in rows}
+    assert sorted(by_check) == ["c1", "c2"]
+    assert by_check["c2"]["subject"] == "first part\nsecond part"
+    assert by_check["c2"]["source_key"] == f"feed.csv:{cut_offset}"
+
+
+async def test_code_parser_without_connection_fails_before_running(project_id: str) -> None:
+    docker_runner = FakeDockerRunner()
+    runner = CodeParserRunner(
+        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=docker_runner,
+        connections=FakeConnections(),
+    )
+
+    with pytest.raises(RuntimeError, match="no connection"):
+        await runner.run(project_id, ParserCode(script="pass"), raw="x\n", origin_ref="feed.raw")
+    assert docker_runner.calls == []

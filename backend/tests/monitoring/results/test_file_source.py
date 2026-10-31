@@ -361,3 +361,29 @@ async def test_file_source_reader_scrubs_credentials_in_error_and_log(
         assert out_open.last_error is not None
         assert secret_open not in out_open.last_error
         assert "***@" in out_open.last_error
+
+
+async def test_csv_raw_read_cuts_at_true_byte_offset_with_invalid_utf8(
+    tmp_path: Path, project_id: str
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    # 0xE9 alone (a cp1252 e-acute) decodes to U+FFFD, three bytes when re-encoded
+    content = b'id,note,time\nc1,caf\xe9,2026-10-30T10:00:00Z\nc2,"open quote\n'
+    (data_dir / "feed.csv").write_bytes(content)
+    cut_offset = content.index(b"c2,")
+
+    connections = FakeConnections()
+    connections.add_local_folder("data_conn", data_dir)
+    reader = FileSourceReader(connections)
+
+    outcome = await reader.read_raw(
+        project_id, source_id("file", "feed.csv", "data_conn"), cursor={}, format="csv"
+    )
+    assert outcome.last_error is None
+    assert len(outcome.chunks) == 1
+    chunk = outcome.chunks[0]
+    assert chunk.new_offset == cut_offset
+    assert chunk.content == content[:cut_offset].decode("utf-8", errors="replace")
+    assert chunk.csv_header == ["id", "note", "time"]
+    assert outcome.cursor["files"]["feed.csv"]["offset"] == cut_offset

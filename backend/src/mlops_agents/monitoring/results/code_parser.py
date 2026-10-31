@@ -8,6 +8,7 @@ import logging
 from typing import Any, Protocol, cast
 
 from mlops_agents.connections.contract import Mount
+from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.results.contract import (
     ParseOutcome,
@@ -19,6 +20,20 @@ from mlops_agents.sandbox.contract import EnvironmentStatus
 from mlops_agents.sandbox.docker import DockerRunner, DockerTimeoutError
 
 logger = logging.getLogger(__name__)
+
+# The team's script sees only the chunk it is given, on stdin: DockerRunner has no stdin, so
+# this stdlib-only bootstrap reads the chunk's bytes from the read-only mount and runs the
+# script over them. Argv: file path, start byte offset, byte length, script, origin_ref.
+_BOOTSTRAP = """\
+import io, sys
+path, start, length, script, origin_ref = sys.argv[1:6]
+with open(path, 'rb') as f:
+    f.seek(int(start))
+    data = f.read(int(length))
+sys.stdin = io.TextIOWrapper(io.BytesIO(data), encoding='utf-8', errors='replace')
+sys.argv = ['<parser>', origin_ref]
+exec(compile(script, '<parser>', 'exec'), {'__name__': '__main__'})
+"""
 
 
 class _Connections(Protocol):
@@ -52,6 +67,9 @@ class CodeParserRunner:
         connection_name: str | None = None,
         start_offset: int = 0,
     ) -> ParseOutcome:
+        if connection_name is None:
+            raise RuntimeError(f"Code parser has no connection to read {origin_ref!r} from")
+
         env_status = await self._sandbox.rebuild(project_id)
         if env_status.tag is None or env_status.state != "ready":
             raise RuntimeError(
@@ -62,11 +80,19 @@ class CodeParserRunner:
         mounts = await self._connections.mounts(project_id)
 
         container_name = f"parser-{new_id('res')}"
-        if connection_name:
-            container_path = f"/data/{connection_name}/{origin_ref.lstrip('/')}"
-        else:
-            container_path = origin_ref
-        command = ["python", "-c", code.script, origin_ref, container_path]
+        container_path = f"{DATA_MOUNT_ROOT}/{connection_name}/{origin_ref}"
+        # The chunk's byte length: exact while the file is valid UTF-8, which the reader decoded.
+        byte_length = len(raw.encode("utf-8"))
+        command = [
+            "python",
+            "-c",
+            _BOOTSTRAP,
+            container_path,
+            str(start_offset),
+            str(byte_length),
+            code.script,
+            origin_ref,
+        ]
 
         run_args = build_one_shot_run_args(
             project_id=project_id,
@@ -94,8 +120,8 @@ class CodeParserRunner:
             raise
 
         if res.exit_code != 0:
-            stdout, stderr = res.command_output()
-            err_msg = stderr or stdout or f"Container exited with code {res.exit_code}"
+            output, _truncated = res.command_output()
+            err_msg = res.stderr or output or f"Container exited with code {res.exit_code}"
             raise RuntimeError(f"Code parser execution failed: {err_msg}")
 
         stdout, truncated = res.command_output()
@@ -143,10 +169,11 @@ class CodeParserRunner:
                 if "detail" not in item_dict or not isinstance(item_dict["detail"], dict):
                     item_dict["detail"] = {}
                 custom_key = item_dict.pop("source_key", None) or item_dict.pop("key", None)
+                # Distinct per chunk start, and the same when a failed chunk is read again
                 source_key = (
                     str(custom_key)
                     if custom_key is not None
-                    else f"{origin_ref}:{start_offset + idx}"
+                    else f"{origin_ref}:{start_offset}:{idx}"
                 )
                 rec = ResultRecord.model_validate(item_dict)
                 records.append((source_key, rec))
