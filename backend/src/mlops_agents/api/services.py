@@ -55,7 +55,9 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
@@ -83,7 +85,9 @@ from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.contract import EvaluationReader, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
 from mlops_agents.promotion.reports import SqliteReports
+from mlops_agents.promotion.surfaces import GithubProtectionSurfaces
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -93,7 +97,7 @@ from mlops_agents.providers.embedders import EmbeddersService
 from mlops_agents.providers.failover import Clock, KeyFailover, SystemClock
 from mlops_agents.providers.models import Provider
 from mlops_agents.providers.service import ProvidersService
-from mlops_agents.sandbox.docker import DockerRunner
+from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
@@ -251,9 +255,11 @@ async def build_services(
     kind_registry = KindRegistry([LocalFolderKind(paths.root)])
     connections = ConnectionsService(databases, events, kind_registry)
 
+    runner = docker_runner if docker_runner is not None else CliDockerRunner()
+    sandbox_projects = DatabaseSandboxProjects(databases, workspace, connections)
     sandbox = SandboxService(
-        docker_runner,
-        projects=DatabaseSandboxProjects(databases, workspace, connections),
+        runner,
+        projects=sandbox_projects,
         events=events,
     )
     await sandbox.cleanup_orphans()
@@ -278,12 +284,39 @@ async def build_services(
         events=events,
         clock=clock,
     )
+    command_runner = CommandRunner(
+        sandbox=sandbox,
+        projects=sandbox_projects,
+        docker_runner=runner,
+        keystore=keystore,
+    )
+    hooks.add_runner(command_runner)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
+    query_providers.register(HooksQueryProvider(hooks))
+    maintenance = NeverSuspended()
+
+    results = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     tracking = TrackingService(
         databases=databases,
@@ -297,6 +330,12 @@ async def build_services(
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
+
+    surfaces = GithubProtectionSurfaces(hooks, http, github, tasks)
+    pr_sync = PrSyncObserver(tasks, github, http, events)
+    stack.push_async_callback(pr_sync.close)
+    closed_unmerged = ClosedUnmergedObserver(knowledge, http, github, tasks)
+    pr_sync.add_observer(closed_unmerged)
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
@@ -316,6 +355,10 @@ async def build_services(
         tracking=tracking,
         handoffs=handoffs,
         reports=reports,
+        hooks=hooks,
+        incidents=incidents,
+        surfaces=surfaces,
+        pr_sync=pr_sync,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -340,8 +383,6 @@ async def build_services(
         list_agents.bind(catalog, status_board)
     turn_observer = EventTurnObserver(events)
     inbound = SqliteInboundSource(databases)
-    pr_sync = PrSyncObserver(tasks, github, http, events)
-    stack.push_async_callback(pr_sync.close)
 
     sessions = SessionManager(
         databases=databases,
@@ -413,29 +454,8 @@ async def build_services(
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
 
-    results = ResultsService(
-        databases=databases,
-        handoffs=handoffs,
-        connections=connections,
-        events=events,
-    )
-    maintenance = NeverSuspended()
-    severity = MediumSeverity()
-    incidents = IncidentsService(
-        databases=databases,
-        events=events,
-        results=results,
-        severity=severity,
-        maintenance=maintenance,
-        clock=clock,
-    )
-    # Registered before the startup `deliver_undelivered` below, so a result stored before a
-    # restart still opens its incident.
-    signals_from_results = SignalsFromResults(incidents, maintenance)
-    results.add_observer(signals_from_results)
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
-
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
