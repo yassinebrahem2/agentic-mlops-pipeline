@@ -115,6 +115,7 @@ from mlops_agents.providers.service import ProvidersService
 from mlops_agents.sandbox.docker import CliDockerRunner, DockerRunner
 from mlops_agents.sandbox.projects import DatabaseSandboxProjects
 from mlops_agents.sandbox.service import SandboxService
+from mlops_agents.stats.service import StatsService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
@@ -179,6 +180,7 @@ class Services:
     expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
+    stats: StatsService
 
 
 async def _app_secrets(
@@ -546,6 +548,15 @@ async def build_services(
         waker=waker,
     )
     scheduler.add_sync_observer(linker)
+    stats = StatsService(
+        databases=databases,
+        incidents=incidents,
+        verdicts=verdicts,
+        baseline=baseline,
+        results=results,
+        hooks=hooks,
+        models=providers,
+    )
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -637,4 +648,5 @@ async def build_services(
         expectations=expectations,
         fixes=fixes,
         training=training,
+        stats=stats,
     )
