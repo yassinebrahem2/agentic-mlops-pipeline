@@ -56,10 +56,12 @@ from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.service import HooksService
-from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.reactor import Reactor
+from mlops_agents.monitoring.incidents.routing import OnCallRouter
 from mlops_agents.monitoring.incidents.service import IncidentsService
+from mlops_agents.monitoring.incidents.severity import RuleSeverity
 from mlops_agents.monitoring.incidents.suspects import SuspectLinker
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
@@ -416,8 +418,19 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
+    retry_notifications_job = RetryJob(databases, notifier, clock)
+    scheduler.register(retry_notifications_job)
+
     maintenance = NeverSuspended()
-    severity = MediumSeverity()
+    severity = RuleSeverity(handoffs=handoffs)
     incidents = IncidentsService(
         databases=databases,
         events=events,
@@ -427,12 +440,28 @@ async def build_services(
         clock=clock,
         handoffs=handoffs,
     )
+    severity.bind_incidents(incidents)
+
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
     signals_from_results = SignalsFromResults(incidents, maintenance, results)
     results.add_observer(signals_from_results)
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
-    incidents.add_observer(diagnosis_dispatch)
+
+    router = OnCallRouter(on_call=on_call, databases=databases)
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=on_call,
+        notifier=notifier,
+        dispatch=diagnosis_dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=events,
+        clock=clock,
+    )
+    incidents.add_observer(reactor)
 
     suspect_linker = SuspectLinker(
         databases=databases,
@@ -462,17 +491,6 @@ async def build_services(
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
-    notification_channels = default_channels(integration_settings, http)
-    notifier = SqliteNotifier(
-        databases=databases,
-        settings=integration_settings,
-        channels=notification_channels,
-        events=events,
-        clock=clock,
-    )
-    retry_notifications_job = RetryJob(databases, notifier, clock)
-    scheduler.register(retry_notifications_job)
-
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 

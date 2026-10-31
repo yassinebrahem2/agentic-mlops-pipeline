@@ -285,29 +285,13 @@ class IncidentsService(Incidents):
                         pass
         prs.sort()
 
-        temp_view = IncidentView(
-            id=inc_id,
-            category=draft.category,
-            subtype=subtype,
-            severity="medium",
-            status="resolved" if is_resolved else "open",
-            cause_key=c_key,
-            model=draft.model,
-            started_at=started_at,
-            detected_at=detected_at,
-            resolved_offline=is_resolved,
-            prs=prs,
-        )
-        decision = await self._severity.decide(project_id, temp_view)
-        severity = decision.severity
-
         await self._store.insert_incident(
             project_id,
             {
                 "id": inc_id,
                 "category": draft.category,
                 "subtype": subtype,
-                "severity": severity,
+                "severity": "medium",
                 "status": "resolved" if is_resolved else "open",
                 "cause": None,
                 "cause_key": c_key,
@@ -330,6 +314,26 @@ class IncidentsService(Incidents):
             },
         )
         await self._store.insert_signal(project_id, sig_id, inc_id, draft, seen_at, c_key)
+
+        temp_view = IncidentView(
+            id=inc_id,
+            category=draft.category,
+            subtype=subtype,
+            severity="medium",
+            status="resolved" if is_resolved else "open",
+            cause_key=c_key,
+            model=draft.model,
+            started_at=started_at,
+            detected_at=detected_at,
+            resolved_offline=is_resolved,
+            prs=prs,
+            signal_ids=[sig_id],
+        )
+        decision = await self._severity.decide(project_id, temp_view)
+        severity = decision.severity
+
+        if severity != "medium":
+            await self._store.update_incident(project_id, inc_id, {"severity": severity})
 
         await self._events.record(
             project_id,
@@ -616,6 +620,23 @@ class IncidentsService(Incidents):
         if view is None:
             raise RuntimeError(f"Incident {incident_id} not found after set_severity")
         return view
+
+    async def record_issue(self, project_id: str, incident_id: str, issue_number: int) -> list[int]:
+        row = await self._store.get_incident_row(project_id, incident_id)
+        if row is None:
+            raise DomainError(
+                "incident_not_found",
+                f"Incident '{incident_id}' not found.",
+                status=404,
+            )
+        issues: list[int] = json.loads(str(row["issues"])) if row["issues"] else []
+        if issue_number not in issues:
+            issues.append(issue_number)
+            issues.sort()
+            await self._store.update_incident(
+                project_id, incident_id, {"issues": json.dumps(issues)}
+            )
+        return issues
 
     async def update(
         self,
