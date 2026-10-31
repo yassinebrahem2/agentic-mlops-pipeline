@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.incidents.contract import IncidentView
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.results.contract import ResultRecord
 from mlops_agents.monitoring.results.service import ResultsService
-from mlops_agents.monitoring.verdicts.contract import VerdictDraft
+from mlops_agents.monitoring.verdicts.contract import VerdictDraft, VerdictView
 from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from tests.monitoring.verdicts.conftest import (
@@ -126,6 +129,38 @@ async def test_a_user_verdict_is_never_replaced(
 
     assert await verdicts.confirm_by_labels(project_id) == []
     assert await verdicts.get(project_id, incident_id) == user_view
+
+
+async def test_a_user_verdict_recorded_between_the_read_and_the_write_is_kept(
+    verdicts: SqliteVerdicts,
+    incidents: IncidentsService,
+    results: ResultsService,
+    events: SqliteEventLog,
+    project_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incident_id = await open_incident(incidents, project_id)
+    await store_result(results, project_id, check_id="chk_auc", ran_at=LATER, fired=True)
+    decide = verdicts._labels_verdict  # pyright: ignore[reportPrivateUsage]
+
+    async def a_person_judges_meanwhile(
+        project_id: str, incident: IncidentView
+    ) -> VerdictView | None:
+        # The candidate was read with no user verdict; the person records one before the write.
+        await verdicts.record(project_id, incident.id, VerdictDraft(value="not_an_issue"), "user")
+        return await decide(project_id, incident)
+
+    monkeypatch.setattr(verdicts, "_labels_verdict", a_person_judges_meanwhile)
+
+    assert await verdicts.confirm_by_labels(project_id) == []
+
+    stored = await verdicts.get(project_id, incident_id)
+    assert stored is not None
+    assert (stored.source, stored.value) == ("user", "not_an_issue")
+    written = await verdict_events(events, project_id)
+    assert [(e.source, e.payload) for e in written] == [
+        ("user", {"value": "not_an_issue", "source": "user"})
+    ]
 
 
 async def test_a_user_verdict_replaces_a_labels_verdict(
