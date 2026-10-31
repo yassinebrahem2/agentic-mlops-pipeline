@@ -111,6 +111,10 @@ class ResultsService(Results):
         self._maintenance = maintenance
 
     @property
+    def maintenance(self) -> Maintenance:
+        return self._maintenance
+
+    @property
     def store(self) -> ResultsStore:
         return self._store
 

@@ -402,6 +402,7 @@ class _IncidentsDown(IncidentsService):
         self,
         project_id: str,
         status: list[IncidentStatus] | None = None,
+        inbox: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> Page[IncidentView]:
