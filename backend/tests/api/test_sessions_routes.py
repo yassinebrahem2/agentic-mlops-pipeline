@@ -157,7 +157,25 @@ async def test_rejected_agent_returns_json_404_or_409_not_stream(
     assert resp409.json()["code"] == "agent_has_no_chat"
 
 
-async def test_anonymous_gets_401_on_all_four_routes(
+async def test_compact_and_clear_routes(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    fake = FakeSessions()
+    app.state.services.sessions = fake
+
+    resp_compact = await client.post(
+        f"/api/projects/{project_id}/agents/orchestrator/session/compact"
+    )
+    assert resp_compact.status_code == 204
+    assert fake.compacted == [(project_id, "orchestrator")]
+
+    resp_clear = await client.post(f"/api/projects/{project_id}/agents/orchestrator/session/clear")
+    assert resp_clear.status_code == 204
+    assert fake.cleared == [(project_id, "orchestrator", "user")]
+
+
+async def test_anonymous_gets_401_on_all_six_routes(
     app: FastAPI,
     anonymous: httpx2.AsyncClient,
     tmp_path: Path,
@@ -171,6 +189,8 @@ async def test_anonymous_gets_401_on_all_four_routes(
         ("GET", ""),
         ("POST", "/messages"),
         ("POST", "/stop"),
+        ("POST", "/compact"),
+        ("POST", "/clear"),
         ("GET", "/stream"),
     ):
         response = await anonymous.request(

@@ -69,7 +69,7 @@ async def compact_if_needed(
     history: list[MessageView],
     system_text: str,
     *,
-    turn_id: str,
+    turn_id: str | None = None,
     agent_name: str,
     tools: list[dict[str, Any]] | None = None,
     force: bool = False,
@@ -208,15 +208,23 @@ async def compact_if_needed(
         reply = await caller.call(model, prompt_messages, tools=[], on_text=_noop)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
-        await store.add_llm_call(
-            project_id,
-            turn_id,
-            agent=agent_name,
-            model_address=model.address,
-            prompt_tokens=reply.prompt_tokens,
-            completion_tokens=reply.completion_tokens,
-            latency_ms=latency_ms,
-        )
+        effective_turn_id = turn_id
+        if not effective_turn_id and turns_to_summarize:
+            for m in reversed(turns_to_summarize[-1]):
+                if m.turn_id:
+                    effective_turn_id = m.turn_id
+                    break
+
+        if effective_turn_id:
+            await store.add_llm_call(
+                project_id,
+                effective_turn_id,
+                agent=agent_name,
+                model_address=model.address,
+                prompt_tokens=reply.prompt_tokens,
+                completion_tokens=reply.completion_tokens,
+                latency_ms=latency_ms,
+            )
 
         new_summary = (
             reply.message.content

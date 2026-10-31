@@ -67,6 +67,34 @@ async def stop_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post(
+    "/projects/{project_id}/agents/{agent}/session/compact",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def compact_session(
+    project_id: str,
+    agent: str,
+    services: ServicesDep,
+    _project: ProjectDep,
+) -> Response:
+    await services.sessions.compact(project_id, agent)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/projects/{project_id}/agents/{agent}/session/clear",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def clear_session(
+    project_id: str,
+    agent: str,
+    services: ServicesDep,
+    _project: ProjectDep,
+) -> Response:
+    await services.sessions.clear(project_id, agent)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/projects/{project_id}/agents/{agent}/session/stream",
     response_class=SseResponse,

@@ -2482,7 +2482,9 @@
               "report.saved",
               "promotion.applied",
               "promotion.refused",
-              "pr.merged_by_agent"
+              "pr.merged_by_agent",
+              "session.compacted",
+              "session.cleared"
             ],
             "title": "Type",
             "type": "string"
@@ -10433,7 +10435,9 @@
                     "report.saved",
                     "promotion.applied",
                     "promotion.refused",
-                    "pr.merged_by_agent"
+                    "pr.merged_by_agent",
+                    "session.compacted",
+                    "session.cleared"
                   ],
                   "type": "string"
                 },
@@ -10777,6 +10781,94 @@
           }
         },
         "summary": "Get Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/clear": {
+      "post": {
+        "operationId": "clear_session_api_projects__project_id__agents__agent__session_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/compact": {
+      "post": {
+        "operationId": "compact_session_api_projects__project_id__agents__agent__session_compact_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compact Session",
         "tags": [
           "sessions"
         ]

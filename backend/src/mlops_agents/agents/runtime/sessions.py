@@ -12,6 +12,8 @@ from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.hooks.registry import HookRegistry
 from mlops_agents.agents.messaging.contract import MessageBus
 from mlops_agents.agents.runtime.agent import AgentBuilder
+from mlops_agents.agents.runtime.compaction import compact_if_needed
+from mlops_agents.agents.runtime.context import system_message
 from mlops_agents.agents.runtime.contract import (
     AgentSessions,
     MessageStatus,
@@ -337,6 +339,88 @@ class SessionManager(AgentSessions):
         self._check_agent(agent)
         await self._recovery.ensure(project_id)
         await self._stop(project_id, agent, None)
+
+    async def compact(self, project_id: str, agent: str) -> None:
+        await self._workspace.get(project_id)
+        self._check_agent(agent)
+        await self._recovery.ensure(project_id)
+
+        session_id = await self._registry.session_id(project_id, agent)
+        lock = self._registry.lock(project_id, session_id)
+
+        async with lock:
+            is_busy = (
+                self._workers.running((project_id, session_id))
+                or await self._store.has_waiting_turn(project_id, session_id)
+                or (await self._store.next_queued_turn(project_id, session_id) is not None)
+            )
+            if is_busy:
+                raise DomainError(
+                    "session_busy", "The agent is busy. Try again when it finishes.", status=409
+                )
+
+            built_agent = await self._builder.build(project_id, agent)
+            history = await self._store.messages(project_id, session_id)
+            summary, _ = await self._store.summary(project_id, session_id)
+            system_text = str(system_message(built_agent, summary).content)
+            tool_schemas = [t.schema() for t in built_agent.tools]
+
+            compacted = await compact_if_needed(
+                self._store,
+                self._caller,
+                built_agent.model,
+                project_id,
+                session_id,
+                history,
+                system_text,
+                agent_name=agent,
+                tools=tool_schemas,
+                force=True,
+            )
+
+            if compacted and self._event_log is not None:
+                await self._event_log.record(
+                    project_id,
+                    source="user",
+                    type="session.compacted",
+                    subject_id=session_id,
+                    payload={"agent": agent},
+                )
+
+    async def clear(self, project_id: str, agent: str, person: str = "user") -> None:
+        await self._workspace.get(project_id)
+        self._check_agent(agent)
+        await self._recovery.ensure(project_id)
+
+        session_id = await self._registry.session_id(project_id, agent)
+        lock = self._registry.lock(project_id, session_id)
+
+        async with lock:
+            is_busy = (
+                self._workers.running((project_id, session_id))
+                or await self._store.has_waiting_turn(project_id, session_id)
+                or (await self._store.next_queued_turn(project_id, session_id) is not None)
+            )
+            if is_busy:
+                raise DomainError(
+                    "session_busy", "The agent is busy. Try again when it finishes.", status=409
+                )
+
+            history = await self._store.messages(project_id, session_id)
+            last_msg_id = history[-1].id if history else None
+
+            await self._store.set_summary(
+                project_id, session_id, summary=None, compacted_through=last_msg_id
+            )
+
+            if self._event_log is not None:
+                await self._event_log.record(
+                    project_id,
+                    source="user",
+                    type="session.cleared",
+                    subject_id=session_id,
+                    payload={"agent": agent, "person": person, "last_message_id": last_msg_id},
+                )
 
     async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         await self._workspace.get(project_id)
