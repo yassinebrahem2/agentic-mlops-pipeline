@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 CODE_PARSER_CONTRACT = (
     "The script runs once per new chunk of the file, in the project's sandbox, without network.\n"
     "- stdin: exactly the chunk, UTF-8 text, in whole lines: the file from its start on the"
-    " first read (and after the file is rewritten), then only what was appended since.\n"
+    " first read (and after the file shrinks, truncated or replaced by a shorter one), then"
+    " only the bytes past the previous read.\n"
     "- sys.argv[1]: the file's path in the connection.\n"
     "- sys.argv[2]: the chunk's start byte offset in the file.\n"
     "- sys.argv[3]: the file's first line (a CSV header, say) when the start offset is above 0;"
