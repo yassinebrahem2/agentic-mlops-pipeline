@@ -34,6 +34,7 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_MERGE,
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
+    MERGE_PULL_REQUEST,
     MONITORING_QUERY,
     RECORD_FIX_CHOICE,
     REQUEST_FIX,
@@ -41,6 +42,7 @@ from mlops_agents.agents.tools.names import (
     SAVE_REPORT,
 )
 from mlops_agents.agents.tools.propose import ProposeTool
+from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.config import RunMode, load_settings
@@ -54,7 +56,17 @@ from mlops_agents.monitoring.results.contract import ResultCategory
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
-from mlops_agents.proposals.contract import PROMOTION_KIND, HandoffPayload
+from mlops_agents.proposals.contract import (
+    CONNECTIONS_KIND,
+    HANDOFF_KIND,
+    HOOKS_KIND,
+    MAINTENANCE_KIND,
+    PARSER_KIND,
+    PROMOTION_KIND,
+    RULE_KIND,
+    TRAINING_POLICY_KIND,
+    HandoffPayload,
+)
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.payloads import ModelSpec, Operations
 from mlops_agents.providers.failover import KeyFailover
@@ -413,7 +425,17 @@ TASK_2_COLUMN: dict[str, tuple[str, ...]] = {
     "deployment": (REQUEST_FIX, ProposeTool.name),
     "orchestrator": (REQUEST_FIX,),
 }
-TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (TASK_1_COLUMN, TASK_2_COLUMN)
+# Every holder of `OpenPullRequest` gains `MergePullRequest`.
+TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
+    row["name"]: (MERGE_PULL_REQUEST,)
+    for row in STAGE_3_TABLE
+    if OpenPullRequestTool.name in row["tools"]
+}
+TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (
+    TASK_1_COLUMN,
+    TASK_2_COLUMN,
+    TASK_3_COLUMN,
+)
 AGENT_TABLE: list[dict[str, Any]] = [
     {
         **row,
@@ -508,6 +530,8 @@ def test_all_seven_definitions_load_with_real_registries() -> None:
         query_providers=cast(Any, dummy),
         data_summaries=cast(Any, dummy),
         connections=cast(Any, dummy),
+        surfaces=cast(Any, dummy),
+        pr_sync=cast(Any, dummy),
     )
     hook_reg = HookRegistry()
     hook_reg.register(StatusBoardHook())
@@ -690,21 +714,60 @@ def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
     assert holders == ["alert-prioritization"]
 
 
-# These three hold `Propose` from task 2, but the kinds their prompts name arrive in task 3.
-PROPOSE_NAMED_FROM_TASK_3: frozenset[str] = frozenset(
-    {"data-quality", "model-performance", "deployment"}
-)
-
-
 def test_task_tools_are_named_in_their_holders_prompts() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     for column in TASK_COLUMNS:
         for name, tools in column.items():
             prompt = catalog.get(name).prompt
             for tool_name in tools:
-                if tool_name == ProposeTool.name and name in PROPOSE_NAMED_FROM_TASK_3:
-                    continue
                 assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
+
+
+def test_merge_pull_request_holders_are_the_open_pull_request_holders() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    mergers = {d.name for d in catalog.all() if MERGE_PULL_REQUEST in d.tools}
+    openers = {d.name for d in catalog.all() if OpenPullRequestTool.name in d.tools}
+    assert mergers == openers and mergers
+
+
+# The matrix's last column: the prompts that name each kind as `` `<kind>` proposal ``.
+# `parser` waits for the results plan (#609), so no prompt names it yet.
+KIND_PROMPTS: dict[str, frozenset[str]] = {
+    CONNECTIONS_KIND: frozenset({"onboarding"}),
+    HANDOFF_KIND: frozenset({"onboarding"}),
+    PROMOTION_KIND: frozenset({"retraining"}),
+    MAINTENANCE_KIND: frozenset({"data-quality"}),
+    RULE_KIND: frozenset({"model-performance", "deployment"}),
+    HOOKS_KIND: frozenset({"deployment", "onboarding"}),
+    TRAINING_POLICY_KIND: frozenset({"retraining"}),
+    PARSER_KIND: frozenset(),
+}
+
+
+@pytest.mark.parametrize("kind", list(KIND_PROMPTS))
+def test_each_proposal_kind_is_named_by_exactly_its_prompts(kind: str) -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    namers = {d.name for d in catalog.all() if f"`{kind}` proposal" in d.prompt}
+    assert namers == KIND_PROMPTS[kind]
+    for name in namers:
+        assert ProposeTool.name in catalog.get(name).tools, f"{name} names a kind without Propose"
+
+
+# Task 1's gate wording, false once rules and policies are cited: the gate may allow at once.
+STALE_GATE_WORDING = "the gate decides and may ask a person first"
+
+
+@pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
+def test_diagnosing_prompt_cites_rules_and_never_certifies_them(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    assert "`rule_id`" in prompt, f"{name} prompt does not cite a rule with `rule_id`"
+    assert "never certify" in prompt.lower(), f"{name} prompt lets the agent certify a rule"
+    assert STALE_GATE_WORDING not in prompt.lower(), f"{name} prompt keeps the stale gate line"
+
+
+def test_retraining_cites_an_approved_training_policy() -> None:
+    prompt = _load_definition("retraining").prompt
+    assert "`policy_id`" in prompt
 
 
 @pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
@@ -762,12 +825,6 @@ def test_retraining_prompt_covers_the_fix_menu_and_the_report() -> None:
     assert "circuit" in low and "escalate" in low
     assert REQUEST_TAG in prompt and "links" in low and "request id" in low
     assert f"`{PROMOTION_KIND}` proposal" in prompt
-
-
-def test_only_retraining_names_the_promotion_proposal() -> None:
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    namers = [d.name for d in catalog.all() if f"`{PROMOTION_KIND}` proposal" in d.prompt]
-    assert namers == ["retraining"]
 
 
 def test_deployment_and_orchestrator_role_lines() -> None:
