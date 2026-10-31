@@ -6,7 +6,7 @@ literal brace is written ``{{`` or ``}}``. A filler parses with the same ``strin
 and fills with ``str.format_map``, never a plain text replace.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from string import Formatter
 
 _BRACE_HINT = "a literal brace is written {{ or }}"
@@ -40,3 +40,20 @@ def check_template(where: str, template: str, declared: Collection[str]) -> None
                 f"{where} uses {{{name}}}, which the command does not declare as a "
                 f"placeholder; {_BRACE_HINT}"
             )
+
+
+def fill_template(template: str, values: Mapping[str, str]) -> str:
+    """Parse template with string.Formatter, check all placeholders have values in values,
+    and fill with str.format_map."""
+    from mlops_agents.monitoring.hooks.contract import HookRefused, MissingPlaceholder
+
+    try:
+        fields = [name for _, name, _, _ in Formatter().parse(template) if name is not None]
+    except ValueError as err:
+        raise HookRefused(f"template does not parse as a template ({err}); {_BRACE_HINT}") from err
+
+    for name in fields:
+        if name not in values:
+            raise MissingPlaceholder(name)
+
+    return template.format_map(values)
