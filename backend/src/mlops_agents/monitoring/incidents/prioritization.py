@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
-from mlops_agents.events.contract import EventType
-from mlops_agents.monitoring.incidents.contract import IncidentChange, IncidentObserver
+from mlops_agents.monitoring.incidents.contract import (
+    ALERT_PRIORITIZATION_AGENT,
+    IncidentChange,
+    IncidentObserver,
+)
 
 if TYPE_CHECKING:
-    from mlops_agents.events.contract import EventLog
+    from mlops_agents.events.contract import EventLog, EventType
     from mlops_agents.monitoring.incidents.contract import AgentWaker
 
-ALERT_PRIORITIZATION_AGENT: Final[str] = "alert-prioritization"
 WAKE_LABEL: Final[str] = "incident"
-SEVERITY_CHANGED_EVENT: Final[EventType] = "incident.severity_changed"
+SEVERITY_CHANGED_EVENT: Final = "incident.severity_changed"
 
 
 class PrioritizationWake(IncidentObserver):
@@ -28,15 +30,24 @@ class PrioritizationWake(IncidentObserver):
             events = await self._events.page(
                 project_id,
                 subject_id=change.incident_id,
-                types=[SEVERITY_CHANGED_EVENT],
+                types=[cast("EventType", SEVERITY_CHANGED_EVENT)],
                 limit=1,
             )
             if events and events[0].source == ALERT_PRIORITIZATION_AGENT:
                 return
-        elif change.kind not in ("opened", "reopened", "merged", "split"):
+            seq = events[0].seq if events else 1
+            key = f"{change.kind}:{seq}"
+        elif change.kind in ("opened", "reopened", "merged", "split"):
+            events = await self._events.page(
+                project_id,
+                subject_id=change.incident_id,
+                limit=1,
+            )
+            seq = events[0].seq if events else 1
+            key = f"{change.kind}:{seq}"
+        else:
             return
 
-        key = f"{change.kind}:{change.incident_id}"
         text = (
             f"Incident {change.incident_id} changed ({change.kind}). "
             "Please review and adjust alert prioritization."

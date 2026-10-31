@@ -231,6 +231,7 @@ class IncidentsService(Incidents):
                         "status": "reopened",
                         "reopened_count": new_reopened_count,
                         "resolved_at": None,
+                        "resolved_offline": 0,
                     },
                 )
                 await self._events.record(

@@ -21,7 +21,7 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
 )
-from mlops_agents.monitoring.incidents.contract import IncidentPatch
+from mlops_agents.monitoring.incidents.contract import ALERT_PRIORITIZATION_AGENT, IncidentPatch
 from mlops_agents.monitoring.incidents.severity import (
     RANK_TO_SEVERITY,
     SEVERITY_RANKS,
@@ -276,9 +276,9 @@ class AdjustSeverity(AgentTool[AdjustSeverityArgs]):
 
     async def run(self, ctx: ToolContext, args: AdjustSeverityArgs) -> ToolOutput:
         try:
-            if ctx.agent != "alert-prioritization":
+            if ctx.agent != ALERT_PRIORITIZATION_AGENT:
                 return ToolOutput(
-                    content="AdjustSeverity is only permitted for alert-prioritization.",
+                    content=f"AdjustSeverity is only permitted for {ALERT_PRIORITIZATION_AGENT}.",
                     is_error=True,
                 )
             inc = await self._incidents.get(ctx.project_id, args.incident_id)
