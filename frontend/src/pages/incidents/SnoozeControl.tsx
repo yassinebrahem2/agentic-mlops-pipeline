@@ -21,6 +21,8 @@ export function SnoozeControl({
   const snooze = useSnooze({ projectId, incidentId: incident.id });
   const when = new Date(until);
   const ready = !Number.isNaN(when.getTime());
+  // The backend keeps snoozed_until after it passes; only a snooze still in force is worth saying.
+  const snoozed = incident.snoozed_until && new Date(incident.snoozed_until).getTime() > Date.now();
 
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -35,7 +37,7 @@ export function SnoozeControl({
 
   return (
     <div className="space-y-2">
-      {incident.snoozed_until && (
+      {snoozed && (
         <p className="text-xs text-muted-foreground">
           Snoozed until {formatTime(incident.snoozed_until)}
         </p>

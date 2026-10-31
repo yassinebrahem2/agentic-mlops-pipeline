@@ -5,11 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { api, unwrap } from "@/lib/api";
 import { formatTime } from "@/lib/format";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
+import { expectationsKey } from "./expectationsKey";
 import { CATEGORY_LABELS } from "@/pages/incidents/labels";
 
 type State = components["schemas"]["ExpectationState"];
-
-const expectationsKey = (projectId: string) => ["projects", projectId, "expectations"] as const;
 
 // Exhaustive over the generated unions, so a value the backend adds fails to compile here.
 const STATUS_LABELS: Record<State["status"], string> = {

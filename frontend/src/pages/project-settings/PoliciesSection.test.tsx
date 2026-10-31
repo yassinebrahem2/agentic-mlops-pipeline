@@ -141,4 +141,32 @@ describe("PoliciesSection", () => {
 
     expect(await screen.findByText("Limit reached.")).toBeInTheDocument();
   });
+
+  it.each(["proposal.decided", "handoff.approved"] as const)(
+    "refetches when %s arrives",
+    async (type) => {
+      const { setPolicies } = setup({ policies: [ACTIVE] });
+      await screen.findByRole("listitem", { name: "Policy for churn" });
+
+      setPolicies([ACTIVE, SUSPENDED]);
+      await act(async () => {
+        stream.emit(
+          type,
+          {
+            id: "evt_1",
+            seq: 1,
+            ts: "2026-10-31T10:00:00Z",
+            source: "proposals",
+            subject_id: null,
+            payload: {},
+            type,
+          },
+          1,
+        );
+        await Promise.resolve();
+      });
+
+      expect(await screen.findByRole("listitem", { name: "Policy for fraud" })).toBeInTheDocument();
+    },
+  );
 });

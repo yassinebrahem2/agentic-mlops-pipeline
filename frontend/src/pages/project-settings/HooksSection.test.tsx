@@ -318,4 +318,56 @@ describe("HooksSection", () => {
 
     expect(await screen.findByText("Pins changed.")).toBeInTheDocument();
   });
+
+  it("clears an old refusal when a later action on the hook succeeds", async () => {
+    let refuse = true;
+    const { user } = setup({
+      routes: {
+        [`PUT ${BASE}/hook_deploy/enabled`]: () =>
+          refuse ? failure("Hook is busy.", 409) : json({ ...SUSPENDED, status: "disabled" }),
+        [`POST ${BASE}/hook_deploy/approve`]: () =>
+          json({ ...SUSPENDED, status: "active", suspended_reason: null }),
+      },
+    });
+
+    const deploy = await screen.findByRole("listitem", { name: "Deploy churn" });
+    await user.click(within(deploy).getByRole("button", { name: "Disable" }));
+    expect(await screen.findByText("Hook is busy.")).toBeInTheDocument();
+    refuse = false;
+    await user.click(
+      within(row("Deploy churn")).getByRole("button", { name: "Approve changed content" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Hook is busy.")).toBeNull();
+    });
+  });
+
+  it.each(["proposal.decided", "handoff.approved"] as const)(
+    "refetches when %s arrives",
+    async (type) => {
+      const { setHooks } = setup({ hooks: [ACTIVE] });
+      await screen.findByRole("listitem", { name: "Train churn" });
+
+      setHooks([ACTIVE, SUSPENDED]);
+      await act(async () => {
+        stream.emit(
+          type,
+          {
+            id: "evt_1",
+            seq: 1,
+            ts: "2026-10-31T10:00:00Z",
+            source: "proposals",
+            subject_id: null,
+            payload: {},
+            type,
+          },
+          1,
+        );
+        await Promise.resolve();
+      });
+
+      expect(await screen.findByRole("listitem", { name: "Deploy churn" })).toBeInTheDocument();
+    },
+  );
 });

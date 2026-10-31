@@ -31,7 +31,11 @@ export function PoliciesSection({ projectId }: { projectId: string }) {
     queryFn: async () =>
       unwrap(await api.GET("/api/projects/{project_id}/training/policies", { params })),
   });
-  useInvalidateOnEvents(projectId, policiesKey(projectId), ["policy.suspended"]);
+  useInvalidateOnEvents(projectId, policiesKey(projectId), [
+    "policy.suspended",
+    "proposal.decided",
+    "handoff.approved",
+  ]);
   return (
     <section className="space-y-4 rounded-lg border p-4" aria-labelledby="policies-title">
       <h2 id="policies-title" className="text-lg font-semibold">

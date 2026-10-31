@@ -156,7 +156,7 @@ describe("Inbox incidents section", () => {
     const user = userEvent.setup();
     stubStream();
     stubGet({ [INCIDENTS]: () => ok(pageOf([incident("inc_1")])) });
-    stubPost({ [SNOOZE]: () => failure("invalid_until", "The end time is in the past.", 422) });
+    stubPost({ [SNOOZE]: () => failure("incident_not_found", "Incident 'inc_1' not found.", 404) });
 
     renderPage("/projects/prj_1/inbox");
     await user.click(await screen.findByRole("button", { name: "Snooze" }));
@@ -165,7 +165,28 @@ describe("Inbox incidents section", () => {
     });
     await user.click(screen.getByRole("button", { name: "Snooze until chosen time" }));
 
-    expect(await screen.findByText("The end time is in the past.")).toBeInTheDocument();
+    expect(await screen.findByText("Incident 'inc_1' not found.")).toBeInTheDocument();
+  });
+
+  it("shows a snooze only while it lasts", async () => {
+    stubStream();
+    stubGet({
+      [INCIDENTS]: () =>
+        ok(
+          pageOf([
+            incident("inc_past", { snoozed_until: "2020-01-01T10:00:00Z" }),
+            incident("inc_future", { snoozed_until: "2999-01-01T10:00:00Z" }),
+          ]),
+        ),
+    });
+
+    renderPage("/projects/prj_1/inbox");
+
+    const future = await screen.findByTestId("incident-row-inc_future");
+    expect(within(future).getByText(/Snoozed until/)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("incident-row-inc_past")).queryByText(/Snoozed until/),
+    ).toBeNull();
   });
 
   it("refetches when an incident.opened event arrives", async () => {

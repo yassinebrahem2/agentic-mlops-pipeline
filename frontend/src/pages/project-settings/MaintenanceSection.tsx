@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
 import { QueryStatus } from "@/components/QueryStatus";
@@ -18,13 +18,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, unwrap } from "@/lib/api";
 import { ActionError } from "@/pages/incidents/ActionError";
+import { expectationsKey } from "./expectationsKey";
 import { formatTime } from "@/lib/format";
+import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 
 type MaintenanceWindow = components["schemas"]["MaintenanceWindowView"];
 
 const windowsKey = (projectId: string) => ["projects", projectId, "maintenance-windows"] as const;
 
-// The route has no event of its own, so the list refreshes when this page changes it.
+// A window changes which expectations are suspended, so the list under "Checks and schedules" follows it.
+async function refreshAfterChange(queryClient: QueryClient, projectId: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: windowsKey(projectId) }),
+    queryClient.invalidateQueries({ queryKey: expectationsKey(projectId) }),
+  ]);
+}
+
+// The routes have no event of their own: the list refreshes when this page changes it and when an
+// approved proposal (which can add a window) lands.
 export function MaintenanceSection({ projectId }: { projectId: string }) {
   const params = { path: { project_id: projectId } };
   const windows = useQuery({
@@ -32,6 +43,7 @@ export function MaintenanceSection({ projectId }: { projectId: string }) {
     queryFn: async () =>
       unwrap(await api.GET("/api/projects/{project_id}/maintenance-windows", { params })),
   });
+  useInvalidateOnEvents(projectId, windowsKey(projectId), ["proposal.decided", "handoff.approved"]);
   return (
     <section className="space-y-4 rounded-lg border p-4" aria-labelledby="maintenance-title">
       <h2 id="maintenance-title" className="text-lg font-semibold">
@@ -68,7 +80,7 @@ function WindowRow({ projectId, window }: { projectId: string; window: Maintenan
           <DeleteWindowDialog projectId={projectId} window={window} />
         </span>
       </div>
-      <ul className="flex flex-wrap gap-1" aria-label="Scope">
+      <ul className="flex flex-wrap gap-1" aria-label="Names covered">
         {window.scope.map((entry) => (
           <li key={entry}>
             <Badge variant="outline">{entry}</Badge>
@@ -77,7 +89,7 @@ function WindowRow({ projectId, window }: { projectId: string; window: Maintenan
       </ul>
       <p className="text-xs text-muted-foreground">
         {window.proposal_id
-          ? `Proposed by ${window.created_by} (proposal ${window.proposal_id})`
+          ? `Proposed by an agent (proposal ${window.proposal_id})`
           : `Created by ${window.created_by}`}
       </p>
     </li>
@@ -103,7 +115,7 @@ function DeleteWindowDialog({
     },
     onSuccess: async () => {
       setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: windowsKey(projectId) });
+      await refreshAfterChange(queryClient, projectId);
     },
   });
   return (
@@ -115,7 +127,11 @@ function DeleteWindowDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="destructive" size="sm" aria-label="Delete window">
+        <Button
+          variant="destructive"
+          size="sm"
+          aria-label={`Delete window ${window.scope.join(", ") || window.id}`}
+        >
           Delete
         </Button>
       </DialogTrigger>
@@ -166,7 +182,7 @@ function WindowForm({ projectId }: { projectId: string }) {
       setEnd("");
       setScope("");
       setReason("");
-      await queryClient.invalidateQueries({ queryKey: windowsKey(projectId) });
+      await refreshAfterChange(queryClient, projectId);
     },
   });
   const startAt = new Date(start);

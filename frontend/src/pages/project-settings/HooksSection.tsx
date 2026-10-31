@@ -43,6 +43,8 @@ export function HooksSection({ projectId }: { projectId: string }) {
     "hook.ran",
     "hook.failed",
     "hook.suspended",
+    "proposal.decided",
+    "handoff.approved",
   ]);
   return (
     <section className="space-y-4 rounded-lg border p-4" aria-labelledby="hooks-title">
@@ -104,6 +106,7 @@ function HookRow({ projectId, hook }: { projectId: string; hook: Hook }) {
               size="sm"
               disabled={busy}
               onClick={() => {
+                setEnabled.reset();
                 approve.mutate();
               }}
             >
@@ -115,6 +118,7 @@ function HookRow({ projectId, hook }: { projectId: string; hook: Hook }) {
             variant="outline"
             disabled={busy}
             onClick={() => {
+              approve.reset();
               setEnabled.mutate(hook.status === "disabled");
             }}
           >
