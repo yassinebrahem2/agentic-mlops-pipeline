@@ -568,7 +568,7 @@ class DashboardView(BaseModel): stages: list[StageStatus]; edges: list[PipelineE
 
 ```python
 class EnvironmentRow(BaseModel): model: str; environment: str; alias: str; version: str | None
-class DecisionRow(BaseModel): at: datetime; model: str; kind: Literal["promotion", "rollback", "fall_back"]; from_version: str | None; to_version: str | None; decided_by: Literal["person", "team_gate", "rule", "agent_bypass"]; decided_by_ref: str | None; report_id: str | None   # decided_by_ref: the rule ID or the person
+class DecisionRow(BaseModel): at: datetime; model: str; kind: Literal["promotion", "rollback", "fall_back"]; from_version: str | None; to_version: str | None; decided_by: Literal["person", "team_gate", "rule", "agent_bypass"]; decided_by_ref: str | None; report_id: str | None   # decided_by_ref: the rule ID, or for a person's decision the approval ID (the approval records who decided; changed at #625's merge)
 class OpenPipelinePr(BaseModel): number: int; title: str; agent: str; labels: list[str]
 class DeploymentsView(BaseModel): environments: list[EnvironmentRow]; decisions: list[DecisionRow]; open_prs: list[OpenPipelinePr]
 ```
