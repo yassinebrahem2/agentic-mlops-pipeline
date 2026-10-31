@@ -391,29 +391,10 @@ def test_diagnoser_targets_are_packaged_definitions() -> None:
 
 
 def test_tool_names_in_names_py_are_unique_and_collide_with_no_registered_tool() -> None:
+    from unittest.mock import MagicMock
+
     import mlops_agents.agents.tools.names as tool_names_mod
-    from mlops_agents.agents.tools import (
-        BashTool,
-        CommentOnIssueTool,
-        EditTool,
-        GlobTool,
-        GrepTool,
-        ListAgentsTool,
-        OpenIssueTool,
-        OpenPullRequestTool,
-        ProposeTool,
-        ReadHandoffTool,
-        ReadTool,
-        ResumeTaskTool,
-        SaveNote,
-        ScheduleWakeupTool,
-        SearchIssuesTool,
-        SearchNotes,
-        StartTaskTool,
-        TrackingHistory,
-        WriteTool,
-    )
-    from mlops_agents.agents.tools.send_message import SendMessageTool
+    from mlops_agents.agents.tools import default_registry
 
     canonical_names = [
         getattr(tool_names_mod, k)
@@ -422,28 +403,27 @@ def test_tool_names_in_names_py_are_unique_and_collide_with_no_registered_tool()
     ]
     assert len(canonical_names) == len(set(canonical_names))
 
-    stage1_3_tool_names = {
-        BashTool.name,
-        CommentOnIssueTool.name,
-        EditTool.name,
-        GlobTool.name,
-        GrepTool.name,
-        ListAgentsTool.name,
-        OpenIssueTool.name,
-        OpenPullRequestTool.name,
-        ProposeTool.name,
-        ReadHandoffTool.name,
-        ReadTool.name,
-        ResumeTaskTool.name,
-        SaveNote.name,
-        ScheduleWakeupTool.name,
-        SearchIssuesTool.name,
-        SearchNotes.name,
-        StartTaskTool.name,
-        TrackingHistory.name,
-        WriteTool.name,
-        SendMessageTool.name,
+    stage1_3_services = {
+        "tasks": MagicMock(),
+        "sandbox": MagicMock(),
+        "bus": MagicMock(),
+        "status_board": MagicMock(),
+        "catalog": MagicMock(),
+        "wakeups": MagicMock(),
+        "workspace": MagicMock(),
+        "github": MagicMock(),
+        "events": MagicMock(),
+        "http": MagicMock(),
+        "databases": MagicMock(),
+        "knowledge": MagicMock(),
+        "proposals": MagicMock(),
+        "proposal_kinds": MagicMock(),
+        "tracking": MagicMock(),
+        "handoffs": MagicMock(),
     }
+    stage1_3_registry = default_registry(**stage1_3_services)
+    stage1_3_tool_names = stage1_3_registry.names()
+    assert len(stage1_3_tool_names) == 20
     assert set(canonical_names) & stage1_3_tool_names == set()
 
 
@@ -576,222 +556,22 @@ def test_prefixes_equal_roadmap_table() -> None:
 def test_payload_and_view_models_forbid_extra_keys_except_evaluation_payload() -> None:
     from pydantic import BaseModel
 
-    from mlops_agents.monitoring.expectations.contract import (
-        ExpectationKey,
-        ExpectationSpec,
-        ExpectationState,
-    )
-    from mlops_agents.monitoring.expr import AllOf, AnyOf, Compare, Not
-    from mlops_agents.monitoring.hooks.contract import (
-        CommandSpec,
-        HookProposal,
-        HookRunView,
-        HooksPayload,
-        HookView,
-        RunContext,
-    )
-    from mlops_agents.monitoring.incidents.contract import (
-        Delivery,
-        HoldScope,
-        IncidentChange,
-        IncidentPatch,
-        IncidentView,
-        MaintenancePayload,
-        RoutePlan,
-        SeverityDecision,
-        SignalDraft,
-        SignalOutcome,
-        SignalView,
-        WindowSpec,
-    )
-    from mlops_agents.monitoring.results.contract import (
-        CollectionReport,
-        ParseOutcome,
-        ParserCode,
-        ParserPayload,
-        ParserSpec,
-        ParserVersion,
-        ResultQuery,
-        ResultRecord,
-        SourceState,
-        StoredResult,
-    )
-    from mlops_agents.monitoring.rules.contract import (
-        RuleLimits,
-        RulePayload,
-        RuleSpec,
-        RuleTerm,
-        RuleView,
-    )
-    from mlops_agents.monitoring.scheduler.contract import HeartbeatView
-    from mlops_agents.monitoring.verdicts.contract import (
-        BaselineLink,
-        MissReport,
-        SilentTeamAlert,
-        VerdictDraft,
-        VerdictView,
-    )
-    from mlops_agents.notifications.contract import (
-        DiscordSettings,
-        EmailSettings,
-        Message,
-        MorningReportBody,
-        OnCallPerson,
-        ReportAction,
-    )
-    from mlops_agents.promotion.contract import (
-        DecisionRow,
-        DeploymentsView,
-        EnvironmentRow,
-        EvaluationPayload,
-        EvaluationView,
-        MergeCheck,
-        MetricSet,
-        MetricValue,
-        OpenPipelinePr,
-        ParityResult,
-        PromotionPayload,
-        PromotionView,
-        ReportDraft,
-        ReportField,
-        ReportView,
-    )
-    from mlops_agents.proposals.contract import (
-        ApplyResult,
-        BaseProposalView,
-        ConnectionsProposalView,
-        CredentialSlot,
-        HandoffProposalView,
-        HandoffView,
-        HooksProposalView,
-        MaintenanceProposalView,
-        ParserProposalView,
-        PromotionProposalView,
-        RuleProposalView,
-        SlotState,
-        TrainingPolicyProposalView,
-    )
-    from mlops_agents.stats.contract import StatsView, StatValue
-    from mlops_agents.training.contract import (
-        FixRequestView,
-        GuardRefusal,
-        GuardResult,
-        TrainingPolicyPayload,
-        TrainingPolicyView,
-        TrainingRequestView,
-        TrainingWindow,
-        WindowRule,
-    )
+    from mlops_agents.promotion.contract import EvaluationPayload
 
-    models_to_check: list[type[BaseModel]] = [
-        # expr
-        AllOf,
-        AnyOf,
-        Compare,
-        Not,
-        # expectations
-        ExpectationKey,
-        ExpectationSpec,
-        ExpectationState,
-        # hooks
-        CommandSpec,
-        HookProposal,
-        HookRunView,
-        HooksPayload,
-        HookView,
-        RunContext,
-        # incidents
-        Delivery,
-        HoldScope,
-        IncidentChange,
-        IncidentPatch,
-        IncidentView,
-        MaintenancePayload,
-        RoutePlan,
-        SeverityDecision,
-        SignalDraft,
-        SignalOutcome,
-        SignalView,
-        WindowSpec,
-        # results
-        CollectionReport,
-        ParseOutcome,
-        ParserCode,
-        ParserPayload,
-        ParserSpec,
-        ParserVersion,
-        ResultQuery,
-        ResultRecord,
-        SourceState,
-        StoredResult,
-        # rules
-        RuleLimits,
-        RulePayload,
-        RuleSpec,
-        RuleTerm,
-        RuleView,
-        # scheduler
-        HeartbeatView,
-        # verdicts
-        BaselineLink,
-        MissReport,
-        SilentTeamAlert,
-        VerdictDraft,
-        VerdictView,
-        # notifications
-        DiscordSettings,
-        EmailSettings,
-        Message,
-        MorningReportBody,
-        OnCallPerson,
-        ReportAction,
-        # promotion
-        DecisionRow,
-        DeploymentsView,
-        EnvironmentRow,
-        EvaluationView,
-        MergeCheck,
-        MetricSet,
-        MetricValue,
-        OpenPipelinePr,
-        ParityResult,
-        PromotionPayload,
-        PromotionView,
-        ReportDraft,
-        ReportField,
-        ReportView,
-        # proposals
-        ApplyResult,
-        BaseProposalView,
-        ConnectionsProposalView,
-        CredentialSlot,
-        HandoffProposalView,
-        HandoffView,
-        HooksProposalView,
-        MaintenanceProposalView,
-        ParserProposalView,
-        PromotionProposalView,
-        RuleProposalView,
-        SlotState,
-        TrainingPolicyProposalView,
-        # stats
-        StatValue,
-        StatsView,
-        # training
-        FixRequestView,
-        GuardRefusal,
-        GuardResult,
-        TrainingPolicyPayload,
-        TrainingPolicyView,
-        TrainingRequestView,
-        TrainingWindow,
-        WindowRule,
-    ]
+    discovered_models: list[type[BaseModel]] = []
+    for mod_name in MODULES:
+        mod = importlib.import_module(mod_name)
+        for _, obj in inspect.getmembers(mod, inspect.isclass):
+            if issubclass(obj, BaseModel) and obj is not BaseModel and obj.__module__ == mod_name:
+                discovered_models.append(obj)
 
-    for model in models_to_check:
-        assert model.model_config.get("extra") == "forbid", (
-            f"{model.__name__} must forbid extra keys"
-        )
+    assert len(discovered_models) >= 90
 
-    # EvaluationPayload is the documented exception (I37: extra="allow" so team's extra fields survive)
-    assert EvaluationPayload.model_config.get("extra") != "forbid"
+    for model in discovered_models:
+        if model is EvaluationPayload:
+            # EvaluationPayload is the documented exception (I37: extra="allow" so team's extra fields survive)
+            assert model.model_config.get("extra") != "forbid"
+        else:
+            assert model.model_config.get("extra") == "forbid", (
+                f"{model.__module__}.{model.__name__} must forbid extra keys"
+            )
