@@ -4,6 +4,7 @@ sandbox once (I22)."""
 from __future__ import annotations
 
 import io
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,14 @@ from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.constants import (
     CODE_PARSER_CHUNK_BYTES,
     CODE_PARSER_MAX_CHUNKS_PER_CYCLE,
+    HELD_TAIL_QUIET_SECONDS,
 )
-from mlops_agents.monitoring.results.contract import ParserMapping, ParserSpec, source_id
+from mlops_agents.monitoring.results.contract import (
+    ParserCode,
+    ParserMapping,
+    ParserSpec,
+    source_id,
+)
 from mlops_agents.monitoring.results.file_source import FileSourceReader, read_code_parser_pieces
 from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.monitoring.results.parsers import SqliteParsers
@@ -33,6 +40,7 @@ from tests.monitoring.results.conftest import (
     code_feed_service,
     feed_mount,
     mapping_feed_service,
+    set_mtime,
 )
 from tests.providers.fake_clock import FakeClock
 
@@ -103,6 +111,47 @@ async def test_file_needing_more_chunks_than_the_bound_is_read_over_several_cycl
     assert stored == len(expected)
 
 
+async def test_a_quiet_file_is_read_over_several_cycles_its_tail_only_at_the_end(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bound(monkeypatch, 2)
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir()
+    # Five pieces, the last ending in a line without a newline; the file is quiet throughout
+    body = _lines("c", 4 * _PIECE_LINES + 10)
+    data = body + b"tail"
+    target = data_dir / "feed.raw"
+    target.write_bytes(data)
+    set_mtime(target, clock.now() - timedelta(seconds=HELD_TAIL_QUIET_SECONDS + 1))
+    service, runner = await code_feed_service(
+        databases, events, project_id, data_dir, "feed.raw", STDIN_LINES_SCRIPT
+    )
+
+    runs: list[int] = []
+    tail_seen: list[bool] = []
+    for _cycle in range(4):
+        calls_before = len(runner.calls)
+        rep = await service.collect(project_id, clock.now())
+        assert rep.failures == {}
+        runs.append(len(runner.calls) - calls_before)
+        tail_seen.append("tail" in await _check_ids(databases, project_id))
+        offset = await _offset(service, project_id, "file:conn_feed:feed.raw", "feed.raw")
+        # A cycle that stopped short of the end stops at a line start
+        assert offset == len(data) or data[offset - 1 : offset] == b"\n"
+
+    assert runs == [2, 2, 1, 0]
+    assert tail_seen == [False, False, True, True]
+    check_ids = await _check_ids(databases, project_id)
+    expected = [f"c{i:04d}".ljust(_LINE_BYTES - 1, "x") for i in range(4 * _PIECE_LINES + 10)]
+    assert sorted(check_ids) == sorted([*expected, "tail"])
+    assert await _offset(service, project_id, "file:conn_feed:feed.raw", "feed.raw") == len(data)
+
+
 async def test_read_raw_gives_a_code_parser_at_most_the_bound_of_chunks(
     tmp_path: Path, project_id: str, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,6 +210,10 @@ async def test_a_cycle_prepares_the_sandbox_once_for_every_chunk_and_file(
     assert len(runner.calls) == 4
     assert (sandbox.rebuilds, connections.mount_lookups) == (1, 1)
 
+    # Once the cycle has ended, a run in the same task outside a cycle prepares on its own
+    await service.parsers.parse(project_id, "file:conn_feed:*.raw", "x\n", origin_ref="a.raw")
+    assert (sandbox.rebuilds, connections.mount_lookups) == (2, 2)
+
     # The next cycle prepares again: what a cycle prepared is dropped when it ends
     with (data_dir / "a.raw").open("ab") as f:
         f.write(_lines("z", 1))
@@ -168,7 +221,7 @@ async def test_a_cycle_prepares_the_sandbox_once_for_every_chunk_and_file(
 
     assert rep2.failures == {}
     assert rep2.stored == 1
-    assert (sandbox.rebuilds, connections.mount_lookups) == (2, 2)
+    assert (sandbox.rebuilds, connections.mount_lookups) == (3, 3)
 
 
 @pytest.mark.parametrize("failure", ["sandbox not ready", "mounts lookup raises"])
@@ -266,19 +319,24 @@ class _CountingFile(io.BytesIO):
         return data
 
 
-def test_the_pieces_read_only_this_cycles_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("quiet", [False, True])
+def test_the_pieces_read_only_this_cycles_bytes(
+    monkeypatch: pytest.MonkeyPatch, quiet: bool
+) -> None:
     _bound(monkeypatch, 4)
     data = _lines("c", 100 * _PIECE_LINES)
     offset = 3 * _PIECE_LINES * _LINE_BYTES
     f = _CountingFile(data)
 
-    pieces = read_code_parser_pieces(f, offset, len(data), quiet=False)
+    pieces = read_code_parser_pieces(f, offset, len(data), quiet=quiet)
 
     piece = _PIECE_LINES * _LINE_BYTES
     assert [(start, len(chunk)) for start, chunk in pieces] == [
         (offset + i * piece, piece) for i in range(4)
     ]
     assert all(chunk == data[start : start + len(chunk)] for start, chunk in pieces)
+    # The read stopped short of the end, so even a quiet file's pieces end at a newline
+    assert all(chunk.endswith(b"\n") for _start, chunk in pieces)
     last_end = pieces[-1][0] + len(pieces[-1][1])
     assert f.bytes_read <= last_end - offset + CODE_PARSER_CHUNK_BYTES
     assert f.bytes_read < len(data) // 10
@@ -289,3 +347,29 @@ def test_the_contract_says_whole_lines_and_the_per_cycle_bound() -> None:
     assert "quoted newlines" in CODE_PARSER_CONTRACT
     assert "mapping parser" in CODE_PARSER_CONTRACT
     assert f"at most {CODE_PARSER_MAX_CHUNKS_PER_CYCLE} chunks of a file" in CODE_PARSER_CONTRACT
+
+
+async def test_a_run_for_another_project_inside_a_cycle_prepares_on_its_own(
+    project_id: str, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir()
+    (data_dir / "a.raw").write_bytes(b"a1\n")
+    sandbox = FakeSandbox(tag="sandbox:test-tag")
+    connections = MountsConnections([feed_mount(data_dir)])
+    runner = CodeParserRunner(
+        sandbox=sandbox,
+        docker_runner=LocalExecDockerRunner("sandbox:test-tag", [feed_mount(data_dir)]),
+        connections=connections,
+    )
+    code = ParserCode(script=STDIN_LINES_SCRIPT, timeout_s=60)
+
+    async with runner.cycle(project_id):
+        for run_project in (project_id, project_id, "prj_other", "prj_other"):
+            outcome = await runner.run(
+                run_project, code, "a1\n", origin_ref="a.raw", connection_name="conn_feed"
+            )
+            assert [rec.check_id for _key, rec in outcome.records] == ["a1"]
+
+    # The cycle's project prepares once; the other project's runs each prepare
+    assert (sandbox.rebuilds, connections.mount_lookups) == (3, 3)
