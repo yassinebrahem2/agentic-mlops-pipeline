@@ -91,14 +91,14 @@
 **Interfaces:** consumes `Verdicts.list`, `Baseline` (`available`, `links`, `silent_alerts`), `Incidents.list`, `Results.query`, `Hooks.runs`, `cost_usd` and `ModelEntry.price` (ui task 1), `Clock`. Produces `StatsService(Stats)` and `GET /api/projects/{id}/stats?window=7d|30d|all&category=` (`StatsView`; a bad `window` or `category` is 422).
 
 **Notes:**
-- Computed on read, nothing stored. The window is `[now − 7d or 30d, now]` on the incident's `detected_at` (and on each other row's own time); `all` has no lower bound. `merged` incidents are left out everywhere (they were absorbed). `category` filters incidents by their current category; groups not built from incidents ignore it.
+- Computed on read, nothing stored. Whether the team caught an incident comes from `Baseline.matched_incidents` (added to I31 on 2026-10-31, implemented in this task in `monitoring/verdicts/baseline.py` on the same matcher as `silent_alerts`, reading every team fire page by page), never from the stored `baseline_links`: an attach that moves `started_at` earlier, or an `update` back to a live status, widens the window without re-linking. A fire that matches a merged incident counts for its survivor (merged incidents are left out of Stats). The stored links only feed the incident page. The window is `[now − 7d or 30d, now]` on the incident's `detected_at` (and on each other row's own time); `all` has no lower bound. `merged` incidents are left out everywhere (they were absorbed). `category` filters incidents by their current category; groups not built from incidents ignore it.
 - `collecting = n < STATS_MIN_VERDICTS` only for verdict-based numbers (marked V below); then `value` is still computed but the page shows "collecting data". Counts have `collecting = false`. With `baseline_available = false`, the numbers that need the baseline (B) are `value = None`, never 0.
 - Definitions (n in brackets):
 
 | Metric | Value |
 |---|---|
 | precision (V) | `real_issue` ÷ verdicts on incidents [verdicts] |
-| caught_baseline_missed (V, B) | `real_issue` incidents with no baseline link [verdicts] |
+| caught_baseline_missed (V, B) | `real_issue` incidents not in `Baseline.matched_incidents` [verdicts] |
 | false_alarms_avoided (V, B) | silent team alerts judged `not_an_issue` [those verdicts] |
 | misses | miss reports + silent team alerts judged `real_issue` [count] |
 | detection_delay_s (V) | median `detected_at − started_at` of `real_issue` incidents [verdicts] |
@@ -117,7 +117,7 @@
 - `cost_per_incident` takes dollars only from `cost_usd`; stats never multiplies a price itself.
 - A metric whose rows are empty is `value = None, n = 0`, never 0.
 
-**Tests (stop condition):** a fixture project (real stores on a temp data folder, fake `Clock`) with known incidents, verdicts, team fires, silent-alert verdicts, hook runs, approvals, tasks, turns and `llm_calls` gives the expected value and n for every metric in `STAT_METRICS` (the test iterates `STAT_METRICS`, so a metric without a function fails); 4 verdicts → `collecting` true, 5 → false; no team records → `baseline_available` false and the B numbers `None`; `7d` excludes an 8-day-old incident and `all` includes it; a merged incident is not counted; `category` narrows the incident groups only; an unpriced model gives `cost_per_incident = None`; bad query values are 422; full suite and checks; CI green.
+**Tests (stop condition):** a team fire in the part of a window widened by an attach (`started_at` moved earlier) keeps the incident out of `caught_baseline_missed`; a team fire on a merged incident's cause key keeps its survivor out of it; a fixture project (real stores on a temp data folder, fake `Clock`) with known incidents, verdicts, team fires, silent-alert verdicts, hook runs, approvals, tasks, turns and `llm_calls` gives the expected value and n for every metric in `STAT_METRICS` (the test iterates `STAT_METRICS`, so a metric without a function fails); 4 verdicts → `collecting` true, 5 → false; no team records → `baseline_available` false and the B numbers `None`; `7d` excludes an 8-day-old incident and `all` includes it; a merged incident is not counted; `category` narrows the incident groups only; an unpriced model gives `cost_per_incident = None`; bad query values are 422; full suite and checks; CI green.
 
 ---
 
