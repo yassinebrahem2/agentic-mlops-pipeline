@@ -287,6 +287,7 @@ async def test_failing_source_scrubs_url_credentials_from_error_signal_and_logs(
             source_id: str,
             cursor: dict[str, Any],
             *,
+            now: datetime,
             consecutive_failures: int = 0,
         ) -> SourceReadOutcome:
             raise RuntimeError(raw_error)

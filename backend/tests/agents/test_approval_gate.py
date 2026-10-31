@@ -17,6 +17,7 @@ from mlops_agents.storage.tables import turns
 from tests.agents.gate_helpers import (
     DeployTool,
     DummyArgs,
+    FailingPreviewTool,
     GithubTool,
     ProposeArgs,
     ProposeTool,
@@ -313,3 +314,23 @@ async def test_a_propose_call_whose_kind_is_not_a_string_has_no_proposal_kind(
     assert approval_id is not None
     stored = await store.get(project_id, approval_id)
     assert stored is not None and stored.proposal_kind is None
+
+
+@pytest.mark.asyncio
+async def test_preview_tool_failure_in_decide_returns_deny(
+    databases: Databases, paths: DataPaths
+) -> None:
+    project_id = "prj_previewfail"
+    paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
+    await setup_session_and_turn(databases, project_id)
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+
+    decisions = await gate.decide([make_call(FailingPreviewTool(), "c_fail", project_id)])
+
+    decision = decisions["c_fail"]
+    assert decision.outcome == "deny"
+    assert decision.message == "Docker is unavailable"
+    assert decision.approval_id is None
+    pending = await store.pending(project_id)
+    assert pending == []
