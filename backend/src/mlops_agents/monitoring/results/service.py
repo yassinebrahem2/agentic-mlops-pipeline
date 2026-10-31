@@ -14,9 +14,11 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expectations.contract import Maintenance, NeverSuspended
 from mlops_agents.monitoring.incidents.contract import SignalDraft
 from mlops_agents.monitoring.results.ci_source import CiSourceReader
+from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     EvaluationCopies,
+    ParseOutcome,
     Parsers,
     ResultQuery,
     ResultRecord,
@@ -318,13 +320,12 @@ class ResultsService(Results):
 
                 source_stored = 0
                 if kind == "file":
-                    parser_format = (
-                        cur_parser.spec.mapping.format
-                        if cur_parser.spec.mapping is not None
-                        else None
-                    )
                     raw_read = await self._file_reader.read_raw(
-                        project_id, s_id, cursor=current_cursor, format=parser_format
+                        project_id,
+                        s_id,
+                        cursor=current_cursor,
+                        now=now,
+                        mapping=cur_parser.spec.mapping,
                     )
                     if raw_read.last_error:
                         failures[s_id] = raw_read.last_error
@@ -347,9 +348,9 @@ class ResultsService(Results):
                                 )
                                 await self._incidents.raise_signal(project_id, draft, seen_at=now)
 
-                    # A file the reader held (no chunk this cycle) takes the reader's entry, so
-                    # its new size and mtime are stored and the next read can see it unchanged.
-                    # A file with a chunk advances only once its chunk parses.
+                    # A file the reader held (no chunk this cycle) takes the reader's entry, with
+                    # its size and mtime as last seen. A file with a chunk advances only once
+                    # its chunk parses.
                     chunk_files = {c.rel_posix for c in raw_read.chunks}
                     held_files_cur = dict(current_cursor.get("files", {}))
                     for rel_posix, entry in raw_read.cursor.get("files", {}).items():
@@ -361,13 +362,18 @@ class ResultsService(Results):
 
                     for chunk in raw_read.chunks:
                         try:
-                            outcome = await self._parsers.parse(
-                                project_id,
-                                s_id,
-                                chunk.content,
-                                origin_ref=chunk.rel_posix,
-                                start_offset=chunk.start_offset,
-                                csv_header=chunk.csv_header,
+                            # A chunk can be only an incomplete last record, with nothing to parse
+                            outcome = (
+                                await self._parsers.parse(
+                                    project_id,
+                                    s_id,
+                                    chunk.content,
+                                    origin_ref=chunk.rel_posix,
+                                    start_offset=chunk.start_offset,
+                                    csv_header=chunk.csv_header,
+                                )
+                                if chunk.content
+                                else ParseOutcome(records=[], errors=[])
                             )
                         except Exception as exc:
                             cycle_has_errors = True
@@ -396,9 +402,16 @@ class ResultsService(Results):
                                     )
                             continue
 
-                        if outcome.errors:
+                        errors = list(outcome.errors)
+                        if chunk.incomplete_tail_offset is not None:
+                            errors.append(
+                                f"Offset {chunk.incomplete_tail_offset}: last record is"
+                                " incomplete and the file has not changed for"
+                                f" {HELD_TAIL_QUIET_SECONDS} s"
+                            )
+                        if errors:
                             cycle_has_errors = True
-                            for err in outcome.errors:
+                            for err in errors:
                                 last_err = scrub_url_secrets(err)
                                 failures[s_id] = last_err
                                 if self._incidents is not None:
@@ -489,7 +502,11 @@ class ResultsService(Results):
             try:
                 if kind == "file":
                     outcome = await self._file_reader.read(
-                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                        project_id,
+                        s_id,
+                        cursor=current_cursor,
+                        now=now,
+                        consecutive_failures=prev_failures,
                     )
                 elif kind == "ci":
                     if self._ci_reader is None:

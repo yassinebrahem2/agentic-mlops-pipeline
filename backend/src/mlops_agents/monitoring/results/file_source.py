@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,8 +13,13 @@ from typing import Any, cast
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
-from mlops_agents.monitoring.results.contract import ResultRecord, parse_source_id
-from mlops_agents.monitoring.results.mapping import split_csv_records
+from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
+from mlops_agents.monitoring.results.contract import ParserMapping, ResultRecord, parse_source_id
+from mlops_agents.monitoring.results.mapping import (
+    LineFormat,
+    is_complete_record,
+    split_csv_records,
+)
 from mlops_agents.tracking.contract import EvaluationRecord
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,9 @@ class RawChunk:
     size: int
     mtime: float
     csv_header: list[str] | None = None
+    # Byte offset of a last record left out of `content` as incomplete after the quiet time;
+    # `new_offset` is past it
+    incomplete_tail_offset: int | None = None
 
 
 @dataclass
@@ -46,24 +55,32 @@ class RawReadOutcome:
     last_error: str | None = None
 
 
-def _unchanged(
-    files_cursor: dict[str, dict[str, Any]], rel_posix: str, size: int, mtime: float
-) -> bool:
-    """Whether the file has the size and mtime of the previous read. A file seen for the
-    first time has no previous read, so it is not unchanged."""
-    prev = files_cursor.get(rel_posix)
-    return prev is not None and prev.get("size") == size and prev.get("mtime") == mtime
+def _quiet(mtime: float, now: datetime) -> bool:
+    """Whether the file has been unchanged for the quiet time, so its writer has stopped."""
+    return now.timestamp() - mtime >= HELD_TAIL_QUIET_SECONDS
 
 
-def _consumable_length(chunk: bytes, unchanged: bool) -> int:
-    """How many bytes of a chunk read from the cursor can be consumed now.
+@dataclass(frozen=True)
+class _TailCut:
+    deliver: int  # bytes of the chunk handed on
+    consume: int  # bytes the cursor moves past; any past `deliver` are an incomplete record
 
-    Up to the last newline: bytes after it may be a record the writer is still writing. Once
-    the file is unchanged since the previous read the writer has stopped, so that tail is a
-    complete record (or a broken one, which the parser reports) and is consumed too."""
-    if unchanged:
-        return len(chunk)
-    return chunk.rfind(b"\n") + 1
+
+def _cut_tail(
+    chunk: bytes, records_end: int, quiet: bool, complete: Callable[[str], bool] | None
+) -> _TailCut:
+    """How much of a chunk read from the cursor to hand on; its complete records end at
+    `records_end`.
+
+    The bytes after them (the tail) may be a record the writer is still writing, so they are
+    held until the file has been quiet for HELD_TAIL_QUIET_SECONDS. Then a complete tail is
+    handed on, and an incomplete one is consumed without being handed on. With `complete`
+    None the consumer judges the tail itself, so a quiet tail is always handed on."""
+    if records_end == len(chunk) or not quiet:
+        return _TailCut(deliver=records_end, consume=records_end)
+    if complete is None or complete(chunk[records_end:].decode("utf-8", errors="replace")):
+        return _TailCut(deliver=len(chunk), consume=len(chunk))
+    return _TailCut(deliver=records_end, consume=len(chunk))
 
 
 def _read_files_sync(
@@ -72,6 +89,8 @@ def _read_files_sync(
     secret_paths: set[str],
     cursor: dict[str, Any],
     consecutive_failures: int = 0,
+    *,
+    now: datetime,
 ) -> SourceReadOutcome:
     """Synchronous file scanner and reader for local folder paths."""
     files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
@@ -153,10 +172,10 @@ def _read_files_sync(
             last_error = scrub_url_secrets(str(exc))
             continue
 
-        consumable = _consumable_length(
-            chunk, _unchanged(files_cursor, rel_posix, cur_size, cur_mtime)
-        )
-        if consumable == 0:
+        # The line loop applies the jsonl rule to a quiet tail itself (a JSON object), so an
+        # incomplete one takes its invalid-line path
+        cut = _cut_tail(chunk, chunk.rfind(b"\n") + 1, _quiet(cur_mtime, now), None)
+        if cut.consume == 0:
             files_cursor[rel_posix] = {
                 "size": cur_size,
                 "mtime": cur_mtime,
@@ -164,8 +183,8 @@ def _read_files_sync(
             }
             continue
 
-        chunk_to_consume = chunk[:consumable]
-        new_offset = offset + consumable
+        chunk_to_consume = chunk[: cut.consume]
+        new_offset = offset + cut.consume
 
         current_line_start = offset
         lines = chunk_to_consume.splitlines(keepends=True)
@@ -257,9 +276,11 @@ class FileSourceReader:
         source_id: str,
         cursor: dict[str, Any],
         *,
+        now: datetime,
         consecutive_failures: int = 0,
     ) -> SourceReadOutcome:
-        """Reads new result records from files matching source_id pattern."""
+        """Reads new result records from files matching source_id pattern. A file's quiet
+        time is judged against `now`, the collection time."""
         kind, pattern, connection_name = parse_source_id(source_id)
         if kind != "file" or connection_name is None:
             return SourceReadOutcome(
@@ -318,7 +339,13 @@ class FileSourceReader:
 
         try:
             return await asyncio.to_thread(
-                _read_files_sync, root, pattern, secret_paths, cursor, consecutive_failures
+                _read_files_sync,
+                root,
+                pattern,
+                secret_paths,
+                cursor,
+                consecutive_failures,
+                now=now,
             )
         except Exception as exc:
             return SourceReadOutcome(
@@ -334,9 +361,12 @@ class FileSourceReader:
         source_id: str,
         cursor: dict[str, Any],
         *,
-        format: str | None = None,
+        now: datetime,
+        mapping: ParserMapping | None = None,
     ) -> RawReadOutcome:
-        """Reads raw file contents from files matching source_id pattern."""
+        """Reads raw file contents from files matching source_id pattern, for `mapping`'s
+        format (None: a code parser). A file's quiet time is judged against `now`, the
+        collection time."""
         kind, pattern, connection_name = parse_source_id(source_id)
         if kind != "file" or connection_name is None:
             return RawReadOutcome(
@@ -390,7 +420,7 @@ class FileSourceReader:
 
         try:
             return await asyncio.to_thread(
-                _read_raw_files_sync, root, pattern, secret_paths, cursor, format
+                _read_raw_files_sync, root, pattern, secret_paths, cursor, mapping, now=now
             )
         except Exception as exc:
             return RawReadOutcome(
@@ -411,13 +441,58 @@ def _byte_end(data: bytes, text: str, end: int) -> int:
     return position
 
 
+def _cut_chunk(
+    chunk: bytes,
+    offset: int,
+    fmt: LineFormat | None,
+    pattern: str | None,
+    saved_header: list[str] | None,
+    quiet: bool,
+) -> tuple[_TailCut, list[str] | None]:
+    """The cut of a chunk read from `offset` for a parser of format `fmt` (None: a code
+    parser, whose script judges a tail itself), and the file's csv header."""
+    newline_end = chunk.rfind(b"\n") + 1
+    if fmt is None:
+        return _cut_tail(chunk, newline_end, quiet, None), None
+    if fmt != "csv":
+
+        def complete(tail: str) -> bool:
+            return is_complete_record(fmt, tail, pattern=pattern)
+
+        return _cut_tail(chunk, newline_end, quiet, complete), None
+
+    # A csv record may span lines inside quotes: its complete records end where the split of
+    # the text up to the last newline says, so an unfinished quoted record is in the tail
+    head = chunk[:newline_end]
+    head_text = head.decode("utf-8", errors="replace")
+    split = split_csv_records(head_text, offset)
+    records_end = _byte_end(head, head_text, split.end)
+    header = saved_header
+    if offset == 0 and header is None and split.records:
+        header = split.records[0].fields
+
+    def complete_csv(tail: str) -> bool:
+        return is_complete_record("csv", tail, csv_header=header)
+
+    cut = _cut_tail(chunk, records_end, quiet, complete_csv)
+    if offset == 0 and header is None and not split.records and cut.deliver == len(chunk):
+        # The tail handed on is the file's first record: its header
+        tail_records = split_csv_records(chunk.decode("utf-8", errors="replace"), 0).records
+        header = tail_records[0].fields if tail_records else None
+    return cut, header
+
+
 def _read_raw_files_sync(
     root: Path,
     pattern: str,
     secret_paths: set[str],
     cursor: dict[str, Any],
-    format: str | None = None,
+    mapping: ParserMapping | None,
+    *,
+    now: datetime,
 ) -> RawReadOutcome:
+    fmt = mapping.format if mapping is not None else None
+    line_pattern = mapping.pattern if mapping is not None else None
     files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
     chunks: list[RawChunk] = []
     candidate_files: list[tuple[str, Path]] = []
@@ -468,7 +543,7 @@ def _read_raw_files_sync(
         prev_mtime = prev.get("mtime", 0.0)
         saved_header: list[str] | None = prev.get("csv_header")
 
-        if format == "json":
+        if fmt == "json":
             if cur_size == prev_size and cur_mtime == prev_mtime:
                 continue
 
@@ -524,57 +599,31 @@ def _read_raw_files_sync(
             last_error = scrub_url_secrets(str(exc))
             continue
 
-        unchanged = _unchanged(files_cursor, rel_posix, cur_size, cur_mtime)
-        consumable = _consumable_length(chunk, unchanged)
-        if consumable == 0:
-            files_cursor[rel_posix] = {
-                "size": cur_size,
-                "mtime": cur_mtime,
-                "offset": offset,
-                "csv_header": saved_header,
-            }
-            continue
-
-        chunk_to_consume = chunk[:consumable]
-        new_offset = offset + consumable
-        raw_text = chunk_to_consume.decode("utf-8", errors="replace")
-
-        if format == "csv":
-            split = split_csv_records(raw_text, offset)
-            # An unfinished quoted record may still be completed while the file changes; once
-            # it is unchanged the record goes to the parser whole, which reports it as broken.
-            if not unchanged:
-                if split.end == 0:
-                    files_cursor[rel_posix] = {
-                        "size": cur_size,
-                        "mtime": cur_mtime,
-                        "offset": offset,
-                        "csv_header": saved_header,
-                    }
-                    continue
-                if split.end < len(raw_text):
-                    new_offset = offset + _byte_end(chunk_to_consume, raw_text, split.end)
-                    raw_text = raw_text[: split.end]
-            if offset == 0 and saved_header is None and split.records:
-                saved_header = split.records[0].fields
-
-        chunks.append(
-            RawChunk(
-                rel_posix=rel_posix,
-                content=raw_text,
-                start_offset=offset,
-                new_offset=new_offset,
-                size=cur_size,
-                mtime=cur_mtime,
-                csv_header=saved_header,
-            )
+        cut, csv_header = _cut_chunk(
+            chunk, offset, fmt, line_pattern, saved_header, _quiet(cur_mtime, now)
         )
+        new_offset = offset + cut.consume
         files_cursor[rel_posix] = {
             "size": cur_size,
             "mtime": cur_mtime,
             "offset": new_offset,
-            "csv_header": saved_header,
+            "csv_header": csv_header,
         }
+        if cut.consume == 0:
+            continue
+
+        chunks.append(
+            RawChunk(
+                rel_posix=rel_posix,
+                content=chunk[: cut.deliver].decode("utf-8", errors="replace"),
+                start_offset=offset,
+                new_offset=new_offset,
+                size=cur_size,
+                mtime=cur_mtime,
+                csv_header=csv_header,
+                incomplete_tail_offset=offset + cut.deliver if cut.deliver < cut.consume else None,
+            )
+        )
 
     return RawReadOutcome(
         chunks=chunks,

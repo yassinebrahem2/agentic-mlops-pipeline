@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
-import sys
-from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,10 +12,8 @@ import pytest
 from sqlalchemy import select
 
 from mlops_agents.connections.contract import Mount
-from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expr import Compare
-from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
 from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.contract import (
     ParserCode,
@@ -34,80 +29,27 @@ from mlops_agents.monitoring.settings import MonitoringSettings, set_monitoring_
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import (
     Cadence,
-    Feed,
     FileResults,
     HandoffPayload,
-    JobFeedRef,
     Operations,
 )
-from mlops_agents.sandbox.contract import EnvironmentStatus
 from mlops_agents.sandbox.docker import DockerResult, DockerTimeoutError
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import results
-from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs, FakeObserver
+from tests.monitoring.results.conftest import (
+    STDIN_LINES_SCRIPT,
+    FakeConnections,
+    FakeHandoffs,
+    FakeIncidents,
+    FakeObserver,
+    FakeSandbox,
+    build_feed_handoff,
+    code_feed_service,
+    mapping_feed_service,
+)
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
 from tests.sandbox.fakes import FakeDockerRunner
-
-
-class FakeIncidents:
-    def __init__(self) -> None:
-        self.signals: list[tuple[str, SignalDraft, datetime]] = []
-
-    async def raise_signal(
-        self, project_id: str, draft: SignalDraft, seen_at: datetime
-    ) -> SignalOutcome:
-        self.signals.append((project_id, draft, seen_at))
-        return SignalOutcome(
-            signal_id=f"sig_{len(self.signals)}",
-            incident_id="inc_1",
-            change="opened",
-            severity="medium",
-        )
-
-
-class FakeSandbox:
-    def __init__(self, tag: str = "img:test", ready: bool = True) -> None:
-        self.tag = tag
-        self.ready = ready
-
-    async def rebuild(self, project_id: str) -> EnvironmentStatus:
-        return EnvironmentStatus(
-            state="ready" if self.ready else "failed",
-            tag=self.tag if self.ready else None,
-            detail=None if self.ready else "Sandbox build failed",
-        )
-
-
-def _build_feed_handoff(
-    conn_name: str,
-    pattern: str,
-) -> HandoffView:
-    feed = Feed(
-        name="feed_test",
-        kind="job",
-        ref=JobFeedRef(
-            file=FileResults(connection=conn_name, path_pattern=pattern),
-            ci_workflow=None,
-        ),
-        cadence=Cadence(cron="0 0 * * *", every_minutes=None),
-        grace_minutes=30,
-        timezone="UTC",
-    )
-    ops = Operations(
-        scheduler=None,
-        feeds=[feed],
-        on_call=[],
-        checks=[],
-        results_location=FileResults(connection=conn_name, path_pattern="standard/*.jsonl"),
-    )
-    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
-    return HandoffView(
-        proposal_id="prop_h1",
-        version=1,
-        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
-        payload=payload,
-    )
 
 
 # 1. Mapping parser tests
@@ -348,7 +290,7 @@ async def test_invalid_record_skipped_with_parser_failure_signal(
     connections = FakeConnections()
     connections.add_local_folder("conn_feed", data_dir)
 
-    handoff = _build_feed_handoff("conn_feed", "feed.jsonl")
+    handoff = build_feed_handoff("conn_feed", "feed.jsonl")
     handoffs = FakeHandoffs(handoff)
 
     parsers = SqliteParsers(databases)
@@ -407,7 +349,7 @@ async def test_raising_parser_raises_signal_and_keeps_cursor(
     connections = FakeConnections()
     connections.add_local_folder("conn_feed", data_dir)
 
-    handoff = _build_feed_handoff("conn_feed", "feed.jsonl")
+    handoff = build_feed_handoff("conn_feed", "feed.jsonl")
     handoffs = FakeHandoffs(handoff)
 
     parsers = SqliteParsers(databases)
@@ -479,7 +421,7 @@ async def test_disabled_after_n_failures_and_read_again_after_new_version(
     connections = FakeConnections()
     connections.add_local_folder("conn_feed", data_dir)
 
-    handoff = _build_feed_handoff("conn_feed", "feed.jsonl")
+    handoff = build_feed_handoff("conn_feed", "feed.jsonl")
     handoffs = FakeHandoffs(handoff)
 
     # Set parser_disable_after = 2
@@ -794,10 +736,10 @@ async def test_file_appends_for_all_formats(
     )
 
     feeds = [
-        _build_feed_handoff("conn_app", "feed.jsonl").payload.operations.feeds[0],
-        _build_feed_handoff("conn_app", "feed.csv").payload.operations.feeds[0],
-        _build_feed_handoff("conn_app", "feed.json").payload.operations.feeds[0],
-        _build_feed_handoff("conn_app", "feed.log").payload.operations.feeds[0],
+        build_feed_handoff("conn_app", "feed.jsonl").payload.operations.feeds[0],
+        build_feed_handoff("conn_app", "feed.csv").payload.operations.feeds[0],
+        build_feed_handoff("conn_app", "feed.json").payload.operations.feeds[0],
+        build_feed_handoff("conn_app", "feed.log").payload.operations.feeds[0],
     ]
     ops = Operations(
         scheduler=None,
@@ -1029,7 +971,7 @@ async def test_source_derivation_preserves_needs_parser_when_merged_with_check(
 
     ops = Operations(
         scheduler=None,
-        feeds=[_build_feed_handoff("conn_deriv", "shared/*.jsonl").payload.operations.feeds[0]],
+        feeds=[build_feed_handoff("conn_deriv", "shared/*.jsonl").payload.operations.feeds[0]],
         on_call=[],
         checks=[],
         results_location=FileResults(connection="conn_deriv", path_pattern="standard/*.jsonl"),
@@ -1150,7 +1092,7 @@ async def test_parser_backed_source_failure_signal_on_raw_read_error(
     connections = FakeConnections()
     connections.add_local_folder("conn_missing", data_dir)
 
-    handoff = _build_feed_handoff("conn_missing", "feed.jsonl")
+    handoff = build_feed_handoff("conn_missing", "feed.jsonl")
     handoffs = FakeHandoffs(handoff)
 
     parsers = SqliteParsers(databases)
@@ -1192,63 +1134,6 @@ async def test_parser_backed_source_failure_signal_on_raw_read_error(
     assert "does not exist" in str(matching[0].detail.get("error"))
 
 
-class LocalExecDockerRunner:
-    """Runs the parser container's command on the host, so a code parser really executes.
-
-    Container paths under a mount are translated back to the mount's host folder."""
-
-    def __init__(self, image_tag: str, mounts: list[Mount]) -> None:
-        self._image_tag = image_tag
-        self._mounts = mounts
-        self.calls: list[list[str]] = []
-
-    def _to_host(self, arg: str) -> str:
-        for mount in self._mounts:
-            prefix = f"{mount.container_path}/"
-            if arg.startswith(prefix):
-                return str(mount.host_path / arg[len(prefix) :])
-        return arg
-
-    async def run(
-        self,
-        args: Sequence[str],
-        *,
-        timeout_s: float | None = None,
-        secrets: Iterable[str] = (),
-    ) -> DockerResult:
-        arg_list = list(args)
-        self.calls.append(arg_list)
-        command = arg_list[arg_list.index(self._image_tag) + 1 :]
-        assert command[0] == "python"
-        host_command = [sys.executable, *(self._to_host(a) for a in command[1:])]
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            host_command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            encoding="utf-8",
-            timeout=timeout_s,
-            check=False,
-        )
-        return DockerResult(stdout=proc.stdout, stderr=proc.stderr, exit_code=proc.returncode)
-
-
-# Reads only its stdin and emits one record per non-empty line, its subject the origin_ref argv.
-_STDIN_LINES_SCRIPT = """
-import json, sys
-for line in sys.stdin.read().splitlines():
-    if line.strip():
-        print(json.dumps({
-            "check_id": line.strip(),
-            "ran_at": "2026-10-30T10:00:00Z",
-            "fired": False,
-            "category": "data_quality",
-            "subject": sys.argv[1],
-            "detail": {},
-        }))
-"""
-
-
 async def test_code_parser_append_stores_only_the_new_record(
     databases: Databases,
     events: SqliteEventLog,
@@ -1260,8 +1145,8 @@ async def test_code_parser_append_stores_only_the_new_record(
     data_dir.mkdir(parents=True, exist_ok=True)
     target = data_dir / "feed.raw"
     target.write_bytes(b"c1\n")
-    service, docker_runner = await _code_feed_service(
-        databases, events, project_id, data_dir, "feed.raw", _STDIN_LINES_SCRIPT
+    service, docker_runner = await code_feed_service(
+        databases, events, project_id, data_dir, "feed.raw", STDIN_LINES_SCRIPT
     )
 
     rep1 = await service.collect(project_id, clock.now())
@@ -1325,7 +1210,7 @@ async def test_bad_file_beside_good_one_counts_once_per_cycle_until_disabled(
     )
     service = ResultsService(
         databases,
-        FakeHandoffs(_build_feed_handoff("conn_feed", "*.jsonl")),
+        FakeHandoffs(build_feed_handoff("conn_feed", "*.jsonl")),
         connections,
         events,
         parsers=parsers,
@@ -1403,7 +1288,7 @@ async def test_csv_record_cut_inside_quotes_is_read_whole_after_append(
     )
     service = ResultsService(
         databases,
-        FakeHandoffs(_build_feed_handoff("conn_feed", "feed.csv")),
+        FakeHandoffs(build_feed_handoff("conn_feed", "feed.csv")),
         connections,
         events,
         parsers=parsers,
@@ -1445,170 +1330,6 @@ async def test_code_parser_without_connection_fails_before_running(project_id: s
     assert docker_runner.calls == []
 
 
-def _mapping_feed_service(
-    databases: Databases,
-    events: SqliteEventLog,
-    data_dir: Path,
-    pattern: str,
-    parsers: SqliteParsers,
-    incidents: FakeIncidents | None = None,
-) -> ResultsService:
-    connections = FakeConnections()
-    connections.add_local_folder("conn_feed", data_dir)
-    return ResultsService(
-        databases,
-        FakeHandoffs(_build_feed_handoff("conn_feed", pattern)),
-        connections,
-        events,
-        parsers=parsers,
-        incidents=incidents,
-    )
-
-
-_HELD_TAIL_DEFAULTS: dict[str, Any] = {"category": "data_quality", "subject": "tbl"}
-_NEVER_FIRES = Compare(op="eq", field="fired", value=True)
-
-# Per format: its mapping, a first complete record (csv: with its header), and a last record
-# the writer leaves without a newline.
-_HELD_TAIL_CASES: dict[str, tuple[ParserMapping, bytes, bytes]] = {
-    "csv": (
-        ParserMapping(
-            format="csv",
-            fields={"check_id": "id", "ran_at": "time"},
-            fired_when=_NEVER_FIRES,
-            defaults=_HELD_TAIL_DEFAULTS,
-        ),
-        b"id,time\nc1,2026-10-30T10:00:00Z\n",
-        b"c2,2026-10-30T10:05:00Z",
-    ),
-    "jsonl": (
-        ParserMapping(
-            format="jsonl",
-            fields={"check_id": "id", "ran_at": "time"},
-            fired_when=_NEVER_FIRES,
-            defaults=_HELD_TAIL_DEFAULTS,
-        ),
-        b'{"id": "c1", "time": "2026-10-30T10:00:00Z"}\n',
-        b'{"id": "c2", "time": "2026-10-30T10:05:00Z"}',
-    ),
-    "log": (
-        ParserMapping(
-            format="log",
-            pattern=r"^(?P<time>\S+) \[CHECK:(?P<id>\w+)\]",
-            fields={"check_id": "id", "ran_at": "time"},
-            fired_when=_NEVER_FIRES,
-            defaults=_HELD_TAIL_DEFAULTS,
-        ),
-        b"2026-10-30T10:00:00Z [CHECK:c1] value=1.0\n",
-        b"2026-10-30T10:05:00Z [CHECK:c2] value=2.0",
-    ),
-}
-
-
-@pytest.mark.parametrize("fmt", sorted(_HELD_TAIL_CASES))
-async def test_last_record_without_newline_arrives_once_the_writer_stops(
-    fmt: str,
-    databases: Databases,
-    events: SqliteEventLog,
-    project_id: str,
-    tmp_path: Path,
-    clock: FakeClock,
-) -> None:
-    mapping, first, last = _HELD_TAIL_CASES[fmt]
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    target = data_dir / f"feed.{fmt}"
-    target.write_bytes(first)
-
-    parsers = SqliteParsers(databases)
-    source = f"file:conn_feed:feed.{fmt}"
-    await parsers.store(
-        project_id, ParserSpec(source_id=source, mapping=mapping), proposal_id="prop_tail"
-    )
-    service = _mapping_feed_service(databases, events, data_dir, f"feed.{fmt}", parsers)
-    observer = FakeObserver()
-    service.add_observer(observer)
-
-    rep1 = await service.collect(project_id, clock.now())
-    assert rep1.failures == {}
-    assert rep1.stored == 1
-
-    with target.open("ab") as f:
-        f.write(last)
-
-    # The file just changed: the writer may still be writing its last record
-    rep2 = await service.collect(project_id, clock.now())
-    assert rep2.failures == {}
-    assert rep2.stored == 0
-
-    # Unchanged since the previous read: the last record is complete and arrives once
-    rep3 = await service.collect(project_id, clock.now())
-    assert rep3.failures == {}
-    assert rep3.stored == 1
-    rep4 = await service.collect(project_id, clock.now())
-    assert rep4.stored == 0
-
-    delivered = [(r.check_id, r.source_key) for batch in observer.batches for r in batch]
-    assert [check_id for check_id, _key in delivered] == ["c1", "c2"]
-    assert delivered[1] == ("c2", f"feed.{fmt}:{len(first)}")
-
-
-@pytest.mark.parametrize("ending", [b"", b"\n"], ids=["no_newline", "newline"])
-async def test_unclosed_quote_at_the_end_raises_parser_failure_with_its_offset(
-    ending: bytes,
-    databases: Databases,
-    events: SqliteEventLog,
-    project_id: str,
-    tmp_path: Path,
-    clock: FakeClock,
-) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    target = data_dir / "feed.csv"
-    first = b"id,note,time\nc1,ok,2026-10-30T10:00:00Z\n"
-    target.write_bytes(first)
-
-    parsers = SqliteParsers(databases)
-    source = "file:conn_feed:feed.csv"
-    await parsers.store(
-        project_id, ParserSpec(source_id=source, mapping=_csv_mapping()), proposal_id="prop_csv"
-    )
-    incidents = FakeIncidents()
-    service = _mapping_feed_service(databases, events, data_dir, "feed.csv", parsers, incidents)
-
-    rep1 = await service.collect(project_id, clock.now())
-    assert rep1.stored == 1
-
-    with target.open("ab") as f:
-        f.write(b'x,"unclosed' + ending)
-
-    # Still changing: the quote may yet be closed
-    rep2 = await service.collect(project_id, clock.now())
-    assert rep2.failures == {}
-    assert rep2.stored == 0
-    assert incidents.signals == []
-
-    # Unchanged since the previous read: the record is broken, not unfinished
-    rep3 = await service.collect(project_id, clock.now())
-    assert rep3.stored == 0
-    assert f"Offset {len(first)}" in rep3.failures[source]
-    failures = [d for _p, d, _t in incidents.signals if d.kind == "parser_failure"]
-    assert len(failures) == 1
-    assert f"Offset {len(first)}" in str(failures[0].detail["error"])
-
-    # The cursor moved past the broken record: a later good one is stored
-    with target.open("ab") as f:
-        f.write(b"\nc3,ok,2026-10-30T10:10:00Z\n")
-    rep4 = await service.collect(project_id, clock.now())
-    assert rep4.failures == {}
-    assert rep4.stored == 1
-
-    engine = await databases.project(project_id)
-    async with engine.connect() as conn:
-        rows = (await conn.execute(select(results))).mappings().all()
-    assert sorted(r["check_id"] for r in rows) == ["c1", "c3"]
-
-
 # Reads its chunk with csv.DictReader. On an append the chunk has no header row, so the
 # fieldnames come from the file's first line, the third argument. Each record carries the
 # chunk's start offset, the second argument, so the test can check it.
@@ -1630,47 +1351,6 @@ for row in rows:
 """
 
 
-async def _code_feed_service(
-    databases: Databases,
-    events: SqliteEventLog,
-    project_id: str,
-    data_dir: Path,
-    filename: str,
-    script: str,
-) -> tuple[ResultsService, LocalExecDockerRunner]:
-    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_feed")
-
-    class MountsConnections(FakeConnections):
-        async def mounts(self, project_id: str) -> list[Mount]:
-            return [mount]
-
-    connections = MountsConnections()
-    connections.add_local_folder("conn_feed", data_dir)
-    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
-    runner = CodeParserRunner(
-        sandbox=FakeSandbox(tag="sandbox:test-tag"),
-        docker_runner=docker_runner,
-        connections=connections,
-    )
-    parsers = SqliteParsers(databases, code_runner=runner)
-    await parsers.store(
-        project_id,
-        ParserSpec(
-            source_id=f"file:conn_feed:{filename}",
-            code=ParserCode(script=script, timeout_s=60),
-        ),
-        proposal_id="prop_code",
-    )
-    service = ResultsService(
-        databases,
-        FakeHandoffs(_build_feed_handoff("conn_feed", filename)),
-        connections,
-        events,
-        parsers=parsers,
-    )
-    return service, docker_runner
-
-
 async def test_header_reading_code_parser_reads_an_appended_row(
     databases: Databases,
     events: SqliteEventLog,
@@ -1683,7 +1363,7 @@ async def test_header_reading_code_parser_reads_an_appended_row(
     target = data_dir / "feed.csv"
     first = b"check,table\nc1,t1\n"
     target.write_bytes(first)
-    service, _runner = await _code_feed_service(
+    service, _runner = await code_feed_service(
         databases, events, project_id, data_dir, "feed.csv", _DICT_READER_SCRIPT
     )
 
@@ -1737,10 +1417,18 @@ async def test_two_bad_files_in_one_cycle_count_one_failure(
     source = "file:conn_feed:*.jsonl"
     await parsers.store(
         project_id,
-        ParserSpec(source_id=source, mapping=_HELD_TAIL_CASES["jsonl"][0]),
+        ParserSpec(
+            source_id=source,
+            mapping=ParserMapping(
+                format="jsonl",
+                fields={"check_id": "id", "ran_at": "time"},
+                fired_when=Compare(op="eq", field="fired", value=True),
+                defaults={"category": "data_quality", "subject": "tbl"},
+            ),
+        ),
         proposal_id="prop_two_bad",
     )
-    service = _mapping_feed_service(databases, events, data_dir, "*.jsonl", parsers)
+    service = mapping_feed_service(databases, events, data_dir, "*.jsonl", parsers)
 
     # Both files fail every cycle (a raising parse keeps their cursors): one count per cycle
     for cycle in (1, 2, 3):

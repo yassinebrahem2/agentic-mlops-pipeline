@@ -7,6 +7,7 @@ import logging
 from pydantic import BaseModel
 
 from mlops_agents.agents.tools.base import Preview
+from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import (
     ParserPayload,
     Parsers,
@@ -26,7 +27,9 @@ CODE_PARSER_CONTRACT = (
     "The script runs once per new chunk of the file, in the project's sandbox, without network.\n"
     "- stdin: exactly the chunk, UTF-8 text, in whole lines: the file from its start on the"
     " first read (and after the file shrinks, truncated or replaced by a shorter one), then"
-    " only the bytes past the previous read.\n"
+    " only the bytes past the previous read. A chunk ends at a newline, except a final line"
+    " without one, given only once the file has been unchanged for"
+    f" {HELD_TAIL_QUIET_SECONDS} s; the script judges whether it is complete.\n"
     "- sys.argv[1]: the file's path in the connection.\n"
     "- sys.argv[2]: the chunk's start byte offset in the file.\n"
     "- sys.argv[3]: the file's first line (a CSV header, say) when the start offset is above 0;"

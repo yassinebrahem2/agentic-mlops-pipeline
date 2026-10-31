@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from mlops_agents.monitoring.expr import evaluate
 from mlops_agents.monitoring.results.contract import (
@@ -19,6 +19,9 @@ from mlops_agents.monitoring.results.contract import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The mapping formats read line by line, whose last line may still be being written
+LineFormat = Literal["jsonl", "csv", "log"]
 
 
 @dataclass(frozen=True)
@@ -43,8 +46,8 @@ def split_csv_records(text: str, start_offset: int) -> CsvSplit:
     """Splits CSV text into complete records, a quoted field may span lines.
 
     Lines are cut on "\\n" only, the reader's newline rule. A final record still inside a
-    quoted field when the text ends is left out, so it can be read again once complete; its
-    offset is kept in `unfinished_offset`."""
+    quoted field when the text ends is left out, so the reader can hold it until it is
+    complete; its offset is kept in `unfinished_offset`."""
     pieces = text.split("\n")
     lines = [p + "\n" for p in pieces[:-1]]
     if pieces[-1]:
@@ -86,6 +89,35 @@ def split_csv_records(text: str, start_offset: int) -> CsvSplit:
         if row and not (len(row) == 1 and not row[0].strip()):
             records.append(CsvRecord(offset=record_offset, fields=row))
     return CsvSplit(records=records, end=end, unfinished_offset=unfinished_offset)
+
+
+def is_complete_record(
+    format: LineFormat,
+    text: str,
+    *,
+    pattern: str | None = None,
+    csv_header: list[str] | None = None,
+) -> bool:
+    """Whether `text`, a file's last record without its newline, is a whole record of `format`.
+
+    csv: one record with no open quote and the header's number of fields (with no header known,
+    the record is the header itself); jsonl: a JSON object; log: `pattern` matches, or the
+    line is not empty when there is no pattern. A blank tail holds no record to break."""
+    if not text.strip():
+        return True
+    if format == "jsonl":
+        try:
+            return isinstance(json.loads(text), dict)
+        except ValueError:
+            return False
+    if format == "log":
+        line = text.strip()
+        return re.search(pattern, line) is not None if pattern else bool(line)
+    split = split_csv_records(text, 0)
+    if split.unfinished_offset is not None or split.end != len(text) or len(split.records) != 1:
+        return False
+    fields = split.records[0].fields
+    return fields is not None and (csv_header is None or len(fields) == len(csv_header))
 
 
 def _get_path_val(data: Mapping[str, Any], path: str) -> object | None:
@@ -237,8 +269,8 @@ def evaluate_mapping(
             errors.append(f"Invalid JSON: {exc}")
 
     elif fmt == "csv":
-        split = split_csv_records(raw, start_offset)
-        csv_records = split.records
+        # The reader passes complete records only: it holds an unfinished one, or reports it
+        csv_records = split_csv_records(raw, start_offset).records
         if start_offset == 0 and csv_records:
             header_record, *csv_records = csv_records
             csv_header = header_record.fields
@@ -258,12 +290,6 @@ def evaluate_mapping(
                 records.append((k, rec))
             except Exception as exc:
                 errors.append(f"Offset {csv_record.offset}: {exc}")
-        # The reader passes an unfinished record only once the file has stopped changing,
-        # so it is broken, not still being written
-        if split.unfinished_offset is not None:
-            errors.append(
-                f"Offset {split.unfinished_offset}: record ends inside an unclosed quoted field"
-            )
 
     elif fmt == "log":
         pattern: re.Pattern[str] | None = None
