@@ -5,7 +5,9 @@ import { GenericApprovalCard } from "./GenericApprovalCard";
 import { ConnectionsProposalCard } from "./proposals/ConnectionsProposalCard";
 import { HandoffProposalCard } from "./proposals/HandoffProposalCard";
 import { HooksProposalCard } from "./proposals/HooksProposalCard";
+import { MaintenanceProposalCard } from "./proposals/MaintenanceProposalCard";
 import { RuleProposalCard } from "./proposals/RuleProposalCard";
+import { TrainingPolicyProposalCard } from "./proposals/TrainingPolicyProposalCard";
 import { StallCard } from "./StallCard";
 
 export type ApprovalPart = components["schemas"]["ApprovalPart"];
@@ -33,6 +35,8 @@ export const CARD_FOR_PROPOSAL: Partial<Record<string, ApprovalCardComponent>> =
   handoff: HandoffProposalCard,
   hooks: HooksProposalCard,
   rule: RuleProposalCard,
+  training_policy: TrainingPolicyProposalCard,
+  maintenance: MaintenanceProposalCard,
 };
 
 /** The card an approval gets, chosen from the part alone: its kind's card, else its proposal

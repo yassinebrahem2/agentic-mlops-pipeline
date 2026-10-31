@@ -508,7 +508,7 @@ class HookVerifier(Protocol):
 ```python
 class EvaluationPayload(BaseModel):     # the typed view of EvaluationRecord.payload (S5 §3); schema_version 1; `extra="allow"` so a team's extra fields survive
     schema_version: int; evaluation_commit: str; gate_config_version: str; champion_version: str | None
-    decision: Literal["promote", "hold", "reject"] | None; reasons: list[str]
+    decision: Literal["promote", "hold", "reject"] | None; reasons: list[str] | None   # None = not computed (shown as "not computed", never as passed checks); 2026-10-31
     parity: ParityResult | None; champion_metrics: MetricSet | None; challenger_metrics: MetricSet | None; calibration: dict[str, Any] | None
     expected_cost: float | None; decision_rate: float | None; holdout_window: TrainingWindow | None; training_window: TrainingWindow | None
     serving_compatibility: dict[str, Any] | None; computed_where: str | None

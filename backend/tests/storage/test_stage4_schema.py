@@ -40,7 +40,7 @@ def _migrated_to(tmp_path: Path, kind: DbKind, names: list[str]) -> Path:
 @pytest.fixture
 def project_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
     conn = connect_sync(db)
     yield conn
     conn.close()
@@ -59,7 +59,7 @@ def test_fresh_databases_migrate_to_latest(tmp_path: Path) -> None:
     app_db_path = tmp_path / "app.db"
     project_db_path = tmp_path / "project.db"
     assert migrate(app_db_path, "app", tmp_path / "bk") == [1, 2, 3]
-    assert migrate(project_db_path, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7]
+    assert migrate(project_db_path, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
 
 
 def test_v6_project_db_migrates_to_v7_preserving_data(tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ def test_v6_project_db_migrates_to_v7_preserving_data(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [7]
+    assert migrate(db, "project", tmp_path / "bk") == [7, 8]
 
     conn = connect_sync(db)
     try:
@@ -214,25 +214,25 @@ def test_project_unique_constraints(project_db: sqlite3.Connection) -> None:
 
     # 2. expectations: unique (kind, ref, coalesce(model, ''))
     project_db.execute(
-        "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second) "
-        "VALUES ('feed', 'feed_1', NULL, '{}', 1, NULL, NULL, NULL)"
+        "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second, registered_at) "
+        "VALUES ('feed', 'feed_1', NULL, '{}', 1, NULL, NULL, NULL, '2026-10-29T12:00:00.000Z')"
     )
     # Duplicate with model=NULL must be refused
     with pytest.raises(sqlite3.IntegrityError):
         project_db.execute(
-            "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second) "
-            "VALUES ('feed', 'feed_1', NULL, '{}', 1, NULL, NULL, NULL)"
+            "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second, registered_at) "
+            "VALUES ('feed', 'feed_1', NULL, '{}', 1, NULL, NULL, NULL, '2026-10-29T12:00:00.000Z')"
         )
     # With a specific model, allowed
     project_db.execute(
-        "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second) "
-        "VALUES ('feed', 'feed_1', 'm1', '{}', 1, NULL, NULL, NULL)"
+        "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second, registered_at) "
+        "VALUES ('feed', 'feed_1', 'm1', '{}', 1, NULL, NULL, NULL, '2026-10-29T12:00:00.000Z')"
     )
     # Duplicate with same model refused
     with pytest.raises(sqlite3.IntegrityError):
         project_db.execute(
-            "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second) "
-            "VALUES ('feed', 'feed_1', 'm1', '{}', 1, NULL, NULL, NULL)"
+            "INSERT INTO expectations (kind, ref, model, spec, active, last_seen, last_signalled_first, last_signalled_second, registered_at) "
+            "VALUES ('feed', 'feed_1', 'm1', '{}', 1, NULL, NULL, NULL, '2026-10-29T12:00:00.000Z')"
         )
 
     # 3. scheduler_jobs: unique (kind, due, subject)

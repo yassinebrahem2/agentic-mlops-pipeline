@@ -2,30 +2,36 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from ulid import ULID
 
+from mlops_agents.config import RunMode
 from mlops_agents.credentials.scrub import error_text, scrub_values
 from mlops_agents.events.contract import EventLog, EventType
-from mlops_agents.notifications.constants import ERROR_MAX_CHARS, RETRY_BACKOFFS_S
+from mlops_agents.monitoring.incidents.contract import Incidents, SignalDraft, cause_key
+from mlops_agents.notifications.constants import (
+    ERROR_MAX_CHARS,
+    FAILURE_SIGNAL_AFTER,
+    RETRY_BACKOFFS_S,
+)
 from mlops_agents.notifications.contract import (
     Channel,
     Message,
     NotificationKind,
     Notifier,
+    OnCallPeople,
     OnCallPerson,
 )
+from mlops_agents.notifications.links import incident_link
+from mlops_agents.notifications.on_call import SqliteOnCallPeople
 from mlops_agents.notifications.settings import IntegrationSettings
-from mlops_agents.proposals.payloads import Contact
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import notification_log, on_call_people
+from mlops_agents.storage.tables import notification_log
 
 
 class SqliteNotifier(Notifier):
@@ -38,6 +44,8 @@ class SqliteNotifier(Notifier):
         channels: Mapping[str, Channel] | Sequence[Channel],
         events: EventLog,
         clock: Clock,
+        run_mode: RunMode = RunMode.LOCAL,
+        on_call: OnCallPeople | None = None,
     ) -> None:
         self._databases = databases
         self._settings = settings
@@ -47,11 +55,74 @@ class SqliteNotifier(Notifier):
             self._channels = dict(channels)
         self._events = events
         self._clock = clock
-        self._incidents: Any = None
+        self._run_mode = run_mode
+        self._incidents: Incidents | None = None
+        self._on_call: OnCallPeople = (
+            on_call if on_call is not None else SqliteOnCallPeople(databases)
+        )
 
-    def bind_incidents(self, incidents: Any) -> None:
+    def bind_incidents(self, incidents: Incidents) -> None:
         """Bind incidents service for channel failure signals (task 4)."""
         self._incidents = incidents
+
+    async def _check_channel_failure(
+        self,
+        project_id: str,
+        ch_name: str,
+        incident_id: str | None,
+        last_error: str | None,
+    ) -> None:
+        """Raises a notification_failure signal after FAILURE_SIGNAL_AFTER consecutive delivery failures."""
+        if self._incidents is None:
+            return
+
+        # S4 §8, §13: A failure while delivering that incident's own notifications raises nothing more.
+        if incident_id is not None:
+            inc = await self._incidents.get(project_id, incident_id)
+            if inc is not None and inc.cause_key == cause_key(f"channel:{ch_name}", None):
+                return
+
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            stmt = (
+                select(notification_log.c.status, notification_log.c.last_error)
+                .where(
+                    notification_log.c.channel == ch_name,
+                    notification_log.c.status.in_(["sent", "failed"]),
+                )
+                .order_by(notification_log.c.created.desc(), notification_log.c.id.desc())
+                .limit(10)
+            )
+            rows = (await conn.execute(stmt)).all()
+
+        consecutive = 0
+        error_msg = last_error or ""
+        for r in rows:
+            if r.status == "failed":
+                consecutive += 1
+                if not error_msg and r.last_error:
+                    error_msg = r.last_error
+            else:
+                break
+
+        if consecutive >= FAILURE_SIGNAL_AFTER:
+            now = self._clock.now()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=UTC)
+            now_utc = now.astimezone(UTC)
+            draft = SignalDraft(
+                kind="notification_failure",
+                category="operational",
+                subject=f"channel:{ch_name}",
+                model=None,
+                ran_at=now_utc,
+                detail={
+                    "channel": ch_name,
+                    "error": error_msg,
+                    "consecutive_failures": consecutive,
+                },
+            )
+            await self._incidents.raise_signal(project_id, draft, now_utc)
 
     def _event_type_for_sent(self, kind: NotificationKind) -> EventType:
         if kind in ("incident", "promotion"):
@@ -62,54 +133,15 @@ class SqliteNotifier(Notifier):
             return "report.sent"
         return "notification.sent"
 
-    async def _save_person_contacts(self, project_id: str, person: OnCallPerson) -> None:
-        """Saves or updates person in on_call_people so retries can resolve contact addresses."""
-        engine = await self._databases.project(project_id)
-        contacts_json = json.dumps([c.model_dump() for c in person.contacts])
-        hours_json = json.dumps(person.hours.model_dump())
-        async with engine.begin() as conn:
-            stmt = (
-                sqlite_insert(on_call_people)
-                .values(
-                    id=person.id,
-                    name=person.name,
-                    contacts=contacts_json,
-                    hours=hours_json,
-                    timezone=person.timezone,
-                    escalation_order=person.escalation_order,
-                )
-                .on_conflict_do_update(
-                    index_elements=[on_call_people.c.id],
-                    set_={
-                        "name": person.name,
-                        "contacts": contacts_json,
-                        "hours": hours_json,
-                        "timezone": person.timezone,
-                        "escalation_order": person.escalation_order,
-                    },
-                )
-            )
-            await conn.execute(stmt)
-
     async def _get_contact_address(
         self, project_id: str, person_id: str, channel_name: str
     ) -> str | None:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            raw = await conn.scalar(
-                select(on_call_people.c.contacts).where(on_call_people.c.id == person_id)
-            )
-        if not raw:
+        people = await self._on_call.list(project_id)
+        person = next((p for p in people if p.id == person_id), None)
+        if person is None:
             return None
-        try:
-            contacts_data = json.loads(str(raw))
-            for item in contacts_data:
-                c = Contact.model_validate(item)
-                if c.channel == channel_name:
-                    return c.address
-        except Exception:
-            return None
-        return None
+        contact = next((c for c in person.contacts if c.channel == channel_name), None)
+        return contact.address if contact is not None else None
 
     async def notify(
         self,
@@ -120,12 +152,21 @@ class SqliteNotifier(Notifier):
         kind: NotificationKind,
         incident_id: str | None,
     ) -> Literal["sent", "retrying", "failed"]:
-        await self._save_person_contacts(project_id, person)
 
         now = self._clock.now()
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
         now_iso = now.isoformat()
+
+        public_url = await self._settings.public_url()
+        if incident_id is not None:
+            link = incident_link(public_url, project_id, incident_id)
+        elif not public_url:
+            link = None
+        else:
+            link = message.link
+        local_mode_note = self._run_mode == RunMode.LOCAL
+        message = message.model_copy(update={"link": link, "local_mode_note": local_mode_note})
 
         # Calculate escalation_step
         escalation_step = 0
@@ -204,6 +245,7 @@ class SqliteNotifier(Notifier):
                     },
                     subject_id=incident_id,
                 )
+                await self._check_channel_failure(project_id, ch_name, incident_id, fail_reason)
                 results.append("failed")
                 continue
 
@@ -358,6 +400,7 @@ class SqliteNotifier(Notifier):
                     },
                     subject_id=incident_id,
                 )
+                await self._check_channel_failure(project_id, ch_name, incident_id, err_text)
                 continue
 
             try:
@@ -384,6 +427,9 @@ class SqliteNotifier(Notifier):
                         "attempt": attempts,
                     },
                     subject_id=incident_id,
+                )
+                await self._check_channel_failure(
+                    project_id, ch_name, incident_id, "Corrupt message payload."
                 )
                 continue
 
@@ -458,4 +504,7 @@ class SqliteNotifier(Notifier):
                             "attempt": attempts,
                         },
                         subject_id=incident_id,
+                    )
+                    await self._check_channel_failure(
+                        project_id, ch_name, incident_id, scrubbed_err
                     )
