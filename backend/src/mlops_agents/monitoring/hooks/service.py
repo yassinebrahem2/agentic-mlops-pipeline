@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from mlops_agents.agents.approvals.authority import Authority
 from mlops_agents.clock import to_iso
@@ -27,9 +28,15 @@ from mlops_agents.monitoring.hooks.contract import (
     PinnedFile,
 )
 from mlops_agents.monitoring.hooks.store import HooksStore, make_hook_view
+from mlops_agents.monitoring.rules.contract import RuleView
+from mlops_agents.monitoring.rules.evaluator import rule_limits_allow
+from mlops_agents.monitoring.rules.store import SqliteRules
 from mlops_agents.proposals.payloads import CommandSpec
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
+
+if TYPE_CHECKING:
+    from mlops_agents.monitoring.rules.contract import Rules
 
 
 class HooksService:
@@ -39,15 +46,23 @@ class HooksService:
         secrets: ProjectSecrets,
         events: EventLog,
         clock: Clock,
+        rules: Rules | None = None,
     ) -> None:
         self._databases = databases
         self._secrets = secrets
         self._events = events
         self._clock = clock
+        self._rules = rules
         self._store = HooksStore(databases)
         self._runners: dict[str, HookRunner] = {}
         self._lifecycles: list[HookLifecycle] = []
         self._pinner: HookPinner | None = None
+        self._project_locks: dict[str, asyncio.Lock] = {}
+
+    def _project_lock(self, project_id: str) -> asyncio.Lock:
+        if project_id not in self._project_locks:
+            self._project_locks[project_id] = asyncio.Lock()
+        return self._project_locks[project_id]
 
     def add_runner(self, runner: HookRunner) -> None:
         self._runners[runner.type] = runner
@@ -277,7 +292,34 @@ class HooksService:
             "started": to_iso(started_at),
             "ended": None,
         }
-        await self._store.insert_run(project_id, run_row)
+
+        async with self._project_lock(project_id):
+            if authority.basis == "rule" and self._rules is not None:
+                rule_id = call.rule_id or authority.ref
+                if rule_id is None:
+                    raise HookRefused("Rule ID required for rule-authorized run")
+                rule: RuleView | None
+                if isinstance(self._rules, SqliteRules):
+                    rule = await self._rules.get(project_id, rule_id)
+                else:
+                    all_rules = await self._rules.list(project_id)
+                    rule = next((r for r in all_rules if r.id == rule_id), None)
+                if rule is None or not rule.enabled:
+                    raise HookRefused(f"Rule {rule_id!r} not found or disabled")
+                allowed, reason = await rule_limits_allow(
+                    self._databases, project_id, rule, call.incident_id, self._clock.now()
+                )
+                if not allowed:
+                    raise HookRefused(reason or f"Rule {rule_id!r} limits reached")
+                if call.incident_id is not None:
+                    await self._events.record(
+                        project_id,
+                        source="hooks",
+                        type="rule.satisfied",
+                        subject_id=call.incident_id,
+                        payload={"rule_id": rule_id, "evidence": authority.evidence},
+                    )
+            await self._store.insert_run(project_id, run_row)
 
         try:
             if hook.status == "disabled":

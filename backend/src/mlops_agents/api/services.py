@@ -74,7 +74,9 @@ from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
+from mlops_agents.monitoring.rules.authority import RuleAuthority
 from mlops_agents.monitoring.rules.kind import RuleKind
+from mlops_agents.monitoring.rules.query import RulesQueryProvider
 from mlops_agents.monitoring.rules.store import SqliteRules
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
@@ -314,11 +316,13 @@ async def build_services(
         events=events,
         clock=clock,
     )
+    rules = SqliteRules(databases, clock=clock)
     hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
         events=events,
         clock=clock,
+        rules=rules,
     )
     command_runner = CommandRunner(
         sandbox=sandbox,
@@ -337,6 +341,7 @@ async def build_services(
 
     query_providers = QueryProviders()
     query_providers.register(HooksQueryProvider(hooks))
+    query_providers.register(RulesQueryProvider(rules))
     maintenance = NeverSuspended()
 
     results = ResultsService(
@@ -344,6 +349,9 @@ async def build_services(
         handoffs=handoffs,
         connections=connections,
         events=events,
+    )
+    authorities.register(
+        "rule", RuleAuthority(rules=rules, results=results, databases=databases, clock=clock)
     )
     incidents = IncidentsService(
         databases=databases,
@@ -491,7 +499,6 @@ async def build_services(
         )
     )
     proposal_kinds.register(HooksKind(hooks=hooks))
-    rules = SqliteRules(databases, clock=clock)
     proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
 
     approvals = ApprovalsService(
