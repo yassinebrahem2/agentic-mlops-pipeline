@@ -643,6 +643,42 @@
         "title": "BackupResult",
         "type": "object"
       },
+      "BaselineLink": {
+        "additionalProperties": false,
+        "properties": {
+          "first_fired_at": {
+            "format": "date-time",
+            "title": "First Fired At",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "lead_seconds": {
+            "title": "Lead Seconds",
+            "type": "number"
+          },
+          "seen_at": {
+            "format": "date-time",
+            "title": "Seen At",
+            "type": "string"
+          },
+          "team_check_id": {
+            "title": "Team Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "team_check_id",
+          "first_fired_at",
+          "seen_at",
+          "lead_seconds"
+        ],
+        "title": "BaselineLink",
+        "type": "object"
+      },
       "Cadence": {
         "additionalProperties": false,
         "properties": {
@@ -675,6 +711,45 @@
           "every_minutes"
         ],
         "title": "Cadence",
+        "type": "object"
+      },
+      "ChannelTest": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelTest",
+        "type": "object"
+      },
+      "ChannelTestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "title": "ChannelTestRequest",
         "type": "object"
       },
       "CheckSpec": {
@@ -1459,6 +1534,50 @@
         "title": "DetectedKey",
         "type": "object"
       },
+      "DiscordSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "webhook_set": {
+            "title": "Webhook Set",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "webhook_set"
+        ],
+        "title": "DiscordSettings",
+        "type": "object"
+      },
+      "DiscordUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "DiscordUpdate",
+        "type": "object"
+      },
       "DockerStatus": {
         "properties": {
           "available": {
@@ -1494,6 +1613,102 @@
           "detail"
         ],
         "title": "DockerStatus",
+        "type": "object"
+      },
+      "EmailSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "password_set": {
+            "title": "Password Set",
+            "type": "boolean"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          },
+          "starttls": {
+            "title": "Starttls",
+            "type": "boolean"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "host",
+          "port",
+          "user",
+          "sender",
+          "starttls",
+          "password_set"
+        ],
+        "title": "EmailSettings",
+        "type": "object"
+      },
+      "EmailUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "default": "",
+            "title": "Host",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "default": 587,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "sender": {
+            "default": "",
+            "title": "Sender",
+            "type": "string"
+          },
+          "starttls": {
+            "default": true,
+            "title": "Starttls",
+            "type": "boolean"
+          },
+          "user": {
+            "default": "",
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "EmailUpdate",
         "type": "object"
       },
       "EmbedderChoice": {
@@ -3414,6 +3629,67 @@
           "payload"
         ],
         "title": "MaintenanceProposalView",
+        "type": "object"
+      },
+      "MaintenanceWindowView": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end",
+          "scope",
+          "reason",
+          "created_by",
+          "created"
+        ],
+        "title": "MaintenanceWindowView",
         "type": "object"
       },
       "MessageCreated": {
@@ -5808,6 +6084,45 @@
         "title": "ProviderSettings",
         "type": "object"
       },
+      "PublicUrlUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
+          }
+        },
+        "title": "PublicUrlUpdate",
+        "type": "object"
+      },
+      "PublicUrlView": {
+        "additionalProperties": false,
+        "properties": {
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
+          }
+        },
+        "required": [
+          "public_url"
+        ],
+        "title": "PublicUrlView",
+        "type": "object"
+      },
       "RelinkProject": {
         "additionalProperties": false,
         "properties": {
@@ -6781,6 +7096,20 @@
         "title": "SetHookCredentialBody",
         "type": "object"
       },
+      "SetPolicyEnabledBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetPolicyEnabledBody",
+        "type": "object"
+      },
       "SetPrice": {
         "additionalProperties": false,
         "properties": {
@@ -6924,6 +7253,70 @@
         "title": "SignalView",
         "type": "object"
       },
+      "SilentTeamAlert": {
+        "additionalProperties": false,
+        "properties": {
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "ran_at": {
+            "format": "date-time",
+            "title": "Ran At",
+            "type": "string"
+          },
+          "result_id": {
+            "title": "Result Id",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "real_issue",
+                  "not_an_issue"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "result_id",
+          "check_id",
+          "subject",
+          "ran_at"
+        ],
+        "title": "SilentTeamAlert",
+        "type": "object"
+      },
+      "SilentVerdictBody": {
+        "additionalProperties": false,
+        "description": "A person's verdict on a team alert no incident matched.",
+        "properties": {
+          "value": {
+            "enum": [
+              "real_issue",
+              "not_an_issue"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SilentVerdictBody",
+        "type": "object"
+      },
       "SlotState": {
         "additionalProperties": false,
         "properties": {
@@ -6946,6 +7339,115 @@
           "set"
         ],
         "title": "SlotState",
+        "type": "object"
+      },
+      "SnoozeIncidentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "until": {
+            "format": "date-time",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until"
+        ],
+        "title": "SnoozeIncidentBody",
+        "type": "object"
+      },
+      "StatValue": {
+        "additionalProperties": false,
+        "properties": {
+          "collecting": {
+            "title": "Collecting",
+            "type": "boolean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "n",
+          "collecting"
+        ],
+        "title": "StatValue",
+        "type": "object"
+      },
+      "StatsView": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_available": {
+            "title": "Baseline Available",
+            "type": "boolean"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "groups": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/StatValue"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "detection",
+                "speed",
+                "noise",
+                "diagnosis",
+                "effort",
+                "model_impact",
+                "cost",
+                "reliability"
+              ]
+            },
+            "title": "Groups",
+            "type": "object"
+          },
+          "window": {
+            "enum": [
+              "7d",
+              "30d",
+              "all"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "baseline_available",
+          "groups"
+        ],
+        "title": "StatsView",
         "type": "object"
       },
       "SyncBody": {
@@ -7653,6 +8155,56 @@
           "payload"
         ],
         "title": "TrainingPolicyProposalView",
+        "type": "object"
+      },
+      "TrainingPolicyView": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "format": "date-time",
+            "title": "Approved",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TrainingPolicyPayload"
+          },
+          "proposal_id": {
+            "title": "Proposal Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suspended_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suspended Reason"
+          }
+        },
+        "required": [
+          "id",
+          "payload",
+          "status",
+          "proposal_id",
+          "approved"
+        ],
+        "title": "TrainingPolicyView",
         "type": "object"
       },
       "TrainingWindow": {
@@ -8678,6 +9230,279 @@
         ]
       }
     },
+    "/api/integrations/discord": {
+      "get": {
+        "description": "Returns the current Discord integration settings.",
+        "operationId": "get_discord_settings_api_integrations_discord_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Discord Settings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Updates Discord integration settings.",
+        "operationId": "update_discord_settings_api_integrations_discord_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscordUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Discord Settings",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/discord/webhook": {
+      "delete": {
+        "description": "Clears the stored Discord webhook URL.",
+        "operationId": "delete_discord_webhook_api_integrations_discord_webhook_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Discord Webhook",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/email": {
+      "get": {
+        "description": "Returns the current Email integration settings.",
+        "operationId": "get_email_settings_api_integrations_email_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Email Settings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Updates Email integration settings.",
+        "operationId": "update_email_settings_api_integrations_email_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Email Settings",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/email/password": {
+      "delete": {
+        "description": "Clears the stored Email SMTP password.",
+        "operationId": "delete_email_password_api_integrations_email_password_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Email Password",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/public-url": {
+      "get": {
+        "description": "Returns the configured public URL.",
+        "operationId": "get_public_url_api_integrations_public_url_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUrlView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Public Url",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "put": {
+        "description": "Sets or clears the app's public URL.",
+        "operationId": "update_public_url_api_integrations_public_url_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicUrlUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUrlView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Public Url",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/{channel}/test": {
+      "post": {
+        "description": "Sends a single test message directly through the specified channel.",
+        "operationId": "test_channel_api_integrations__channel__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel",
+            "required": true,
+            "schema": {
+              "enum": [
+                "discord",
+                "email"
+              ],
+              "title": "Channel",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Channel",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/models": {
       "delete": {
         "operationId": "delete_model_api_models_delete",
@@ -9652,6 +10477,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/baseline/silent-alerts": {
+      "get": {
+        "operationId": "list_silent_alerts_api_projects__project_id__baseline_silent_alerts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SilentTeamAlert"
+                  },
+                  "title": "Response List Silent Alerts Api Projects  Project Id  Baseline Silent Alerts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Silent Alerts",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/baseline/silent-alerts/{result_id}/verdict": {
+      "post": {
+        "operationId": "judge_silent_alert_api_projects__project_id__baseline_silent_alerts__result_id__verdict_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "result_id",
+            "required": true,
+            "schema": {
+              "title": "Result Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SilentVerdictBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilentTeamAlert"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Silent Alert",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
     "/api/projects/{project_id}/connections": {
       "get": {
         "operationId": "list_connections_api_projects__project_id__connections_get",
@@ -10305,6 +11237,57 @@
         ]
       }
     },
+    "/api/projects/{project_id}/hooks/{hook_id}/approve": {
+      "post": {
+        "operationId": "approve_hook_api_projects__project_id__hooks__hook_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "title": "Hook Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Hook",
+        "tags": [
+          "training"
+        ]
+      }
+    },
     "/api/projects/{project_id}/hooks/{hook_id}/credential": {
       "delete": {
         "operationId": "delete_hook_credential_api_projects__project_id__hooks__hook_id__credential_delete",
@@ -10519,6 +11502,16 @@
           },
           {
             "in": "query",
+            "name": "inbox",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Inbox",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -10671,6 +11664,61 @@
         ]
       }
     },
+    "/api/projects/{project_id}/incidents/{incident_id}/baseline": {
+      "get": {
+        "operationId": "list_baseline_links_api_projects__project_id__incidents__incident_id__baseline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BaselineLink"
+                  },
+                  "title": "Response List Baseline Links Api Projects  Project Id  Incidents  Incident Id  Baseline Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Baseline Links",
+        "tags": [
+          "baseline"
+        ]
+      }
+    },
     "/api/projects/{project_id}/incidents/{incident_id}/close": {
       "post": {
         "operationId": "close_incident_api_projects__project_id__incidents__incident_id__close_post",
@@ -10772,6 +11820,67 @@
           }
         },
         "summary": "Get Incident Signals",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/snooze": {
+      "post": {
+        "operationId": "snooze_incident_api_projects__project_id__incidents__incident_id__snooze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeIncidentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Incident",
         "tags": [
           "incidents"
         ]
@@ -10918,6 +12027,146 @@
         "summary": "Record Verdict",
         "tags": [
           "verdicts"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/maintenance-windows": {
+      "get": {
+        "operationId": "list_maintenance_windows_api_projects__project_id__maintenance_windows_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MaintenanceWindowView"
+                  },
+                  "title": "Response List Maintenance Windows Api Projects  Project Id  Maintenance Windows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Maintenance Windows",
+        "tags": [
+          "incidents"
+        ]
+      },
+      "post": {
+        "operationId": "create_maintenance_window_api_projects__project_id__maintenance_windows_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WindowSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceWindowView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Maintenance Window",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/maintenance-windows/{window_id}": {
+      "delete": {
+        "operationId": "delete_maintenance_window_api_projects__project_id__maintenance_windows__window_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "window_id",
+            "required": true,
+            "schema": {
+              "title": "Window Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Maintenance Window",
+        "tags": [
+          "incidents"
         ]
       }
     },
@@ -12380,6 +13629,85 @@
         ]
       }
     },
+    "/api/projects/{project_id}/stats": {
+      "get": {
+        "operationId": "get_stats_api_projects__project_id__stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "30d",
+              "enum": [
+                "7d",
+                "30d",
+                "all"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "data_quality",
+                    "drift",
+                    "model_performance",
+                    "operational"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stats",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
     "/api/projects/{project_id}/tasks/{task_id}/discard": {
       "post": {
         "operationId": "discard_project_task_api_projects__project_id__tasks__task_id__discard_post",
@@ -13310,6 +14638,129 @@
         "summary": "Get Versions",
         "tags": [
           "tracking"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/training/policies": {
+      "get": {
+        "operationId": "list_training_policies_api_projects__project_id__training_policies_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrainingPolicyView"
+                  },
+                  "title": "Response List Training Policies Api Projects  Project Id  Training Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Training Policies",
+        "tags": [
+          "training"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/training/policies/{policy_id}/enabled": {
+      "put": {
+        "operationId": "set_policy_enabled_api_projects__project_id__training_policies__policy_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPolicyEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Policy Enabled",
+        "tags": [
+          "training"
         ]
       }
     },

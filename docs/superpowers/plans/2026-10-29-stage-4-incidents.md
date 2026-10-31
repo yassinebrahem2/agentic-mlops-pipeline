@@ -36,6 +36,7 @@
 | 5 | Incident tools, `MonitoringQuery`, the `follow_ups` job | tasks 1, 2; results task 1 | after task 4 |
 | 6 | Alert Prioritization's run and `AdjustSeverity` | tasks 2, 4, 5 | after task 5; early PR |
 | 7 | Maintenance windows, snooze, the `maintenance` kind and card | task 1; contracts task 4 | after task 6 and contracts task 4 |
+| 8 | The Inbox set: `inbox=true` on the incidents list (Decision #576) | task 1; stats task 1 (`bind_verdicts`) | may run before task 7 (ui task 3 waits on it); **early PR** |
 
 Tasks 1 to 6 are the core path; task 7 is the extra (until it merges, contracts' default never suspends anything and no snooze or window route exists).
 
@@ -167,6 +168,22 @@ Tasks 1 to 6 are the core path; task 7 is the extra (until it merges, contracts'
 **Tests (stop condition):** a window suspends a feed's key and a connection only inside its time range; a record in scope raises no signal and is stored; apply twice stores one window; the window routes create, list and delete; the snooze route sets `snoozed_until` and a snoozed incident pages no one; card test (renders the window, approve and reject); `openapi_export --check`; checks and CI green.
 
 ---
+
+---
+
+### Task 8: The Inbox set (Decision #576)
+
+Added 2026-10-31 for ui task 3: the Inbox must show the incidents that need a person without the frontend copying a status set the backend owns.
+
+**Files:** `monitoring/incidents/store.py` and `service.py` (the rule, once), `api/routers/incidents.py` (the `inbox` query parameter); tests; regenerated `frontend/openapi.json`.
+
+**Notes:**
+- `GET .../incidents?inbox=true` returns `ACTIVE_STATUSES` plus `resolved` incidents with no verdict yet (a verdict on a resolved incident closes it, so the Inbox's verdict buttons must reach those), ranked as the list already is. The rule lives in one place in the incidents service or store, using the verdict binding it has (`bind_verdicts`), and is applied in the query, so `limit`, `offset` and `total` stay right (never filter a fetched page); `status` and `inbox` together is a 422.
+- Without `inbox`, the list behaves as today.
+
+**Tests (stop condition):** each active status and a resolved incident without a verdict are returned; a resolved one with a verdict, a closed and a merged one are not; ranking is kept; paging with `inbox` returns the right `total` and pages; `status` with `inbox` is 422; backend suite, ruff, pyright, openapi check; CI green.
+
+**PR:** its own PR into `main` from `plan/stage-4-incidents-task8`, created at this task's last commit (ui task 3 consumes it).
 
 ## Known debt added
 

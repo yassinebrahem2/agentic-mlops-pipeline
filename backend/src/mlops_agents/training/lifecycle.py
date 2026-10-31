@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from mlops_agents.ids import new_id
+from mlops_agents.monitoring.expectations.contract import ExpectationKey, ExpectationSpec
 from mlops_agents.monitoring.hooks.contract import (
     HookCall,
     HookLifecycle,
@@ -18,15 +19,45 @@ from mlops_agents.monitoring.hooks.contract import (
     RunContext,
 )
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
-from mlops_agents.training.contract import TrainingWindow
+from mlops_agents.training.constants import (
+    TRAINING_REQUEST_DEADLINE_MINUTES,
+    TRAINING_REQUEST_GRACE_MINUTES,
+)
+from mlops_agents.training.contract import TrainingWindow, WindowRule
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
+    from mlops_agents.monitoring.expectations.contract import Expectations
     from mlops_agents.providers.failover import Clock
     from mlops_agents.training.fixes import SqliteFixes
     from mlops_agents.training.requests import SqliteTraining
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._:+-]{1,128}$")
+
+
+def resolve_window(
+    rule: WindowRule,
+    now: datetime,
+    last_linked_end: datetime | None = None,
+) -> TrainingWindow:
+    """Resolve a WindowRule against current time and optional last linked run window end."""
+
+    def _utc(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+    now_utc = _utc(now)
+    if rule.kind == "trailing_days":
+        days = rule.days if rule.days is not None else 0
+        start = now_utc - timedelta(days=days)
+        return TrainingWindow(start=start, end=now_utc)
+    if rule.kind == "since_last_run":
+        start = _utc(last_linked_end) if last_linked_end is not None else now_utc
+        return TrainingWindow(start=start, end=now_utc)
+    if rule.kind == "fixed":
+        start = _utc(rule.start) if rule.start is not None else now_utc
+        end = _utc(rule.end) if rule.end is not None else now_utc
+        return TrainingWindow(start=start, end=end)
+    raise ValueError(f"Unknown WindowRule kind: {rule.kind}")
 
 
 class TrainingLifecycle(HookLifecycle):
@@ -39,12 +70,17 @@ class TrainingLifecycle(HookLifecycle):
         resolver: PlaceholderResolver,
         clock: Clock,
         events: EventLog,
+        expectations: Expectations | None = None,
     ) -> None:
         self._training = training
         self._fixes = fixes
         self._resolver = resolver
         self._clock = clock
         self._events = events
+        self._expectations = expectations
+
+    def bind_expectations(self, expectations: Expectations) -> None:
+        self._expectations = expectations
 
     async def before(self, project_id: str, hook: HookView, call: HookCall) -> HookCall:
         is_training = hook.spec.kind in ("train", "evaluate")
@@ -90,7 +126,20 @@ class TrainingLifecycle(HookLifecycle):
             window = TrainingWindow(start=start_dt, end=end_dt)
 
         if is_training:
-            # 1. Take window from call params
+            # 1. Take window from call params or fallback to policy WindowRule
+            if window is None and call.policy_id is not None:
+                policy = await self._training.get_policy(project_id, call.policy_id)
+                if policy is not None and hook.model is not None:
+                    last_linked_end: datetime | None = None
+                    if policy.payload.window.kind == "since_last_run":
+                        linked_reqs = await self._training.list_requests(
+                            project_id, model=hook.model, status="linked", limit=1
+                        )
+                        if linked_reqs and linked_reqs[0].window:
+                            last_linked_end = linked_reqs[0].window.end
+                    now = self._clock.now()
+                    window = resolve_window(policy.payload.window, now, last_linked_end)
+
             if window is None:
                 raise HookRefused("Window is required for training/evaluation hooks")
 
@@ -190,5 +239,37 @@ class TrainingLifecycle(HookLifecycle):
         if hook.spec.kind not in ("train", "evaluate"):
             return
         request_id = result.request_id or call.params.get("request_id")
-        if not result.ok and request_id is not None:
-            await self._training.set_status(project_id, request_id, "failed")
+        if not result.ok:
+            if request_id is not None:
+                await self._training.set_status(project_id, request_id, "failed")
+            fix_id = call.fix_id
+            if fix_id is None and request_id is not None:
+                trq = await self._training.request(project_id, request_id)
+                if trq is not None:
+                    fix_id = trq.fix_id
+            if fix_id is not None:
+                await self._fixes.set_outcome(project_id, fix_id, "not_cleared")
+        elif result.ok and request_id is not None and self._expectations is not None:
+            deadline_minutes = TRAINING_REQUEST_DEADLINE_MINUTES
+            req = await self._training.request(project_id, request_id)
+            if req is not None and req.policy_id is not None:
+                policy = await self._training.get_policy(project_id, req.policy_id)
+                if policy is not None:
+                    deadline_minutes = policy.payload.run_time_limit_minutes
+
+            started = self._clock.now()
+            due_at = started + timedelta(minutes=deadline_minutes)
+            await self._expectations.register(
+                project_id,
+                ExpectationSpec(
+                    key=ExpectationKey(kind="training_request", ref=request_id, model=hook.model),
+                    category="operational",
+                    cadence=None,
+                    due_at=due_at,
+                    source="training",
+                    timezone="UTC",
+                    grace_minutes=TRAINING_REQUEST_GRACE_MINUTES,
+                    second_deadline=False,
+                    activates_on_pr=None,
+                ),
+            )

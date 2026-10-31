@@ -42,7 +42,7 @@ Anything not listed here is unknown.
 - [USER] 2026-10-28: who decides, in three tiers. (1) Always allowed, at any time: watch, diagnose, record, notify, hold a pending deploy. (2) Rules the team approves in advance (for example roll back to the last good model past a set threshold, rerun a failed job once): agents act within them at any time, and report what they did. (3) A human always decides: deploying a new model and anything irreversible (except, for a team that chose full CD, an agent-triggered run within an approved training policy, which the team's gate decides; see below); at night these wait for the morning unless the severity warrants waking the on-call person. The least risky move comes first: do nothing harmful, hold, keep the last good model, roll back; retraining or deploying something new is the riskiest.
 - [USER] 2026-10-27: anything an MLOps engineer does, an agent must be able to do, behind permission gates or not. The target is live production systems (assumed, not deployed).
 - [USER] Data Quality: decides first whether a change is bad data (block it) or real drift (inform adaptation); writes its own checks and triggers after studying the data; schedules checks; explains every flag.
-- [USER] Alert Prioritization: deduplicates, ranks and routes alerts to the owner and channel.
+- [AGREED] 2026-10-29 (stage 4-6 overview, approved by the user): Alert Prioritization merges duplicate incidents and adjusts an incident's severity by one level (`AdjustSeverity`); routing alerts to people and channels is done in code (`SeverityPolicy`, `Router`), not by the agent.
 - [USER] Retraining and Deployment act through hooks (train / evaluate / deploy / rollback commands) found or written by agents.
 - [USER] Users can talk to agents to do things and configure agent schedules on the Agents page.
 - [USER] Agents record what they learn in a per-project store (the Knowledge page).
@@ -158,6 +158,7 @@ Anything not listed here is unknown.
 - Resource/Cost Optimization agent and Security/Compliance agent (offered before the presentation).
 
 ## 5. Changed (superseded decisions)
+- Superseded 2026-10-29: "[USER] Alert Prioritization: deduplicates, ranks and routes alerts to the owner and channel." Routing moved into code in the stage 4-6 overview; the agent keeps dedup (merge) and a one-level severity adjustment.
 - "No technical debt" (AGENTS.md, 2026-10-21) and the 2026-10-26 merge gate's "Minors filed as Bug issues": superseded 2026-10-29 by recorded debt in `docs/known-debt.md` and the lowered review bar (Process).
 - Orchestrator: was "routes tasks, resolves conflicts, enforces permission levels". Now the project-level assistant; permissions are enforced in code.
 - OpenCode plugin: considered, not adopted as the runtime.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import httpx2
 import pytest
@@ -26,12 +26,28 @@ from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tasks.service import TasksService
-from mlops_agents.agents.tools import default_registry
+from mlops_agents.agents.tools import default_registry, names
+from mlops_agents.agents.tools.names import (
+    ADJUST_SEVERITY,
+    HOLD,
+    INCIDENT_FOLLOW_UP,
+    INCIDENT_MERGE,
+    INCIDENT_SPLIT,
+    INCIDENT_UPDATE,
+    MONITORING_QUERY,
+    RUN_HOOK,
+)
+from mlops_agents.agents.tools.save_note import SaveNote
+from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.events.status import SqliteStatusBoard
 from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
+from mlops_agents.monitoring.hooks.constants import HOOK_CREDENTIAL_ENV
+from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
+from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import HandoffPayload
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -377,6 +393,60 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
     },
 ]
 
+# The tool matrix of the stages 4-6 definitions plan: the stage 3 rows above plus one column
+# per task done so far. D = the agents `diagnoser()` can return.
+DIAGNOSING_AGENTS: tuple[str, ...] = (
+    "orchestrator",
+    "data-quality",
+    "model-performance",
+    "retraining",
+    "deployment",
+)
+DIAGNOSING_TOOLS: tuple[str, ...] = (
+    INCIDENT_UPDATE,
+    INCIDENT_MERGE,
+    INCIDENT_SPLIT,
+    INCIDENT_FOLLOW_UP,
+    MONITORING_QUERY,
+    RUN_HOOK,
+    HOLD,
+)
+TASK_1_COLUMN: dict[str, tuple[str, ...]] = {
+    **dict.fromkeys(DIAGNOSING_AGENTS, DIAGNOSING_TOOLS),
+    "alert-prioritization": (MONITORING_QUERY, INCIDENT_MERGE, INCIDENT_UPDATE, ADJUST_SEVERITY),
+}
+AGENT_TABLE: list[dict[str, Any]] = [
+    {**row, "tools": row["tools"] + TASK_1_COLUMN.get(row["name"], ())} for row in STAGE_3_TABLE
+]
+
+# The operational subtypes `diagnoser()` maps to an agent of their own.
+DIAGNOSER_SUBTYPES: tuple[str, ...] = ("failed_training", "bad_deploy", "failed_scoring")
+
+# How a diagnosing prompt names each wake label it is woken by.
+WAKE_LABEL_WORDS: dict[WakeLabel, str] = {
+    "incident": "`incident`",
+    "follow_up": "`follow_up`",
+}
+
+# S4 §6's response menu, safest first, as each diagnosing prompt words it.
+RESPONSE_MENU: tuple[str, ...] = (
+    f"`{INCIDENT_FOLLOW_UP}`",
+    "notify",
+    "open an issue",
+    f"`{HOLD}`",
+    "roll back",
+    "fall back",
+    "rerun",
+    f"`{RUN_HOOK}`",
+    "revert",
+)
+RESPONSE_MENU_HEADING = "response menu, safest first"
+
+# Every tool name of agents/tools/names.py, read from the module, never retyped.
+_NAMED_TOOLS: tuple[str, ...] = tuple(
+    value for key, value in vars(names).items() if key.isupper() and isinstance(value, str)
+)
+
 
 def _assert_definition_matches_spec(defn: AgentDefinition, expected: dict[str, Any]) -> None:
     assert defn.name == expected["name"] and defn.display_name == expected["display_name"]
@@ -387,8 +457,8 @@ def _assert_definition_matches_spec(defn: AgentDefinition, expected: dict[str, A
     assert defn.can_message == expected["can_message"]
 
 
-@pytest.mark.parametrize("expected", STAGE_3_TABLE, ids=[str(r["name"]) for r in STAGE_3_TABLE])
-def test_stage3_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
+@pytest.mark.parametrize("expected", AGENT_TABLE, ids=[str(r["name"]) for r in AGENT_TABLE])
+def test_agent_definitions_match_the_tool_matrix(expected: dict[str, Any]) -> None:
     defn = _load_definition(str(expected["name"]))
     _assert_definition_matches_spec(defn, expected)
     low = defn.prompt.lower()
@@ -400,7 +470,7 @@ def test_stage3_agent_definitions_match_spec(expected: dict[str, Any]) -> None:
 
 
 def test_spec_table_detects_missing_tool() -> None:
-    expected = STAGE_3_TABLE[0]
+    expected = AGENT_TABLE[0]
     defn = _load_definition(str(expected["name"]))
     tampered = defn.model_copy(update={"tools": defn.tools[:-1]})
     with pytest.raises(AssertionError):
@@ -427,6 +497,12 @@ def test_all_seven_definitions_load_with_real_registries() -> None:
         proposal_kinds=ProposalKinds(),
         tracking=cast(Any, dummy),
         handoffs=cast(Any, dummy),
+        hooks=cast(Any, dummy),
+        incidents=cast(Any, dummy),
+        severity=cast(Any, dummy),
+        query_providers=cast(Any, dummy),
+        data_summaries=cast(Any, dummy),
+        connections=cast(Any, dummy),
     )
     hook_reg = HookRegistry()
     hook_reg.register(StatusBoardHook())
@@ -468,13 +544,12 @@ def test_prompt_checks_guard_nothing_it_cannot_do_yet() -> None:
                     f"Agent '{defn.name}' prompt names missing tool '{tool_name}'"
                 )
 
-        # Onboarding is the only prompt that mentions Propose
-        if defn.name == "onboarding":
-            assert "Propose" in defn.prompt
-        else:
-            assert "Propose" not in defn.prompt, (
-                f"Agent '{defn.name}' unexpectedly mentions Propose"
-            )
+        # No prompt names, in backticks, a tool of names.py the agent lacks
+        for tool_name in _NAMED_TOOLS:
+            if tool_name not in defn.tools:
+                assert f"`{tool_name}`" not in defn.prompt, (
+                    f"Agent '{defn.name}' prompt names missing tool '{tool_name}'"
+                )
 
         # ReadHandoff is named by the six agents that have it and not by Alert Prioritization
         if defn.name != "alert-prioritization":
@@ -564,10 +639,71 @@ def test_onboarding_coverage_contract_fields() -> None:
 def test_alert_prioritization_loads_in_catalog() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     defn = catalog.get("alert-prioritization")
-    alert_spec = next(r for r in STAGE_3_TABLE if r["name"] == "alert-prioritization")
+    alert_spec = next(r for r in AGENT_TABLE if r["name"] == "alert-prioritization")
     assert defn.name == "alert-prioritization" and defn.display_name == "Alert Prioritization"
     assert not defn.chat and not defn.schedules
     assert defn.tools == alert_spec["tools"] and defn.can_message == alert_spec["can_message"]
+
+
+def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    returned: set[str] = set()
+    for category in get_args(ResultCategory):
+        for subtype in (None, *DIAGNOSER_SUBTYPES):
+            returned.add(diagnoser(category, subtype))
+    assert returned == set(DIAGNOSING_AGENTS)
+    for name in returned:
+        tools = catalog.get(name).tools
+        assert set(DIAGNOSING_TOOLS) <= set(tools), f"{name} lacks a diagnosing tool"
+    holders = [d.name for d in catalog.all() if ADJUST_SEVERITY in d.tools]
+    assert holders == ["alert-prioritization"]
+
+
+def test_task_1_tools_are_named_in_their_holders_prompts() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for name, column in TASK_1_COLUMN.items():
+        prompt = catalog.get(name).prompt
+        for tool_name in column:
+            assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
+
+
+@pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
+def test_diagnosing_prompt_covers_wake_menu_and_knowledge_note(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    low = prompt.lower()
+    assert set(WAKE_LABEL_WORDS) <= set(get_args(WakeLabel))
+    for label, words in WAKE_LABEL_WORDS.items():
+        assert words in prompt, f"{name} prompt does not name the {label} wake label"
+    position = low.find(RESPONSE_MENU_HEADING)
+    assert position >= 0, f"{name} prompt has no '{RESPONSE_MENU_HEADING}'"
+    for item in RESPONSE_MENU:
+        found = low.find(item.lower(), position)
+        assert found > position, f"{name} menu lacks '{item}' after the previous item"
+        position = found
+    assert "knowledge note" in low and f"`{SaveNote.name}`" in prompt
+    assert HOOK_CREDENTIAL_ENV in prompt, f"{name} prompt lacks {HOOK_CREDENTIAL_ENV}"
+
+
+def test_data_quality_and_model_performance_role_lines() -> None:
+    dq = _load_definition("data-quality").prompt.lower()
+    assert "bad data" in dq and "drift" in dq
+    mp = _load_definition("model-performance").prompt.lower()
+    assert "label delay" in mp and "skew" in mp
+
+
+def test_alert_prioritization_prompt_leaves_paging_and_routing_to_code() -> None:
+    low = _load_definition("alert-prioritization").prompt.lower()
+    assert "monitoring loop" in low
+    for stage_2_wording in ("does not run", "route alerts", "sendmessage", "not available yet"):
+        assert stage_2_wording not in low, f"AP prompt still says '{stage_2_wording}'"
+
+
+def test_working_rules_describe_the_untrusted_data_block() -> None:
+    # The opening tag up to its quoted value: hard_limits.md writes it as <data source=...>.
+    opening = untrusted("x", source="t").split('"', 1)[0]
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        assert opening in working_rules(defn), f"{defn.name}'s working rules lack {opening}"
 
 
 async def test_alert_prioritization_derived_as_inactive_on_status_board(

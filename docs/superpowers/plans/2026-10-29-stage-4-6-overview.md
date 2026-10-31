@@ -391,10 +391,13 @@ class Verdicts(Protocol):               # verdicts (stats task 1)
     async def confirm_by_labels(self, project_id: str) -> list[VerdictView]: ...                        # model performance incidents, past the minimum sample, from Model Performance's label-based results
     async def report_miss(self, project_id: str, miss: MissReport) -> None: ...
     async def list(self, project_id: str, since: datetime | None = None) -> list[VerdictView]: ...
+    async def list_misses(self, project_id: str, since: datetime | None = None) -> list[MissReport]: ...   # stats task 3 (Decision #568): Stats' misses
 class Baseline(Protocol):               # stats task 2; never notifies and never opens an incident
     async def available(self, project_id: str) -> bool: ...   # true once a `team`-origin result is stored; the Dashboard and Stats read it
     async def links(self, project_id: str, incident_id: str) -> list[BaselineLink]: ...
     async def silent_alerts(self, project_id: str) -> list[SilentTeamAlert]: ...
+    async def matched_incidents(self, project_id: str) -> set[str]: ...   # stats task 3 (2026-10-31): IDs of incidents at least one team fire matches, by the same matcher `silent_alerts` uses, on read; a fire matching a merged incident counts for its survivor. Stats reads this, not the stored links (they can lag a widened window)
+    async def judged_silent_alerts(self, project_id: str) -> list[SilentTeamAlert]: ...   # stats task 3 (Decision #568): every team alert a person judged that is still silent by the same matcher, re-checked on read, uncapped (judged rows grow only as people judge; the list route keeps its cap)
     async def judge_silent(self, project_id: str, result_id: str, value: SilentVerdict, by: str) -> SilentTeamAlert: ...   # a person's verdict on a silent alert
 ```
 
@@ -505,7 +508,7 @@ class HookVerifier(Protocol):
 ```python
 class EvaluationPayload(BaseModel):     # the typed view of EvaluationRecord.payload (S5 §3); schema_version 1; `extra="allow"` so a team's extra fields survive
     schema_version: int; evaluation_commit: str; gate_config_version: str; champion_version: str | None
-    decision: Literal["promote", "hold", "reject"] | None; reasons: list[str]
+    decision: Literal["promote", "hold", "reject"] | None; reasons: list[str] | None   # None = not computed (shown as "not computed", never as passed checks); 2026-10-31
     parity: ParityResult | None; champion_metrics: MetricSet | None; challenger_metrics: MetricSet | None; calibration: dict[str, Any] | None
     expected_cost: float | None; decision_rate: float | None; holdout_window: TrainingWindow | None; training_window: TrainingWindow | None
     serving_compatibility: dict[str, Any] | None; computed_where: str | None
@@ -580,7 +583,7 @@ STAT_METRICS: Final[Mapping[StatGroup, tuple[str, ...]]]        # the one list o
 class StatValue(BaseModel): value: float | None; n: int; collecting: bool          # n: the verdicts (or incidents, for counts) it rests on; collecting: n < STATS_MIN_VERDICTS for a verdict-based number
 class StatsView(BaseModel): window: StatsWindow; category: ResultCategory | None; baseline_available: bool; groups: dict[StatGroup, dict[str, StatValue]]
 class Stats(Protocol):                  # stats
-    async def compute(self, project_id: str, window: StatsWindow, category: ResultCategory | None, now: datetime) -> StatsView: ...   # computed on read from incidents, verdicts, baseline links, approvals, PRs, llm_calls, hook runs; nothing stored twice
+    async def compute(self, project_id: str, window: StatsWindow, category: ResultCategory | None, now: datetime) -> StatsView: ...   # computed on read from incidents, verdicts, `Baseline.matched_incidents` and `judged_silent_alerts` (never the stored links), approvals, PRs, llm_calls, hook runs; nothing stored twice
 ```
 
 - `GET /api/projects/{id}/stats?window=&category=` returns `StatsView`. Without readable team monitoring `baseline_available` is false and the page says so (S4 §10); the detection numbers that need the baseline are then `None`, never 0.
@@ -604,7 +607,7 @@ def cost_usd(prompt_tokens: int, completion_tokens: int, price: ModelPrice | Non
 | `GET`/`PUT .../monitoring-settings` (`MonitoringSettings`) | contracts 2 |
 | `GET /api/health/heartbeat` (`HeartbeatView`, no session) | results 3 |
 | `GET .../expectations` (`list[ExpectationState]`); `GET .../checks` (`list[CheckView]`) | results 5; results 7 |
-| `GET .../incidents?status=&limit=&offset=` (`Page[IncidentView]`, ranked), `GET .../incidents/{inc}`, `.../signals`, `.../timeline?before=&limit=` (`list[EventRecord]`, newest first), `POST .../incidents/{inc}/acknowledge`, `.../close` | incidents 1 |
+| `GET .../incidents?status=&inbox=&limit=&offset=` (`Page[IncidentView]`, ranked; `inbox=true` (incidents task 8, Decision #576): `ACTIVE_STATUSES` plus `resolved` incidents with no verdict yet, the one "needs a person" rule), `GET .../incidents/{inc}`, `.../signals`, `.../timeline?before=&limit=` (`list[EventRecord]`, newest first), `POST .../incidents/{inc}/acknowledge`, `.../close` | incidents 1 |
 | `POST .../incidents/{inc}/snooze` (`{until}`); `GET`/`POST .../maintenance-windows`, `DELETE .../maintenance-windows/{win}` | incidents 7 |
 | `GET`/`PUT .../on-call` | notifications 2 |
 | `GET`/`PUT /api/integrations/discord`, `.../email`, `.../public-url`; `DELETE .../discord/webhook`, `.../email/password`; `POST .../{discord,email}/test` | notifications 3 |
