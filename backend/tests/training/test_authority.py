@@ -306,7 +306,10 @@ async def test_policy_authority_rejections(tmp_path: Path) -> None:
     assert auth5.basis == "none"
     assert "suspended" in auth5.reason
 
-    # 5b. Hook itself suspended
+    # Re-activate policy so that policy itself is active
+    await training.policies_store.set_status("prj_1", pol.id, "active")
+
+    # 5b. Hook itself suspended while policy is active -> refuses on hook status
     suspended_hook = _make_hook(
         "hok_train",
         deploys=False,
@@ -326,9 +329,6 @@ async def test_policy_authority_rejections(tmp_path: Path) -> None:
     )
     assert auth_hook_susp.basis == "none"
     assert "not active (suspended)" in auth_hook_susp.reason
-
-    # Re-activate policy for rate limit checks
-    await training.policies_store.set_status("prj_1", pol.id, "active")
 
     # 6. min_interval_hours violated
     recent_run = CiRunRow(
