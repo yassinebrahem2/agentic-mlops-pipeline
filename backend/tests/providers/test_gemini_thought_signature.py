@@ -6,7 +6,7 @@ import httpx2
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
-from mlops_agents.providers.bridge import build_chat_model
+from mlops_agents.providers.bridge import SKIP_THOUGHT_SIGNATURE_VALIDATOR, build_chat_model
 from tests.fakes.fake_openai import RunningFake
 
 TOOLS: list[dict[str, Any]] = [
@@ -126,17 +126,16 @@ async def test_two_tool_calls_only_one_with_extra_content(
 
 
 @pytest.mark.asyncio
-async def test_extra_content_split_across_deltas_merged_not_doubled(
+async def test_same_value_arriving_on_two_deltas_comes_back_exactly_once(
     fake_openai: RunningFake, model_http: httpx2.AsyncClient
 ) -> None:
     fake_openai.state.scripted_tool_calls = [
         {
             "name": "Read",
             "arguments": {"file_path": "a.txt"},
-            "extra_content_deltas": [
-                {"google": {"thought_signature": "part_1"}},
-                {"google": {"thought_signature": "part_2"}},
-            ],
+            "extra_content": {"google": {"thought_signature": "sig_abc"}},
+            "repeat_extra_content_on_second_delta": True,
+            "repeat_id_on_second_delta": True,
         }
     ]
 
@@ -168,7 +167,51 @@ async def test_extra_content_split_across_deltas_merged_not_doubled(
     assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
     tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
     tc = tcs[0]
-    assert tc.get("extra_content") == {"google": {"thought_signature": "part_1part_2"}}
+    assert tc.get("extra_content") == {"google": {"thought_signature": "sig_abc"}}
+
+
+@pytest.mark.asyncio
+async def test_extra_content_containing_repeat_comes_back_unchanged(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    fake_openai.state.scripted_tool_calls = [
+        {
+            "name": "Read",
+            "arguments": {"file_path": "a.txt"},
+            "extra_content": {"google": {"thought_signature": "AAAA"}},
+        }
+    ]
+
+    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
+    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
+
+    chunks: list[AIMessageChunk] = []
+    async for chunk in runnable.astream([HumanMessage(content="Read")]):
+        chunks.append(cast(AIMessageChunk, chunk))
+
+    total_chunk = _merge_chunks(chunks)
+    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
+    tc_id = str(tool_calls[0]["id"])
+
+    fake_openai.state.requests.clear()
+    fake_openai.state.scripted_tool_calls = None
+
+    follow_up: list[BaseMessage] = [
+        HumanMessage(content="Read"),
+        total_chunk,
+        ToolMessage(tool_call_id=tc_id, content="Content A"),
+    ]
+    async for _ in runnable.astream(follow_up):
+        pass
+
+    assert len(fake_openai.state.requests) >= 1
+    sent_request = fake_openai.state.requests[-1]
+    msgs = cast(list[dict[str, Any]], sent_request["messages"])
+    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
+    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
+    tc = tcs[0]
+    # Opaque repeats such as "AAAA" must never be collapsed to "A"
+    assert tc.get("extra_content") == {"google": {"thought_signature": "AAAA"}}
 
 
 @pytest.mark.asyncio
@@ -273,64 +316,25 @@ async def test_history_from_one_model_sent_to_another_drops_extra_content(
 
 
 @pytest.mark.asyncio
-async def test_extra_content_and_id_repeated_across_deltas_never_doubled(
-    fake_openai: RunningFake, model_http: httpx2.AsyncClient
-) -> None:
-    fake_openai.state.scripted_tool_calls = [
-        {
-            "name": "Read",
-            "arguments": {"file_path": "a.txt"},
-            "extra_content": {"google": {"thought_signature": "sig_abc"}},
-            "repeat_extra_content_on_second_delta": True,
-            "repeat_id_on_second_delta": True,
-        }
-    ]
-
-    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
-    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
-
-    chunks: list[AIMessageChunk] = []
-    async for chunk in runnable.astream([HumanMessage(content="Read")]):
-        chunks.append(cast(AIMessageChunk, chunk))
-
-    total_chunk = _merge_chunks(chunks)
-    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
-    tc_id = str(tool_calls[0]["id"])
-
-    fake_openai.state.requests.clear()
-    fake_openai.state.scripted_tool_calls = None
-
-    follow_up: list[BaseMessage] = [
-        HumanMessage(content="Read"),
-        total_chunk,
-        ToolMessage(tool_call_id=tc_id, content="Content A"),
-    ]
-    async for _ in runnable.astream(follow_up):
-        pass
-
-    assert len(fake_openai.state.requests) >= 1
-    sent_request = fake_openai.state.requests[-1]
-    msgs = cast(list[dict[str, Any]], sent_request["messages"])
-    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
-    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
-    tc = tcs[0]
-    assert tc.get("extra_content") == {"google": {"thought_signature": "sig_abc"}}
-
-
-@pytest.mark.asyncio
 async def test_two_tool_calls_in_one_reply_both_with_extra_content(
     fake_openai: RunningFake, model_http: httpx2.AsyncClient
 ) -> None:
+    # Both tool calls repeat id and extra_content on their second deltas;
+    # this verifies neither call's extra_content is doubled and fails if the fix is reverted.
     fake_openai.state.scripted_tool_calls = [
         {
             "name": "Read",
             "arguments": {"file_path": "a.txt"},
             "extra_content": {"google": {"thought_signature": "sig_0"}},
+            "repeat_extra_content_on_second_delta": True,
+            "repeat_id_on_second_delta": True,
         },
         {
             "name": "Read",
             "arguments": {"file_path": "b.txt"},
             "extra_content": {"google": {"thought_signature": "sig_1"}},
+            "repeat_extra_content_on_second_delta": True,
+            "repeat_id_on_second_delta": True,
         },
     ]
 
@@ -368,7 +372,7 @@ async def test_two_tool_calls_in_one_reply_both_with_extra_content(
 
 
 @pytest.mark.asyncio
-async def test_unsigned_history_sent_to_gemini3_without_extra_content(
+async def test_unsigned_history_sent_to_gemini3_receives_skip_thought_signature_validator(
     fake_openai: RunningFake, model_http: httpx2.AsyncClient
 ) -> None:
     # Older history from another session/model has no extra_content
@@ -379,7 +383,14 @@ async def test_unsigned_history_sent_to_gemini3_without_extra_content(
         }
     ]
 
-    client = build_chat_model(fake_openai.base_url, "test-key", "fake-tools", http=model_http)
+    client = build_chat_model(
+        fake_openai.base_url,
+        "test-key",
+        "fake-tools",
+        http=model_http,
+        model_address="gemini/gemini-2.5-pro",
+        is_gemini=True,
+    )
     runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
 
     chunks: list[AIMessageChunk] = []
@@ -408,5 +419,59 @@ async def test_unsigned_history_sent_to_gemini3_without_extra_content(
     assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
     tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
     tc = tcs[0]
-    # No signature is invented
+    # Documented fallback placeholder is sent to Gemini model for unsigned history
+    assert tc.get("extra_content") == {
+        "google": {"thought_signature": SKIP_THOUGHT_SIGNATURE_VALIDATOR}
+    }
+
+
+@pytest.mark.asyncio
+async def test_unsigned_history_sent_to_other_provider_has_no_extra_content(
+    fake_openai: RunningFake, model_http: httpx2.AsyncClient
+) -> None:
+    # Older history without signatures
+    fake_openai.state.scripted_tool_calls = [
+        {
+            "name": "Read",
+            "arguments": {"file_path": "old.txt"},
+        }
+    ]
+
+    # Non-Gemini model (e.g. OpenAI GPT-4o)
+    client = build_chat_model(
+        fake_openai.base_url,
+        "test-key",
+        "fake-tools",
+        http=model_http,
+        model_address="openai/gpt-4o",
+        is_gemini=False,
+    )
+    runnable: Any = client.bind_tools(TOOLS)  # pyright: ignore[reportUnknownMemberType]
+
+    chunks: list[AIMessageChunk] = []
+    async for chunk in runnable.astream([HumanMessage(content="Old read")]):
+        chunks.append(cast(AIMessageChunk, chunk))
+
+    total_chunk = _merge_chunks(chunks)
+    tool_calls = cast(list[dict[str, Any]], total_chunk.tool_calls)
+    tc_id = str(tool_calls[0]["id"])
+
+    fake_openai.state.requests.clear()
+    fake_openai.state.scripted_tool_calls = None
+
+    follow_up: list[BaseMessage] = [
+        HumanMessage(content="Old read"),
+        total_chunk,
+        ToolMessage(tool_call_id=tc_id, content="Old content"),
+    ]
+    async for _ in runnable.astream(follow_up):
+        pass
+
+    assert len(fake_openai.state.requests) >= 1
+    sent_request = fake_openai.state.requests[-1]
+    msgs = cast(list[dict[str, Any]], sent_request["messages"])
+    assistant_msg = next(m for m in msgs if m.get("role") == "assistant")
+    tcs = cast(list[dict[str, Any]], assistant_msg["tool_calls"])
+    tc = tcs[0]
+    # No other provider gets thought signatures or the fallback placeholder
     assert "extra_content" not in tc

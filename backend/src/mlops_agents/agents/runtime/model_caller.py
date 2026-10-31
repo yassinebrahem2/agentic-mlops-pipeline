@@ -12,7 +12,7 @@ import httpx2
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 
 from mlops_agents.errors import DomainError
-from mlops_agents.providers.bridge import ResolvedModel, deduplicate_repeated_strings
+from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderErrorKind, classify
 from mlops_agents.providers.failover import (
     AllKeysExhausted,
@@ -135,15 +135,6 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
             additional_kwargs["tool_calls_extra_content"] = extra_by_id
             if model_by_id:
                 additional_kwargs["tool_calls_model"] = model_by_id
-
-        if "tool_calls_extra_content" in additional_kwargs:
-            additional_kwargs["tool_calls_extra_content"] = deduplicate_repeated_strings(
-                additional_kwargs["tool_calls_extra_content"]
-            )
-        if "tool_calls_model" in additional_kwargs:
-            additional_kwargs["tool_calls_model"] = deduplicate_repeated_strings(
-                additional_kwargs["tool_calls_model"]
-            )
 
     if total_chunk is None:
         final_message = AIMessage(content="")
