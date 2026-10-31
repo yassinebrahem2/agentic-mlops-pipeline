@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mlops_agents.agents.approvals.contract import ApprovalObserver, ApprovalView
 from mlops_agents.clock import now_iso, to_iso, utc_now
@@ -36,6 +37,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ["PromotionRejectObserver", "SqlitePromotions"]
+
+
+async def _has_record(conn: AsyncConnection, model: str, candidate_version: str) -> bool:
+    row = (
+        await conn.execute(
+            select(promotions.c.id)
+            .where(
+                promotions.c.model == model,
+                promotions.c.candidate_version == candidate_version,
+            )
+            .limit(1)
+        )
+    ).first()
+    return row is not None
 
 
 class SqlitePromotions(Promotions):
@@ -198,6 +213,12 @@ class SqlitePromotions(Promotions):
                 )
 
         return refusals
+
+    async def has_record(self, project_id: str, model: str, candidate_version: str) -> bool:
+        """Whether this model version has any promotion row, whatever its mode or status."""
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            return await _has_record(conn, model, candidate_version)
 
     async def history(self, project_id: str, model: str | None = None) -> list[PromotionView]:
         """Return promotion records history, newest first."""
@@ -413,23 +434,10 @@ class SqlitePromotions(Promotions):
     ) -> PromotionView | None:
         """Record a team_gate promotion row and emit the matching event.
 
-        Idempotent: returns None if a team_gate promotion row already exists for
-        (model, candidate_version).
+        Returns None, recording nothing, if (model, candidate_version) already has a
+        promotion row in any mode: a version someone already decided is never re-decided.
         """
         engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            existing = (
-                await conn.execute(
-                    select(promotions).where(
-                        promotions.c.model == model,
-                        promotions.c.candidate_version == candidate_version,
-                        promotions.c.mode == "team_gate",
-                    )
-                )
-            ).first()
-            if existing is not None:
-                return None
-
         promo_id = new_id("prm")
         now_dt = created or (
             self._clock.now()
@@ -453,6 +461,8 @@ class SqlitePromotions(Promotions):
 
         try:
             async with engine.begin() as conn:
+                if await _has_record(conn, model, candidate_version):
+                    return None
                 await conn.execute(
                     promotions.insert().values(
                         id=promo_id,
