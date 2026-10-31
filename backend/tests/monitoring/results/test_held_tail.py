@@ -4,7 +4,7 @@ time and the record is complete (I22)."""
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.results.constants import HELD_TAIL_QUIET_SECONDS
 from mlops_agents.monitoring.results.contract import ParserMapping, ParserSpec
+from mlops_agents.monitoring.results.mapping import is_complete_record
 from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.storage.databases import Databases
@@ -270,7 +271,8 @@ async def test_incomplete_last_record_after_the_quiet_time_fails_at_its_offset(
     _write(target, case.half, clock, quiet=True)
     rep = await service.collect(project_id, clock.now())
     assert rep.stored == 0
-    assert f"Offset {len(case.first)}" in rep.failures[case.source]
+    # Judged incomplete by the format's rule, not merely rejected by the mapping
+    assert f"Offset {len(case.first)}: last record is incomplete" in rep.failures[case.source]
     failures = [d for _p, d, _t in incidents.signals if d.kind == "parser_failure"]
     assert len(failures) == 1
     assert f"Offset {len(case.first)}" in str(failures[0].detail["error"])
@@ -408,3 +410,63 @@ async def test_code_parser_gets_a_last_line_without_newline_only_after_the_quiet
         ("c1", "feed.raw:0:0", None),
         ("c2", "feed.raw:3:0", None),
     ]
+
+
+async def test_csv_header_without_newline_is_kept_for_the_rows_after_it(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    header = b"id,time,value"
+    case = replace(_CASES["csv"], first=header)
+    service, target = await _service(databases, events, project_id, tmp_path, clock, case)
+
+    # The file's first record, its header, is the quiet tail: read, and saved as the header
+    set_mtime(target, clock.now() - _QUIET)
+    rep = await service.collect(project_id, clock.now())
+    assert rep.failures == {}
+    assert rep.stored == 0
+    state = await service.store.get_source_state(project_id, case.source)
+    assert state is not None
+    assert state.cursor["files"][case.path]["offset"] == len(header)
+    assert state.cursor["files"][case.path]["csv_header"] == ["id", "time", "value"]
+
+    # A row appended after it is mapped by that header
+    _write(target, b"\nc1,2026-10-30T10:00:00Z,0.5\n", clock)
+    rep = await service.collect(project_id, clock.now())
+    assert rep.failures == {}
+    assert rep.stored == 1
+    assert await _stored(databases, project_id) == [("c1", f"{case.path}:{len(header) + 1}", 0.5)]
+
+
+@pytest.mark.parametrize("fmt", _MAPPING_FORMATS)
+async def test_blank_tail_after_the_quiet_time_is_no_failure(
+    fmt: str,
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    case = _CASES[fmt]
+    service, target = await _service(databases, events, project_id, tmp_path, clock, case)
+    rep = await service.collect(project_id, clock.now())
+    assert rep.stored == 1
+
+    _write(target, b"   ", clock, quiet=True)
+    rep = await service.collect(project_id, clock.now())
+    assert rep.failures == {}
+    assert rep.stored == 0
+    state = await service.store.get_source_state(project_id, case.source)
+    assert state is not None
+    assert state.cursor["files"][case.path]["offset"] == len(case.first) + 3
+
+
+def test_csv_tail_is_complete_only_as_one_closed_record_of_the_header_width() -> None:
+    header = ["x", "y"]
+    # Two records, the second with an open quote: not one complete record
+    assert is_complete_record("csv", 'a,b\nc,"d', csv_header=header) is False
+    assert is_complete_record("csv", "a", csv_header=header) is False
+    assert is_complete_record("csv", 'a,"b\nc"', csv_header=header) is True
