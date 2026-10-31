@@ -303,6 +303,7 @@ async def test_not_computed_lists_none_fields_and_matches_prs() -> None:
     assert not_comp["training_window"] is None
     assert not_comp["computed_where"] is None
     assert not_comp["champion_version"] is None
+    assert not_comp["reasons"] is None
 
     # Every key in not_computed must be an optional field of EvaluationPayload
     for field_name in not_comp:

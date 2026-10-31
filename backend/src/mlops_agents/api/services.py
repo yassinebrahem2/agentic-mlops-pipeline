@@ -125,11 +125,15 @@ from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
-from mlops_agents.promotion.contract import EvaluationReader, Reports
+from mlops_agents.promotion.contract import EvaluationReader, Promotions, Reports
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
+from mlops_agents.promotion.kind import PromotionKind
+from mlops_agents.promotion.post_deploy import PostDeployObserver
 from mlops_agents.promotion.pr_closed import ClosedUnmergedObserver
+from mlops_agents.promotion.promotions import PromotionRejectObserver, SqlitePromotions
 from mlops_agents.promotion.reports import SqliteReports
 from mlops_agents.promotion.surfaces import GithubProtectionSurfaces
+from mlops_agents.promotion.team_gate import TeamGateObserver
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.kinds import ProposalKinds
@@ -202,6 +206,7 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    promotions: Promotions
     hooks: HooksService
     incidents: IncidentsService
     maintenance_windows: MaintenanceWindows
@@ -444,6 +449,16 @@ async def build_services(
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
+    promotions = SqlitePromotions(
+        databases=databases,
+        tracking=tracking,
+        handoffs=handoffs,
+        reader=evaluation_reader,
+        reports=reports,
+        hooks=hooks,
+        events=events,
+        clock=clock,
+    )
 
     surfaces = GithubProtectionSurfaces(hooks, http, github, tasks)
     pr_sync = PrSyncObserver(tasks, github, http, events)
@@ -592,6 +607,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(PromotionKind(promotions))
     proposal_kinds.register(HooksKind(hooks=hooks))
     proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
     proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=rules))
@@ -692,6 +708,9 @@ async def build_services(
         verifier=verifier,
     )
     scheduler.add_sync_observer(linker)
+    scheduler.add_sync_observer(
+        PostDeployObserver(databases, tracking, handoffs, promotions, waker)
+    )
     stats = StatsService(
         databases=databases,
         incidents=incidents,
@@ -701,6 +720,7 @@ async def build_services(
         hooks=hooks,
         models=providers,
     )
+    approval_store.add_observer(PromotionRejectObserver(promotions, proposals, workspace))
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -762,6 +782,19 @@ async def build_services(
         settings=integration_settings,
     )
     scheduler.register(morning_report_job)
+    scheduler.add_sync_observer(
+        TeamGateObserver(
+            databases=databases,
+            tracking=tracking,
+            handoffs=handoffs,
+            reader=evaluation_reader,
+            reports=reports,
+            promotions=promotions,
+            notifier=notifier,
+            on_call=on_call,
+            clock=clock,
+        )
+    )
 
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
@@ -829,6 +862,7 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        promotions=promotions,
         hooks=hooks,
         incidents=incidents,
         maintenance_windows=maintenance_windows,
