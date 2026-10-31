@@ -61,9 +61,12 @@ from mlops_agents.monitoring.expectations.query import (
     ResultsQueryProvider,
 )
 from mlops_agents.monitoring.expectations.service import ExpectationsService
+from mlops_agents.monitoring.hooks.alias_check import HookAliasVerifier
 from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner, GitHubCiDispatcher
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
+from mlops_agents.monitoring.hooks.facts import HandoffGateFacts
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.pins import GitHookPinner, PinCheckObserver
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
@@ -138,11 +141,17 @@ from mlops_agents.stats.service import StatsService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
+from mlops_agents.training.authority import PolicyAuthority
 from mlops_agents.training.fixes import SqliteFixes
 from mlops_agents.training.lifecycle import TrainingLifecycle
 from mlops_agents.training.linking import RequestLinker
 from mlops_agents.training.outcomes import FixOutcomeObserver
-from mlops_agents.training.queries import FixesQueryProvider, TrainingRequestsQueryProvider
+from mlops_agents.training.policies import TrainingPolicyKind
+from mlops_agents.training.queries import (
+    FixesQueryProvider,
+    PoliciesQueryProvider,
+    TrainingRequestsQueryProvider,
+)
 from mlops_agents.training.requests import SqliteTraining
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -353,6 +362,10 @@ async def build_services(
     ci_dispatcher = GitHubCiDispatcher(http=http, github=github, workspace=workspace, git=git)
     ci_runner = CiDispatchRunner(dispatcher=ci_dispatcher, github=github)
     hooks.add_runner(ci_runner)
+    pinner = GitHookPinner(workspace, git)
+    hooks.set_pinner(pinner)
+    gate_facts = HandoffGateFacts(hooks, handoffs)
+    authorities.set_facts(gate_facts)
     handoff_hooks = HandoffHooks(hooks, handoffs)
     handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
@@ -459,10 +472,21 @@ async def build_services(
     )
     outcome_observer = FixOutcomeObserver(fixes, incidents)
     incidents.add_observer(outcome_observer)
-    training = SqliteTraining(databases, events, clock)
+    training = SqliteTraining(databases, events, clock, hooks=hooks)
     resolver = TrackerPlaceholderResolver(tracking)
     training_lifecycle = TrainingLifecycle(training, fixes, resolver, clock, events)
     hooks.add_lifecycle(training_lifecycle)
+
+    policy_authority = PolicyAuthority(
+        policies=training.policies_store,
+        training=training,
+        tracking=tracking,
+        hooks=hooks,
+        clock=clock,
+        rules=None,
+    )
+    authorities.register("policy", policy_authority)
+    fixes.bind_policy_authority(policy_authority)
 
     # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
@@ -556,6 +580,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=None))
     proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))
 
     approvals = ApprovalsService(
@@ -627,8 +652,20 @@ async def build_services(
     query_providers.register(ExpectationsQueryProvider(expectations))
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
+    query_providers.register(PoliciesQueryProvider(training))
     query_providers.register(WindowsQueryProvider(windows=maintenance_windows))
     training_lifecycle.bind_expectations(expectations)
+    pin_observer = PinCheckObserver(hooks, workspace, git, training=training)
+    scheduler.add_sync_observer(pin_observer)
+    pr_sync.add_observer(pin_observer)
+    verifier = HookAliasVerifier(
+        tracking=tracking,
+        handoffs=handoffs,
+        training=training,
+        hooks=hooks,
+        workspace=workspace,
+        git=git,
+    )
     linker = RequestLinker(
         training=training,
         fixes=fixes,
@@ -636,6 +673,9 @@ async def build_services(
         expectations=expectations,
         events=events,
         waker=waker,
+        hooks=hooks,
+        incidents=incidents,
+        verifier=verifier,
     )
     scheduler.add_sync_observer(linker)
     stats = StatsService(

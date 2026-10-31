@@ -1,6 +1,6 @@
 # Stages 4 to 6 — Definitions Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task, in order, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; task 1 also gets an early PR (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
+> **For agentic workers:** Implement this plan task by task, in the order the Starts column sets, as `docs/implementing-plan-tasks.md` says. The plan merges through one PR for the whole branch; task 1 also gets an early PR (`AGENTS.md` rule 5). Each task lists its files, the interfaces it consumes and produces, and its tests (the task's stop condition).
 
 **Goal:** the seven agents do their stage 4 and 5 work: each definition holds the tools its role needs and a prompt that says what it can now do (S4 §4, §6, §7; S5 §1 to §5); two end-to-end tests prove the monitoring night (S4 §14, Done when) and the path from an incident to a fix and a promotion (S5 §8).
 
@@ -23,8 +23,9 @@
 | 1 | The stage 4 tools and prompts of the diagnosing agents and Alert Prioritization | onboarding; incidents task 6; hooks task 3 | when onboarding has merged and incidents task 6 and hooks task 3 are on `main`; **early PR** |
 | 2 | The stage 5 tools and prompts: fix requests, Retraining, Deployment & Rollback | task 1; training task 6; promotion task 5 | after task 1, when training task 6 and promotion task 5 (each its plan's core path, early PRs) are on `main` |
 | 3 | The extras' lines: checks, the other proposal kinds, rule citations, `MergePullRequest` | task 2; results, incidents, hooks, training, promotion merged | after task 2; each line once its producer has merged |
-| 4 | The stage 4 end-to-end test (the simulated night) | tasks 1 to 3; notifications, stats, ui merged | after task 3, when notifications, stats and ui have merged |
-| 5 | The stage 5 end-to-end test (incident to fix to promotion) | task 4 | after task 4 |
+| 4 | The stage 4 end-to-end test (the simulated night) | task 1; notifications, stats merged; results merged (task 6's parser), hooks merged (task 5's rules), ui tasks 1 to 6 (early PR) | after task 1 (changed 2026-10-31: runs while task 2 waits on promotion task 5); each scene once its producer is on `main` (see the task's "Order") |
+| 5 | The stage 5 end-to-end test (incident to fix to promotion) | tasks 2 and 4 | after tasks 2 and 4 |
+| 6 | Alert Prioritization holds only what it uses | task 1 | now (added 2026-10-31) |
 
 The catalog refuses a definition naming an unregistered tool, and a prompt line about a behaviour that is not on `main` is a stub feature: a task adds neither before its producer is on `main`. Task 1 is the diagnosis the core path needs, so it is an early PR as soon as its tools are on `main`; the extras' lines come last, so a deadline cut loses them, not diagnosis. If time runs short, the rule, escalation and morning-report steps of task 4 move into a later task and say so in the plan issue.
 
@@ -104,7 +105,9 @@ D = the agents `diagnoser()` can return: data-quality, model-performance, retrai
 
 ### Task 3: The extras' lines: the other proposal kinds, rule citations, `MergePullRequest`
 
-**Files:** the definitions whose matrix cells are task 3's; the test files, own lines.
+**Files:** the definitions whose matrix cells are task 3's; `agents/working_rules.py` (Alert Prioritization's line only); the test files, own lines.
+
+**Also (added 2026-10-31, from task 6):** `working_rules.py` still tells Alert Prioritization "you route, you do not open them", which is no longer true since routing is in code (task 6): reword it to what the agent does (merge duplicates, adjust severity by one level), and update the inline Alert Prioritization fixture in `tests/agents/test_working_rules.py`, which still lists the removed tools.
 
 **Interfaces:** consumes `RegisterCheck`, `MergePullRequest`, the kind constants `PARSER_KIND`, `MAINTENANCE_KIND`, `RULE_KIND`, `HOOKS_KIND`, `TRAINING_POLICY_KIND`. Produces the rest of the matrix. Each line goes in only once its producer has merged (results: checks, `RegisterCheck`, `parser`; incidents: `maintenance`; hooks: `rule`, `hooks`, rule citations; training: `training_policy`; promotion: `MergePullRequest`); a line whose producer has not merged by the deadline is left out and listed in the plan issue.
 
@@ -127,6 +130,8 @@ D = the agents `diagnoser()` can return: data-quality, model-performance, retrai
 **Files:** new `backend/tests/e2e/__init__.py`, `backend/tests/e2e/fixture_project.py` (the fixture project: the handoff payload builder, with a Playwright variant that has only file and MLflow sources, and the results writer; one source for the backend tests and the scripted onboarding model), `backend/tests/e2e/harness.py` (the shared clock, the two-app start and restart on one data folder and key store, `run_due` at an instant, waiting for a woken turn; task 5 reuses it), `backend/tests/e2e/test_monitoring_night.py`, `backend/tests/fakes/monitoring_script.py` (the scripted replies of each woken agent and of `fake-onboarding-night`), a `MODELS` entry and a dispatch line per scripted model in `backend/tests/fakes/fake_openai.py`, placed before its generic "last message is a tool result" branch; `backend/tests/api/conftest.py` (`keystore` and `clock` parameters of `build_app` and `started_app`, so a restarted app keeps the Discord URL and the hook credentials); `frontend/e2e/monitoring.spec.ts`.
 
 **Interfaces:** consumes the Starts plans through their services, routes and fakes (`create_app(clock=...)`, `Scheduler.run_due`, the fake Discord and SMTP servers, `Verdicts`, `Baseline`). Produces the test and the scripted models.
+
+**Order (2026-10-31):** this task starts before tasks 2 and 3, because it is the first run of the whole monitoring loop and the likeliest to find bugs. The scripted models call tools in a fixed order and need no prompt line from tasks 2 or 3. Build first what needs no producer: the `StartTask`/`Write`/`OpenPullRequest` check below, the `conftest.py` parameters, `harness.py`, the fixture builder and the scenes whose producers are on `main`. Three scenes wait for their producer: the team check's mapping parser (results task 6, on `main` when the results plan merges), the rollback by rule with `rule.satisfied` (hooks tasks 5 and 6, when #588 merges), and `monitoring.spec.ts` (ui tasks 1 to 6, early PR). Push each part to the plan branch as it is green. The task closes when every scene is in, or when a producer has not merged by the deadline and that scene is listed in the plan issue as left out.
 
 **Notes:**
 - In process: `started_app` with `FakeDockerRunner`, the fake OpenAI, GitHub and Discord servers in process, and one fake `Clock` passed to `create_app`, so every stage 4 to 6 service shares it. The night is driven by setting the clock and calling `Scheduler.run_due(project_id, now)` at each instant; nothing sleeps. Wait for a woken agent's turn to end by polling its session, as onboarding's flow test does. The scripted models call tools in a fixed order and never depend on server state.
@@ -168,6 +173,18 @@ D = the agents `diagnoser()` can return: data-quality, model-performance, retrai
 - Deployment & Rollback, messaged by the test, opens a PR improving the evaluation step through `StartTask`, `Write` and `OpenPullRequest` against the fake GitHub.
 - `actions.spec.ts` (with the seeded fake MLflow): a person-mode promotion proposal (a scripted Retraining turn) shows its card with the assessments, computed values marked as computed, and champion against challenger; Reject records the rejection; the Deployments page shows the environment's version.
 - Full backend suite and checks as task 4; `npm run e2e`; CI green, every job.
+
+---
+
+### Task 6: Alert Prioritization holds only what it uses (added 2026-10-31)
+
+From the lead's debt re-triage (#593's row): Alert Prioritization reads untrusted `MonitoringQuery` rows yet still holds its stage 2 `SendMessage`, `OpenIssue` and `CommentOnIssue` and a broad `can_message`; its prompt says it contacts no person, so today only the prompt stops untrusted text from reaching a public repo or another agent.
+
+**Files:** `agents/definitions/alert-prioritization.md`; tests (`tests/agents/` for the tool matrix). The `STAGE_2_TOOLS` test constant keeps its name (renaming it touches about 27 files across plans; it stays in the #593 debt row).
+
+**Notes (Decision #606):** remove `SendMessage`, `OpenIssue`, `CommentOnIssue`, `ListAgents` and `SearchIssues` from its tools and empty its `can_message`: no line of its prompt uses them, and the three outbound ones could carry untrusted text out. It keeps `Read`, `Glob`, `Grep` (its prompt says "Read files and search the workspace") and `MonitoringQuery`, `IncidentMerge`, `IncidentUpdate`, `AdjustSeverity`.
+
+**Tests (stop condition):** the definition loads with exactly those seven tools; a test fails if any of the five removed tools is added back; backend suite, ruff, pyright; CI green. It rides on the plan branch (no early PR); the lead removes the #593 row when it merges.
 
 ## Known debt added
 

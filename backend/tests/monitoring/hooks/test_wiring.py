@@ -13,6 +13,8 @@ from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.hooks.ci_dispatch import CiDispatchRunner
+from mlops_agents.monitoring.hooks.facts import HandoffGateFacts
+from mlops_agents.monitoring.hooks.pins import GitHookPinner
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.proposals.payloads import HandoffPayload
@@ -58,6 +60,10 @@ async def test_build_services_hooks_wiring(
 
         # Verify hooks query provider is registered
         assert isinstance(services.query_providers.get("hooks"), HooksQueryProvider)
+
+        # Verify pinner and gate facts wiring (Task 7)
+        assert isinstance(services.hooks._pinner, GitHookPinner)  # pyright: ignore[reportPrivateUsage]
+        assert isinstance(services.authorities.facts, HandoffGateFacts)
 
         # Create a project directly
         project_id = new_id("prj")

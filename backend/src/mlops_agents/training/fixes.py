@@ -38,9 +38,11 @@ from mlops_agents.training.guards import (
     check_data_held,
     check_labels_immature,
     check_open_data_quality_incident,
+    check_policy_limit,
 )
 
 if TYPE_CHECKING:
+    from mlops_agents.agents.approvals.authority import ActionAuthority
     from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.providers.failover import Clock
 
@@ -60,6 +62,7 @@ class SqliteFixes:
         handoffs: Handoffs,
         notifier: Notifier | None = None,
         on_call: OnCallPeople | None = None,
+        policy_authority: ActionAuthority | None = None,
     ) -> None:
         self._databases = databases
         self._incidents = incidents
@@ -69,6 +72,10 @@ class SqliteFixes:
         self._handoffs = handoffs
         self._notifier = notifier
         self._on_call = on_call
+        self._policy_authority = policy_authority
+
+    def bind_policy_authority(self, authority: ActionAuthority) -> None:
+        self._policy_authority = authority
 
     async def circuit(self, project_id: str, model: str) -> CircuitState:
         settings = await get_monitoring_settings(self._databases, project_id)
@@ -131,6 +138,14 @@ class SqliteFixes:
                     ),
                 )
             )
+
+        # 5. policy_limit
+        if self._policy_authority is not None and policy_id is not None:
+            limit_refusal = await check_policy_limit(
+                self._policy_authority, project_id, model, policy_id
+            )
+            if limit_refusal is not None:
+                refusals.append(limit_refusal)
 
         return GuardResult(ok=len(refusals) == 0, refusals=refusals)
 
