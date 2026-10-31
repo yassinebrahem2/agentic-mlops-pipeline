@@ -16,8 +16,9 @@ from mlops_agents.errors import DomainError
 from tests.agents.repair_doubles import HeldObserver, cancelled_once
 from tests.agents.repair_env import WRITER, RepairEnv
 from tests.agents.runtime.session_env import collect_until_turn_ended
+from tests.agents.runtime.stop_doubles import stop_returned
 from tests.agents.runtime.test_resuming_turns import collect_until_turn_waiting
-from tests.agents.turn_end_doubles import gate_then, hold, signalled
+from tests.agents.turn_end_doubles import gate_then, hold
 
 Interleaving = Literal["one after the other", "stop before the resumed worker runs"]
 
@@ -43,12 +44,12 @@ async def test_an_approve_then_a_stop_end_the_turn_stopped(
             await stop()
         else:
             # The resumed worker is held before it takes the turn, and Stop has asked it to
-            # stop that turn (its look for the waiting turn comes right after), so the turn
-            # ends stopped without its executor running: the message is still `waiting` then.
+            # stop that turn (once `TurnWorkers.stop` returns), so the turn ends stopped
+            # without its executor running: the message is still `waiting` then.
             trigger = hold(monkeypatch, SessionStore, "turn_trigger_id", lambda *a: a[2] == turn_id)
             await approve()
             await trigger.wait_entered()
-            looked = signalled(monkeypatch, SessionStore, "waiting_turn")
+            looked = stop_returned(monkeypatch)
             stopping = asyncio.create_task(stop())
             await looked.wait()
             trigger.release.set()
@@ -63,41 +64,37 @@ async def test_an_approve_then_a_stop_end_the_turn_stopped(
     assert len(await repair.events_of(approval.id)) == 1
 
 
-async def test_a_stop_stored_before_the_resumed_worker_takes_the_turn_is_kept(
+async def test_a_turn_stored_stopped_before_the_resumed_worker_takes_it_is_kept(
     repair: RepairEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The worker's take guard, kept as defence in depth (Decision #562): the approve's resume
+    starts its worker, held before it takes the turn, and the turn is stored stopped meanwhile,
+    not through Stop (approval cancellation and the restart repair store `stopped` too). The
+    worker takes a resumed turn only while it still waits (Decision #445), so it takes nothing
+    and the turn stays stopped."""
     app = repair.restart()
     turn_id, [approval] = await repair.ask(app=app)
-    # The approve's resume holds the session lock before it starts its worker; Stop looks (the
-    # turn waits, no worker yet) and queues on that lock. The resume then starts the worker,
-    # but Stop takes the lock first and stores the turn stopped: the worker takes a resumed
-    # turn only while it still waits, so it leaves it (Decision #445). Not covered: a Stop whose
-    # worker check comes before the resume's worker exists while its look comes after the
-    # worker took the turn (window A, bug #446), and a Stop that finds the resume's worker
-    # already started and waits it out without stopping it (window C, also bug #446).
-    resuming = hold(monkeypatch, SessionStore, "turn_status")
-    looked = signalled(monkeypatch, SessionStore, "waiting_turn")
+    trigger = hold(monkeypatch, SessionStore, "turn_trigger_id", lambda *a: a[2] == turn_id)
 
-    async with asyncio.timeout(15):
-        deciding = asyncio.create_task(
-            app.service.decide(repair.project_id, approval.id, approve=True, note=None)
-        )
-        await resuming.wait_entered()
-        stopping = asyncio.create_task(app.manager.stop(repair.project_id, WRITER))
-        await looked.wait()
-        resuming.release.set()
-        await deciding
-        await stopping
-        await repair.turns.wait_ended(turn_id)
-        while True:  # until the resumed worker is gone, whatever it did
-            if not await repair.running(app):
-                break
-            await asyncio.sleep(0.01)
+    try:
+        async with asyncio.timeout(15):
+            deciding = asyncio.create_task(
+                app.service.decide(repair.project_id, approval.id, approve=True, note=None)
+            )
+            await trigger.wait_entered()
+            await repair.sessions.set_turn(repair.project_id, turn_id, "stopped")
+            trigger.release.set()
+            await deciding
+            while True:  # until the resumed worker is gone, whatever it did
+                if not await repair.running(app):
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        trigger.release.set()
 
-    assert repair.ends(turn_id) == ["stopped"]
     assert await repair.turn_status(turn_id) == "stopped"
+    assert repair.ends(turn_id) == []
     assert repair.write_tool.invoked == []
-    assert (await repair.message_of(approval)).status == "stopped"
     assert (await repair.stored(approval.id)).status == "approved"
 
 
@@ -111,10 +108,10 @@ async def test_a_stop_stored_before_the_resume_leaves_the_queued_turn_to_one_tra
     queued = await repair.sessions.next_queued_turn(repair.project_id, approval.session_id)
     assert queued is not None
     queued_id = queued[0]
-    # As in the test above, Stop stores the turn stopped before the resume's worker takes it;
-    # a message is queued, so Stop starts a worker for it while the resume's worker still runs.
-    # The resume's worker loses its take and must leave the new worker alone. The new worker
-    # is held as it marks the queued turn running.
+    # The resume holds the session lock as it starts its worker, and Stop, which found no
+    # worker yet, waits for that lock: it then stops the resume's worker before its take, and
+    # that worker goes on to the queued turn, held as it marks that turn running. One worker
+    # runs the session's turns throughout.
     started = hold(
         monkeypatch,
         SessionStore,
@@ -122,7 +119,7 @@ async def test_a_stop_stored_before_the_resume_leaves_the_queued_turn_to_one_tra
         lambda *a, **_: a[2] == queued_id and a[3] == "running",
     )
     resuming = hold(monkeypatch, SessionStore, "turn_status")
-    looked = signalled(monkeypatch, SessionStore, "waiting_turn")
+    looked = stop_returned(monkeypatch)
 
     try:
         async with asyncio.timeout(20):
