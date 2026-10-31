@@ -15,6 +15,7 @@ from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.constants import RETRY_BACKOFFS_S
 from mlops_agents.notifications.contract import Message, OnCallPerson
 from mlops_agents.notifications.notifier import SqliteNotifier
+from mlops_agents.notifications.on_call import SqliteOnCallPeople
 from mlops_agents.notifications.retries import RetryJob
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.paths import DataPaths
@@ -240,11 +241,14 @@ async def test_failure_then_retry_success_on_retry_job(
         fake_discord.state.fail_next(500)
 
         async with httpx2.AsyncClient() as http:
+            on_call = SqliteOnCallPeople(databases)
             channels = default_channels(settings, http)
-            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
             job = RetryJob(databases, notifier, clock)
 
             person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            stored = await on_call.replace("prj_1", [person])
+            person = stored[0]
             msg = Message(title="Alert", severity="high")
 
             res = await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_1")
@@ -311,11 +315,14 @@ async def test_failure_after_every_backoff_ends_failed(
         fake_discord.state.fail_next(500)
 
         async with httpx2.AsyncClient() as http:
+            on_call = SqliteOnCallPeople(databases)
             channels = default_channels(settings, http)
-            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
             job = RetryJob(databases, notifier, clock)
 
             person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            stored = await on_call.replace("prj_1", [person])
+            person = stored[0]
             msg = Message(title="Alert", severity="high")
 
             res = await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_1")
@@ -367,9 +374,12 @@ async def test_retrying_row_resumed_after_restart(
         fake_discord.state.fail_next(500)
 
         async with httpx2.AsyncClient() as http:
+            on_call = SqliteOnCallPeople(databases)
             channels = default_channels(settings, http)
-            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
             person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            stored = await on_call.replace("prj_1", [person])
+            person = stored[0]
             msg = Message(title="Alert", severity="high")
             await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_1")
     finally:
@@ -382,9 +392,10 @@ async def test_retrying_row_resumed_after_restart(
         new_events = SqliteEventLog(new_databases)
 
         async with httpx2.AsyncClient() as http:
+            new_on_call = SqliteOnCallPeople(new_databases)
             new_channels = default_channels(new_settings, http)
             new_notifier = SqliteNotifier(
-                new_databases, new_settings, new_channels, new_events, clock
+                new_databases, new_settings, new_channels, new_events, clock, on_call=new_on_call
             )
             new_job = RetryJob(new_databases, new_notifier, clock)
 
@@ -424,11 +435,14 @@ async def test_failing_webhook_error_and_event_scrubs_secrets(
             )
 
         async with httpx2.AsyncClient() as http:
+            on_call = SqliteOnCallPeople(databases)
             channels = default_channels(settings, http)
-            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
             job = RetryJob(databases, notifier, clock)
 
             person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            stored = await on_call.replace("prj_1", [person])
+            person = stored[0]
             msg = Message(title="Alert", severity="high")
             await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_1")
 
@@ -687,5 +701,75 @@ async def test_retry_pending_corrupt_message_emits_notification_failed(
             assert len(evts) == 1
             assert evts[0].subject_id == "inc_corrupt"
             assert evts[0].payload["person"] == person.id
+    finally:
+        await databases.dispose()
+
+
+async def test_removed_person_not_recreated_by_retry(
+    tmp_path: Path, fake_discord: RunningFakeDiscord
+) -> None:
+    """A person removed from on-call is not re-created by a retry, and retry fails."""
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    try:
+        keystore = MemoryKeyStore()
+        settings = IntegrationSettings(databases, keystore)
+        events = SqliteEventLog(databases)
+        clock = FakeClock()
+
+        webhook_url = f"{fake_discord.base_url}/api/webhooks/123/token_secret"
+        await settings.set_discord(enabled=True, webhook_url=webhook_url)
+
+        # Fail the first attempt so it enters 'retrying'
+        fake_discord.state.fail_next(500)
+
+        async with httpx2.AsyncClient() as http:
+            on_call = SqliteOnCallPeople(databases)
+            channels = default_channels(settings, http)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
+            job = RetryJob(databases, notifier, clock)
+
+            person = make_person(contacts=[Contact(channel="discord", address="u1")])
+            stored = await on_call.replace("prj_1", [person])
+            person = stored[0]
+
+            msg = Message(title="Alert", severity="high")
+            res = await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_1")
+            assert res == "retrying"
+
+            # Remove person from on-call
+            await on_call.replace("prj_1", [])
+            assert await on_call.list("prj_1") == []
+
+            # Subsequent notify (e.g. escalation re-page) must not re-create the removed person
+            await notifier.notify("prj_1", person, msg, kind="escalation", incident_id="inc_1")
+            assert await on_call.list("prj_1") == []
+
+            # Advance clock and run retry
+            clock.advance(timedelta(seconds=RETRY_BACKOFFS_S[0] + 5))
+            await job.run("prj_1", None)  # type: ignore
+
+            # Retry fails because contact address is not available
+            engine = await databases.project("prj_1")
+            async with engine.connect() as conn:
+                rows = (
+                    (
+                        await conn.execute(
+                            select(notification_log).order_by(notification_log.c.created)
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                people_rows = (await conn.execute(select(on_call_people))).mappings().all()
+            incident_row = next(r for r in rows if r["kind"] == "incident")
+            assert incident_row["status"] == "failed"
+            assert incident_row["attempts"] == 2
+            assert "not available" in str(incident_row["last_error"]).lower()
+
+            # Crucial: verify removed person was NOT re-created in on_call_people
+            assert len(people_rows) == 0
+            assert await on_call.list("prj_1") == []
     finally:
         await databases.dispose()

@@ -485,6 +485,7 @@ expectations = Table(
     Column("last_seen", Text),
     Column("last_signalled_first", Text),
     Column("last_signalled_second", Text),
+    Column("registered_at", Text, nullable=False),
 )
 
 scheduler_jobs = Table(

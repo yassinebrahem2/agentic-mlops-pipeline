@@ -241,7 +241,8 @@ async def test_attach_never_lowers_severity(
     fake_severity.default_severity = "low"
     second = await service.raise_signal(project_id, draft(5), seen_at=now)
 
-    assert second.change == "attached"
+    # No rise, so a quiet attach (task 3).
+    assert second.change == "quiet"
     assert second.incident_id == first.incident_id
     assert second.severity == "high"
     incident = await service.get(project_id, first.incident_id)
