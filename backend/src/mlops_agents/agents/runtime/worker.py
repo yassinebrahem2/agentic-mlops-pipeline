@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
+from typing import Literal
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import MessageView, ToolCallPart, ToolResultPart
@@ -19,9 +20,11 @@ from mlops_agents.events.contract import AuditLog, EventLog
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TurnWorkers"]
+__all__ = ["StopOutcome", "TurnWorkers"]
 
 SessionKey = tuple[str, str]
+# What a Stop found on the session's worker (`TurnWorkers.stop`).
+StopOutcome = Literal["landed", "dropped", "waiting", "no worker"]
 
 
 class TurnWorkers:
@@ -62,6 +65,11 @@ class TurnWorkers:
         # The workers whose turn's end (or wait) is decided and that have not taken another:
         # from there they only finish their loop, and run no turn (#273).
         self._turn_over: set[SessionKey] = set()
+        # The workers in `_turn_over` because their turn went waiting: they only finish their
+        # loop (telling the subscribers and observers), and that turn's resume or Stop follows.
+        self._went_waiting: set[SessionKey] = set()
+        # The waiting turn each resume's worker is about to take, until it takes it or leaves.
+        self._resume_turns: dict[SessionKey, str] = {}
 
     def running(self, key: SessionKey) -> bool:
         worker = self._workers.get(key)
@@ -80,11 +88,22 @@ class TurnWorkers:
         }
 
     def start(
-        self, project_id: str, session_id: str, agent: str, hub: SessionHub, lock: AsyncRLock
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        hub: SessionHub,
+        lock: AsyncRLock,
+        *,
+        stops_first_turn: bool = True,
     ) -> None:
-        """Start the session's worker. The caller holds the session lock and saw none running."""
+        """Start the session's worker. The caller holds the session lock and saw none running.
+        A Stop before its first look goes to the turn it takes, as after the Send that started
+        it; not for a worker that a Stop starts (`stops_first_turn=False`): a second Stop then
+        comes between two turns, and is dropped."""
         key = (project_id, session_id)
-        self._first_look.add(key)
+        if stops_first_turn:
+            self._first_look.add(key)
         self._workers[key] = asyncio.create_task(
             self._loop(project_id, session_id, agent, hub, lock)
         )
@@ -102,25 +121,51 @@ class TurnWorkers:
         The caller holds the session lock and saw none running."""
         key = (project_id, session_id)
         self._first_look.add(key)
+        self._resume_turns[key] = turn_id
         self._workers[key] = asyncio.create_task(
             self._loop(project_id, session_id, agent, hub, lock, resume_turn_id=turn_id)
         )
 
-    def stop(self, key: SessionKey) -> None:
-        """Stop the turn of a running worker: the one it is on, or, before its first look, the
-        one it is about to take. A turn stopped before its task exists ends stopped without
-        running. With no worker running, or between two turns, there is nothing to stop."""
+    def turn_of(self, key: SessionKey) -> str | None:
+        """The turn the session's worker is on or, before its first look, about to resume."""
+        current = self._current_turns.get(key)
+        if current is not None:
+            return current
+        return self._resume_turns.get(key) if key in self._first_look else None
+
+    def stop(self, key: SessionKey, turn_id: str | None = None) -> StopOutcome:
+        """Classify the session's worker for a Stop, and stop its turn when the Stop lands; given
+        `turn_id`, only that turn. In one call, with no await, in this order:
+        - no worker running: "no worker";
+        - its turn went waiting, and it only finishes its loop: "waiting", and nothing is
+          cancelled (cancelling the turn task while it reports its wait would orphan its
+          checkpoint); the caller stops the waiting turn once the worker is gone;
+        - its turn's end is decided, or it is between two turns: "dropped" (stage 1 rule);
+        - `turn_id` given and not `turn_of(key)`: "dropped", the worker is left alone;
+        - it is on a turn: that turn is stopped (a turn stopped before its task exists ends
+          stopped without running): "landed";
+        - before its first look: the Stop goes to the turn it takes: "landed";
+        - otherwise (a worker that a Stop started, or one going on to the queue after a lost
+          take, before it takes a turn): between two turns, "dropped"."""
         if not self.running(key):
-            return
-        turn_id = self._current_turns.get(key)
-        if turn_id is None:
-            if key in self._first_look:
-                self._stop_next.add(key)
-            return
-        self._stopped_turns.add(turn_id)
-        child = self._child_tasks.get(key)
-        if child is not None and not child.done():
-            child.cancel()
+            return "no worker"
+        if key in self._went_waiting:
+            return "waiting"
+        if key in self._turn_over:
+            return "dropped"
+        if turn_id is not None and self.turn_of(key) != turn_id:
+            return "dropped"
+        current = self._current_turns.get(key)
+        if current is not None:
+            self._stopped_turns.add(current)
+            child = self._child_tasks.get(key)
+            if child is not None and not child.done():
+                child.cancel()
+            return "landed"
+        if key in self._first_look:
+            self._stop_next.add(key)
+            return "landed"
+        return "dropped"
 
     def projects(self) -> set[str]:
         """The projects with a worker or a turn task."""
@@ -147,7 +192,9 @@ class TurnWorkers:
             self._workers.pop(k, None)
             self._child_tasks.pop(k, None)
             self._current_turns.pop(k, None)
+            self._resume_turns.pop(k, None)
         self._turn_over = {k for k in self._turn_over if project_id not in (None, k[0])}
+        self._went_waiting = {k for k in self._went_waiting if project_id not in (None, k[0])}
         self._first_look = {k for k in self._first_look if project_id not in (None, k[0])}
         self._stop_next = {k for k in self._stop_next if project_id not in (None, k[0])}
         if project_id is None:
@@ -180,6 +227,15 @@ class TurnWorkers:
                         )
                     else:
                         next_turn = await self._store.next_queued_turn(project_id, session_id)
+                    if next_turn is None and resuming is not None and self._is_registered(key):
+                        # The take lost (the turn was stored stopped first): a Stop meant for
+                        # that turn is dropped with it, and the worker goes on to the queued
+                        # turns, which a Send that saw it running left to it.
+                        self._first_look.discard(key)
+                        self._stop_next.discard(key)
+                        self._resume_turns.pop(key, None)
+                        resuming = None
+                        continue
                     if next_turn is None:
                         # Under the lock, so a send from here on starts a new worker.
                         self._leave(key)
@@ -187,9 +243,11 @@ class TurnWorkers:
                     # Taking the turn and claiming an early Stop happen with no await between
                     # them, so a Stop lands either here or on the turn itself.
                     self._first_look.discard(key)
+                    self._resume_turns.pop(key, None)
                     turn_id, trigger_msg_id = next_turn
                     self._current_turns[key] = turn_id
                     self._turn_over.discard(key)
+                    self._went_waiting.discard(key)
                     if key in self._stop_next:
                         self._stop_next.discard(key)
                         self._stopped_turns.add(turn_id)
@@ -210,15 +268,25 @@ class TurnWorkers:
             self._leave(key)
 
     def _leave(self, key: SessionKey) -> None:
-        """Drop the session's worker state, only while the session's worker is this one: a
-        resume's worker whose take lost to a Stop may have been replaced by the worker that Stop
-        started for a queued turn, whose state is not this worker's to drop (#445)."""
-        if self._workers.get(key) is not asyncio.current_task():
+        """Drop the session's worker state, only while the session's worker is this one: once a
+        worker is forgotten (a close) its session's state may already be another worker's."""
+        if not self._is_registered(key):
             return
         self._first_look.discard(key)
         self._stop_next.discard(key)
         self._turn_over.discard(key)
+        self._went_waiting.discard(key)
+        self._resume_turns.pop(key, None)
         self._workers.pop(key, None)
+
+    def _is_registered(self, key: SessionKey) -> bool:
+        """Whether the calling task is the session's worker."""
+        return self._workers.get(key) is asyncio.current_task()
+
+    def _went_waiting_now(self, key: SessionKey) -> None:
+        """The turn's wait is stored: the worker no longer runs it, and only finishes its loop."""
+        self._turn_over.add(key)
+        self._went_waiting.add(key)
 
     async def _take_turn(
         self,
@@ -287,7 +355,7 @@ class TurnWorkers:
         if turn_id in self._stopped_turns:
             return _Ending("stopped")
         runner = self._executor.resume if resume else self._executor.run
-        sink: TurnSink = _WaitAwareSink(hub, lambda: self._turn_over.add(key))
+        sink: TurnSink = _WaitAwareSink(hub, lambda: self._went_waiting_now(key))
         child_task = asyncio.create_task(
             runner(project_id, session_id, agent, turn_id, sink, lock=lock)
         )
