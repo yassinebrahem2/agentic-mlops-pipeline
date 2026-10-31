@@ -462,3 +462,35 @@ async def test_notifier_incident_link_and_run_mode(
         ).scalar_one()
     data = json.loads(str(row))
     assert data["link"] is None
+
+
+@pytest.mark.asyncio
+async def test_channel_test_scrubs_secrets_on_non_channel_error(
+    app: FastAPI, client: httpx2.AsyncClient
+) -> None:
+    services = app.state.services
+    secret_webhook = "http://127.0.0.1:9999/webhook/super-secret-token"
+    await client.put(
+        "/api/integrations/discord",
+        json={"enabled": True, "webhook_url": secret_webhook},
+    )
+
+    class FailingChannel:
+        name = "discord"
+
+        async def send(self, target: str, message: Message) -> None:
+            raise RuntimeError(f"Connection error to {secret_webhook}")
+
+    services.notification_channels["discord"] = FailingChannel()
+
+    res = await client.post(
+        "/api/integrations/discord/test",
+        json={"target": "123456789"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is False
+    assert data["detail"] is not None
+    assert "super-secret-token" not in data["detail"]
+    assert secret_webhook not in data["detail"]
+    assert "***" in data["detail"]

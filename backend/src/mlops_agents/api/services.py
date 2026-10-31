@@ -322,6 +322,7 @@ async def build_services(
         channels=notification_channels,
         events=events,
         clock=clock,
+        on_call=on_call,
     )
     hooks = HooksService(
         databases=databases,
@@ -598,6 +599,7 @@ async def build_services(
         events=events,
         clock=clock,
         run_mode=settings.mode,
+        on_call=on_call,
     )
     notifier.bind_incidents(incidents)
     retry_notifications_job = RetryJob(databases, notifier, clock)

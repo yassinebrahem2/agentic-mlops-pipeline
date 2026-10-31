@@ -879,3 +879,156 @@ async def test_failure_while_delivering_channel_failure_incident_raises_nothing_
             assert len(page_after.rows) == 1  # No new incident opened!
     finally:
         await databases.dispose()
+
+
+async def test_escalation_does_not_stop_when_paged_person_removed_from_on_call(
+    tmp_path: Path, fake_discord: RunningFakeDiscord
+) -> None:
+    """Escalation continues when a previously paged person is removed from on-call."""
+    env = await setup_test_env(tmp_path, fake_discord)
+    databases = env["databases"]
+    settings = env["settings"]
+    events = env["events"]
+    clock = env["clock"]
+    incidents = env["incidents"]
+    on_call = env["on_call"]
+
+    try:
+        async with httpx2.AsyncClient() as http:
+            channels = default_channels(settings, http)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock, on_call=on_call)
+            notifier.bind_incidents(incidents)
+
+            escalation_job = EscalationJob(
+                databases=databases,
+                incidents=incidents,
+                on_call=on_call,
+                notifier=notifier,
+                clock=clock,
+            )
+
+            # Seed person A and person D on call
+            person_a = OnCall(
+                name="Person A",
+                contacts=[Contact(channel="discord", address="u_a")],
+                hours=OnCallHours(
+                    days=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                    start="00:00",
+                    end="23:59",
+                ),
+                timezone="UTC",
+                escalation_order=1,
+            )
+            person_d = OnCall(
+                name="Person D",
+                contacts=[Contact(channel="discord", address="u_d")],
+                hours=OnCallHours(
+                    days=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                    start="00:00",
+                    end="23:59",
+                ),
+                timezone="UTC",
+                escalation_order=2,
+            )
+            stored_ad = await on_call.replace("prj_1", [person_a, person_d])
+            alice = stored_ad[0]
+
+            # Raise critical incident
+            outcome = await incidents.raise_signal(
+                "prj_1",
+                SignalDraft(
+                    kind="fired_result",
+                    category="data_quality",
+                    subject="null_check",
+                    model=None,
+                    ran_at=clock.now(),
+                    detail={"issue": "critical nulls"},
+                ),
+                seen_at=clock.now(),
+            )
+            incident_id = outcome.incident_id
+            assert incident_id is not None
+
+            # Step 0: Notify Person A
+            step0_msg = Message(
+                title="Critical Alert",
+                severity="critical",
+                lines=["Data quality failure"],
+            )
+            await notifier.notify(
+                "prj_1",
+                alice,
+                step0_msg,
+                kind="incident",
+                incident_id=incident_id,
+            )
+
+            # Advance 15m and escalate to Person D
+            clock.advance(timedelta(minutes=15))
+            dues = await escalation_job.due(
+                "prj_1", clock.now() - timedelta(minutes=15), clock.now()
+            )
+            assert len(dues) == 1
+            await escalation_job.run("prj_1", dues[0])
+
+            # Now sent_person_ids has 2 people: Alice and David.
+            # Remove Person A and Person D, replace with Person B and Person C (len(people) == 2)
+            person_b = OnCall(
+                name="Person B",
+                contacts=[Contact(channel="discord", address="u_b")],
+                hours=OnCallHours(
+                    days=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                    start="00:00",
+                    end="23:59",
+                ),
+                timezone="UTC",
+                escalation_order=1,
+            )
+            person_c = OnCall(
+                name="Person C",
+                contacts=[Contact(channel="discord", address="u_c")],
+                hours=OnCallHours(
+                    days=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                    start="00:00",
+                    end="23:59",
+                ),
+                timezone="UTC",
+                escalation_order=2,
+            )
+            stored_bc = await on_call.replace("prj_1", [person_b, person_c])
+            bob = stored_bc[0]
+            assert len(await on_call.list("prj_1")) == 2
+
+            # Advance clock past escalation timeout (15m)
+            clock.advance(timedelta(minutes=15))
+
+            # Old code: len(sent_person_ids) >= len(people) -> 2 >= 2 -> returned []!
+            # New code: next((p for p in people if p.id not in sent_person_ids), None) -> Bob -> returns JobDue!
+            dues = await escalation_job.due(
+                "prj_1", clock.now() - timedelta(minutes=15), clock.now()
+            )
+            assert len(dues) == 1
+            assert dues[0].subject == incident_id
+
+            # Run escalation: pages Person B
+            await escalation_job.run("prj_1", dues[0])
+
+            engine = await databases.project("prj_1")
+            async with engine.connect() as conn:
+                rows = (
+                    (
+                        await conn.execute(
+                            select(notification_log)
+                            .where(notification_log.c.incident == incident_id)
+                            .order_by(notification_log.c.created.asc(), notification_log.c.id.asc())
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+            # 3 notifications sent: alice (incident), david (escalation), bob (escalation)
+            assert len(rows) == 3
+            assert rows[2]["person"] == bob.id
+            assert rows[2]["kind"] == "escalation"
+    finally:
+        await databases.dispose()

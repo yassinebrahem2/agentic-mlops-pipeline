@@ -101,10 +101,6 @@ class EscalationJob(ScheduledJob):
                 continue
 
             sent_person_ids = {r.person for r in rows}
-            if len(sent_person_ids) >= len(people):
-                # Past last person, nothing more to send
-                continue
-
             next_person = next((p for p in people if p.id not in sent_person_ids), None)
             if next_person is None:
                 continue

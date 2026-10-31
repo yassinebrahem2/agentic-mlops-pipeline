@@ -516,10 +516,31 @@ async def test_re_run_same_due_sends_nothing(
     await job.run(project_id, job_due)
     assert len(fake_discord.state.posts) == 1
 
-    # Second run with identical due
+    # Introduce new qualifying activity after first run so a report body built now would be non-empty
+    clock.advance(timedelta(minutes=1))
+    draft2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="schema_check_2",
+        ran_at=clock.now(),
+        detail={"error": "table missing"},
+    )
+    await incidents.raise_signal(project_id, draft2, seen_at=clock.now())
+
+    # Second run with identical due (guarded by latest_created >= job_due_utc)
     await job.run(project_id, job_due)
     # Still 1 message, no second send
     assert len(fake_discord.state.posts) == 1
+
+    # Exactly 1 report row exists in notification_log
+    engine = await env["databases"].project(project_id)
+    async with engine.connect() as conn:
+        stmt = select(notification_log).where(
+            notification_log.c.person == bob.id,
+            notification_log.c.kind == "report",
+        )
+        rows = (await conn.execute(stmt)).all()
+    assert len(rows) == 1
 
 
 @pytest.mark.asyncio

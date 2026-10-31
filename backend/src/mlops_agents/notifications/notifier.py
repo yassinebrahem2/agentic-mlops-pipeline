@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from ulid import ULID
 
 from mlops_agents.config import RunMode
@@ -25,14 +23,15 @@ from mlops_agents.notifications.contract import (
     Message,
     NotificationKind,
     Notifier,
+    OnCallPeople,
     OnCallPerson,
 )
 from mlops_agents.notifications.links import incident_link
+from mlops_agents.notifications.on_call import SqliteOnCallPeople
 from mlops_agents.notifications.settings import IntegrationSettings
-from mlops_agents.proposals.payloads import Contact
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import notification_log, on_call_people
+from mlops_agents.storage.tables import notification_log
 
 
 class SqliteNotifier(Notifier):
@@ -46,6 +45,7 @@ class SqliteNotifier(Notifier):
         events: EventLog,
         clock: Clock,
         run_mode: RunMode = RunMode.LOCAL,
+        on_call: OnCallPeople | None = None,
     ) -> None:
         self._databases = databases
         self._settings = settings
@@ -57,6 +57,9 @@ class SqliteNotifier(Notifier):
         self._clock = clock
         self._run_mode = run_mode
         self._incidents: Incidents | None = None
+        self._on_call: OnCallPeople = (
+            on_call if on_call is not None else SqliteOnCallPeople(databases)
+        )
 
     def bind_incidents(self, incidents: Incidents) -> None:
         """Bind incidents service for channel failure signals (task 4)."""
@@ -130,54 +133,15 @@ class SqliteNotifier(Notifier):
             return "report.sent"
         return "notification.sent"
 
-    async def _save_person_contacts(self, project_id: str, person: OnCallPerson) -> None:
-        """Saves or updates person in on_call_people so retries can resolve contact addresses."""
-        engine = await self._databases.project(project_id)
-        contacts_json = json.dumps([c.model_dump() for c in person.contacts])
-        hours_json = json.dumps(person.hours.model_dump())
-        async with engine.begin() as conn:
-            stmt = (
-                sqlite_insert(on_call_people)
-                .values(
-                    id=person.id,
-                    name=person.name,
-                    contacts=contacts_json,
-                    hours=hours_json,
-                    timezone=person.timezone,
-                    escalation_order=person.escalation_order,
-                )
-                .on_conflict_do_update(
-                    index_elements=[on_call_people.c.id],
-                    set_={
-                        "name": person.name,
-                        "contacts": contacts_json,
-                        "hours": hours_json,
-                        "timezone": person.timezone,
-                        "escalation_order": person.escalation_order,
-                    },
-                )
-            )
-            await conn.execute(stmt)
-
     async def _get_contact_address(
         self, project_id: str, person_id: str, channel_name: str
     ) -> str | None:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            raw = await conn.scalar(
-                select(on_call_people.c.contacts).where(on_call_people.c.id == person_id)
-            )
-        if not raw:
+        people = await self._on_call.list(project_id)
+        person = next((p for p in people if p.id == person_id), None)
+        if person is None:
             return None
-        try:
-            contacts_data = json.loads(str(raw))
-            for item in contacts_data:
-                c = Contact.model_validate(item)
-                if c.channel == channel_name:
-                    return c.address
-        except Exception:
-            return None
-        return None
+        contact = next((c for c in person.contacts if c.channel == channel_name), None)
+        return contact.address if contact is not None else None
 
     async def notify(
         self,
@@ -188,7 +152,6 @@ class SqliteNotifier(Notifier):
         kind: NotificationKind,
         incident_id: str | None,
     ) -> Literal["sent", "retrying", "failed"]:
-        await self._save_person_contacts(project_id, person)
 
         now = self._clock.now()
         if now.tzinfo is None:
