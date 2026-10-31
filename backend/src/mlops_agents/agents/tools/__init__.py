@@ -15,6 +15,7 @@ from mlops_agents.agents.tools.issues import (
     SearchIssuesTool,
 )
 from mlops_agents.agents.tools.list_agents import ListAgentsTool
+from mlops_agents.agents.tools.merge import MergePullRequest, MergePullRequestTool
 from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
@@ -35,13 +36,14 @@ if TYPE_CHECKING:
     from mlops_agents.agents.catalog import AgentCatalog
     from mlops_agents.agents.messaging.bus import SqliteMessageBus
     from mlops_agents.agents.messaging.wakeups import WakeupService
+    from mlops_agents.agents.pr_sync import PrSyncObserver
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
     from mlops_agents.monitoring.hooks.contract import Hooks
     from mlops_agents.monitoring.incidents.contract import Incidents
-    from mlops_agents.promotion.contract import Reports
+    from mlops_agents.promotion.contract import ProtectionSurfaces, Reports
     from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.proposals.kinds import ProposalKinds
     from mlops_agents.proposals.service import ProposalsService
@@ -60,6 +62,8 @@ __all__ = [
     "GrepTool",
     "HoldTool",
     "ListAgentsTool",
+    "MergePullRequest",
+    "MergePullRequestTool",
     "OpenIssueTool",
     "OpenPullRequestTool",
     "ProposeTool",
@@ -109,6 +113,8 @@ def default_registry(
     hooks: Hooks | None = None,
     incidents: Incidents | None = None,
     fixes: SqliteFixes | None = None,
+    surfaces: ProtectionSurfaces | None = None,
+    pr_sync: PrSyncObserver | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -155,6 +161,15 @@ def default_registry(
                 CommentOnIssueTool(tasks, github, events, http),
             ]
         )
+    if (
+        tasks is not None
+        and github is not None
+        and http is not None
+        and events is not None
+        and surfaces is not None
+        and pr_sync is not None
+    ):
+        tools.append(MergePullRequestTool(tasks, github, http, events, surfaces, pr_sync))
     registry = _DefaultToolRegistry(tools)
     if bus is not None:
         # Imported here: the bus reaches this package through the session contract, so a
