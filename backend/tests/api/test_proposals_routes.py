@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx2
@@ -28,6 +29,7 @@ from mlops_agents.proposals.payloads import ConnectionsPayload
 from mlops_agents.storage.tables import events as events_table
 from mlops_agents.storage.tables import proposals as proposals_table
 from tests.api.conftest import add_local_project
+from tests.fakes.proposal_kinds import swapped_kind
 from tests.proposals.samples import connection, handoff
 
 
@@ -69,7 +71,7 @@ class RouteTestKind:
 class MovingRouteTestKind(RouteTestKind):
     def __init__(self, secrets: ProjectSecrets) -> None:
         super().__init__()
-        self.name = "moving_kind"
+        self.name = CONNECTIONS_KIND
         self._secrets = secrets
 
     async def apply(self, project_id: str, proposal_id: str, payload: BaseModel) -> ApplyResult:
@@ -92,59 +94,57 @@ async def test_slot_route_writes_keystore_and_masks_value(
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
     kind = RouteTestKind()
-    with contextlib.suppress(ValueError):
-        services.proposal_kinds.register(kind)
-
-    view = await services.proposals.create(
-        project_id,
-        agent="architect",
-        kind=kind.name,
-        key="key1",
-        payload={"connections": [connection()]},
-        turn_id="trn_1",
-        tool_call_id="call_1",
-    )
-
-    secret_val = "super-secret-token-12345"
-    with caplog.at_level(logging.DEBUG):
-        resp = await client.put(
-            f"/api/projects/{project_id}/proposals/{view.id}/credentials/0",
-            json={"value": secret_val},
+    with swapped_kind(services.proposal_kinds, kind):
+        view = await services.proposals.create(
+            project_id,
+            agent="architect",
+            kind=kind.name,
+            key="key1",
+            payload={"connections": [connection()]},
+            turn_id="trn_1",
+            tool_call_id="call_1",
         )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["index"] == 0
-    assert data["set"] is True
-    # Secret value is absent from response
-    assert secret_val not in resp.text
-    # Secret value is absent from logs
-    assert secret_val not in caplog.text
 
-    # Secret value is absent from database row
-    engine = await services.databases.project(project_id)
-    async with engine.connect() as conn:
-        row = (
-            (await conn.execute(select(proposals_table).where(proposals_table.c.id == view.id)))
-            .mappings()
-            .one()
-        )
-    assert secret_val not in str(row["payload"])
-    if row["result"] is not None:
-        assert secret_val not in str(row["result"])
+        secret_val = "super-secret-token-12345"
+        with caplog.at_level(logging.DEBUG):
+            resp = await client.put(
+                f"/api/projects/{project_id}/proposals/{view.id}/credentials/0",
+                json={"value": secret_val},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["index"] == 0
+        assert data["set"] is True
+        # Secret value is absent from response
+        assert secret_val not in resp.text
+        # Secret value is absent from logs
+        assert secret_val not in caplog.text
 
-    # Secret value is absent from event history (scanning all event types in database)
-    engine = await services.databases.project(project_id)
-    async with engine.connect() as conn:
-        all_events = (await conn.execute(select(events_table))).mappings().all()
-    assert len(all_events) > 0
-    for ev in all_events:
-        assert secret_val not in str(ev["payload"])
-        assert secret_val not in str(ev)
+        # Secret value is absent from database row
+        engine = await services.databases.project(project_id)
+        async with engine.connect() as conn:
+            row = (
+                (await conn.execute(select(proposals_table).where(proposals_table.c.id == view.id)))
+                .mappings()
+                .one()
+            )
+        assert secret_val not in str(row["payload"])
+        if row["result"] is not None:
+            assert secret_val not in str(row["result"])
 
-    # Keystore received the secret
-    ref_0 = proposal_slot_ref(project_id, view.id, 0)
-    assert await services.project_secrets.is_set(ref_0)
-    assert services.keystore.get(ref_0) == secret_val
+        # Secret value is absent from event history (scanning all event types in database)
+        engine = await services.databases.project(project_id)
+        async with engine.connect() as conn:
+            all_events = (await conn.execute(select(events_table))).mappings().all()
+        assert len(all_events) > 0
+        for ev in all_events:
+            assert secret_val not in str(ev["payload"])
+            assert secret_val not in str(ev)
+
+        # Keystore received the secret
+        ref_0 = proposal_slot_ref(project_id, view.id, 0)
+        assert await services.project_secrets.is_set(ref_0)
+        assert services.keystore.get(ref_0) == secret_val
 
 
 @pytest.mark.asyncio
@@ -157,32 +157,30 @@ async def test_slot_route_unknown_proposal_or_slot_is_404(
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
     kind = RouteTestKind()
-    with contextlib.suppress(ValueError):
-        services.proposal_kinds.register(kind)
+    with swapped_kind(services.proposal_kinds, kind):
+        view = await services.proposals.create(
+            project_id,
+            agent="architect",
+            kind=kind.name,
+            key="key1",
+            payload={"connections": [connection()]},
+            turn_id="trn_1",
+            tool_call_id="call_1",
+        )
 
-    view = await services.proposals.create(
-        project_id,
-        agent="architect",
-        kind=kind.name,
-        key="key1",
-        payload={"connections": [connection()]},
-        turn_id="trn_1",
-        tool_call_id="call_1",
-    )
+        # Unknown proposal
+        resp = await client.put(
+            f"/api/projects/{project_id}/proposals/nonexistent/credentials/0",
+            json={"value": "foo"},
+        )
+        assert resp.status_code == 404
 
-    # Unknown proposal
-    resp = await client.put(
-        f"/api/projects/{project_id}/proposals/nonexistent/credentials/0",
-        json={"value": "foo"},
-    )
-    assert resp.status_code == 404
-
-    # Unknown slot
-    resp2 = await client.put(
-        f"/api/projects/{project_id}/proposals/{view.id}/credentials/99",
-        json={"value": "foo"},
-    )
-    assert resp2.status_code == 404
+        # Unknown slot
+        resp2 = await client.put(
+            f"/api/projects/{project_id}/proposals/{view.id}/credentials/99",
+            json={"value": "foo"},
+        )
+        assert resp2.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -197,69 +195,67 @@ async def test_slot_route_non_pending_is_409(
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
     kind = RouteTestKind()
-    with contextlib.suppress(ValueError):
-        services.proposal_kinds.register(kind)
-
-    view = await services.proposals.create(
-        project_id,
-        agent="architect",
-        kind=kind.name,
-        key="key1",
-        payload={"connections": [connection()]},
-        turn_id="trn_1",
-        tool_call_id="call_1",
-    )
-
-    if status_name == "rejected":
-        await services.proposals.decide(project_id, view.id, approved=False)
-    elif status_name == "approved":
-        await services.proposals.decide(project_id, view.id, approved=True)
-    elif status_name == "superseded":
-        await services.proposals.attach(project_id, view.id, "apr_1")
-        v2 = await services.proposals.create(
+    with swapped_kind(services.proposal_kinds, kind):
+        view = await services.proposals.create(
             project_id,
             agent="architect",
             kind=kind.name,
             key="key1",
             payload={"connections": [connection()]},
-            turn_id="trn_2",
-            tool_call_id="call_2",
+            turn_id="trn_1",
+            tool_call_id="call_1",
         )
-        await services.proposals.attach(project_id, v2.id, "apr_2")
 
-    resp = await client.put(
-        f"/api/projects/{project_id}/proposals/{view.id}/credentials/0",
-        json={"value": "foo"},
-    )
-    assert resp.status_code == 409
-    assert resp.json()["code"] == "proposal_not_pending"
+        if status_name == "rejected":
+            await services.proposals.decide(project_id, view.id, approved=False)
+        elif status_name == "approved":
+            await services.proposals.decide(project_id, view.id, approved=True)
+        elif status_name == "superseded":
+            await services.proposals.attach(project_id, view.id, "apr_1")
+            v2 = await services.proposals.create(
+                project_id,
+                agent="architect",
+                kind=kind.name,
+                key="key1",
+                payload={"connections": [connection()]},
+                turn_id="trn_2",
+                tool_call_id="call_2",
+            )
+            await services.proposals.attach(project_id, v2.id, "apr_2")
 
-    # Assert keystore and is_set stay empty
-    ref_0 = proposal_slot_ref(project_id, view.id, 0)
-    assert not await services.project_secrets.is_set(ref_0)
-    assert services.keystore.get(ref_0) is None
+        resp = await client.put(
+            f"/api/projects/{project_id}/proposals/{view.id}/credentials/0",
+            json={"value": "foo"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["code"] == "proposal_not_pending"
+
+        # Assert keystore and is_set stay empty
+        ref_0 = proposal_slot_ref(project_id, view.id, 0)
+        assert not await services.project_secrets.is_set(ref_0)
+        assert services.keystore.get(ref_0) is None
 
 
+@asynccontextmanager
 async def _race_setup(
     app: FastAPI, tmp_path: Path, git_env: dict[str, str], moves_slot: bool
-) -> tuple[str, RouteTestKind, str]:
+) -> AsyncGenerator[tuple[str, RouteTestKind, str]]:
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
     kind: RouteTestKind = (
         MovingRouteTestKind(services.project_secrets) if moves_slot else RouteTestKind()
     )
-    with contextlib.suppress(ValueError):
-        services.proposal_kinds.register(kind)
-    view = await services.proposals.create(
-        project_id,
-        agent="architect",
-        kind=kind.name,
-        key="race_key",
-        payload={"connections": [connection()]},
-        turn_id="trn_race",
-        tool_call_id="call_race",
-    )
-    return project_id, kind, view.id
+    with swapped_kind(services.proposal_kinds, kind):
+        view = await services.proposals.create(
+            project_id,
+            agent="architect",
+            kind=kind.name,
+            key="race_key",
+            payload={"connections": [connection()]},
+            turn_id="trn_race",
+            tool_call_id="call_race",
+        )
+        yield project_id, kind, view.id
 
 
 @pytest.mark.asyncio
@@ -271,42 +267,42 @@ async def test_slot_put_in_flight_before_apply_is_moved_or_swept(
     git_env: dict[str, str],
     moves_slot: bool,
 ) -> None:
-    project_id, kind, proposal_id = await _race_setup(app, tmp_path, git_env, moves_slot)
-    secrets = app.state.services.project_secrets
-    src = proposal_slot_ref(project_id, proposal_id, 0)
-    dst = f"project/{project_id}/moved_permanent"
-    secret_val = "race_secret_value"
-    in_put = asyncio.Event()
-    finish_put = asyncio.Event()
-    real_put = secrets.put
+    async with _race_setup(app, tmp_path, git_env, moves_slot) as (project_id, kind, proposal_id):
+        secrets = app.state.services.project_secrets
+        src = proposal_slot_ref(project_id, proposal_id, 0)
+        dst = f"project/{project_id}/moved_permanent"
+        secret_val = "race_secret_value"
+        in_put = asyncio.Event()
+        finish_put = asyncio.Event()
+        real_put = secrets.put
 
-    async def slow_put(ref: str, value: str) -> None:
-        in_put.set()
-        await finish_put.wait()
-        await real_put(ref, value)
+        async def slow_put(ref: str, value: str) -> None:
+            in_put.set()
+            await finish_put.wait()
+            await real_put(ref, value)
 
-    secrets.put = slow_put  # the PUT is mid-write when decide starts
+        secrets.put = slow_put  # the PUT is mid-write when decide starts
 
-    put = asyncio.create_task(
-        client.put(
-            f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
-            json={"value": secret_val},
+        put = asyncio.create_task(
+            client.put(
+                f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
+                json={"value": secret_val},
+            )
         )
-    )
-    await in_put.wait()
-    decide = asyncio.create_task(
-        app.state.services.proposals.decide(project_id, proposal_id, approved=True)
-    )
-    await asyncio.sleep(0.05)
-    assert not kind.entered.is_set()  # decide waits for the PUT's lock
-    finish_put.set()
-    put_resp = await put
-    await decide
+        await in_put.wait()
+        decide = asyncio.create_task(
+            app.state.services.proposals.decide(project_id, proposal_id, approved=True)
+        )
+        await asyncio.sleep(0.05)
+        assert not kind.entered.is_set()  # decide waits for the PUT's lock
+        finish_put.set()
+        put_resp = await put
+        await decide
 
-    assert put_resp.status_code == 200
-    assert secret_val not in put_resp.text
-    assert app.state.services.keystore.get(src) is None
-    assert app.state.services.keystore.get(dst) == (secret_val if moves_slot else None)
+        assert put_resp.status_code == 200
+        assert secret_val not in put_resp.text
+        assert app.state.services.keystore.get(src) is None
+        assert app.state.services.keystore.get(dst) == (secret_val if moves_slot else None)
 
 
 @pytest.mark.asyncio
@@ -318,34 +314,34 @@ async def test_slot_put_during_apply_waits_and_gets_409(
     git_env: dict[str, str],
     moves_slot: bool,
 ) -> None:
-    project_id, kind, proposal_id = await _race_setup(app, tmp_path, git_env, moves_slot)
-    src = proposal_slot_ref(project_id, proposal_id, 0)
-    dst = f"project/{project_id}/moved_permanent"
-    kind.gated = True
+    async with _race_setup(app, tmp_path, git_env, moves_slot) as (project_id, kind, proposal_id):
+        src = proposal_slot_ref(project_id, proposal_id, 0)
+        dst = f"project/{project_id}/moved_permanent"
+        kind.gated = True
 
-    decide = asyncio.create_task(
-        app.state.services.proposals.decide(project_id, proposal_id, approved=True)
-    )
-    await kind.entered.wait()
-    # The PUT-first test above proves that PUT locks out decide until write completes.
-    # Here, decide is in apply and holds the project proposals lock:
-    assert app.state.services.proposals._lock_for(project_id).locked()
-    put = asyncio.create_task(
-        client.put(
-            f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
-            json={"value": "late_secret"},
+        decide = asyncio.create_task(
+            app.state.services.proposals.decide(project_id, proposal_id, approved=True)
         )
-    )
-    await asyncio.sleep(0.05)
-    assert not put.done()  # the lock holds the PUT back while apply runs
-    kind.release.set()
-    await decide
-    put_resp = await put
+        await kind.entered.wait()
+        # The PUT-first test above proves that PUT locks out decide until write completes.
+        # Here, decide is in apply and holds the project proposals lock:
+        assert app.state.services.proposals._lock_for(project_id).locked()
+        put = asyncio.create_task(
+            client.put(
+                f"/api/projects/{project_id}/proposals/{proposal_id}/credentials/0",
+                json={"value": "late_secret"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not put.done()  # the lock holds the PUT back while apply runs
+        kind.release.set()
+        await decide
+        put_resp = await put
 
-    assert put_resp.status_code == 409
-    assert put_resp.json()["code"] == "proposal_not_pending"
-    assert app.state.services.keystore.get(src) is None
-    assert app.state.services.keystore.get(dst) is None
+        assert put_resp.status_code == 409
+        assert put_resp.json()["code"] == "proposal_not_pending"
+        assert app.state.services.keystore.get(src) is None
+        assert app.state.services.keystore.get(dst) is None
 
 
 @pytest.mark.asyncio
@@ -358,32 +354,32 @@ async def test_by_approval_route(
     project_id = await add_local_project(app, tmp_path, git_env)
     services = app.state.services
     kind = RouteTestKind()
-    with contextlib.suppress(ValueError):
-        services.proposal_kinds.register(kind)
+    with swapped_kind(services.proposal_kinds, kind):
+        # 404 for unknown approval
+        resp_none = await client.get(
+            f"/api/projects/{project_id}/proposals/by-approval/apr_unknown"
+        )
+        assert resp_none.status_code == 404
 
-    # 404 for unknown approval
-    resp_none = await client.get(f"/api/projects/{project_id}/proposals/by-approval/apr_unknown")
-    assert resp_none.status_code == 404
+        view = await services.proposals.create(
+            project_id,
+            agent="architect",
+            kind=kind.name,
+            key="key1",
+            payload={"connections": [connection()]},
+            turn_id="trn_1",
+            tool_call_id="call_1",
+        )
+        await services.proposals.attach(project_id, view.id, "apr_known")
 
-    view = await services.proposals.create(
-        project_id,
-        agent="architect",
-        kind=kind.name,
-        key="key1",
-        payload={"connections": [connection()]},
-        turn_id="trn_1",
-        tool_call_id="call_1",
-    )
-    await services.proposals.attach(project_id, view.id, "apr_known")
-
-    resp = await client.get(f"/api/projects/{project_id}/proposals/by-approval/apr_known")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["id"] == view.id
-    assert data["status"] == "pending"
-    assert "slots" in data
-    assert len(data["slots"]) == 2
-    assert data["warnings"] == ["Route warning"]
+        resp = await client.get(f"/api/projects/{project_id}/proposals/by-approval/apr_known")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == view.id
+        assert data["status"] == "pending"
+        assert "slots" in data
+        assert len(data["slots"]) == 2
+        assert data["warnings"] == ["Route warning"]
 
 
 @pytest.mark.asyncio

@@ -32,8 +32,11 @@ class ScriptedTestKind:
         name: str = "connections",
         slots: list[CredentialSlot] | None = None,
         warnings_list: list[str] | None = None,
+        payload_model: type[BaseModel] | None = None,
     ) -> None:
         self.name = name
+        if payload_model is not None:
+            self.payload_model = payload_model
         self._slots = (
             slots
             if slots is not None

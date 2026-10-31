@@ -40,6 +40,25 @@ class RuleSpec(BaseModel):
     limits: RuleLimits
 
 
+def validate_rule_spec(spec: RuleSpec) -> None:
+    """Validate rule specification terms and limits."""
+    if not spec.terms:
+        raise ValueError("Rule spec terms cannot be empty; at least one term is required.")
+    for i, term in enumerate(spec.terms):
+        if term.min_records < 1:
+            raise ValueError(f"Term {i} min_records must be at least 1 (got {term.min_records}).")
+        if term.window_minutes < 1:
+            raise ValueError(
+                f"Term {i} window_minutes must be at least 1 (got {term.window_minutes})."
+            )
+    if spec.limits.per_incident < 1:
+        raise ValueError(
+            f"Rule limits per_incident must be at least 1 (got {spec.limits.per_incident})."
+        )
+    if spec.limits.per_day < 1:
+        raise ValueError(f"Rule limits per_day must be at least 1 (got {spec.limits.per_day}).")
+
+
 class RuleView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +67,12 @@ class RuleView(BaseModel):
     enabled: bool
     proposal_id: str
     approved: datetime
+
+
+class RulePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    spec: RuleSpec
 
 
 class Rules(Protocol):

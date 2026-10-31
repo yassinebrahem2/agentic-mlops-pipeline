@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FIXTURE_DIR } from "./env";
 
 // Plain words only: the agent's answer quotes this line and the page renders it as markdown.
 export const README_FIRST_LINE = "This sample project counts the words in a text file";
@@ -60,4 +61,41 @@ export function createTestRepo(): TestRepo {
   }
 
   return { path, remove };
+}
+
+// The tables the scripted fake-onboarding model (backend/tests/fakes/onboarding_script.py) names
+// in its handoff; the backend tests write the same tables with write_data_folder.
+export const DATA_TABLES = ["bookings_e2e", "predictions_e2e", "labels_e2e"] as const;
+
+const IDS = ["B001", "B002", "B003", "B004", "B005", "B006", "B007"];
+const COUNTRIES = ["PRT", "GBR", "FRA", "ESP", "DEU", "PRT", "GBR"];
+
+function csv(header: string, row: (id: string, n: number) => string): string {
+  return [header, ...IDS.map((id, n) => row(id, n))].join("\n") + "\n";
+}
+
+/**
+ * A team's data folder in a new folder inside the run's fixture folder (removed by e2e/run.mjs):
+ * three tables of a header and 7 rows each (predictions and labels share their ID column) and
+ * one unsupported file.
+ */
+export function createDataFolder(): string {
+  const path = mkdtempSync(join(FIXTURE_DIR, "hotel-"));
+  const day = (n: number) => `2026-10-${String(n + 1).padStart(2, "0")}`;
+  const files: Record<(typeof DATA_TABLES)[number], string> = {
+    bookings_e2e: csv(
+      "booking_id,arrival_date,country,lead_time,canceled",
+      (id, n) => `${id},${day(n)},${COUNTRIES[n] ?? ""},${String(10 * (n + 1))},${String(n % 2)}`,
+    ),
+    predictions_e2e: csv(
+      "booking_id,scored_at,score",
+      (id, n) => `${id},${day(n)}T06:00:00,0.${String(n + 2)}`,
+    ),
+    labels_e2e: csv("booking_id,canceled", (id, n) => `${id},${String(n % 2)}`),
+  };
+  for (const table of DATA_TABLES) {
+    writeFileSync(join(path, `${table}.csv`), files[table]);
+  }
+  writeFileSync(join(path, "notes.txt"), "Exported every morning at 06:00.\n");
+  return path;
 }

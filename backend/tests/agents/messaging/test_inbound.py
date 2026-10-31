@@ -19,7 +19,7 @@ from mlops_agents.agents.messaging.bus import SqliteMessageBus
 from mlops_agents.agents.messaging.inbound import SqliteInboundSource
 from mlops_agents.agents.messaging.settings import MessagingSettings
 from mlops_agents.agents.runtime.contract import StreamEvent, TurnEnded, TurnWaiting
-from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
+from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.tools import default_registry
@@ -33,7 +33,7 @@ from tests.agents.runtime.session_env import (
     build_session_env,
     collect_until_turn_ended,
 )
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 NO_TURN = "trn_none"
@@ -118,6 +118,7 @@ async def build_inbound_env(
     git_env: dict[str, str],
     *,
     gate: Gate | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> tuple[BusEnv, SqliteInboundSource]:
     defs = tmp_path / "defs"
     defs.mkdir()
@@ -131,7 +132,11 @@ async def build_inbound_env(
     settings = MessagingSettings(databases)
     bus = SqliteMessageBus(databases, events, settings)
     tools = default_registry(bus=bus)
-    bus.use_catalog(AgentCatalog.load(tools.names() | STAGE_2_TOOLS, extra_dirs=[defs]))
+    bus.use_catalog(
+        AgentCatalog.load(
+            tools.names() | STAGE_2_TOOLS, extra_dirs=[defs], hook_names=STAGE_3_HOOKS
+        )
+    )
 
     inbound = SqliteInboundSource(databases)
 
@@ -148,7 +153,7 @@ async def build_inbound_env(
         bus=bus,
         gate=gate,
         inbound=inbound,
-        observers=[inbound],
+        observers=[inbound, *observers],
     )
     inbound.bind(session.manager)
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Final, Self
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from mlops_agents.agents.tools.base import (
     AgentTool,
@@ -14,9 +15,8 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
-from mlops_agents.errors import DomainError
-from mlops_agents.proposals.contract import CONNECTIONS_KIND, HANDOFF_KIND
-from mlops_agents.proposals.payloads import ConnectionsPayload, HandoffPayload
+from mlops_agents.errors import DomainError, validation_error_message
+from mlops_agents.proposals.contract import ProposalCheck
 
 if TYPE_CHECKING:
     from mlops_agents.proposals.kinds import ProposalKinds
@@ -24,35 +24,26 @@ if TYPE_CHECKING:
 
 PROPOSE_TOOL_NAME: Final = "Propose"
 
-_KIND_PAYLOAD_MODELS: Final[dict[str, type[BaseModel]]] = {
-    CONNECTIONS_KIND: ConnectionsPayload,
-    HANDOFF_KIND: HandoffPayload,
-}
-
 
 class ProposeArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: str
-    payload: ConnectionsPayload | HandoffPayload
-
-    @field_validator("kind")
-    @classmethod
-    def _validate_kind(cls, value: str) -> str:
-        if value not in (CONNECTIONS_KIND, HANDOFF_KIND):
-            raise ValueError(
-                f"kind must be '{CONNECTIONS_KIND}' or '{HANDOFF_KIND}', got '{value}'"
-            )
-        return value
+    payload: Any
 
     @model_validator(mode="after")
-    def _validate_payload(self) -> Self:
-        expected = _KIND_PAYLOAD_MODELS.get(self.kind)
-        if expected is not None and type(self.payload) is not expected:
-            raise ValueError(
-                f"payload for kind '{self.kind}' must be {expected.__name__}, "
-                f"got {type(self.payload).__name__}"
-            )
+    def _parse_known_payload(self) -> Self:
+        from mlops_agents.proposals.payloads import ConnectionsPayload, HandoffPayload
+
+        payload_obj: object = self.payload
+        if isinstance(payload_obj, dict):
+            dict_payload = cast(dict[str, Any], payload_obj)
+            if self.kind == "connections":
+                with suppress(ValidationError):
+                    self.payload = ConnectionsPayload.model_validate(dict_payload)
+            elif self.kind == "handoff":
+                with suppress(ValidationError):
+                    self.payload = HandoffPayload.model_validate(dict_payload)
         return self
 
 
@@ -72,31 +63,60 @@ class ProposeTool(AgentTool[ProposeArgs]):
     async def preview(self, ctx: ToolContext, args: ProposeArgs) -> Preview:
         try:
             kind_obj = self._kinds.get(args.kind)
-            key = kind_obj.key(args.payload)
+        except DomainError as exc:
+            raise ToolFailure(f"Unknown proposal kind: {args.kind}") from exc
+
+        try:
+            payload = (
+                args.payload
+                if isinstance(args.payload, kind_obj.payload_model)
+                else kind_obj.payload_model.model_validate(args.payload)
+            )
+        except ValidationError as exc:
+            raise ToolFailure(
+                f"Invalid payload for {args.kind}: {validation_error_message(exc).text}"
+            ) from exc
+
+        if isinstance(kind_obj, ProposalCheck):
+            refusals = await kind_obj.check(ctx.project_id, payload)
+            if refusals:
+                raise ToolFailure("\n".join(refusals))
+
+        key = kind_obj.key(payload)
+        payload_dump = payload.model_dump()
+        try:
             await self._proposals.create(
                 project_id=ctx.project_id,
                 agent=ctx.agent,
                 kind=args.kind,
                 key=key,
-                payload=args.payload.model_dump(),
+                payload=payload_dump,
                 turn_id=ctx.turn_id,
                 tool_call_id=ctx.tool_call_id,
-            )
-            kind_preview = kind_obj.preview(args.payload)
-            return Preview(
-                kind=kind_preview.kind,
-                title=f"Proposal: {args.kind}",
-                body=kind_preview.body,
             )
         except DomainError as exc:
             raise ToolFailure(str(exc)) from exc
 
+        kind_preview = kind_obj.preview(payload)
+        return Preview(
+            kind=kind_preview.kind,
+            title=f"Proposal: {args.kind}",
+            body=kind_preview.body,
+        )
+
     async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
         proposal = await self._proposals.for_call(ctx.project_id, ctx.turn_id, ctx.tool_call_id)
-        if proposal is None or proposal.result is None:
+        if proposal is None:
             return ToolOutput("Could not read proposal state for this call.", is_error=True)
 
-        result = proposal.result
+        if proposal.result is None:
+            result = await self._proposals.apply_allowed(ctx.project_id, proposal.id)
+        else:
+            result = proposal.result
+
+        if result is None:
+            return ToolOutput("Could not read proposal state for this call.", is_error=True)
+
         if result.failed:
             failed_parts = ", ".join(f"{k}: {v}" for k, v in result.failed.items())
             if result.applied:

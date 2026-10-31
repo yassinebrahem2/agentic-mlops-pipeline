@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
+from mlops_agents.agents.approvals.authority import Authority, AuthorityRegistry
 from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.policy.actions import PROPOSE_BYPASS_OVERRIDES, decide_action
 from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.policy.table import decide as policy_decide
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
@@ -16,6 +19,8 @@ from mlops_agents.agents.runtime.tool_step import REJECTED_TEXT
 from mlops_agents.agents.tools.base import RiskClass
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
+
+logger = logging.getLogger(__name__)
 
 
 def format_rejection_message(note: str | None) -> str:
@@ -63,11 +68,13 @@ class ApprovalGate(Gate):
         store: ApprovalStore,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
+        authorities: AuthorityRegistry | None = None,
     ) -> None:
         self._databases = databases
         self._store = store
         self._audit_log = audit_log
         self._event_log = event_log
+        self._authorities = authorities if authorities is not None else AuthorityRegistry()
 
     async def decide(self, calls: Sequence[GateCall]) -> dict[str, GateDecision]:
         """Never pauses. Evaluates policy for each call, logs audit/events, and creates approval requests."""
@@ -90,7 +97,108 @@ class ApprovalGate(Gate):
 
             level = level_cache[project_id]
             risk = call.tool.risk
-            policy_dec = policy_decide(risk, level)
+
+            action = await call.action()
+            if action is None:
+                if risk == RiskClass.PROPOSE and level == "bypass":
+                    proposal_kind = _proposal_kind(call)
+                    if proposal_kind is not None and proposal_kind in PROPOSE_BYPASS_OVERRIDES:
+                        policy_dec = PROPOSE_BYPASS_OVERRIDES[proposal_kind]
+                    else:
+                        policy_dec = policy_decide(risk, level)
+                else:
+                    policy_dec = policy_decide(risk, level)
+                auth: Authority | None = None
+            else:
+                failed_closed = False
+                try:
+                    deploys, has_prod, team_gate = await self._authorities.facts.facts(
+                        project_id, action.hook_id
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Gate facts provider raised for hook %r: %s", action.hook_id, exc
+                    )
+                    deploys, has_prod, team_gate = None, None, None
+                    failed_closed = True
+
+                action = action.model_copy(
+                    update={
+                        "deploys": deploys,
+                        "has_production_signal": has_prod,
+                        "team_gate_authority": team_gate,
+                    }
+                )
+                # 2. Consult authority for the citation the kind takes
+                if action.kind in ("rollback", "rerun", "fall_back"):
+                    if action.rule_id:
+                        rule_auth = self._authorities.get_authority("rule")
+                        if rule_auth is not None:
+                            try:
+                                auth = await rule_auth.authorize(action)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Rule authority raised for rule %r: %s", action.rule_id, exc
+                                )
+                                auth = Authority(
+                                    basis="none",
+                                    reason=f"authority error: {exc}",
+                                    evidence=[],
+                                )
+                                failed_closed = True
+                        else:
+                            auth = Authority(
+                                basis="none",
+                                reason="no authority registered for rule",
+                                evidence=[],
+                            )
+                    else:
+                        auth = Authority(
+                            basis="none",
+                            reason="no rule cited",
+                            evidence=[],
+                        )
+                elif action.kind in ("train", "evaluate"):
+                    if action.policy_id:
+                        pol_auth = self._authorities.get_authority("policy")
+                        if pol_auth is not None:
+                            try:
+                                auth = await pol_auth.authorize(action)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Policy authority raised for policy %r: %s",
+                                    action.policy_id,
+                                    exc,
+                                )
+                                auth = Authority(
+                                    basis="none",
+                                    reason=f"authority error: {exc}",
+                                    evidence=[],
+                                )
+                                failed_closed = True
+                        else:
+                            auth = Authority(
+                                basis="none",
+                                reason="no authority registered for policy",
+                                evidence=[],
+                            )
+                    else:
+                        auth = Authority(
+                            basis="none",
+                            reason="no policy cited",
+                            evidence=[],
+                        )
+                else:
+                    auth = Authority(
+                        basis="none",
+                        reason="action kind takes no citation",
+                        evidence=[],
+                    )
+
+                if failed_closed:
+                    policy_dec = "deny" if level == "suggest" else "ask"
+                else:
+                    policy_dec = decide_action(level, action, auth)
 
             target = _extract_target(call.tool.name, call.args)
             detail = call.args.model_dump()
@@ -108,7 +216,11 @@ class ApprovalGate(Gate):
                         detail=detail,
                     )
                 results[call.tool_call_id] = GateDecision(
-                    outcome="allow", message=None, approval_id=None, preview=None
+                    outcome="allow",
+                    message=None,
+                    approval_id=None,
+                    preview=None,
+                    authority=auth if action is not None else None,
                 )
 
             elif policy_dec == "deny":
@@ -125,7 +237,7 @@ class ApprovalGate(Gate):
                         detail=detail,
                     )
                 results[call.tool_call_id] = GateDecision(
-                    outcome="deny", message=msg, approval_id=None, preview=None
+                    outcome="deny", message=msg, approval_id=None, preview=None, authority=None
                 )
 
             elif policy_dec == "ask":
@@ -177,6 +289,7 @@ class ApprovalGate(Gate):
                     approval_id=approval.id,
                     preview=preview,
                     proposal_kind=proposal_kind,
+                    authority=auth if action is not None else None,
                 )
 
         return results
@@ -201,11 +314,23 @@ class ApprovalGate(Gate):
             if dec.approval_id and dec.approval_id in apr_map:
                 apr = apr_map[dec.approval_id]
                 if apr.status == "approved":
+                    authority = (
+                        Authority(
+                            basis="approval",
+                            ref=apr.id,
+                            reason="approved by user",
+                            evidence=[],
+                        )
+                        if dec.authority is not None
+                        else None
+                    )
                     updated_decisions[tool_call_id] = GateDecision(
                         outcome="approved",
                         message=None,
                         approval_id=apr.id,
                         preview=apr.preview,
+                        proposal_kind=dec.proposal_kind,
+                        authority=authority,
                     )
                 elif apr.status in ("rejected", "cancelled", "expired"):
                     updated_decisions[tool_call_id] = GateDecision(
@@ -213,6 +338,8 @@ class ApprovalGate(Gate):
                         message=format_rejection_message(apr.note),
                         approval_id=apr.id,
                         preview=apr.preview,
+                        proposal_kind=dec.proposal_kind,
+                        authority=None,
                     )
 
         return updated_decisions

@@ -3,31 +3,12 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
-from mlops_agents.agents.hooks.contract import HookContext
 from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
-from mlops_agents.agents.hooks.registry import HookRegistry
+from mlops_agents.agents.tools.names import ADJUST_SEVERITY, RECORD_FIX_CHOICE, SAVE_REPORT
 from mlops_agents.errors import DomainError
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS
 
 TOOLS = frozenset({"Read", "Glob", "Grep"})
-STAGE_2_TOOLS = frozenset(
-    {
-        "Read",
-        "Glob",
-        "Grep",
-        "Write",
-        "Edit",
-        "Bash",
-        "StartTask",
-        "ResumeTask",
-        "OpenPullRequest",
-        "SearchIssues",
-        "OpenIssue",
-        "CommentOnIssue",
-        "ListAgents",
-        "SendMessage",
-        "ScheduleWakeup",
-    }
-)
 
 VALID = """---
 name: helper
@@ -51,12 +32,10 @@ def test_parse_valid_definition() -> None:
     assert d.prompt == "You help."
 
 
-def test_status_board_defaults_to_off_and_can_be_switched_on() -> None:
-    assert parse_definition(VALID, "helper.md").status_board is False
-    on = parse_definition(
-        VALID.replace("tools: [Read]", "tools: [Read]\nstatus_board: true"), "h.md"
-    )
-    assert on.status_board is True
+def test_status_board_key_raises_definition_error() -> None:
+    text = VALID.replace("tools: [Read]", "tools: [Read]\nstatus_board: true")
+    with pytest.raises(DefinitionError, match="status_board"):
+        parse_definition(text, "helper.md")
 
 
 def test_an_unknown_key_still_fails() -> None:
@@ -125,48 +104,7 @@ def test_load_rejects_a_context_hook_listed_twice(tmp_path: Path) -> None:
         _with("context_hooks: [status_board, status_board]"), encoding="utf-8"
     )
     with pytest.raises(DefinitionError, match="lists context hooks twice: status_board"):
-        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=frozenset({STATUS_BOARD_HOOK}))
-
-
-def test_status_board_true_is_the_status_board_hook_and_needs_no_registered_name() -> None:
-    definition = parse_definition(_with("status_board: true"), "a.md")
-    assert definition.hook_names == (STATUS_BOARD_HOOK,)
-    assert AgentCatalog([definition], TOOLS).get("helper").hook_names == ("status_board",)
-
-
-def test_status_board_listed_and_declared_appears_once() -> None:
-    definition = parse_definition(
-        _with("context_hooks: [profile, status_board]\nstatus_board: true"), "a.md"
-    )
-    assert definition.hook_names == ("profile", STATUS_BOARD_HOOK)
-
-
-class _CountingHook:
-    name = STATUS_BOARD_HOOK
-
-    def __init__(self) -> None:
-        self.renders = 0
-
-    async def render(self, ctx: HookContext) -> str:
-        self.renders += 1
-        return "board"
-
-
-async def test_status_board_listed_and_declared_loads_and_runs_once() -> None:
-    """Not a duplicate: the duplicate check counts only `context_hooks`."""
-    definition = parse_definition(
-        _with("context_hooks: [status_board]\nstatus_board: true"), "a.md"
-    )
-    catalog = AgentCatalog([definition], TOOLS, hook_names=frozenset({STATUS_BOARD_HOOK}))
-    hook = _CountingHook()
-    hooks = HookRegistry()
-    hooks.register(hook)
-
-    ctx = HookContext(project_id="prj_1", agent="helper", trigger_text="")
-    text = await hooks.run(catalog.get("helper").hook_names, ctx)
-
-    assert hook.renders == 1
-    assert text == '<data source="hook:status_board">\nboard\n</data>'
+        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=STAGE_3_HOOKS)
 
 
 def test_an_agent_without_hooks_has_no_hook_names() -> None:
@@ -176,31 +114,22 @@ def test_an_agent_without_hooks_has_no_hook_names() -> None:
 def test_load_passes_the_hook_names(tmp_path: Path) -> None:
     (tmp_path / "helper.md").write_text(_with("context_hooks: [profile]"), encoding="utf-8")
     with pytest.raises(DefinitionError, match="unknown context hooks"):
-        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path])
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=frozenset({"profile"}))
+        AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=STAGE_3_HOOKS)
+    catalog = AgentCatalog.load(
+        STAGE_2_TOOLS, [tmp_path], hook_names=STAGE_3_HOOKS | frozenset({"profile"})
+    )
     assert catalog.get("helper").hook_names == ("profile",)
 
 
 def test_packaged_orchestrator() -> None:
-    catalog = AgentCatalog.load(STAGE_2_TOOLS)
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     orchestrator = catalog.get("orchestrator")
-    assert orchestrator.tools == (
-        "Read",
-        "Glob",
-        "Grep",
-        "Write",
-        "Edit",
-        "Bash",
-        "StartTask",
-        "ResumeTask",
-        "OpenPullRequest",
-        "SearchIssues",
-        "OpenIssue",
-        "CommentOnIssue",
-        "ListAgents",
-        "SendMessage",
-        "ScheduleWakeup",
-    )
+    assert set(orchestrator.tools) == STAGE_2_TOOLS - {
+        "Propose",
+        ADJUST_SEVERITY,
+        RECORD_FIX_CHOICE,
+        SAVE_REPORT,
+    }
     assert orchestrator.chat
     assert catalog.all()[0].name == "orchestrator"
     with pytest.raises(DomainError) as err:
@@ -210,7 +139,7 @@ def test_packaged_orchestrator() -> None:
 
 def test_adding_an_agent_is_adding_a_file(tmp_path: Path) -> None:
     (tmp_path / "helper.md").write_text(VALID, encoding="utf-8")
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path])
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, [tmp_path], hook_names=STAGE_3_HOOKS)
     assert [d.name for d in catalog.all()] == [
         "orchestrator",
         "alert-prioritization",

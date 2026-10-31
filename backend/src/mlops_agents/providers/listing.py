@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import cast
 from urllib.parse import urlsplit
 
 import httpx2
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ValidationError
 from mlops_agents.credentials.scrub import error_text, scrub_values
 from mlops_agents.errors import DomainError
 from mlops_agents.providers.models import Provider, RemoteModel
+from mlops_agents.providers.usage import provider_price
+from mlops_agents.providers.usage_contract import ModelPrice
 
 _log = logging.getLogger(__name__)
 
@@ -32,6 +35,15 @@ class ListedModel(BaseModel):
     context_length: object = None
     max_context_length: object = None
     max_model_len: object = None
+    pricing: object = None
+
+    def price(self) -> ModelPrice | None:
+        """OpenRouter's pricing object: USD per token, as strings."""
+        raw = self.pricing
+        if not isinstance(raw, dict):
+            return None
+        pricing = cast(dict[str, object], raw)
+        return provider_price(pricing.get("prompt"), pricing.get("completion"))
 
     def context(self) -> int | None:
         for value in (
@@ -181,9 +193,11 @@ async def list_remote_models(
             existing = next(m for m in found if m.id == norm_id)
             if existing.context_window is None and listed.context() is not None:
                 existing.context_window = listed.context()
+            if existing.price is None:
+                existing.price = listed.price()
             continue
         seen_ids.add(norm_id)
-        found.append(RemoteModel(id=norm_id, context_window=listed.context()))
+        found.append(RemoteModel(id=norm_id, context_window=listed.context(), price=listed.price()))
 
     if is_gemini_shaped(provider.base_url):
         native_windows = await fetch_gemini_native_windows(

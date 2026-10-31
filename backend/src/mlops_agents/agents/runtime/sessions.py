@@ -24,6 +24,7 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
+from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.repair import ProjectRecovery
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
@@ -207,6 +208,7 @@ class SessionManager(AgentSessions):
         text: str,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         return await self._enqueue(
             project_id,
@@ -216,6 +218,7 @@ class SessionManager(AgentSessions):
             from_agent=from_agent,
             exchange_id=exchange_id,
             hop=hop,
+            system=system,
         )
 
     async def _enqueue(
@@ -228,13 +231,15 @@ class SessionManager(AgentSessions):
         from_agent: str | None,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
 
         await self._recovery.ensure(project_id)
-        self._check_agent(agent)
+        if not system:
+            self._check_agent(agent)
 
         session_id = await self._registry.session_id(project_id, agent)
         lock = self._registry.lock(project_id, session_id)
@@ -342,37 +347,83 @@ class SessionManager(AgentSessions):
         await self._stop(project_id, agent, turn_id)
 
     async def _stop(self, project_id: str, agent: str, turn_id: str | None) -> None:
-        """Stop the agent's turn, running or waiting; given `turn_id`, only that one if it waits."""
+        """Stop the agent's turn, running or waiting; given `turn_id`, only that turn. A running
+        worker is stopped at once, without the lock; a waiting turn is stopped under the session
+        lock, where the resume's worker is started and takes it, so a Stop lands either before
+        that start or on that worker (#446)."""
         session_id = await self._registry.session_id(project_id, agent)
-        if turn_id is None:
-            self._workers.stop((project_id, session_id))
+        key = (project_id, session_id)
+        if self._workers.stop(key, turn_id) in ("landed", "dropped"):
+            return
 
-        waiting = await self._store.waiting_turn(project_id, session_id)
-        if waiting is not None and turn_id in (None, waiting[0]):
-            worker = self._workers.get((project_id, session_id))
-            if worker is not None and not worker.done():
-                await worker
-
-            lock = self._registry.lock(project_id, session_id)
+        lock = self._registry.lock(project_id, session_id)
+        hub = self._registry.hub(project_id, session_id)
+        while True:
             async with lock:
-                waiting = await self._store.waiting_turn(project_id, session_id)
-                if waiting is not None and turn_id in (None, waiting[0]):
-                    hub = self._registry.hub(project_id, session_id)
-                    await stop_waiting_turn(
-                        project_id=project_id,
-                        session_id=session_id,
-                        agent=agent,
-                        turn_id=waiting[0],
-                        store=self._store,
-                        hub=hub,
-                        executor=self._executor,
-                        approval_store=self._approval_store,
-                        audit_log=self._audit_log,
-                        event_log=self._event_log,
-                        observers=self._observers,
-                    )
-                    if await self._store.next_queued_turn(project_id, session_id) is not None:
-                        self._workers.start(project_id, session_id, agent, hub, lock)
+                worker = self._workers.get(key)
+                if worker is None or worker.done():
+                    await self._stop_waiting(project_id, session_id, agent, turn_id, hub)
+                    return
+                if self._workers.stop(key, turn_id) != "waiting":
+                    return
+            # The worker whose turn went waiting needs the lock to finish: never under it.
+            await worker
+
+    async def _stop_waiting(
+        self,
+        project_id: str,
+        session_id: str,
+        agent: str,
+        turn_id: str | None,
+        hub: SessionHub,
+    ) -> None:
+        """Stop the session's waiting turn (given `turn_id`, only that one) and start a worker for
+        its queued turns, unless the stop's observers started one (a redelivery). Under the
+        session lock, with no worker running."""
+        waiting = await self._store.waiting_turn(project_id, session_id)
+        if waiting is None or turn_id not in (None, waiting[0]):
+            return
+        await stop_waiting_turn(
+            project_id=project_id,
+            session_id=session_id,
+            agent=agent,
+            turn_id=waiting[0],
+            store=self._store,
+            hub=hub,
+            executor=self._executor,
+            approval_store=self._approval_store,
+            audit_log=self._audit_log,
+            event_log=self._event_log,
+            observers=self._observers,
+        )
+        await self.start_queued_turns(project_id, session_id, agent)
+
+    def session_lock(self, project_id: str, session_id: str) -> AsyncRLock:
+        """The session's one lock, from the registry (the inbound source's `QueuedTurns`)."""
+        return self._registry.lock(project_id, session_id)
+
+    def session_hub(self, project_id: str, session_id: str) -> SessionHub:
+        """The session's one hub, from the registry (the inbound source's `QueuedTurns`)."""
+        return self._registry.hub(project_id, session_id)
+
+    async def start_queued_turns(self, project_id: str, session_id: str, agent: str) -> None:
+        """Start a worker for the session's queued turns when it has some and none is running.
+        The caller holds the session lock, or the session's worker is running (then this returns
+        before any await). The worker is started by a Stop or a redelivery, not by the Send of
+        the turn it takes, so a Stop before it takes that turn comes between two turns, and is
+        dropped (`stops_first_turn=False`)."""
+        if self._workers.running((project_id, session_id)):
+            return
+        if await self._store.next_queued_turn(project_id, session_id) is None:
+            return
+        self._workers.start(
+            project_id,
+            session_id,
+            agent,
+            self._registry.hub(project_id, session_id),
+            self._registry.lock(project_id, session_id),
+            stops_first_turn=False,
+        )
 
     async def subscribe(
         self, project_id: str, agent: str, after_seq: int | None = None

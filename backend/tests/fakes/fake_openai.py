@@ -17,11 +17,17 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+# Pyright checks tests/fakes as its own root (pyproject's executionEnvironments).
+if TYPE_CHECKING:
+    from onboarding_script import audit_reply, onboarding_reply
+else:
+    from tests.fakes.onboarding_script import audit_reply, onboarding_reply
 
 MODELS: dict[str, int] = {
     "fake-tools": 32768,
@@ -30,6 +36,8 @@ MODELS: dict[str, int] = {
     "fake-invalid-tools": 32768,
     "fake-mixed-tools": 32768,
     "fake-write": 32768,
+    "fake-onboarding": 131072,
+    "fake-audit": 131072,
 }
 EMBEDDING_MODELS: dict[str, int] = {
     "fake-embed": 16,
@@ -80,6 +88,8 @@ class FakeState:
     server_error_remaining: int = 0
     auth_fail: bool = False
     usage_in_stream: bool = True
+    # Per-token USD strings, as OpenRouter's /models publishes them, by model id.
+    pricing: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     drop_after_chunks: int | None = None
     scripted_tool_calls: list[dict[str, Any]] | None = None
     bad_generation_remaining: int = 0
@@ -117,6 +127,7 @@ class FakeState:
         self.server_error_remaining = 0
         self.auth_fail = False
         self.usage_in_stream = True
+        self.pricing.clear()
         self.drop_after_chunks = None
         self.scripted_tool_calls = None
         self.bad_generation_remaining = 0
@@ -185,6 +196,10 @@ def _reply(
         return "Hello from the fake model.", None
     if any(tool["function"]["name"] == "report_capabilities" for tool in tools):
         return "", [{"name": "report_capabilities", "arguments": TOOL_ARGS["report_capabilities"]}]
+    if model == "fake-onboarding":
+        return onboarding_reply(messages, tools)
+    if model == "fake-audit":
+        return audit_reply(messages), None
     if model == "fake-slow":
         return SLOW_TEXT, None
     if model == "fake-write":
@@ -357,9 +372,12 @@ def create_fake_app(state: FakeState) -> FastAPI:
     async def list_models(request: Request) -> Response:
         if not authorized(request):
             return _error(401, "Invalid API key", "invalid_api_key")
-        data = [{"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()] + [
-            {"id": m, "object": "model"} for m in EMBEDDING_MODELS
-        ]
+        data: list[dict[str, Any]] = [
+            {"id": m, "object": "model", "context_window": c} for m, c in MODELS.items()
+        ] + [{"id": m, "object": "model"} for m in EMBEDDING_MODELS]
+        for entry in data:
+            if entry["id"] in state.pricing:
+                entry["pricing"] = state.pricing[str(entry["id"])]
         return JSONResponse({"object": "list", "data": data})
 
     async def chat(request: Request) -> Response:

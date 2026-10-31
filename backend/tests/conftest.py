@@ -7,6 +7,19 @@ from typing import Any, cast
 import httpx2
 import pytest
 
+from mlops_agents.agents.tools.names import (
+    ADJUST_SEVERITY,
+    HOLD,
+    INCIDENT_FOLLOW_UP,
+    INCIDENT_MERGE,
+    INCIDENT_SPLIT,
+    INCIDENT_UPDATE,
+    MONITORING_QUERY,
+    RECORD_FIX_CHOICE,
+    REQUEST_FIX,
+    RUN_HOOK,
+    SAVE_REPORT,
+)
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.paths import DataPaths
 from mlops_agents.sandbox.docker import CliDockerRunner
@@ -30,6 +43,31 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         "ListAgents",
         "SendMessage",
         "ScheduleWakeup",
+        "SaveNote",
+        "SearchNotes",
+        "TrackingHistory",
+        "Propose",
+        "ReadHandoff",
+        INCIDENT_UPDATE,
+        INCIDENT_MERGE,
+        INCIDENT_SPLIT,
+        INCIDENT_FOLLOW_UP,
+        MONITORING_QUERY,
+        RUN_HOOK,
+        HOLD,
+        ADJUST_SEVERITY,
+        REQUEST_FIX,
+        RECORD_FIX_CHOICE,
+        SAVE_REPORT,
+    }
+)
+
+STAGE_3_HOOKS: frozenset[str] = frozenset(
+    {
+        "status_board",
+        "data_summary",
+        "tracking_summary",
+        "knowledge",
     }
 )
 

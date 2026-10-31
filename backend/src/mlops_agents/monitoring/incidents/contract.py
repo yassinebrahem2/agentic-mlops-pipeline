@@ -25,6 +25,7 @@ ACTIVE_STATUSES: Final[tuple[IncidentStatus, ...]] = (
     "mitigated",
     "reopened",
 )
+ALERT_PRIORITIZATION_AGENT: Final[str] = "alert-prioritization"
 SignalKind = Literal[
     "fired_result", "silence", "parser_failure", "source_failure", "notification_failure"
 ]
@@ -143,6 +144,7 @@ class Incidents(Protocol):
         self,
         project_id: str,
         status: list[IncidentStatus] | None = None,
+        inbox: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> Page[IncidentView]: ...
@@ -259,3 +261,18 @@ def stages_of(subject: str, payload: HandoffPayload) -> list[str]:
         for stage in payload.pipeline
         if subject in stage.inputs or subject in stage.outputs
     ]
+
+
+class WindowSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: datetime
+    end: datetime
+    scope: list[str]
+    reason: str
+
+
+class MaintenancePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window: WindowSpec

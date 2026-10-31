@@ -17,10 +17,10 @@ from sqlalchemy import Select, func, select, update
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import ToolResultPart
 from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.api import services as api_services
 from mlops_agents.api.services import Services
 from mlops_agents.clock import now_iso
 from mlops_agents.proposals.contract import CONNECTIONS_KIND, ApplyResult
-from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.storage.tables import approvals, audit, events, turns
 from tests.api.conftest import add_local_project, started_app
@@ -32,15 +32,15 @@ AGENT = "orchestrator"
 
 
 def registered_kind(monkeypatch: pytest.MonkeyPatch) -> ScriptedTestKind:
-    """A connections kind whose apply is recorded, in every app's ProposalKinds."""
+    """A connections kind whose apply is recorded, registered by every app's build_services."""
     kind = ScriptedTestKind(CONNECTIONS_KIND, slots=[])
-    init = ProposalKinds.__init__
 
-    def with_kind(self: ProposalKinds) -> None:
-        init(self)
-        self.register(kind)
+    def scripted_connections_kind(*args: Any, **kwargs: Any) -> ScriptedTestKind:
+        return kind
 
-    monkeypatch.setattr(ProposalKinds, "__init__", with_kind)
+    # Recovery runs inside build_services, before a test could swap the kind: build_services
+    # registers the scripted kind as its connections kind instead.
+    monkeypatch.setattr(api_services, "ConnectionsKind", scripted_connections_kind)
     return kind
 
 

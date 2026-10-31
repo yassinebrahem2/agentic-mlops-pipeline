@@ -24,7 +24,7 @@ from tests.agents.runtime.session_env import (
     build_session_env,
     collect_until_turn_ended,
 )
-from tests.conftest import STAGE_2_TOOLS, MemoryKeyStore
+from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS, MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 
@@ -87,7 +87,11 @@ async def test_schedule_wakeup_refused_without_schedules_permission(
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     tool = ScheduleWakeupTool(wakeups_svc)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     ctx = _ctx("prj_test", "plain")
@@ -105,7 +109,11 @@ async def test_limits_enforced_delay_bounds(
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     tool = ScheduleWakeupTool(wakeups_svc)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     ctx = _ctx("prj_test", "sched")
@@ -128,7 +136,11 @@ async def test_limits_enforced_max_pending(
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     tool = ScheduleWakeupTool(wakeups_svc)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     engine = await databases.project("prj_test")
@@ -165,7 +177,11 @@ async def test_limits_enforced_max_fired_per_rolling_day(
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     tool = ScheduleWakeupTool(wakeups_svc)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     engine = await databases.project("prj_test")
@@ -391,7 +407,11 @@ async def test_cancel_wakeup(
 
     wakeups_svc = WakeupService(databases, clock=lambda: current_time)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     engine = await databases.project("prj_test")
@@ -453,7 +473,11 @@ async def test_list_pending(
     now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     engine = await databases.project("prj_test")
@@ -522,7 +546,11 @@ async def test_note_length_validation(
     wakeups_svc = WakeupService(databases, clock=lambda: now)
     tool = ScheduleWakeupTool(wakeups_svc)
     registry = default_registry(wakeups=wakeups_svc)
-    catalog = AgentCatalog.load(registry.names() | STAGE_2_TOOLS, extra_dirs=[defs_dir])
+    catalog = AgentCatalog.load(
+        registry.names() | STAGE_2_TOOLS,
+        extra_dirs=[defs_dir],
+        hook_names=STAGE_3_HOOKS,
+    )
     wakeups_svc.use_catalog(catalog)
 
     engine = await databases.project("prj_test")
