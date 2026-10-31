@@ -370,26 +370,10 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
         "display_name": "Alert Prioritization",
         "chat": False,
         "schedules": False,
-        "tools": (
-            "Read",
-            "Glob",
-            "Grep",
-            "ListAgents",
-            "SendMessage",
-            "SearchIssues",
-            "OpenIssue",
-            "CommentOnIssue",
-        ),
+        "tools": ("Read", "Glob", "Grep"),
         "context_hooks": (),
         "max_steps": 25,
-        "can_message": (
-            "orchestrator",
-            "onboarding",
-            "data-quality",
-            "model-performance",
-            "retraining",
-            "deployment",
-        ),
+        "can_message": (),
     },
 ]
 
@@ -645,6 +629,32 @@ def test_alert_prioritization_loads_in_catalog() -> None:
     assert defn.tools == alert_spec["tools"] and defn.can_message == alert_spec["can_message"]
 
 
+REMOVED_FROM_ALERT_PRIORITIZATION: tuple[str, ...] = (
+    "ListAgents",
+    "SendMessage",
+    "SearchIssues",
+    "OpenIssue",
+    "CommentOnIssue",
+)
+
+
+def test_alert_prioritization_holds_only_the_seven_tools_it_uses() -> None:
+    defn = _load_definition("alert-prioritization")
+    assert set(defn.tools) == {
+        "Read",
+        "Glob",
+        "Grep",
+        MONITORING_QUERY,
+        INCIDENT_MERGE,
+        INCIDENT_UPDATE,
+        ADJUST_SEVERITY,
+    }
+    assert len(defn.tools) == 7
+    for tool_name in REMOVED_FROM_ALERT_PRIORITIZATION:
+        assert tool_name not in defn.tools, f"{tool_name} came back to alert-prioritization"
+    assert defn.can_message == ()
+
+
 def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     returned: set[str] = set()
@@ -730,7 +740,7 @@ def test_no_stage2_agent_may_message_alert_prioritization() -> None:
 
 def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     with pytest.raises(DefinitionError) as exc_info:
-        AgentCatalog.load(default_registry().names(), hook_names=STAGE_3_HOOKS)
+        AgentCatalog.load(STAGE_2_TOOLS - {"ListAgents", "SendMessage"}, hook_names=STAGE_3_HOOKS)
     error_msg = str(exc_info.value)
     assert "ListAgents" in error_msg and "SendMessage" in error_msg
 
