@@ -53,6 +53,8 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
@@ -64,6 +66,11 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.notifications.channels import default_channels
+from mlops_agents.notifications.contract import Notifier
+from mlops_agents.notifications.notifier import SqliteNotifier
+from mlops_agents.notifications.retries import RetryJob
+from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
 from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
@@ -128,13 +135,17 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    hooks: HooksService
     incidents: IncidentsService
+    integration_settings: IntegrationSettings
+    notifier: Notifier
 
 
 async def _app_secrets(
     providers: ProvidersService,
     github: GitHubAuth,
     settings: Settings,
+    integration_settings: IntegrationSettings | None = None,
 ) -> list[str]:
     secrets: list[str] = []
     if settings.password:
@@ -145,6 +156,8 @@ async def _app_secrets(
         secrets.append(settings.master_key)
 
     secrets.extend(await providers.secret_values())
+    if integration_settings is not None:
+        secrets.extend(await integration_settings.secret_values())
 
     try:
         gh_token = await github.token()
@@ -200,9 +213,10 @@ async def build_services(
     failover = KeyFailover(clock=clock, on_success=clear_attention)
     providers = ProvidersService(databases, keystore, http, failover)
     embedders = EmbeddersService(databases, providers, failover, http)
+    integration_settings = IntegrationSettings(databases, keystore)
 
     async def secret_source() -> list[str]:
-        return await _app_secrets(providers, github, settings)
+        return await _app_secrets(providers, github, settings, integration_settings)
 
     events = SqliteEventLog(databases)
     audit = SqliteAuditLog(databases, secrets=secret_source)
@@ -243,6 +257,14 @@ async def build_services(
     )
 
     handoffs = SqliteHandoffs(databases)
+    hooks = HooksService(
+        databases=databases,
+        secrets=project_secrets,
+        events=events,
+        clock=clock,
+    )
+    handoff_hooks = HandoffHooks(hooks, handoffs)
+    handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
@@ -282,15 +304,17 @@ async def build_services(
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
-    hooks = HookRegistry()
+    turn_hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
-    hooks.register(status_board_hook)
-    hooks.register(KnowledgeHook(knowledge))
+    turn_hooks.register(status_board_hook)
+    turn_hooks.register(KnowledgeHook(knowledge))
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
-    hooks.register(DataSummaryHook(connections, data_summaries))
-    hooks.register(TrackingSummaryHook(tracking))
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
+    turn_hooks.register(DataSummaryHook(connections, data_summaries))
+    turn_hooks.register(TrackingSummaryHook(tracking))
+    catalog = await asyncio.to_thread(
+        AgentCatalog.load, tools.names(), hook_names=turn_hooks.names()
+    )
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
@@ -320,7 +344,7 @@ async def build_services(
         approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
-        hooks=hooks,
+        hooks=turn_hooks,
         audit_log=audit,
         event_log=events,
     )
@@ -404,6 +428,17 @@ async def build_services(
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
+    notification_channels = default_channels(integration_settings, http)
+    notifier = SqliteNotifier(
+        databases=databases,
+        settings=integration_settings,
+        channels=notification_channels,
+        events=events,
+        clock=clock,
+    )
+    retry_notifications_job = RetryJob(databases, notifier, clock)
+    scheduler.register(retry_notifications_job)
+
     await scheduler.start()
     stack.push_async_callback(scheduler.stop)
 
@@ -411,6 +446,9 @@ async def build_services(
     startup_now = clock.now()
     for project in await workspace.list_projects():
         await results.deliver_undelivered(project.id, startup_now)
+
+    # Reconcile handoff hooks across existing projects
+    await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
     return Services(
         settings=settings,
@@ -450,5 +488,8 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        hooks=hooks,
         incidents=incidents,
+        integration_settings=integration_settings,
+        notifier=notifier,
     )
