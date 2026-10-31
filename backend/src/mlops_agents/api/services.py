@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -70,8 +71,9 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
 )
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
-from mlops_agents.notifications.contract import Notifier
+from mlops_agents.notifications.contract import Notifier, OnCallPeople
 from mlops_agents.notifications.notifier import SqliteNotifier
+from mlops_agents.notifications.on_call import OnCallSeeder, SqliteOnCallPeople
 from mlops_agents.notifications.retries import RetryJob
 from mlops_agents.notifications.settings import IntegrationSettings
 from mlops_agents.onboarding.connections_kind import ConnectionsKind
@@ -97,6 +99,8 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.adapters import default_adapters
 from mlops_agents.tracking.service import TrackingService
 from mlops_agents.workspace.service import WorkspaceService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -143,6 +147,7 @@ class Services:
     waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
+    on_call: OnCallPeople
 
 
 async def _app_secrets(
@@ -261,6 +266,9 @@ async def build_services(
     )
 
     handoffs = SqliteHandoffs(databases)
+    on_call = SqliteOnCallPeople(databases)
+    on_call_seeder = OnCallSeeder(on_call, handoffs, databases)
+    handoffs.add_observer(on_call_seeder)
     hooks = HooksService(
         databases=databases,
         secrets=project_secrets,
@@ -472,6 +480,10 @@ async def build_services(
     startup_now = clock.now()
     for project in await workspace.list_projects():
         await results.deliver_undelivered(project.id, startup_now)
+        try:
+            await on_call_seeder.reconcile(project.id)
+        except Exception:
+            logger.exception("Failed to reconcile on-call for project %s", project.id)
 
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
@@ -519,4 +531,5 @@ async def build_services(
         waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
+        on_call=on_call,
     )
