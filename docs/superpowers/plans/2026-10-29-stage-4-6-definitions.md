@@ -25,6 +25,7 @@
 | 3 | The extras' lines: checks, the other proposal kinds, rule citations, `MergePullRequest` | task 2; results, incidents, hooks, training, promotion merged | after task 2; each line once its producer has merged |
 | 4 | The stage 4 end-to-end test (the simulated night) | tasks 1 to 3; notifications, stats, ui merged | after task 3, when notifications, stats and ui have merged |
 | 5 | The stage 5 end-to-end test (incident to fix to promotion) | task 4 | after task 4 |
+| 6 | Alert Prioritization holds only what it uses | task 1 | now (added 2026-10-31) |
 
 The catalog refuses a definition naming an unregistered tool, and a prompt line about a behaviour that is not on `main` is a stub feature: a task adds neither before its producer is on `main`. Task 1 is the diagnosis the core path needs, so it is an early PR as soon as its tools are on `main`; the extras' lines come last, so a deadline cut loses them, not diagnosis. If time runs short, the rule, escalation and morning-report steps of task 4 move into a later task and say so in the plan issue.
 
@@ -168,6 +169,18 @@ D = the agents `diagnoser()` can return: data-quality, model-performance, retrai
 - Deployment & Rollback, messaged by the test, opens a PR improving the evaluation step through `StartTask`, `Write` and `OpenPullRequest` against the fake GitHub.
 - `actions.spec.ts` (with the seeded fake MLflow): a person-mode promotion proposal (a scripted Retraining turn) shows its card with the assessments, computed values marked as computed, and champion against challenger; Reject records the rejection; the Deployments page shows the environment's version.
 - Full backend suite and checks as task 4; `npm run e2e`; CI green, every job.
+
+---
+
+### Task 6: Alert Prioritization holds only what it uses (added 2026-10-31)
+
+From the lead's debt re-triage (#593's row): Alert Prioritization reads untrusted `MonitoringQuery` rows yet still holds its stage 2 `SendMessage`, `OpenIssue` and `CommentOnIssue` and a broad `can_message`; its prompt says it contacts no person, so today only the prompt stops untrusted text from reaching a public repo or another agent.
+
+**Files:** `agents/definitions/alert-prioritization.md`; tests (`tests/agents/` for the tool matrix; rename the `STAGE_2_TOOLS` constant to what it now holds).
+
+**Notes:** remove `SendMessage`, `OpenIssue` and `CommentOnIssue` from its tools and empty its `can_message` (no stage 4 line in its prompt needs them). It keeps `MonitoringQuery`, `IncidentMerge`, `IncidentUpdate` and `AdjustSeverity`.
+
+**Tests (stop condition):** the definition loads with exactly those four tools; a test fails if any of the three removed tools is added back; backend suite, ruff, pyright; CI green. It rides on the plan branch (no early PR); the lead removes the #593 row when it merges.
 
 ## Known debt added
 
