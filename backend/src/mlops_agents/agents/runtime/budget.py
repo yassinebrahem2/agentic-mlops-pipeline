@@ -94,10 +94,8 @@ def cut_text(text: str, max_chars: int) -> str:
 
     If the cut falls inside an open <data source="..."> block from
     mlops_agents.monitoring.untrusted, it closes the block before appending the notice.
-    If the text was already cut with a context budget notice, it is returned as-is to avoid
-    double-cutting.
     """
-    if len(text) <= max_chars or NOTICE_SUFFIX in text:
+    if len(text) <= max_chars:
         return text
 
     head = text[: max(0, max_chars)]

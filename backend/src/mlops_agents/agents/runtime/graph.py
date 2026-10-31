@@ -174,14 +174,10 @@ def create_turn_graph(
                 "stopped_reason": "max_steps",
             }
 
-        inbound = await hooks.inbound.take(project_id, session_id, turn_id)
-        request = [*state["messages"], *inbound]
-        if end_note:
-            request.append(HumanMessage(content=end_note))
+        # Floor check before taking inbound or calling model
         tool_schemas = [t.schema() for t in agent.tools]
-
-        # Floor check before model request
-        sys_text = str(request[0].content) if request else ""
+        messages_list = state.get("messages", [])
+        sys_text = str(messages_list[0].content) if messages_list else ""
         fixed = fixed_tokens(sys_text, tool_schemas)
         room = room_tokens(agent.model, fixed)
         if room < ROOM_FLOOR_TOKENS:
@@ -205,6 +201,11 @@ def create_turn_graph(
             return {
                 "stopped_reason": "room_below_floor",
             }
+
+        inbound = await hooks.inbound.take(project_id, session_id, turn_id)
+        request = [*messages_list, *inbound]
+        if end_note:
+            request.append(HumanMessage(content=end_note))
 
         # The text of the step's current attempt: stored only when the step succeeds, or as the
         # partial answer of a failed or stopped step.
@@ -281,6 +282,7 @@ def create_turn_graph(
                 order_key = reply.tool_call_indices.get(call_id, pos)
                 items.append((order_key, dict(tc)))
                 pos += 1
+            finish_reason = (reply.message.response_metadata or {}).get("finish_reason")
             for itc in invalid_calls:
                 call_id = str(itc.get("id") or "")
                 order_key = reply.tool_call_indices.get(call_id, pos)
@@ -296,10 +298,15 @@ def create_turn_graph(
                         },
                     )
                 )
-                tool_errors[call_id] = format_invalid_tool_call_error(
-                    name,
-                    str(raw_args) if raw_args is not None else None,
-                )
+                if finish_reason == "length":
+                    tool_errors[call_id] = (
+                        "Reply cut by completion token limit. Write output in smaller parts."
+                    )
+                else:
+                    tool_errors[call_id] = format_invalid_tool_call_error(
+                        name,
+                        str(raw_args) if raw_args is not None else None,
+                    )
                 pos += 1
 
             items.sort(key=lambda x: x[0])

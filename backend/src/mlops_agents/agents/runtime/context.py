@@ -11,7 +11,12 @@ from langchain_core.messages import (
 )
 
 from mlops_agents.agents.catalog import AgentDefinition
-from mlops_agents.agents.runtime.budget import OLD_TOOL_RESULT_CHARS
+from mlops_agents.agents.runtime.budget import (
+    OLD_TOOL_RESULT_CHARS,
+    cut_text,
+    reply_reserve_tokens,
+    request_budget_tokens,
+)
 from mlops_agents.agents.runtime.contract import (
     MessageStatus,
     MessageView,
@@ -21,7 +26,6 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.tools.base import FileAccess
 from mlops_agents.agents.working_rules import working_rules
-from mlops_agents.monitoring.untrusted import DATA_CLOSE_TAG
 from mlops_agents.workspace.models import Project
 
 if TYPE_CHECKING:
@@ -50,8 +54,21 @@ async def top_level_layout(files: FileAccess) -> str:
 def system_message(agent: Agent, summary: str | None) -> SystemMessage:
     """The turn's system message, with this build's hook context: the one place it is built for
     a turn (the graph's `prepare` node and a resume)."""
+    reply_limit_text: str | None = None
+    if getattr(agent.model, "request_token_limit", None) is not None:
+        budget = request_budget_tokens(agent.model)
+        reserve = reply_reserve_tokens(budget)
+        reply_limit_text = (
+            f"Reply limit: your reply must fit within {reserve} tokens (~{reserve * 4} characters). "
+            "For large outputs (e.g. file writes), write in smaller parts."
+        )
     return _system_message(
-        agent.definition, agent.project, agent.layout, summary, agent.hook_context
+        agent.definition,
+        agent.project,
+        agent.layout,
+        summary,
+        agent.hook_context,
+        reply_limit_text=reply_limit_text,
     )
 
 
@@ -61,6 +78,7 @@ def _system_message(
     layout: str,
     summary: str | None,
     hook_context: str | None,
+    reply_limit_text: str | None = None,
 ) -> SystemMessage:
     sections = [definition.prompt.strip()]
     sections.append(working_rules(definition))
@@ -82,6 +100,9 @@ def _system_message(
     # The context hooks' blocks, already wrapped as data by the registry.
     if hook_context:
         sections.append(hook_context)
+
+    if reply_limit_text:
+        sections.append(reply_limit_text)
 
     return SystemMessage(content="\n\n".join(sections))
 
@@ -153,15 +174,7 @@ def history_messages(
                     if (current_turn_id is None or message.turn_id != current_turn_id) and len(
                         content
                     ) > OLD_TOOL_RESULT_CHARS:
-                        head = content[:OLD_TOOL_RESULT_CHARS]
-                        open_idx = head.rfind("<data")
-                        close_idx = head.rfind(DATA_CLOSE_TAG)
-                        if open_idx != -1 and (close_idx == -1 or open_idx > close_idx):
-                            if not head.endswith("\n"):
-                                head = f"{head}\n{DATA_CLOSE_TAG}\n"
-                            else:
-                                head = f"{head}{DATA_CLOSE_TAG}\n"
-                        content = f"{head}\n[... earlier output truncated. Full output is in the session.]"
+                        content = cut_text(content, OLD_TOOL_RESULT_CHARS)
                     messages.append(
                         ToolMessage(
                             tool_call_id=part.tool_call_id,
