@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.runtime.contract import TurnEnded
+from mlops_agents.agents.runtime.hooks import GateCall
 from mlops_agents.agents.tools.base import (
+    Preview,
     ToolContext,
     ToolFailure,
     ToolOutput,
@@ -25,16 +28,21 @@ from mlops_agents.agents.tools.propose import (
     ProposeTool,
 )
 from mlops_agents.api.services import Services
+from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import (
     CONNECTIONS_KIND,
     HANDOFF_KIND,
     ApplyResult,
     CredentialSlot,
+    PromotionPayload,
 )
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.payloads import ConnectionsPayload, HandoffPayload
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
+from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import (
     approvals as approvals_table,
 )
@@ -47,11 +55,13 @@ from mlops_agents.storage.tables import (
 from mlops_agents.storage.tables import (
     proposals as proposals_table,
 )
+from tests.agents.gate_helpers import setup_session_and_turn
 from tests.agents.runtime.test_resuming_turns import (
     collect_until_turn_ended,
     collect_until_turn_waiting,
 )
 from tests.api.conftest import add_local_project, started_app
+from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.proposal_kinds import swapped_kind
 from tests.proposals.conftest import ScriptedTestKind
@@ -122,81 +132,212 @@ async def _pending_approvals(services: Services, project_id: str, count: int = 1
 # ---------------------------------------------------------------------------
 
 
-def test_union_members_equal_contract_kind_payload_models() -> None:
-    contract_payload_models = {ConnectionsPayload, HandoffPayload}
-    union_args = set(get_args(ProposeArgs.model_fields["payload"].annotation))
-    assert union_args == contract_payload_models
+def test_propose_args_payload_annotation_is_any() -> None:
+    assert ProposeArgs.model_fields["payload"].annotation is Any
 
 
 def test_valid_connections_and_handoff_payloads_parse() -> None:
     conn_args = ProposeArgs.model_validate({"kind": CONNECTIONS_KIND, "payload": connections()})
     assert conn_args.kind == CONNECTIONS_KIND
-    assert isinstance(conn_args.payload, ConnectionsPayload)
+    assert conn_args.payload.model_dump() == connections()
 
     hnd_args = ProposeArgs.model_validate({"kind": HANDOFF_KIND, "payload": handoff()})
     assert hnd_args.kind == HANDOFF_KIND
-    assert isinstance(hnd_args.payload, HandoffPayload)
+    assert hnd_args.payload.model_dump() == handoff()
 
 
-def test_kind_payload_mismatch_and_unknown_fields_are_tool_errors_naming_the_field() -> None:
+def test_unknown_field_in_top_level_args_is_parse_error() -> None:
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
     tool = ProposeTool(proposals_service, kinds)
 
-    # 1. Kind connections with handoff payload
-    out1 = tool.parse({"kind": CONNECTIONS_KIND, "payload": handoff()})
-    assert isinstance(out1, ToolOutput)
-    assert out1.is_error
-    assert "payload" in out1.content.lower()
-
-    # 2. Kind handoff with connections payload
-    out2 = tool.parse({"kind": HANDOFF_KIND, "payload": connections()})
-    assert isinstance(out2, ToolOutput)
-    assert out2.is_error
-    assert "payload" in out2.content.lower()
-
-    # 3. Unknown field in top-level args
-    out3 = tool.parse(
+    out = tool.parse(
         {
             "kind": CONNECTIONS_KIND,
             "payload": connections(),
             "extra_field": "disallowed",
         }
     )
-    assert isinstance(out3, ToolOutput)
-    assert out3.is_error
-    assert "extra_field" in out3.content
-
-    # 4. Unknown field in payload
-    bad_conn = dict(connections())
-    bad_conn["connections"] = [dict(bad_conn["connections"][0], extra_prop="disallowed")]
-    out4 = tool.parse({"kind": CONNECTIONS_KIND, "payload": bad_conn})
-    assert isinstance(out4, ToolOutput)
-    assert out4.is_error
-    assert "extra_prop" in out4.content
-
-    # 5. Unknown kind naming both allowed kinds
-    out5 = tool.parse({"kind": "unknown_kind", "payload": connections()})
-    assert isinstance(out5, ToolOutput)
-    assert out5.is_error
-    assert CONNECTIONS_KIND in out5.content
-    assert HANDOFF_KIND in out5.content
+    assert isinstance(out, ToolOutput)
+    assert out.is_error
+    assert "extra_field" in out.content
 
 
-def test_payload_with_bypass_grant_refused_before_any_record_or_approval() -> None:
+@pytest.mark.asyncio
+async def test_propose_with_unregistered_kind_is_tool_error_before_gate() -> None:
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
+    tool = ProposeTool(proposals_service, kinds)
+    ctx = _dummy_ctx()
+    args = ProposeArgs(kind="unregistered_kind", payload={})
+
+    with pytest.raises(ToolFailure, match="Unknown proposal kind: unregistered_kind"):
+        await tool.preview(ctx, args)
+    proposals_service.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_registered_kind_payload_validated_by_its_model() -> None:
+    proposals_service = MagicMock(spec=ProposalsService)
+    kinds = ProposalKinds()
+    kind = ScriptedTestKind(name=CONNECTIONS_KIND)
+    kinds.register(kind)
+    tool = ProposeTool(proposals_service, kinds)
+    ctx = _dummy_ctx()
+
+    # Invalid payload for connections: missing connections list
+    bad_payload = {"invalid_key": "bad"}
+    args = ProposeArgs(kind=CONNECTIONS_KIND, payload=bad_payload)
+    with pytest.raises(ToolFailure, match="Invalid payload for connections"):
+        await tool.preview(ctx, args)
+    proposals_service.create.assert_not_called()
+
+    # Extra property in connections list (extra="forbid")
+    bad_conn = dict(connections())
+    bad_conn["connections"] = [dict(bad_conn["connections"][0], extra_prop="disallowed")]
+    args_extra = ProposeArgs(kind=CONNECTIONS_KIND, payload=bad_conn)
+    with pytest.raises(ToolFailure, match="extra_prop"):
+        await tool.preview(ctx, args_extra)
+    proposals_service.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fake_kind_with_proposal_check_refused_before_gate_with_lines() -> None:
+    class CheckingKind:
+        name = "checking_kind"
+        payload_model = ConnectionsPayload
+
+        def key(self, payload: Any) -> str:
+            return "check_key"
+
+        def preview(self, payload: Any) -> Preview:
+            return Preview(kind="text", title="Title", body="body")
+
+        def warnings(self, payload: Any) -> list[str]:
+            return []
+
+        def credentials_needed(self, payload: Any) -> list[CredentialSlot]:
+            return []
+
+        async def apply(self, project_id: str, proposal_id: str, payload: Any) -> ApplyResult:
+            return ApplyResult(applied=[], failed={})
+
+        async def check(self, project_id: str, payload: Any) -> list[str]:
+            return ["Refusal 1: table not found", "Refusal 2: permissions lacking"]
+
+    proposals_service = MagicMock(spec=ProposalsService)
+    kinds = ProposalKinds()
+    kinds.register(CheckingKind())  # pyright: ignore[reportArgumentType]
+    tool = ProposeTool(proposals_service, kinds)
+    ctx = _dummy_ctx()
+
+    args = ProposeArgs(kind="checking_kind", payload=connections())
+    with pytest.raises(ToolFailure) as exc_info:
+        await tool.preview(ctx, args)
+    assert "Refusal 1: table not found" in str(exc_info.value)
+    assert "Refusal 2: permissions lacking" in str(exc_info.value)
+    proposals_service.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_payload_with_bypass_grant_refused_before_any_record_or_approval() -> None:
+    proposals_service = MagicMock(spec=ProposalsService)
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=HANDOFF_KIND, payload_model=HandoffPayload))
     tool = ProposeTool(proposals_service, kinds)
 
     bad_handoff = dict(handoff())
     bad_handoff["grants"] = {"network": False, "permission_level": "bypass"}
 
-    out = tool.parse({"kind": HANDOFF_KIND, "payload": bad_handoff})
-    assert isinstance(out, ToolOutput)
-    assert out.is_error
-    assert "permission_level" in out.content
-    # No service method was called
+    ctx = _dummy_ctx()
+    args = ProposeArgs(kind=HANDOFF_KIND, payload=bad_handoff)
+    with pytest.raises(ToolFailure, match="permission_level"):
+        await tool.preview(ctx, args)
     proposals_service.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fake_promotion_kind_at_bypass_applied_no_approval_and_run_returns_applied_result(
+    tmp_path: Path,
+) -> None:
+    databases = Databases(DataPaths(tmp_path / "data"))
+    project_id = "prj_promo"
+    engine = await databases.project(project_id)
+    async with engine.begin() as _conn:
+        pass
+
+    event_log = SqliteEventLog(databases)
+    key_store = MemoryKeyStore()
+    project_secrets = ProjectSecrets(key_store, databases)
+    kinds = ProposalKinds()
+    promo_kind = ScriptedTestKind(name="promotion", payload_model=PromotionPayload)
+    kinds.register(promo_kind)
+    proposals_service = ProposalsService(databases, project_secrets, kinds, event_log)
+    tool = ProposeTool(proposals_service, kinds)
+
+    approval_store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=approval_store, event_log=event_log)
+
+    promo_payload = {
+        "model": "mdl_1",
+        "report_id": "rep_1",
+        "candidate_version": "v2",
+        "champion_version": "v1",
+        "deploy_hook_id": "hok_1",
+    }
+    args = ProposeArgs(kind="promotion", payload=promo_payload)
+
+    # 1. At bypass: allowed without approval, Propose.run applies proposal
+    await set_permission_level(databases, project_id, "bypass")
+    ctx_bypass = _dummy_ctx(project_id=project_id, turn_id="trn_bp", tool_call_id="call_bp")
+    preview_bypass = await tool.preview(ctx_bypass, args)
+    assert preview_bypass.title == "Proposal: promotion"
+
+    gate_call_bypass = GateCall(
+        tool_call_id="call_bp",
+        message_id="msg_1",
+        tool=tool,
+        args=args,
+        ctx=ctx_bypass,
+    )
+    decisions_bypass = await gate.decide([gate_call_bypass])
+    dec_bypass = decisions_bypass["call_bp"]
+    assert dec_bypass.outcome == "allow"
+    assert dec_bypass.approval_id is None
+
+    out_bypass = await tool.run(ctx_bypass, args)
+    assert out_bypass.is_error is False
+    assert out_bypass.content == "Approved. Everything was applied."
+    assert len(promo_kind.apply_calls) == 1
+
+    stored_bp = await proposals_service.for_call(project_id, "trn_bp", "call_bp")
+    assert stored_bp is not None
+    assert stored_bp.status == "approved"
+    assert stored_bp.result is not None
+
+    # 2. At autonomous: gate asks for human approval
+    await set_permission_level(databases, project_id, "autonomous")
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_auto")
+    ctx_auto = _dummy_ctx(project_id=project_id, turn_id="trn_auto", tool_call_id="call_auto")
+    preview_auto = await tool.preview(ctx_auto, args)
+    assert preview_auto.title == "Proposal: promotion"
+
+    gate_call_auto = GateCall(
+        tool_call_id="call_auto",
+        message_id="msg_2",
+        tool=tool,
+        args=args,
+        ctx=ctx_auto,
+    )
+    decisions_auto = await gate.decide([gate_call_auto])
+    dec_auto = decisions_auto["call_auto"]
+    assert dec_auto.outcome == "ask"
+    assert dec_auto.approval_id is not None
+
+    stored_auto = await proposals_service.for_call(project_id, "trn_auto", "call_auto")
+    assert stored_auto is not None
+    assert stored_auto.status == "pending"
+    assert stored_auto.result is None
 
 
 # ---------------------------------------------------------------------------

@@ -72,13 +72,13 @@
 
 **Notes:**
 - Never notifies, never raises a signal, never opens an incident (S4 §10); it only writes `baseline_links` and `silent_alert_verdicts`.
-- `team_fire_matches`: a `team`-origin fired result matches an incident when `cause_key(result.subject, result.model) == incident.cause_key` and `ran_at` lies in `[incident.started_at − grouping_window_minutes, incident.resolved_at or now]`.
+- `team_fire_matches`: a `team`-origin fired result matches an incident when `cause_key(result.subject, result.model) == incident.cause_key` and `ran_at` lies in `[incident.started_at − grouping_window_minutes, end]`. The window's end (Decision #565, one helper beside the matcher): a live incident (status in `ACTIVE_STATUSES`, read from the incidents constant) ends now, even with an old `resolved_at` (a reopened one); otherwise `resolved_at`, else `closed_at` (a person can close an open incident). A merged incident keeps matching on its own cause key (`merge` moves its signals to the survivor but not its key), up to its survivor's end by the same rule, and the link goes to the survivor (`merged_into`), never to the merged incident. The matcher takes the survivor when there is one.
 - Two directions, both through the matcher, both idempotent on (incident, team check): the `ResultsObserver` links newly stored team fires to matching incidents; the `IncidentObserver` on `opened` and `reopened` looks back for team fires already stored. `first_fired_at` is the earliest matching fire; `lead_seconds = (first_fired_at − incident.detected_at)` in seconds (negative: the team fired first).
 - `silent_alerts`: team fired results that match no incident, newest first, capped at 500, each with its stored verdict. `judge_silent` stores a person's verdict on one (`by="user"`, replaced on a second call) and writes `verdict.recorded` with the result as subject; a result that is not a silent team alert is 404.
 - `available`: true once the project has at least one stored `team`-origin result; the Dashboard (ui task 2) and Stats read it, nothing else decides it.
 - Both observers sit on paths that must not fail: the `IncidentObserver` is awaited inside `raise_signal` (paging), the `ResultsObserver` beside incidents' own observer during delivery. Incidents and results already isolate observer failures; each baseline observer also catches its own errors, logs them at warning with the IDs and returns, so a baseline bug never delays a page or an incident.
 
-**Tests (stop condition):** a team fire before an agent incident gives a negative `lead_seconds`, after it a positive one; a team fire on another cause key or outside the window links nothing; a repeated delivery or a reopen adds no second link; a team fire never raises a signal or a notification (assert no `signal.raised`, no `notification.*` event); an unmatched team fire is listed as silent and drops off once an incident matches it; a silent-alert verdict is stored, shown in the list and replaced by a second one; `available` flips with the first team record; an error inside either baseline observer fails neither `raise_signal` nor the delivery; full suite and checks; CI green.
+**Tests (stop condition):** Decision #565's cases: an incident a person closed while open stops matching after `closed_at`; a reopened incident with an old `resolved_at` still matches a fire now; a fire on a merged incident's cause key, inside its survivor's window, links to the survivor; a team fire before an agent incident gives a negative `lead_seconds`, after it a positive one; a team fire on another cause key or outside the window links nothing; a repeated delivery or a reopen adds no second link; a team fire never raises a signal or a notification (assert no `signal.raised`, no `notification.*` event); an unmatched team fire is listed as silent and drops off once an incident matches it; a silent-alert verdict is stored, shown in the list and replaced by a second one; `available` flips with the first team record; an error inside either baseline observer fails neither `raise_signal` nor the delivery; full suite and checks; CI green.
 
 **PR:** early PR from `plan/stage-6-stats-task2` into `main` (`Closes #<task issue>`): ui task 2 (the Dashboard) reads `Baseline.available`.
 
@@ -86,21 +86,21 @@
 
 ### Task 3: The Stats computation and route (I41)
 
-**Files:** new `stats/sources.py`, `stats/metrics.py`, `stats/service.py` (`StatsService`), `api/routers/stats.py`; `api/services.py` (one `stats` field); tests under `backend/tests/stats/`; regenerated `openapi.json`.
+**Files:** new `stats/sources.py`, `stats/metrics.py`, `stats/service.py` (`StatsService`), `api/routers/stats.py`; `monitoring/verdicts/baseline.py` (`matched_incidents`, `judged_silent_alerts`, one internal helper both use) and `monitoring/verdicts/contract.py` (both on the `Baseline` protocol, and `list_misses` on the `Verdicts` protocol, so `StatsService` depends on the protocols); `api/services.py` (one `stats` field); tests under `backend/tests/stats/`; regenerated `openapi.json`.
 
 **Interfaces:** consumes `Verdicts.list`, `Baseline` (`available`, `links`, `silent_alerts`), `Incidents.list`, `Results.query`, `Hooks.runs`, `cost_usd` and `ModelEntry.price` (ui task 1), `Clock`. Produces `StatsService(Stats)` and `GET /api/projects/{id}/stats?window=7d|30d|all&category=` (`StatsView`; a bad `window` or `category` is 422).
 
 **Notes:**
-- Computed on read, nothing stored. The window is `[now − 7d or 30d, now]` on the incident's `detected_at` (and on each other row's own time); `all` has no lower bound. `merged` incidents are left out everywhere (they were absorbed). `category` filters incidents by their current category; groups not built from incidents ignore it.
+- Computed on read, nothing stored. Whether the team caught an incident comes from `Baseline.matched_incidents` (added to I31 on 2026-10-31, implemented in this task in `monitoring/verdicts/baseline.py` on the same matcher as `silent_alerts`, reading every team fire page by page), never from the stored `baseline_links`: an attach that moves `started_at` earlier, or an `update` back to a live status, widens the window without re-linking. A fire that matches a merged incident counts for its survivor (merged incidents are left out of Stats). The stored links only feed the incident page. The judged silent alerts come from `Baseline.judged_silent_alerts` (Decision #568), never from the capped `silent_alerts` list, and are windowed by the alert's own `ran_at`. The window is `[now − 7d or 30d, now]` on the incident's `detected_at` (and on each other row's own time); `all` has no lower bound. `merged` incidents are left out everywhere (they were absorbed). `category` filters incidents by their current category; groups not built from incidents ignore it.
 - `collecting = n < STATS_MIN_VERDICTS` only for verdict-based numbers (marked V below); then `value` is still computed but the page shows "collecting data". Counts have `collecting = false`. With `baseline_available = false`, the numbers that need the baseline (B) are `value = None`, never 0.
 - Definitions (n in brackets):
 
 | Metric | Value |
 |---|---|
 | precision (V) | `real_issue` ÷ verdicts on incidents [verdicts] |
-| caught_baseline_missed (V, B) | `real_issue` incidents with no baseline link [verdicts] |
-| false_alarms_avoided (V, B) | silent team alerts judged `not_an_issue` [those verdicts] |
-| misses | miss reports + silent team alerts judged `real_issue` [count] |
+| caught_baseline_missed (V, B) | `real_issue` incidents not in `Baseline.matched_incidents` [verdicts] |
+| false_alarms_avoided (V, B) | `Baseline.judged_silent_alerts` judged `not_an_issue` [those verdicts] |
+| misses | miss reports (`Verdicts.list_misses`) + `Baseline.judged_silent_alerts` judged `real_issue` [count] |
 | detection_delay_s (V) | median `detected_at − started_at` of `real_issue` incidents [verdicts] |
 | time_to_resolution_s (V) | median `resolved_at − detected_at` of resolved `real_issue` incidents [verdicts] |
 | alerts_per_week | incidents opened ÷ weeks in the window [incidents] |
@@ -117,7 +117,7 @@
 - `cost_per_incident` takes dollars only from `cost_usd`; stats never multiplies a price itself.
 - A metric whose rows are empty is `value = None, n = 0`, never 0.
 
-**Tests (stop condition):** a fixture project (real stores on a temp data folder, fake `Clock`) with known incidents, verdicts, team fires, silent-alert verdicts, hook runs, approvals, tasks, turns and `llm_calls` gives the expected value and n for every metric in `STAT_METRICS` (the test iterates `STAT_METRICS`, so a metric without a function fails); 4 verdicts → `collecting` true, 5 → false; no team records → `baseline_available` false and the B numbers `None`; `7d` excludes an 8-day-old incident and `all` includes it; a merged incident is not counted; `category` narrows the incident groups only; an unpriced model gives `cost_per_incident = None`; bad query values are 422; full suite and checks; CI green.
+**Tests (stop condition):** with more than 500 silent alerts, an old judged one is still counted in its window; a judged alert that a widened incident window now matches is no longer counted; a team fire in the part of a window widened by an attach (`started_at` moved earlier) keeps the incident out of `caught_baseline_missed`; a team fire on a merged incident's cause key keeps its survivor out of it; a fixture project (real stores on a temp data folder, fake `Clock`) with known incidents, verdicts, team fires, silent-alert verdicts, hook runs, approvals, tasks, turns and `llm_calls` gives the expected value and n for every metric in `STAT_METRICS` (the test iterates `STAT_METRICS`, so a metric without a function fails); 4 verdicts → `collecting` true, 5 → false; no team records → `baseline_available` false and the B numbers `None`; `7d` excludes an 8-day-old incident and `all` includes it; a merged incident is not counted; `category` narrows the incident groups only; an unpriced model gives `cost_per_incident = None`; bad query values are 422; full suite and checks; CI green.
 
 ---
 

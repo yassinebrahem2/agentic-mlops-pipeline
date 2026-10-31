@@ -50,6 +50,12 @@ class RuleView(BaseModel):
     approved: datetime
 
 
+class RulePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    spec: RuleSpec
+
+
 class Rules(Protocol):
     async def list(self, project_id: str, model: str | None = None) -> list[RuleView]: ...
 
