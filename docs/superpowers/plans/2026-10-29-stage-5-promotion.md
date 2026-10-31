@@ -32,9 +32,9 @@ No type here is redefined: every I37, I38 and I40 type is contracts'.
 | 4 | The post-deploy trigger | results tasks 1, 3; incidents task 2 | after task 3, results task 3 and incidents task 2 |
 | 5 | `team_gate` mode | tasks 2, 3; results task 3; notifications tasks 1, 2 | after task 4 and notifications task 2; early PR |
 | 6 | `GET .../deployments` (I40) and the query providers | tasks 2, 3, 5; hooks task 1 | after task 5 |
-| 7 | `MergePullRequest`, its checks, `ProtectionSurfaces`, the closed-unmerged observer, merge events | contracts tasks 1, 3; hooks task 1; stage 3 knowledge (#406) | after task 6 and #406 merged |
+| 7 | `MergePullRequest`, its checks, `ProtectionSurfaces`, the closed-unmerged observer, merge events | contracts tasks 1, 3; hooks task 1; stage 3 knowledge (#406) | after task 2 (may run while task 3 waits); **early PR** |
 
-Core path: tasks 1 to 5 (promote). Extras: task 6 (Deployments data) and task 7 (agents merging). Shared files: this plan adds only its own lines to `api/services.py` (`build_services`), `agents/tools/__init__.py` (`default_registry`) and `frontend/src/pages/agents/ApprovalCard.tsx`; its routes are in its own `api/routers/promotion.py`, found by `include_routers`. Every change to the API commits the regenerated `frontend/openapi.json`.
+Core path: tasks 1 to 5 (promote). Extras: task 6 (Deployments data) and task 7 (agents merging). Task 7 consumes nothing from tasks 3 to 6, so it runs while task 3 waits on hooks, training and contracts (lead, 2026-10-31), with its own early PR from `plan/stage-5-promotion-task7` so its code is not reviewed inside task 5's PR; definitions task 3 consumes `MergePullRequest`. Shared files: this plan adds only its own lines to `api/services.py` (`build_services`), `agents/tools/__init__.py` (`default_registry`) and `frontend/src/pages/agents/ApprovalCard.tsx`; its routes are in its own `api/routers/promotion.py`, found by `include_routers`. Every change to the API commits the regenerated `frontend/openapi.json`.
 
 ---
 
