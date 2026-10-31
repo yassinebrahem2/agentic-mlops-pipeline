@@ -462,7 +462,11 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
     async def list_check_runs(owner: str, repo: str, ref: str, request: Request) -> Response:
         full_name = f"{owner}/{repo}"
         state.requests.append(
-            {"method": "GET", "path": f"/repos/{full_name}/commits/{ref}/check-runs"}
+            {
+                "method": "GET",
+                "path": f"/repos/{full_name}/commits/{ref}/check-runs",
+                "params": dict(request.query_params),
+            }
         )
         err = _check_common(request)
         if err is not None:
@@ -471,7 +475,12 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         runs = state.check_runs.get((full_name, ref))
         if runs is None:
             runs = state.check_runs.get((repo, ref), [])
-        return JSONResponse({"total_count": len(runs), "check_runs": runs})
+
+        page = int(request.query_params.get("page", 1))
+        per_page = int(request.query_params.get("per_page", 30))
+        start = (page - 1) * per_page
+        end = start + per_page
+        return JSONResponse({"total_count": len(runs), "check_runs": runs[start:end]})
 
     return app
 

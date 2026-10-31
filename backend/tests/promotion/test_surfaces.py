@@ -241,3 +241,28 @@ async def test_protection_surfaces_refuses_when_files_exceed_github_return(
         with pytest.raises(DomainError) as exc_info:
             await surfaces.touches("proj_1", pr.number)
         assert exc_info.value.code == "surface_check_failed"
+
+
+async def test_protection_surfaces_refuses_when_changed_files_is_none(
+    fake_github: RunningFakeGitHub,
+) -> None:
+    repo = "test-owner/test-repo"
+    async with httpx2.AsyncClient() as http:
+        pr = await create_pull(
+            http,
+            token="ghp_test",
+            repo=repo,
+            title="PR without changed_files",
+            head="feat",
+            base="main",
+        )
+        fake_github.state.prs[(repo, pr.number)]["changed_files"] = None
+
+        surfaces = _make_surfaces(
+            http=http,
+        )
+
+        with pytest.raises(DomainError) as exc_info:
+            await surfaces.touches("proj_1", pr.number)
+        assert exc_info.value.code == "surface_check_failed"
+        assert "unknown or missing" in exc_info.value.message

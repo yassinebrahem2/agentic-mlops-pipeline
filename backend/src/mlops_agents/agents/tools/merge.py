@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.agents.approvals.authority import ActionCall
-from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tools.base import (
     AgentTool,
     Preview,
@@ -28,10 +27,13 @@ if TYPE_CHECKING:
     import httpx2
 
     from mlops_agents.agents.pr_sync import PrSyncObserver
+    from mlops_agents.agents.runtime.contract import TaskView
     from mlops_agents.agents.tasks.contract import Tasks
     from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.promotion.contract import ProtectionSurfaces
+
+PASSING_CONCLUSIONS: frozenset[str] = frozenset({"success", "neutral", "skipped"})
 
 
 class MergePullRequestArgs(BaseModel):
@@ -122,21 +124,22 @@ class MergePullRequestTool(AgentTool[MergePullRequestArgs]):
                     )
                     runs = []
 
-                passing = any(r.status == "completed" and r.conclusion == "success" for r in runs)
-                if not passing:
-                    if not runs:
-                        refusals.append(f"Head commit {pr_details.head_sha} has no check runs.")
-                    else:
-                        refusals.append(
-                            f"Head commit {pr_details.head_sha} has no passing check runs."
-                        )
-
+                passing_runs = [
+                    r
+                    for r in runs
+                    if r.status == "completed" and r.conclusion in PASSING_CONCLUSIONS
+                ]
                 failed_or_pending = [
                     r
                     for r in runs
-                    if r.status != "completed"
-                    or r.conclusion in ("failure", "timed_out", "cancelled", "action_required")
+                    if r.status != "completed" or r.conclusion not in PASSING_CONCLUSIONS
                 ]
+
+                if not runs:
+                    refusals.append(f"Head commit {pr_details.head_sha} has no check runs.")
+                elif not passing_runs:
+                    refusals.append(f"Head commit {pr_details.head_sha} has no passing check runs.")
+
                 if failed_or_pending:
                     names = ", ".join(
                         f"{r.name} ({r.status}/{r.conclusion})" for r in failed_or_pending

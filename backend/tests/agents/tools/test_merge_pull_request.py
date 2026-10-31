@@ -377,6 +377,36 @@ async def test_merge_refusals(fake_github: RunningFakeGitHub) -> None:
             await tool.run(ctx, args)
         assert "failed or pending" in str(err.value).lower()
 
+        # 5a. Refuses stale check runs
+        fake_github.state.check_runs[(repo, head_sha)] = [
+            {"name": "test", "status": "completed", "conclusion": "success"},
+            {"name": "stale-check", "status": "completed", "conclusion": "stale"},
+        ]
+        with pytest.raises(ToolFailure) as err:
+            await tool.run(ctx, args)
+        assert "failed or pending" in str(err.value).lower()
+        assert "stale" in str(err.value).lower()
+
+        # 5b. Refuses startup_failure check runs
+        fake_github.state.check_runs[(repo, head_sha)] = [
+            {"name": "test", "status": "completed", "conclusion": "success"},
+            {"name": "startup-check", "status": "completed", "conclusion": "startup_failure"},
+        ]
+        with pytest.raises(ToolFailure) as err:
+            await tool.run(ctx, args)
+        assert "failed or pending" in str(err.value).lower()
+        assert "startup_failure" in str(err.value).lower()
+
+        # 5c. Pagination catches failing check run beyond first page (>100 check runs)
+        fake_github.state.check_runs[(repo, head_sha)] = [
+            {"name": f"check-{i}", "status": "completed", "conclusion": "success"}
+            for i in range(1, 105)
+        ] + [{"name": "check-105", "status": "completed", "conclusion": "failure"}]
+        with pytest.raises(ToolFailure) as err:
+            await tool.run(ctx, args)
+        assert "failed or pending" in str(err.value).lower()
+        assert "check-105" in str(err.value)
+
         # Reset checks to clean passing
         fake_github.state.check_runs[(repo, head_sha)] = [
             {"name": "test", "status": "completed", "conclusion": "success"}
@@ -435,3 +465,38 @@ async def test_merge_pr_action_call_and_gate_decisions() -> None:
     assert decide_action("autonomous", action, auth) == "ask"
     # allowed at bypass
     assert decide_action("bypass", action, auth) == "allow"
+
+
+async def test_merge_allows_neutral_and_skipped_checks(fake_github: RunningFakeGitHub) -> None:
+    repo = "test-owner/test-repo"
+    head_sha = "sha_neutral_skip"
+    async with httpx2.AsyncClient() as http:
+        pr = await create_pull(http, "ghp_test", repo, title="Neutral PR", head="feat", base="main")
+        fake_github.state.prs[(repo, pr.number)]["head"] = {"sha": head_sha, "ref": "feat"}
+        fake_github.state.prs[(repo, pr.number)]["mergeable"] = True
+        fake_github.state.prs[(repo, pr.number)]["mergeable_state"] = "clean"
+        fake_github.state.check_runs[(repo, head_sha)] = [
+            {"name": "ci-required", "status": "completed", "conclusion": "success"},
+            {"name": "ci-advisory", "status": "completed", "conclusion": "neutral"},
+            {"name": "ci-optional", "status": "completed", "conclusion": "skipped"},
+        ]
+
+        task = TaskView(
+            id="tsk_102",
+            agent="coder",
+            title="Neutral PR",
+            branch="feat",
+            status="in_review",
+            review_kind="github",
+            pr_number=pr.number,
+            pr_url=f"https://github.com/{repo}/pull/{pr.number}",
+        )
+        tool = _make_tool(
+            tasks=ToolTasks([task]),
+            http=http,
+        )
+        ctx = _make_context(agent="coder")
+        args = MergePullRequestArgs(pr_number=pr.number)
+        output = await tool.run(ctx, args)
+        assert output.is_error is False
+        assert fake_github.state.prs[(repo, pr.number)]["merged"] is True

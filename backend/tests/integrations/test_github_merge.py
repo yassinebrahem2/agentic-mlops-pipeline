@@ -50,6 +50,28 @@ async def test_get_check_runs(fake_github: RunningFakeGitHub) -> None:
         assert runs[2] == CheckRun(name="build", status="in_progress", conclusion=None)
 
 
+async def test_get_check_runs_pagination(fake_github: RunningFakeGitHub) -> None:
+    repo = "test-owner/test-repo"
+    sha = "head_paginated"
+    # 35 check runs, where run #35 is failing
+    fake_github.state.check_runs[(repo, sha)] = [
+        {"name": f"check-{i}", "status": "completed", "conclusion": "success"} for i in range(1, 35)
+    ] + [{"name": "check-35", "status": "completed", "conclusion": "failure"}]
+
+    async with httpx2.AsyncClient() as http:
+        # Paging with per_page=30 catches check #35 on page 2
+        runs = await get_check_runs(http, token="ghp_test", repo=repo, ref=sha, per_page=30)
+        assert len(runs) == 35
+        assert runs[34] == CheckRun(name="check-35", status="completed", conclusion="failure")
+
+        # Default per_page=100 also fetches all check runs
+        runs_default = await get_check_runs(http, token="ghp_test", repo=repo, ref=sha)
+        assert len(runs_default) == 35
+        assert runs_default[34] == CheckRun(
+            name="check-35", status="completed", conclusion="failure"
+        )
+
+
 async def test_get_pull_merge_state(fake_github: RunningFakeGitHub) -> None:
     repo = "test-owner/test-repo"
     async with httpx2.AsyncClient() as http:

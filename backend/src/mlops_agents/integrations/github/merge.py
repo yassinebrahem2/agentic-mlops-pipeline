@@ -48,28 +48,39 @@ async def get_check_runs(
     token: str,
     repo: str,
     ref: str,
+    *,
+    per_page: int = 100,
 ) -> list[CheckRun]:
-    response = await request(
-        http,
-        "GET",
-        f"/repos/{repo}/commits/{ref}/check-runs",
-        token,
-    )
-    if response.status_code != 200:
-        raise DomainError(
-            "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+    runs: list[CheckRun] = []
+    page = 1
+    while True:
+        response = await request(
+            http,
+            "GET",
+            f"/repos/{repo}/commits/{ref}/check-runs",
+            token,
+            params={"per_page": per_page, "page": page},
         )
-    try:
-        data: object = response.json()
-        if not isinstance(data, dict):
-            raise unreadable()
-        data_dict = cast(dict[str, object], data)
-        raw_runs = data_dict.get("check_runs")
-        if not isinstance(raw_runs, list):
-            raw_runs = []
-        return [CheckRun.model_validate(r) for r in cast(list[object], raw_runs)]
-    except (ValidationError, ValueError):
-        raise unreadable() from None
+        if response.status_code != 200:
+            raise DomainError(
+                "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+            )
+        try:
+            data: object = response.json()
+            if not isinstance(data, dict):
+                raise unreadable()
+            data_dict = cast(dict[str, object], data)
+            raw_runs = data_dict.get("check_runs")
+            if not isinstance(raw_runs, list):
+                raw_runs = []
+            page_runs = [CheckRun.model_validate(r) for r in cast(list[object], raw_runs)]
+            runs.extend(page_runs)
+            if len(page_runs) < per_page:
+                break
+            page += 1
+        except (ValidationError, ValueError):
+            raise unreadable() from None
+    return runs
 
 
 async def get_pull_merge_state(

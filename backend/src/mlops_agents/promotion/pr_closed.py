@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.merge import get_last_issue_comment
 from mlops_agents.integrations.github.pulls import get_pull
 from mlops_agents.knowledge.contract import NoteDraft
+from mlops_agents.knowledge.limits import TITLE_MAX_CHARS
 from mlops_agents.monitoring.untrusted import untrusted
 
 if TYPE_CHECKING:
@@ -44,14 +44,20 @@ class ClosedUnmergedObserver:
         if (project_id, pr.number) in self._seen:
             return
 
-        note_id = f"kno_closed_pr_{pr.number}"
+        title_prefix = f"PR #{pr.number} closed unmerged:"
         try:
-            existing = await self._knowledge.get(project_id, note_id)
-            if existing is not None:
-                self._seen.add((project_id, pr.number))
-                return
+            search_res = await self._knowledge.search(
+                project_id,
+                query=f"PR #{pr.number} closed unmerged",
+                type="decision",
+                limit=10,
+            )
+            for existing in search_res.notes:
+                if existing.title.startswith(title_prefix):
+                    self._seen.add((project_id, pr.number))
+                    return
         except Exception as exc:
-            logger.debug("Could not check existing note for PR #%s: %s", pr.number, exc)
+            logger.debug("Could not search existing note for PR #%s: %s", pr.number, exc)
 
         token = await self._github.token()
         if not token:
@@ -63,11 +69,11 @@ class ClosedUnmergedObserver:
 
         try:
             pr_obj = await get_pull(self._http, token, repo_slug, pr.number)
-            title = pr_obj.title
+            pr_title = pr_obj.title
             pr_body = pr_obj.body or ""
         except Exception as exc:
             logger.warning("Could not fetch PR #%s for note creation: %s", pr.number, exc)
-            title = f"PR #{pr.number}"
+            pr_title = f"PR #{pr.number}"
             pr_body = ""
 
         try:
@@ -78,26 +84,30 @@ class ClosedUnmergedObserver:
 
         comment_text = last_comment if last_comment is not None else pr_body
         text = untrusted(comment_text, "github_comment")
+
+        # Wrap PR title in untrusted(pr_title, "github") and ensure full title <= TITLE_MAX_CHARS
+        prefix = f"{title_prefix} "
+        wrapped_title = untrusted(pr_title, "github")
+        full_title = f"{prefix}{wrapped_title}"
+        if len(full_title) > TITLE_MAX_CHARS:
+            excess = len(full_title) - TITLE_MAX_CHARS
+            truncated_title = pr_title[:-excess]
+            wrapped_title = untrusted(truncated_title, "github")
+            full_title = f"{prefix}{wrapped_title}"
+            while len(full_title) > TITLE_MAX_CHARS and truncated_title:
+                truncated_title = truncated_title[:-1]
+                wrapped_title = untrusted(truncated_title, "github")
+                full_title = f"{prefix}{wrapped_title}"
+
         draft = NoteDraft(
             type="decision",
-            title=f"PR #{pr.number} closed unmerged: {title}",
+            title=full_title,
             text=text,
         )
 
-        try:
-            await self._knowledge.save(
-                project_id,
-                author="system",
-                note=draft,
-                note_id=note_id,
-            )
-        except DomainError as err:
-            if err.code == "note_not_found":
-                await self._knowledge.save(
-                    project_id,
-                    author="system",
-                    note=draft,
-                )
-            else:
-                raise
+        await self._knowledge.save(
+            project_id,
+            author="system",
+            note=draft,
+        )
         self._seen.add((project_id, pr.number))

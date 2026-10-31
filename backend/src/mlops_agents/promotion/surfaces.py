@@ -67,7 +67,13 @@ class GithubProtectionSurfaces(ProtectionSurfaces):
         pull_files = await list_pull_files(self._http, token, repo_slug, pr_number)
 
         # Hard limit: a list it cannot see whole is never trusted
-        if pr.changed_files is not None and len(pull_files) < pr.changed_files:
+        if pr.changed_files is None:
+            raise DomainError(
+                "surface_check_failed",
+                "PR changed_files count is unknown or missing",
+                status=422,
+            )
+        if len(pull_files) < pr.changed_files:
             raise DomainError(
                 "surface_check_failed",
                 f"PR #{pr_number} changed files ({pr.changed_files}) exceed files returned by GitHub ({len(pull_files)}).",
