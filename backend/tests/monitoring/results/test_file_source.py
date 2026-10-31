@@ -333,14 +333,10 @@ async def test_file_source_reader_scrubs_credentials_in_error_and_log(
     secret_stat = "stat_secret_token_999"
     stat_url = f"https://stat_user:{secret_stat}@stat.internal/path"
     orig_stat = Path.stat
-    stat_calls = 0
 
     def failing_stat(self: Path, *args: Any, **kwargs: Any) -> Any:
-        nonlocal stat_calls
         if self.name == "results.jsonl":
-            stat_calls += 1
-            if stat_calls > 1:
-                raise OSError(f"Stat failed for {stat_url}")
+            raise OSError(f"Stat failed for {stat_url}")
         return orig_stat(self, *args, **kwargs)
 
     with patch.object(Path, "stat", failing_stat):

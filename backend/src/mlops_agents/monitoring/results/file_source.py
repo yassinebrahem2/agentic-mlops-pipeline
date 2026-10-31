@@ -35,14 +35,30 @@ def _read_files_sync(
     consecutive_failures: int = 0,
 ) -> SourceReadOutcome:
     """Synchronous file scanner and reader for local folder paths."""
+    files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
+    last_error: str | None = None
+    records: list[tuple[str, ResultRecord]] = []
+    evaluations: list[EvaluationRecord] = []
     candidate_files: list[tuple[str, Path]] = []
-    for match in sorted(root.glob(pattern)):
+
+    try:
+        matches = sorted(root.glob(pattern))
+    except OSError as exc:
+        return SourceReadOutcome(
+            records=[],
+            cursor=cursor,
+            consecutive_failures=consecutive_failures + 1,
+            last_error=scrub_url_secrets(str(exc)),
+        )
+
+    for match in matches:
         try:
             resolved = match.resolve()
-        except OSError:
-            continue
-
-        if not resolved.is_file():
+            if not resolved.is_file():
+                continue
+        except OSError as exc:
+            consecutive_failures += 1
+            last_error = scrub_url_secrets(str(exc))
             continue
 
         try:
@@ -56,11 +72,6 @@ def _read_files_sync(
             continue
 
         candidate_files.append((rel_posix, resolved))
-
-    files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
-    last_error: str | None = None
-    records: list[tuple[str, ResultRecord]] = []
-    evaluations: list[EvaluationRecord] = []
 
     for rel_posix, resolved_path in candidate_files:
         try:
@@ -264,6 +275,14 @@ class FileSourceReader:
         )
         secret_paths = {f.path for f in findings.secret_files}
 
-        return await asyncio.to_thread(
-            _read_files_sync, root, pattern, secret_paths, cursor, consecutive_failures
-        )
+        try:
+            return await asyncio.to_thread(
+                _read_files_sync, root, pattern, secret_paths, cursor, consecutive_failures
+            )
+        except Exception as exc:
+            return SourceReadOutcome(
+                records=[],
+                cursor=cursor,
+                consecutive_failures=consecutive_failures + 1,
+                last_error=scrub_url_secrets(str(exc)),
+            )
