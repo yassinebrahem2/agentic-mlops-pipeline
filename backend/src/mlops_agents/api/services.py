@@ -54,6 +54,12 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
+from mlops_agents.monitoring.expectations.query import (
+    ExpectationsQueryProvider,
+    ResultsQueryProvider,
+)
+from mlops_agents.monitoring.expectations.service import ExpectationsService
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
@@ -64,12 +70,18 @@ from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
     AfterSyncJob,
     SyncPrsJob,
     SyncTrackingJob,
+)
+from mlops_agents.monitoring.verdicts.baseline import (
+    BaselineIncidentObserver,
+    BaselineResultsObserver,
+    SqliteBaseline,
 )
 from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
 from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider
@@ -155,10 +167,12 @@ class Services:
     hooks: HooksService
     incidents: IncidentsService
     verdicts: SqliteVerdicts
+    baseline: SqliteBaseline
     waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    expectations: ExpectationsService
     fixes: SqliteFixes
     training: SqliteTraining
 
@@ -320,12 +334,17 @@ async def build_services(
         maintenance=maintenance,
         clock=clock,
     )
+    results.bind_incidents(incidents)
     verdicts = SqliteVerdicts(databases, incidents, results, events, clock)
     incidents.bind_verdicts(verdicts)
     query_providers.register(VerdictsQueryProvider(verdicts))
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
     results.add_observer(SignalsFromResults(incidents, maintenance))
+    # After SignalsFromResults, so an incident an agent fire opens in the same batch exists.
+    baseline = SqliteBaseline(databases, results, incidents, events, clock)
+    results.add_observer(BaselineResultsObserver(baseline))
+    incidents.add_observer(BaselineIncidentObserver(baseline))
 
     tracking = TrackingService(
         databases=databases,
@@ -336,6 +355,7 @@ async def build_services(
         github_token=github.token,
         handoffs=handoffs,
     )
+    results.bind_tracking(tracking)
     stack.push_async_callback(tracking.close)
     evaluation_reader = SqliteEvaluationReader(tracking, tasks)
     reports = SqliteReports(databases, evaluation_reader, events)
@@ -467,11 +487,27 @@ async def build_services(
     )
     scheduler.register(SyncTrackingJob(tracking))
     scheduler.register(SyncPrsJob(databases, pr_sync))
+    scheduler.register(CollectResultsJob(databases, results))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
     scheduler.add_sync_observer(LabelConfirmation(verdicts))
 
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
+
+    expectations = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        tracking=tracking,
+        maintenance=maintenance,
+        clock=clock,
+    )
+    handoffs.add_observer(expectations.handoff_observer)
+    results.add_observer(expectations.results_observer)
+    scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
+    query_providers.register(ResultsQueryProvider(results))
+    query_providers.register(ExpectationsQueryProvider(expectations))
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -512,6 +548,10 @@ async def build_services(
             await on_call_seeder.reconcile(project.id)
         except Exception:
             logger.exception("Failed to reconcile on-call for project %s", project.id)
+        try:
+            await expectations.reconcile(project.id)
+        except Exception:
+            logger.exception("Failed to reconcile expectations for project %s", project.id)
 
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
@@ -557,10 +597,12 @@ async def build_services(
         hooks=hooks,
         incidents=incidents,
         verdicts=verdicts,
+        baseline=baseline,
         waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        expectations=expectations,
         fixes=fixes,
         training=training,
     )
