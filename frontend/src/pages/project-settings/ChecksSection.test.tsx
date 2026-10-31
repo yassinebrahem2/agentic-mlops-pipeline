@@ -6,8 +6,45 @@ import { ChecksSection } from "./ChecksSection";
 import { failure, json, renderSection, stubEventStream, stubRoutes } from "./testing";
 
 type State = components["schemas"]["ExpectationState"];
+type Check = components["schemas"]["CheckView"];
 
 const ROUTE = "/api/projects/prj_demo/expectations";
+const CHECKS_ROUTE = "/api/projects/prj_demo/checks";
+
+const FILE_CHECK: Check = {
+  id: "chk_1",
+  check_id: "psi_age",
+  category: "drift",
+  cadence: { cron: "0 6 * * *", every_minutes: null },
+  timezone: "Europe/Paris",
+  results_location: { connection: "warehouse", path_pattern: "results/psi_age/*.json" },
+  pr_number: 41,
+  agent: "monitor",
+  version: "v3",
+  status: "active",
+  registered: "2026-10-30T08:00:00Z",
+};
+const MLFLOW_CHECK: Check = {
+  id: "chk_2",
+  check_id: "auc_floor",
+  category: "model_performance",
+  cadence: { cron: null, every_minutes: 30 },
+  timezone: "UTC",
+  results_location: { metric: "auc", threshold: 0.8, fires_when: "below" },
+  pr_number: 42,
+  agent: "monitor",
+  version: null,
+  status: "pending_pr",
+  registered: "2026-10-31T08:00:00Z",
+};
+const RETIRED_CHECK: Check = {
+  ...FILE_CHECK,
+  id: "chk_3",
+  check_id: "old_check",
+  pr_number: 40,
+  version: null,
+  status: "retired",
+};
 
 const OK: State = {
   key: { kind: "feed", ref: "daily_scores", model: "churn" },
@@ -48,17 +85,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup(states: State[] | Response = [OK, LATE, PENDING]) {
+function setup(
+  states: State[] | Response = [OK, LATE, PENDING],
+  registered: Check[] | Response = [],
+) {
   let current = states;
-  stubRoutes({ [`GET ${ROUTE}`]: () => (current instanceof Response ? current : json(current)) });
+  let currentChecks = registered;
+  const requests = stubRoutes({
+    [`GET ${ROUTE}`]: () => (current instanceof Response ? current : json(current)),
+    [`GET ${CHECKS_ROUTE}`]: () =>
+      currentChecks instanceof Response ? currentChecks : json(currentChecks),
+  });
   renderSection(<ChecksSection projectId="prj_demo" />);
   return {
     user: userEvent.setup(),
+    requests,
     set: (next: State[]) => {
       current = next;
     },
+    setChecks: (next: Check[]) => {
+      currentChecks = next;
+    },
   };
 }
+
+function emit(type: "check.registered" | "pr.updated", seq: number) {
+  return act(async () => {
+    stream.emit(
+      type,
+      {
+        id: `evt_${String(seq)}`,
+        seq,
+        ts: "2026-10-31T07:00:00Z",
+        source: "checks",
+        subject_id: null,
+        payload: {},
+        type,
+      },
+      seq,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  });
+}
+
+const checkRequests = (requests: { path: string }[]) =>
+  requests.filter((r) => r.path === CHECKS_ROUTE).length;
 
 describe("ChecksSection", () => {
   it("renders each expectation with its kind, name, category and status as text", async () => {
@@ -115,5 +186,84 @@ describe("ChecksSection", () => {
     });
 
     expect(await screen.findByRole("listitem", { name: "nightly_eval" })).toBeInTheDocument();
+  });
+
+  describe("registered checks", () => {
+    it("renders each status with cadence, time zone, PR, agent and location as text", async () => {
+      setup([], [FILE_CHECK, MLFLOW_CHECK, RETIRED_CHECK]);
+
+      const file = within(await screen.findByRole("listitem", { name: "Check psi_age" }));
+      expect(file.getByText("Active")).toBeInTheDocument();
+      expect(file.getByText("Drift")).toBeInTheDocument();
+      expect(file.getByText("0 6 * * *")).toBeInTheDocument();
+      expect(file.getByText("Europe/Paris")).toBeInTheDocument();
+      expect(file.getByText("#41")).toBeInTheDocument();
+      expect(file.getByText("monitor")).toBeInTheDocument();
+      expect(file.getByText("v3")).toBeInTheDocument();
+      expect(file.getByText(/warehouse/)).toBeInTheDocument();
+      expect(file.getByText(/results\/psi_age\/\*\.json/)).toBeInTheDocument();
+
+      const mlflow = within(screen.getByRole("listitem", { name: "Check auc_floor" }));
+      expect(mlflow.getByText("Waiting for its pull request")).toBeInTheDocument();
+      expect(mlflow.getByText("every 30 minutes")).toBeInTheDocument();
+      expect(mlflow.getByText("MLflow metric auc, fires when below 0.8")).toBeInTheDocument();
+      expect(mlflow.queryByText("Version")).not.toBeInTheDocument();
+
+      const retired = within(screen.getByRole("listitem", { name: "Check old_check" }));
+      expect(retired.getByText("Retired")).toBeInTheDocument();
+    });
+
+    it("keeps the server's order", async () => {
+      setup([], [MLFLOW_CHECK, FILE_CHECK]);
+
+      await screen.findByRole("listitem", { name: "Check psi_age" });
+      const names = screen
+        .getAllByRole("listitem")
+        .map((item) => item.getAttribute("aria-label"))
+        .filter((name) => name?.startsWith("Check "));
+      expect(names).toEqual(["Check auc_floor", "Check psi_age"]);
+    });
+
+    it("explains where checks come from when there are none", async () => {
+      setup();
+
+      expect(
+        await screen.findByText(/Agents register checks through a pull request/),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the server's error with a retry while the expectation states still render", async () => {
+      const { user, setChecks } = setup([OK], failure("Checks unavailable", 500));
+
+      expect(await screen.findByText("Checks unavailable")).toBeInTheDocument();
+      expect(screen.getByRole("listitem", { name: "daily_scores" })).toBeInTheDocument();
+
+      setChecks([FILE_CHECK]);
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(await screen.findByRole("listitem", { name: "Check psi_age" })).toBeInTheDocument();
+    });
+
+    it("keeps the checks when the expectation states fail", async () => {
+      setup(failure("Expectations unavailable", 500), [FILE_CHECK]);
+
+      expect(await screen.findByText("Expectations unavailable")).toBeInTheDocument();
+      expect(await screen.findByRole("listitem", { name: "Check psi_age" })).toBeInTheDocument();
+    });
+
+    it("refetches the checks on check.registered and not on an unrelated event", async () => {
+      const { requests, setChecks } = setup([], [FILE_CHECK]);
+      await screen.findByRole("listitem", { name: "Check psi_age" });
+      expect(checkRequests(requests)).toBe(1);
+
+      await emit("pr.updated", 1);
+      expect(checkRequests(requests)).toBe(1);
+
+      setChecks([FILE_CHECK, MLFLOW_CHECK]);
+      await emit("check.registered", 2);
+
+      expect(await screen.findByRole("listitem", { name: "Check auc_floor" })).toBeInTheDocument();
+      expect(checkRequests(requests)).toBe(2);
+    });
   });
 });

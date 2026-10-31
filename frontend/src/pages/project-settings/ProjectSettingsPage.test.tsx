@@ -125,6 +125,7 @@ function setup(
           "/on-call",
           "/hooks",
           "/expectations",
+          "/checks",
           "/training/policies",
           "/rules",
           "/maintenance-windows",

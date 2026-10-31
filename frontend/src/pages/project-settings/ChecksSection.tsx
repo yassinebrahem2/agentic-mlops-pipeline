@@ -7,6 +7,7 @@ import { formatTime } from "@/lib/format";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { expectationsKey } from "./expectationsKey";
 import { CATEGORY_LABELS } from "@/pages/incidents/labels";
+import { RegisteredChecks } from "./RegisteredChecks";
 
 type State = components["schemas"]["ExpectationState"];
 
@@ -46,8 +47,10 @@ export function ChecksSection({ projectId }: { projectId: string }) {
         Checks and schedules
       </h2>
       <p className="text-sm text-muted-foreground">
-        What the project expects to arrive, and whether it has.
+        The checks agents registered, and what the project expects to arrive and whether it has.
       </p>
+      <RegisteredChecks projectId={projectId} />
+      <h3 className="text-base font-semibold">What is expected</h3>
       <QueryStatus query={states} loading="Loading what is expected..." />
       {states.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">Nothing is expected yet.</p>
