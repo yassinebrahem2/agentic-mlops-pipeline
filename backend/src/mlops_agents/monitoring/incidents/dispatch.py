@@ -9,6 +9,7 @@ from mlops_agents.monitoring.incidents.contract import (
     IncidentChange,
     IncidentObserver,
     Incidents,
+    Severity,
     diagnoser,
 )
 from mlops_agents.monitoring.untrusted import untrusted
@@ -21,7 +22,7 @@ class DiagnosisDispatch(IncidentObserver):
         self._incidents = incidents
         self._waker = waker
         self._current_diagnoser: dict[tuple[str, str], str] = {}
-        self._cause_woken: set[tuple[str, str]] = set()
+        self._cause_woken_severity: dict[tuple[str, str], Severity] = {}
 
     async def changed(self, project_id: str, change: IncidentChange) -> None:
         incident = await self._incidents.get(project_id, change.incident_id)
@@ -36,12 +37,12 @@ class DiagnosisDispatch(IncidentObserver):
             target_agent = diagnoser(incident.category, incident.subtype)
             key = "opened"
             self._current_diagnoser[incident_key] = target_agent
-            self._cause_woken.discard(incident_key)
+            self._cause_woken_severity.pop(incident_key, None)
         elif change.kind == "reopened":
             target_agent = diagnoser(incident.category, incident.subtype)
             key = f"reopened:{incident.reopened_count}"
             self._current_diagnoser[incident_key] = target_agent
-            self._cause_woken.discard(incident_key)
+            self._cause_woken_severity.pop(incident_key, None)
         elif change.kind == "cause":
             new_agent = diagnoser(incident.category, incident.subtype)
             prev_agent = self._current_diagnoser.get(incident_key)
@@ -50,22 +51,22 @@ class DiagnosisDispatch(IncidentObserver):
                 prev_agent = diagnoser(sigs[0].category, None) if sigs else new_agent
 
             if new_agent == prev_agent:
-                self._cause_woken.discard(incident_key)
+                self._cause_woken_severity.pop(incident_key, None)
                 return
 
             target_agent = new_agent
             key = f"diagnoser:{new_agent}"
             self._current_diagnoser[incident_key] = new_agent
-            self._cause_woken.add(incident_key)
+            self._cause_woken_severity[incident_key] = incident.severity
         elif change.kind == "severity_raised":
-            if incident_key in self._cause_woken:
-                self._cause_woken.discard(incident_key)
+            severity_after = change.after or incident.severity
+            woken_sev = self._cause_woken_severity.pop(incident_key, None)
+            if woken_sev is not None and woken_sev == severity_after:
                 return
             target_agent = diagnoser(incident.category, incident.subtype)
-            severity_after = change.after or incident.severity
             key = f"severity:{severity_after}"
         else:
-            self._cause_woken.discard(incident_key)
+            self._cause_woken_severity.pop(incident_key, None)
             return
 
         signals = await self._incidents.signals(project_id, incident.id)
