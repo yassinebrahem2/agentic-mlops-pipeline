@@ -223,22 +223,23 @@ describe("KnowledgePage", () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
-  it("shows the server's 422 message as is and keeps the editor open", async () => {
+  it.each([
+    ["invalid_note", "Title and text cannot be empty"],
+    ["note_too_long", "Title exceeds maximum length of 200 characters"],
+  ])("shows the server's %s 422 message as is and keeps the editor open", async (code, message) => {
     const user = userEvent.setup();
     stubNotes(() => ok(result([note("kno_1")])));
     patchSpy = vi
       .spyOn(api, "PATCH")
-      .mockImplementation(() =>
-        Promise.reject(new ApiError("invalid_note", "The title must not be empty", 422)),
-      );
+      .mockImplementation(() => Promise.reject(new ApiError(code, message, 422)));
     renderPage("/projects/prj_1/knowledge");
     const row = await screen.findByTestId("note-kno_1");
 
     await user.click(within(row).getByRole("button", { name: "Edit" }));
-    await user.clear(within(row).getByLabelText("Title"));
+    await user.type(within(row).getByLabelText("Title"), " more");
     await user.click(within(row).getByRole("button", { name: "Save" }));
 
-    expect(await within(row).findByText("The title must not be empty")).toBeInTheDocument();
+    expect(await within(row).findByText(message)).toBeInTheDocument();
     expect(within(row).getByLabelText("Title")).toBeInTheDocument();
   });
 
