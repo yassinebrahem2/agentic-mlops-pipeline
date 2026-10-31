@@ -15,7 +15,24 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function stubApi(handlers: Record<string, Handler>): Sent[] {
+// The notification sections load beside GitHub; their own tests cover them.
+const sectionDefaults: Record<string, Handler> = {
+  "GET /api/integrations/discord": () => json({ enabled: false, webhook_set: false }),
+  "GET /api/integrations/email": () =>
+    json({
+      enabled: false,
+      host: "",
+      port: 25,
+      user: "",
+      sender: "",
+      starttls: false,
+      password_set: false,
+    }),
+  "GET /api/integrations/public-url": () => json({ public_url: null }),
+};
+
+function stubApi(routes: Record<string, Handler>): Sent[] {
+  const handlers = { ...sectionDefaults, ...routes };
   const sent: Sent[] = [];
   vi.stubGlobal(
     "fetch",

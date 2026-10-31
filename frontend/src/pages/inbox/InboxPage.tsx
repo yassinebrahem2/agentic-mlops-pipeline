@@ -10,6 +10,8 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { errorText } from "@/lib/api";
+import { IncidentList } from "@/pages/incidents/IncidentList";
+import { MissReportDialog } from "@/pages/incidents/MissReportDialog";
 import { ApprovalCard, type ApprovalPart } from "@/pages/agents/ApprovalCard";
 import { LocalReviewCard } from "./LocalReviewCard";
 import { useGithubActivity, useLocalReviews, usePendingApprovals } from "./usePendingApprovals";
@@ -47,6 +49,17 @@ function Inbox({ projectId }: { projectId: string }) {
         </h1>
         <p className="text-sm text-muted-foreground">Everything waiting on you across agents.</p>
       </div>
+
+      {/* Incidents: ranked by the backend; Acknowledge and verdicts are the person's */}
+      <section aria-labelledby="incidents-heading" className="space-y-3">
+        <div className="flex items-center justify-between border-b pb-2">
+          <h2 id="incidents-heading" className="text-lg font-semibold tracking-tight">
+            Incidents
+          </h2>
+          <MissReportDialog projectId={projectId} />
+        </div>
+        <IncidentList projectId={projectId} />
+      </section>
 
       {/* Section 1: Pending approvals */}
       <section aria-labelledby="approvals-heading" className="space-y-3">
