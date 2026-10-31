@@ -19,6 +19,12 @@ from mlops_agents.agents.approvals.authority import Authority
 from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
+from mlops_agents.agents.runtime.budget import (
+    ROOM_FLOOR_TOKENS,
+    fixed_tokens,
+    request_budget_tokens,
+    room_tokens,
+)
 from mlops_agents.agents.runtime.compaction import compact_if_needed
 from mlops_agents.agents.runtime.context import history_messages, system_message
 from mlops_agents.agents.runtime.contract import (
@@ -142,7 +148,9 @@ def create_turn_graph(
         summary, compacted_through = await store.summary(project_id, session_id)
         active = await store.messages(project_id, session_id, after=compacted_through)
         messages: list[BaseMessage] = [system_message(agent, summary)]
-        messages.extend(history_messages([m for m in active if m.id != message_id]))
+        messages.extend(
+            history_messages([m for m in active if m.id != message_id], current_turn_id=turn_id)
+        )
         # A resolved stall ends here. The model node, which always runs next, clears it too on
         # success; this keeps the stall's lifetime within the node that set it.
         return {"messages": messages, "stall": None}
@@ -171,6 +179,32 @@ def create_turn_graph(
         if end_note:
             request.append(HumanMessage(content=end_note))
         tool_schemas = [t.schema() for t in agent.tools]
+
+        # Floor check before model request
+        sys_text = str(request[0].content) if request else ""
+        fixed = fixed_tokens(sys_text, tool_schemas)
+        room = room_tokens(agent.model, fixed)
+        if room < ROOM_FLOOR_TOKENS:
+            budget = request_budget_tokens(agent.model)
+            limit_val = (
+                agent.model.request_token_limit
+                if getattr(agent.model, "request_token_limit", None) is not None
+                else getattr(agent.model, "context_window", None)
+            )
+            floor_text = (
+                f"Cannot run {agent.definition.name} on {agent.model.address}: "
+                f"room ({room} tokens) is below the minimum floor of {ROOM_FLOOR_TOKENS} tokens "
+                f"(budget: {budget}, limit: {limit_val}, fixed part: {fixed} tokens). "
+                f"Choose a model with a larger limit or context window."
+            )
+            floor_part = TextPart(type="text", text=floor_text)
+            current_parts.append(floor_part)
+            async with lock:
+                await sink.text(message_id, floor_text)
+                await store.update_message(project_id, message_id, parts=current_parts)
+            return {
+                "stopped_reason": "room_below_floor",
+            }
 
         # The text of the step's current attempt: stored only when the step succeeds, or as the
         # partial answer of a failed or stopped step.
@@ -306,8 +340,13 @@ def create_turn_graph(
             "stall": None,
         }
 
+    initial_sys = str(system_message(agent, None).content)
+    turn_fixed = fixed_tokens(initial_sys, [t.schema() for t in agent.tools])
+
     step = ToolStep(
         agent=agent,
+        model=agent.model,
+        fixed=turn_fixed,
         gate=hooks.gate,
         workspaces=hooks.workspaces,
         sink=sink,
