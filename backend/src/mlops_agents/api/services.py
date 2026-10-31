@@ -55,6 +55,7 @@ from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
@@ -268,7 +269,26 @@ async def build_services(
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
+    query_providers.register(HooksQueryProvider(hooks))
     maintenance = NeverSuspended()
+
+    results = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     tracking = TrackingService(
         databases=databases,
@@ -300,6 +320,8 @@ async def build_services(
         tracking=tracking,
         handoffs=handoffs,
         reports=reports,
+        hooks=hooks,
+        incidents=incidents,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -395,24 +417,6 @@ async def build_services(
     scheduler.register(SyncTrackingJob(tracking))
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
-
-    results = ResultsService(
-        databases=databases,
-        handoffs=handoffs,
-        connections=connections,
-        events=events,
-    )
-    incidents = IncidentsService(
-        databases=databases,
-        events=events,
-        results=results,
-        severity=MediumSeverity(),
-        maintenance=maintenance,
-        clock=clock,
-    )
-    # Registered before the startup `deliver_undelivered` below, so a result stored before a
-    # restart still opens its incident.
-    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
