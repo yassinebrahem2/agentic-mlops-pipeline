@@ -59,6 +59,7 @@ from mlops_agents.monitoring.incidents.contract import MediumSeverity
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.collect_job import CollectResultsJob
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
 from mlops_agents.monitoring.scheduler.sync_jobs import (
@@ -382,16 +383,20 @@ async def build_services(
         clock=clock,
         sleep=clock.sleep,
     )
-    scheduler.register(SyncTrackingJob(tracking))
-    scheduler.register(SyncPrsJob(databases, pr_sync))
-    scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
-
     results = ResultsService(
         databases=databases,
         handoffs=handoffs,
         connections=connections,
         events=events,
+        tracking=tracking,
+        maintenance=maintenance,
     )
+
+    scheduler.register(SyncTrackingJob(tracking))
+    scheduler.register(SyncPrsJob(databases, pr_sync))
+    scheduler.register(CollectResultsJob(databases, results))
+    scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
+
     incidents = IncidentsService(
         databases=databases,
         events=events,
@@ -400,6 +405,7 @@ async def build_services(
         maintenance=maintenance,
         clock=clock,
     )
+    results.bind_incidents(incidents)
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
     results.add_observer(SignalsFromResults(incidents, maintenance))
