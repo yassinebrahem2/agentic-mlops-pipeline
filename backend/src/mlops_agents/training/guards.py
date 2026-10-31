@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from mlops_agents.monitoring.incidents.contract import ACTIVE_STATUSES
 from mlops_agents.training.contract import GuardRefusal, TrainingWindow
 
 if TYPE_CHECKING:
@@ -82,38 +83,49 @@ async def check_open_data_quality_incident(
     if not training_tables:
         return []
 
-    page = await incidents.list(project_id, limit=1000)
     refusals: list[GuardRefusal] = []
-
     w_start = _to_utc(window.start)
     w_end = _to_utc(window.end)
     now_utc = _to_utc(now)
 
-    for incident in page.rows:
-        if incident.status in ("resolved", "closed", "merged"):
-            continue
-        if incident.category != "data_quality":
-            continue
+    offset = 0
+    limit = 100
+    while True:
+        page = await incidents.list(
+            project_id,
+            status=list(ACTIVE_STATUSES),
+            limit=limit,
+            offset=offset,
+        )
+        for incident in page.rows:
+            if incident.status in ("resolved", "closed", "merged"):
+                continue
+            if incident.category != "data_quality":
+                continue
 
-        inc_started = _to_utc(incident.started_at)
+            inc_started = _to_utc(incident.started_at)
 
-        # Span is [incident.started_at, now]. Overlaps window if incident.started_at < window.end and now > window.start
-        overlaps = inc_started < w_end and now_utc > w_start
-        if not overlaps:
-            continue
+            # Span is [incident.started_at, now]. Overlaps window if incident.started_at < window.end and now > window.start
+            overlaps = inc_started < w_end and now_utc > w_start
+            if not overlaps:
+                continue
 
-        signals = await incidents.signals(project_id, incident.id)
-        matched_subjects = [s.subject for s in signals if s.subject in training_tables]
-        if matched_subjects:
-            refusals.append(
-                GuardRefusal(
-                    code="open_data_quality_incident",
-                    detail=(
-                        f"Open data quality incident '{incident.id}' on table(s) "
-                        f"{sorted(set(matched_subjects))} overlaps training window."
-                    ),
+            signals = await incidents.signals(project_id, incident.id)
+            matched_subjects = [s.subject for s in signals if s.subject in training_tables]
+            if matched_subjects:
+                refusals.append(
+                    GuardRefusal(
+                        code="open_data_quality_incident",
+                        detail=(
+                            f"Open data quality incident '{incident.id}' on table(s) "
+                            f"{sorted(set(matched_subjects))} overlaps training window."
+                        ),
+                    )
                 )
-            )
+
+        offset += len(page.rows)
+        if not page.rows or offset >= page.total:
+            break
 
     return refusals
 

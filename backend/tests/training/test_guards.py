@@ -51,7 +51,7 @@ class FakeIncidents:
         offset: int = 0,
     ) -> Page[IncidentView]:
         matched = [inc for inc in self._incidents if status is None or inc.status in status]
-        return Page(rows=matched[:limit], total=len(matched), truncated=False)
+        return Page(rows=matched[offset : offset + limit], total=len(matched), truncated=False)
 
     async def signals(self, project_id: str, incident_id: str) -> list[SignalView]:
         return self._signals.get(incident_id, [])
@@ -83,13 +83,14 @@ def make_fixes(
     handoffs: FakeHandoffs | None = None,
 ) -> SqliteFixes:
     events = SqliteEventLog(databases)
+    effective_handoffs = handoffs if handoffs is not None else FakeHandoffs()
     return SqliteFixes(
         databases=databases,
         incidents=cast(Incidents, incidents),
         waker=cast(AgentWaker, FakeAgentWaker()),
         events=events,
         clock=clock,
-        handoffs=cast(Handoffs, handoffs) if handoffs is not None else None,
+        handoffs=cast(Handoffs, effective_handoffs),
     )
 
 
@@ -389,6 +390,61 @@ async def test_guards_open_data_quality_incident(
     )
     result = await fixes.guards("prj_test", "cancel", window)
     assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_guards_open_data_quality_incident_pagination_and_status_filtering(
+    databases: Databases, fake_clock: FakeClock
+) -> None:
+    """The data quality guard filters to active statuses and pages past 100 items."""
+    handoff_view = make_handoff_view("cancel", maturity_days=7)
+    handoffs = FakeHandoffs(handoff_view)
+
+    window = TrainingWindow(
+        start=datetime(2026, 10, 10, 0, 0, 0, tzinfo=UTC),
+        end=datetime(2026, 10, 20, 0, 0, 0, tzinfo=UTC),
+    )
+
+    # Create 120 open incidents of other categories (e.g. drift)
+    incidents_list: list[IncidentView] = []
+    for i in range(120):
+        incidents_list.append(
+            make_incident(
+                f"inc_drift_{i}",
+                status="open",
+                category="drift",
+                started_at=datetime(2026, 10, 15, tzinfo=UTC),
+            )
+        )
+
+    # At index 121 (page 2), add an open data_quality incident touching bookings_train
+    target_inc = make_incident(
+        "inc_dq_target",
+        status="open",
+        category="data_quality",
+        started_at=datetime(2026, 10, 15, tzinfo=UTC),
+    )
+    incidents_list.append(target_inc)
+    sig = make_signal("sig_dq", "inc_dq_target", subject="bookings_train")
+
+    # Add resolved/closed incidents that status filter should ignore
+    incidents_list.append(
+        make_incident(
+            "inc_dq_closed",
+            status="closed",
+            category="data_quality",
+            started_at=datetime(2026, 10, 15, tzinfo=UTC),
+        )
+    )
+
+    fake_incidents = FakeIncidents(incidents=incidents_list, signals_map={"inc_dq_target": [sig]})
+    fixes = make_fixes(databases, fake_incidents, fake_clock, handoffs=handoffs)
+
+    result = await fixes.guards("prj_test", "cancel", window)
+    assert result.ok is False
+    assert len(result.refusals) == 1
+    assert result.refusals[0].code == "open_data_quality_incident"
+    assert "inc_dq_target" in result.refusals[0].detail
 
 
 @pytest.mark.asyncio

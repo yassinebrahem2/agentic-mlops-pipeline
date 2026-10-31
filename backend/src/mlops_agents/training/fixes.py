@@ -52,7 +52,7 @@ class SqliteFixes:
         waker: AgentWaker,
         events: EventLog,
         clock: Clock,
-        handoffs: Handoffs | None = None,
+        handoffs: Handoffs,
     ) -> None:
         self._databases = databases
         self._incidents = incidents
@@ -74,13 +74,12 @@ class SqliteFixes:
         training_tables: set[str] = set()
         model_spec = None
 
-        if self._handoffs is not None:
-            handoff = await self._handoffs.current(project_id)
-            if handoff is not None:
-                training_tables = {
-                    dr.table for dr in handoff.payload.data_roles if dr.role == "training"
-                }
-                model_spec = next((m for m in handoff.payload.models if m.name == model), None)
+        handoff = await self._handoffs.current(project_id)
+        if handoff is not None:
+            training_tables = {
+                dr.table for dr in handoff.payload.data_roles if dr.role == "training"
+            }
+            model_spec = next((m for m in handoff.payload.models if m.name == model), None)
 
         # 1. data_held
         refusals.extend(

@@ -66,6 +66,11 @@ class FakeIncidents:
         return self._incidents.get(incident_id)
 
 
+class FakeHandoffs:
+    async def current(self, project_id: str) -> None:
+        return None
+
+
 def make_incident(
     incident_id: str = "inc_1",
     model: str | None = "churn_predictor",
@@ -121,6 +126,7 @@ def fixes_service(
         waker=fake_waker,
         events=events,
         clock=fake_clock,
+        handoffs=FakeHandoffs(),  # type: ignore[arg-type]
     )
 
 
@@ -223,6 +229,7 @@ async def test_wake_fails_once_then_retried_request_wakes_retraining(
         waker=fake_waker,
         events=events,
         clock=fake_clock,
+        handoffs=FakeHandoffs(),  # type: ignore[arg-type]
     )
     project_id = "prj_test"
     incident_id = "inc_test"
