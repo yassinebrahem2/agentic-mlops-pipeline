@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from typing import Any, cast
@@ -14,6 +15,7 @@ class ProviderErrorKind(StrEnum):
     AUTH = "auth"
     QUOTA = "quota"
     RATE_LIMIT = "rate_limit"
+    REQUEST_TOO_LARGE = "request_too_large"
     TRANSIENT = "transient"
     UNREACHABLE = "unreachable"
     BAD_GENERATION = "bad_generation"
@@ -79,8 +81,48 @@ def _code(e: openai.APIError) -> object:
     return code
 
 
+def _is_request_too_large(e: BaseException) -> bool:
+    status_code = getattr(e, "status_code", None)
+    if status_code is None and hasattr(e, "response"):
+        resp = getattr(e, "response", None)
+        status_code = getattr(resp, "status_code", None)
+    if status_code == 413:
+        return True
+
+    if isinstance(e, openai.APIError):
+        code = _code(e)
+        if code == "context_length_exceeded":
+            return True
+
+    msg = _provider_message(e) or str(e)
+    msg_lower = msg.lower()
+
+    if (
+        "maximum context length" in msg_lower
+        or "reduce the length of the messages" in msg_lower
+        or "request payload size exceeds the limit" in msg_lower
+        or "context length exceeded" in msg_lower
+    ):
+        return True
+
+    # Groq TPM limit when single request is above per-minute limit (Requested > Limit)
+    if "tokens per minute" in msg_lower or "tpm" in msg_lower:
+        limit_match = re.search(r"\blimit\b\s*[:=]?\s*(\d+)", msg, re.IGNORECASE)
+        req_match = re.search(r"\brequested\b\s*[:=]?\s*(\d+)", msg, re.IGNORECASE)
+        if limit_match and req_match:
+            limit_val = int(limit_match.group(1))
+            req_val = int(req_match.group(1))
+            if req_val > limit_val:
+                return True
+
+    return False
+
+
 def _kind(exc: BaseException) -> tuple[ProviderErrorKind, float | None]:
     for e in _chain(exc):
+        if _is_request_too_large(e):
+            return ProviderErrorKind.REQUEST_TOO_LARGE, None
+
         if isinstance(e, openai.APIError):
             code = _code(e)
             if code in _BAD_GENERATION_CODES:
@@ -126,7 +168,11 @@ def _provider_message(exc: BaseException) -> str | None:
 
 def classify(exc: BaseException, secrets: Iterable[str] = ()) -> ProviderCallError:
     kind, retry_after = _kind(exc)
-    raw_message = _provider_message(exc) if kind is ProviderErrorKind.BAD_GENERATION else None
+    raw_message = (
+        _provider_message(exc)
+        if kind in (ProviderErrorKind.BAD_GENERATION, ProviderErrorKind.REQUEST_TOO_LARGE)
+        else None
+    )
     if raw_message is None:
         raw_message = error_text(exc)
     return ProviderCallError(kind, scrub_values(raw_message, secrets), retry_after)

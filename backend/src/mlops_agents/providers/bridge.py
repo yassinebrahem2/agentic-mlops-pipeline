@@ -18,6 +18,7 @@ def build_chat_model(
     *,
     http: httpx2.AsyncClient,
     timeout: float = 120.0,
+    max_tokens: int | None = None,
 ) -> ChatOpenAI:
     """The only way the app creates an LLM client. Retries are handled by the caller. `http` is
     the app's shared client (see ProvidersService); without it langchain-openai would use a
@@ -31,6 +32,7 @@ def build_chat_model(
         max_retries=0,
         timeout=timeout,
         http_async_client=http,
+        max_completion_tokens=max_tokens,
     )
 
 
@@ -63,7 +65,21 @@ class ResolvedModel:
     wire_model_id: str
     context_window: int
     keys: tuple[str, ...] = field(repr=False)
+    request_token_limit: int | None = None
 
     def build(self, http: httpx2.AsyncClient, key_index: int = 0) -> ChatOpenAI:
+        from mlops_agents.agents.runtime.budget import reply_reserve_tokens, request_budget_tokens
+
         key = self.keys[key_index] if self.keys else None
-        return build_chat_model(self.base_url, key, self.wire_model_id, http=http)
+        max_tokens = (
+            reply_reserve_tokens(request_budget_tokens(self))
+            if self.request_token_limit is not None
+            else None
+        )
+        return build_chat_model(
+            self.base_url,
+            key,
+            self.wire_model_id,
+            http=http,
+            max_tokens=max_tokens,
+        )

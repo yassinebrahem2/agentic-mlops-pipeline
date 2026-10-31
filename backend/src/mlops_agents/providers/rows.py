@@ -47,4 +47,5 @@ def model_from_row(row: RowMapping) -> ModelEntry:
         model_type=row["model_type"],
         dimensions=row["dimensions"],
         price=_price_from_row(row),
+        request_token_limit=row["request_token_limit"],
     )

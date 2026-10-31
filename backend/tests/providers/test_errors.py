@@ -182,3 +182,114 @@ def test_bad_request_other_code_is_bad_request() -> None:
     )
     result = classify(err)
     assert result.kind is ProviderErrorKind.BAD_REQUEST
+
+
+def test_groq_429_tpm_requested_greater_than_limit_is_request_too_large() -> None:
+    err = openai.RateLimitError(
+        "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 0, Requested 9000. Please try again in 1m0s.",
+        response=_response(429),
+        body={
+            "error": {
+                "message": "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 0, Requested 9000. Please try again in 1m0s.",
+                "type": "tokens",
+                "code": "rate_limit_exceeded",
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_groq_429_tpm_requested_within_limit_is_rate_limit() -> None:
+    err = openai.RateLimitError(
+        "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 15s.",
+        response=_response(429),
+        body={
+            "error": {
+                "message": "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 15s.",
+                "type": "tokens",
+                "code": "rate_limit_exceeded",
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.RATE_LIMIT
+
+
+def test_groq_429_rpm_is_rate_limit() -> None:
+    err = openai.RateLimitError(
+        "Rate limit reached for model `llama-3.3-70b-versatile` on requests per minute (RPM): Limit 30, Used 30, Requested 1. Please try again in 2s.",
+        response=_response(429),
+        body={
+            "error": {
+                "message": "Rate limit reached for model `llama-3.3-70b-versatile` on requests per minute (RPM): Limit 30, Used 30, Requested 1. Please try again in 2s.",
+                "code": "rate_limit_exceeded",
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.RATE_LIMIT
+
+
+def test_context_length_exceeded_code_is_request_too_large() -> None:
+    err = openai.BadRequestError(
+        "Context length exceeded",
+        response=_response(400),
+        body={"error": {"code": "context_length_exceeded"}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_openai_maximum_context_length_message_is_request_too_large() -> None:
+    err = openai.BadRequestError(
+        "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens.",
+        response=_response(400),
+        body={
+            "error": {
+                "message": "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens."
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_openai_reduce_length_message_is_request_too_large() -> None:
+    err = openai.BadRequestError(
+        "Please reduce the length of the messages or completion.",
+        response=_response(400),
+        body={"error": {"message": "Please reduce the length of the messages or completion."}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_gemini_payload_size_message_is_request_too_large() -> None:
+    err = openai.BadRequestError(
+        "Request payload size exceeds the limit: 10485760 bytes.",
+        response=_response(400),
+        body={"error": {"message": "Request payload size exceeds the limit: 10485760 bytes."}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_gemini_context_length_message_is_request_too_large() -> None:
+    err = openai.BadRequestError(
+        "context length exceeded",
+        response=_response(400),
+        body={"error": {"message": "context length exceeded"}},
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_http_413_is_request_too_large() -> None:
+    err = openai.APIStatusError(
+        "Payload Too Large",
+        response=_response(413),
+        body=None,
+    )
+    result = classify(err)
+    assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
