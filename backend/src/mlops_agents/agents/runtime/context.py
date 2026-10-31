@@ -87,7 +87,10 @@ def _system_message(
 
 
 def history_messages(
-    history: list[MessageView], current_turn_id: str | None = None
+    history: list[MessageView],
+    current_turn_id: str | None = None,
+    *,
+    trim_current_turn_tools: bool = False,
 ) -> list[BaseMessage]:
     """The session's stored messages as the model reads them; queued and system ones are left
     out."""
@@ -150,9 +153,12 @@ def history_messages(
                     if part.tool_call_id in unresolved_calls:
                         unresolved_calls.remove(part.tool_call_id)
                     content = part.content
-                    if (current_turn_id is None or message.turn_id != current_turn_id) and len(
-                        content
-                    ) > OLD_TOOL_RESULT_CHARS:
+                    should_trim = (
+                        trim_current_turn_tools
+                        or current_turn_id is None
+                        or message.turn_id != current_turn_id
+                    )
+                    if should_trim and len(content) > OLD_TOOL_RESULT_CHARS:
                         head = content[:OLD_TOOL_RESULT_CHARS]
                         open_idx = head.rfind("<data")
                         close_idx = head.rfind(DATA_CLOSE_TAG)

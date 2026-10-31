@@ -20,12 +20,17 @@ from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.budget import (
+    REQUEST_TOO_LARGE_MESSAGE,
     ROOM_FLOOR_TOKENS,
     fixed_tokens,
     request_budget_tokens,
     room_tokens,
 )
-from mlops_agents.agents.runtime.compaction import compact_if_needed
+from mlops_agents.agents.runtime.compaction import (
+    compact_if_needed,
+    group_turns,
+    message_len,
+)
 from mlops_agents.agents.runtime.context import history_messages, system_message
 from mlops_agents.agents.runtime.contract import (
     MessageView,
@@ -35,13 +40,18 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.runtime.hooks import Gate, GateDecision, InboundSource, TurnEndCheck
-from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelKeysExhausted
+from mlops_agents.agents.runtime.model_caller import (
+    ModelCaller,
+    ModelKeysExhausted,
+    TurnFailed,
+)
 from mlops_agents.agents.runtime.stall import StallState, await_stall, pending_stall, record_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.tool_step import ToolStep, needs_wait
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.events.contract import EventLog
+from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind
 
 
 class TurnSink(Protocol):
@@ -121,6 +131,7 @@ def create_turn_graph(
         nothing."""
         summary, _ = await store.summary(project_id, session_id)
         history = await store.messages(project_id, session_id)
+        tool_schemas = [t.schema() for t in agent.tools]
         try:
             await compact_if_needed(
                 store,
@@ -132,6 +143,7 @@ def create_turn_graph(
                 str(system_message(agent, summary).content),
                 turn_id=turn_id,
                 agent_name=agent.definition.name,
+                tools=tool_schemas,
             )
         except ModelKeysExhausted as error:
             stall = await record_stall(
@@ -145,11 +157,27 @@ def create_turn_graph(
                 node="prepare",
             )
             return {"stall": stall}
+        except ProviderCallError as comp_err:
+            if comp_err.kind is ProviderErrorKind.REQUEST_TOO_LARGE:
+                raise TurnFailed(REQUEST_TOO_LARGE_MESSAGE) from comp_err
+            raise
         summary, compacted_through = await store.summary(project_id, session_id)
         active = await store.messages(project_id, session_id, after=compacted_through)
-        messages: list[BaseMessage] = [system_message(agent, summary)]
+        active_msgs = [m for m in active if m.id != message_id]
+
+        sys_msg = system_message(agent, summary)
+        fixed = fixed_tokens(str(sys_msg.content), tool_schemas)
+        room = room_tokens(agent.model, fixed)
+        active_tokens = sum(message_len(m) for m in active_msgs) // 4
+        trim_tools = active_tokens > room
+
+        messages: list[BaseMessage] = [sys_msg]
         messages.extend(
-            history_messages([m for m in active if m.id != message_id], current_turn_id=turn_id)
+            history_messages(
+                active_msgs,
+                current_turn_id=turn_id,
+                trim_current_turn_tools=trim_tools,
+            )
         )
         # A resolved stall ends here. The model node, which always runs next, clears it too on
         # success; this keeps the stall's lifetime within the node that set it.
@@ -180,32 +208,6 @@ def create_turn_graph(
             request.append(HumanMessage(content=end_note))
         tool_schemas = [t.schema() for t in agent.tools]
 
-        # Floor check before model request
-        sys_text = str(request[0].content) if request else ""
-        fixed = fixed_tokens(sys_text, tool_schemas)
-        room = room_tokens(agent.model, fixed)
-        if room < ROOM_FLOOR_TOKENS:
-            budget = request_budget_tokens(agent.model)
-            limit_val = (
-                agent.model.request_token_limit
-                if getattr(agent.model, "request_token_limit", None) is not None
-                else getattr(agent.model, "context_window", None)
-            )
-            floor_text = (
-                f"Cannot run {agent.definition.name} on {agent.model.address}: "
-                f"room ({room} tokens) is below the minimum floor of {ROOM_FLOOR_TOKENS} tokens "
-                f"(budget: {budget}, limit: {limit_val}, fixed part: {fixed} tokens). "
-                f"Choose a model with a larger limit or context window."
-            )
-            floor_part = TextPart(type="text", text=floor_text)
-            current_parts.append(floor_part)
-            async with lock:
-                await sink.text(message_id, floor_text)
-                await store.update_message(project_id, message_id, parts=current_parts)
-            return {
-                "stopped_reason": "room_below_floor",
-            }
-
         # The text of the step's current attempt: stored only when the step succeeds, or as the
         # partial answer of a failed or stopped step.
         streamed_chunks: list[str] = []
@@ -223,32 +225,132 @@ def create_turn_graph(
                 updated = await store.update_message(project_id, message_id, parts=current_parts)
                 await sink.message(updated, created=False)
 
-        t0 = time.monotonic()
-        try:
-            reply = await caller.call(agent.model, request, tool_schemas, on_text, take_back)
-        except (Exception, asyncio.CancelledError) as error:
-            if isinstance(error, ModelKeysExhausted):
-                # No attempt follows the last one, so its text is still shown.
+        retried_too_large = False
+        while True:
+            # Floor check before model request
+            sys_text = str(request[0].content) if request else ""
+            fixed = fixed_tokens(sys_text, tool_schemas)
+            room = room_tokens(agent.model, fixed)
+            if room < ROOM_FLOOR_TOKENS:
+                budget = request_budget_tokens(agent.model)
+                limit_val = (
+                    agent.model.request_token_limit
+                    if getattr(agent.model, "request_token_limit", None) is not None
+                    else getattr(agent.model, "context_window", None)
+                )
+                floor_text = (
+                    f"Cannot run {agent.definition.name} on {agent.model.address}: "
+                    f"room ({room} tokens) is below the minimum floor of {ROOM_FLOOR_TOKENS} tokens "
+                    f"(budget: {budget}, limit: {limit_val}, fixed part: {fixed} tokens). "
+                    f"Choose a model with a larger limit or context window."
+                )
+                floor_part = TextPart(type="text", text=floor_text)
+                current_parts.append(floor_part)
+                async with lock:
+                    await sink.text(message_id, floor_text)
+                    await store.update_message(project_id, message_id, parts=current_parts)
+                return {
+                    "stopped_reason": "room_below_floor",
+                }
+
+            t0 = time.monotonic()
+            try:
+                reply = await caller.call(agent.model, request, tool_schemas, on_text, take_back)
+                break
+            except ProviderCallError as error:
+                if error.kind is not ProviderErrorKind.REQUEST_TOO_LARGE or retried_too_large:
+                    if streamed_chunks:
+                        current_parts.append(TextPart(type="text", text="".join(streamed_chunks)))
+                        await _update_parts()
+                    msg = (
+                        REQUEST_TOO_LARGE_MESSAGE
+                        if error.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+                        else error.message
+                    )
+                    raise TurnFailed(msg) from error
+
+                retried_too_large = True
                 if streamed_chunks:
                     await take_back()
-                stall = await record_stall(
-                    hooks.approvals,
-                    hooks.events,
-                    project_id=project_id,
-                    agent=agent.definition.name,
-                    turn_id=turn_id,
-                    step=step_count,
-                    exhausted=error,
-                    node="model",
+
+                # Compact the session (force compaction if turns exist before last 2; trim tool results of last 2 turns if needed)
+                all_history = await store.messages(project_id, session_id)
+                old_summary, compacted_through = await store.summary(project_id, session_id)
+                uncompacted = [m for m in all_history if m.id != message_id]
+                compacted_idx = -1
+                if compacted_through:
+                    for idx, m in enumerate(uncompacted):
+                        if m.id == compacted_through:
+                            compacted_idx = idx
+                            break
+                uncompacted_history = (
+                    uncompacted[compacted_idx + 1 :] if compacted_idx >= 0 else uncompacted
                 )
-                # The step is taken again after Try again: no message and no step spent. The
-                # inbound messages are this turn's now (taken), so they stay in its state.
-                return {"messages": inbound, "stall": stall}
-            # A failure with no next attempt, and a Stop, keep the text still shown.
-            if streamed_chunks:
-                current_parts.append(TextPart(type="text", text="".join(streamed_chunks)))
-                await _update_parts()
-            raise
+                uncompacted_turns = group_turns(uncompacted_history)
+
+                compacted = False
+                if len(uncompacted_turns) > 2:
+                    try:
+                        compacted = await compact_if_needed(
+                            store,
+                            caller,
+                            agent.model,
+                            project_id,
+                            session_id,
+                            uncompacted,
+                            str(system_message(agent, old_summary).content),
+                            turn_id=turn_id,
+                            agent_name=agent.definition.name,
+                            tools=tool_schemas,
+                            force=True,
+                        )
+                    except ProviderCallError as comp_err:
+                        if comp_err.kind is not ProviderErrorKind.REQUEST_TOO_LARGE:
+                            raise
+                        compacted = False
+
+                summary, compacted_through = await store.summary(project_id, session_id)
+                active = await store.messages(project_id, session_id, after=compacted_through)
+                trimmed_history = history_messages(
+                    [m for m in active if m.id != message_id],
+                    current_turn_id=turn_id,
+                    trim_current_turn_tools=True,
+                )
+                new_request = [system_message(agent, summary), *trimmed_history, *inbound]
+                if end_note:
+                    new_request.append(HumanMessage(content=end_note))
+
+                # Check if new_request was compacted or trimmed compared to request
+                old_req_chars = sum(len(str(m.content)) for m in request)
+                new_req_chars = sum(len(str(m.content)) for m in new_request)
+                if not compacted and new_req_chars >= old_req_chars:
+                    raise TurnFailed(REQUEST_TOO_LARGE_MESSAGE) from error
+
+                request = new_request
+                continue
+            except (Exception, asyncio.CancelledError) as error:
+                if isinstance(error, ModelKeysExhausted):
+                    # No attempt follows the last one, so its text is still shown.
+                    if streamed_chunks:
+                        await take_back()
+                    stall = await record_stall(
+                        hooks.approvals,
+                        hooks.events,
+                        project_id=project_id,
+                        agent=agent.definition.name,
+                        turn_id=turn_id,
+                        step=step_count,
+                        exhausted=error,
+                        node="model",
+                    )
+                    # The step is taken again after Try again: no message and no step spent. The
+                    # inbound messages are this turn's now (taken), so they stay in its state.
+                    return {"messages": inbound, "stall": stall}
+                # A failure with no next attempt, and a Stop, keep the text still shown.
+                if streamed_chunks:
+                    current_parts.append(TextPart(type="text", text="".join(streamed_chunks)))
+                    await _update_parts()
+                raise
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         await store.add_llm_call(

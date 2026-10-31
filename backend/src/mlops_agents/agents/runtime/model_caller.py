@@ -283,6 +283,8 @@ class ModelCaller:
             error = classify(exc, secrets=call.secrets)
             if error.kind is ProviderErrorKind.BAD_GENERATION:
                 raise _Rejected(error.message) from exc
+            if error.kind is ProviderErrorKind.REQUEST_TOO_LARGE:
+                raise error from exc
             raise TurnFailed(error.message) from exc
         return reply
 

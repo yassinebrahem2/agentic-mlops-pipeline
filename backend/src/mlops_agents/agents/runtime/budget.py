@@ -32,6 +32,11 @@ SUMMARY_MAX_SHARE = 0.10
 # Older tool output re-sent in history messages is capped at 500 characters plus notice.
 OLD_TOOL_RESULT_CHARS = 500
 
+REQUEST_TOO_LARGE_MESSAGE = (
+    "The request is too large for the model's context budget even after compaction. "
+    "Use Compact now or Clear context to free up room."
+)
+
 NOTICE_SUFFIX = (
     "characters cut to fit context budget. Use offset and limit, narrower search, "
     "or grep to read smaller parts.]"
