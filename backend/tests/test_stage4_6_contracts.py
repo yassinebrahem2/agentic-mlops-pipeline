@@ -37,6 +37,7 @@ MODULES = [
     "mlops_agents.training.constants",
     "mlops_agents.promotion.constants",
     "mlops_agents.agents.tools.names",
+    "mlops_agents.proposals.contract",
 ]
 
 
@@ -568,9 +569,10 @@ def test_prefixes_equal_roadmap_table() -> None:
 
 
 def test_payload_and_view_models_forbid_extra_keys_except_evaluation_payload() -> None:
-    from pydantic import BaseModel
+    from pydantic import BaseModel, RootModel
 
     from mlops_agents.promotion.contract import EvaluationPayload
+    from mlops_agents.proposals.contract import ProposalView
 
     discovered_models: list[type[BaseModel]] = []
     for mod_name in MODULES:
@@ -579,11 +581,13 @@ def test_payload_and_view_models_forbid_extra_keys_except_evaluation_payload() -
             if issubclass(obj, BaseModel) and obj is not BaseModel and obj.__module__ == mod_name:
                 discovered_models.append(obj)
 
-    assert len(discovered_models) >= 90
+    assert len(discovered_models) >= 100
 
+    exceptions = {EvaluationPayload, ProposalView}
     for model in discovered_models:
-        if model is EvaluationPayload:
+        if model in exceptions or issubclass(model, RootModel):
             # EvaluationPayload is the documented exception (I37: extra="allow" so team's extra fields survive)
+            # ProposalView is a RootModel over the discriminated union; RootModel does not support extra
             assert model.model_config.get("extra") != "forbid"
         else:
             assert model.model_config.get("extra") == "forbid", (
