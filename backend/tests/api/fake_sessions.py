@@ -154,8 +154,10 @@ class FakeSessions(AgentSessions):
         text: str,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
-        self._check_agent(agent)
+        if not system:
+            self._check_agent(agent)
         self.posted_messages.append((project_id, agent, from_agent, text))
         return await self._append(
             project_id, agent, text, author_name=author_name, from_agent=from_agent
@@ -174,8 +176,18 @@ class FakeSessions(AgentSessions):
             status="complete",
             created_at=now_iso(),
         )
-        view = await self.get(project_id, agent)
-        self.views[(project_id, agent)] = SessionView(
+        key = (project_id, agent)
+        if key not in self.views:
+            self.views[key] = SessionView(
+                id=new_id("ses"),
+                agent=agent,
+                busy=False,
+                messages=[],
+                last_seq=0,
+                current_task=None,
+            )
+        view = self.views[key]
+        self.views[key] = SessionView(
             id=view.id,
             agent=view.agent,
             busy=view.busy,

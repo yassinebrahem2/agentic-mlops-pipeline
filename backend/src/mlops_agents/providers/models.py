@@ -5,6 +5,7 @@ from pydantic.config import JsonDict
 
 from mlops_agents.credentials.scrub import base_url_problem
 from mlops_agents.providers.embedder import ModelType
+from mlops_agents.providers.usage_contract import ModelPrice
 
 ProviderKind = Literal["hosted", "self_hosted"]
 ProviderStatus = Literal["ok", "needs_attention"]
@@ -78,6 +79,7 @@ class ModelEntry(BaseModel):
     verified_at: str | None
     model_type: ModelType = "chat"
     dimensions: int | None = None
+    price: ModelPrice | None = None
 
     @computed_field
     @property
@@ -117,6 +119,7 @@ class ModelEntry(BaseModel):
 class RemoteModel(BaseModel):
     id: str
     context_window: int | None
+    price: ModelPrice | None = None
 
 
 class DetectedKey(BaseModel):
