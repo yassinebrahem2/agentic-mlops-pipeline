@@ -607,10 +607,10 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(PromotionKind(promotions))
     proposal_kinds.register(HooksKind(hooks=hooks))
     proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
     proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=rules))
-    proposal_kinds.register(PromotionKind(promotions))
     proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))
 
     approvals = ApprovalsService(
