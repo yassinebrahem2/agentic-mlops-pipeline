@@ -25,6 +25,7 @@ import {
 import { api, errorText, fieldErrors, unwrap } from "@/lib/api";
 import { useModels } from "@/lib/useModels";
 import { useRemoteModels } from "@/lib/useRemoteModels";
+import { PriceCell } from "./PriceCell";
 
 type ModelEntry = components["schemas"]["ModelEntry"];
 
@@ -82,6 +83,7 @@ export function ModelsTable() {
             <TableHead>Streaming</TableHead>
             <TableHead>Context window</TableHead>
             <TableHead>Dimensions</TableHead>
+            <TableHead>Price</TableHead>
             <TableHead>Availability</TableHead>
             <TableHead>Last verified</TableHead>
             <TableHead>Actions</TableHead>
@@ -165,6 +167,18 @@ function ModelRow({ model }: { model: ModelEntry }) {
             ? model.dimensions
             : "Not checked"
           : "Not applicable"}
+      </TableCell>
+      <TableCell className="whitespace-normal">
+        {isEmbedder ? (
+          "–"
+        ) : (
+          <PriceCell
+            model={model}
+            onUpdated={(updated) => {
+              storeModel(queryClient, updated);
+            }}
+          />
+        )}
       </TableCell>
       <TableCell className="whitespace-normal">
         <p>{AVAILABILITY_LABELS[model.availability]}</p>

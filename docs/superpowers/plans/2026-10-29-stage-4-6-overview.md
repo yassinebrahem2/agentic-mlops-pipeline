@@ -324,7 +324,7 @@ class Hooks(Protocol):                  # hooks
     def set_pinner(self, pinner: HookPinner) -> None: ...   # until set, hooks carry no pins
     async def list(self, project_id: str, model: str | None = None) -> list[HookView]: ...
     async def get(self, project_id: str, hook_id: str) -> HookView | None: ...
-    async def register(self, project_id: str, spec: CommandSpec, name: str, model: str | None, source: Literal["handoff", "proposal"]) -> HookView: ...   # idempotent by (model, name); pins through the pinner
+    async def register(self, project_id: str, spec: CommandSpec, name: str, model: str | None, source: Literal["handoff", "proposal"]) -> HookView: ...   # idempotent by (model, name); pins through the pinner only a hook with no pins (only approve replaces pins)
     async def set_enabled(self, project_id: str, hook_id: str, enabled: bool) -> HookView: ...   # never clears a suspension
     async def suspend(self, project_id: str, hook_id: str, reason: str) -> HookView: ...
     async def set_deploys_verified(self, project_id: str, hook_id: str, verified: bool) -> HookView: ...   # the alias check's verdict
@@ -414,6 +414,7 @@ class TrainingPolicyPayload(BaseModel): ...                                     
 class PromotionPayload(BaseModel): ...                                                                          # I37; key: the model
 ```
 
+- I19's `Proposals` gains `async apply_allowed(project_id: str, proposal_id: str) -> ApplyResult | None` (contracts task 4, #550): it applies a propose the gate allowed, with no approval. Only `Propose.run` calls it, and only after an allow decision.
 - Each kind implements `ProposalKind` (I19): preview, warnings, `credentials_needed` (none of the six needs a slot: a hook's credential is set on its route), idempotent `apply`; registered in `build_services` by the plan that owns it, with its card by that plan. The first five ask at every level; `promotion` per the override above, and an allowed propose is applied at once by the proposals service (contracts task 4). Proposals supersede by kind and key, as stage 3 decided. Keys: parser, the source ID; rule, model and rule name; hooks, constant per project; maintenance, reason and start; training policy and promotion, the model.
 - `ProposalCheck` (Protocol, `proposals/contract.py`, runtime-checkable, an I19 addition): `async check(project_id, payload) -> list[str]`, code refusals at propose time; a kind may also implement it (promotion does), and `Propose` refuses before the gate when it returns any. The stage 3 kinds are unchanged.
 - `Propose` takes every registered kind: `ProposeArgs.payload` is a plain object validated by the kind's `payload_model` (contracts task 4).
