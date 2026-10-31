@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -91,6 +92,7 @@ class ResultsService(Results):
         self._incidents = incidents
         self._maintenance = maintenance or NeverSuspended()
         self._observers: list[ResultsObserver] = []
+        self._delivery_locks: dict[str, asyncio.Lock] = {}
 
     def bind_incidents(self, incidents: SignalSink) -> None:
         """Binds incidents service to results service."""
@@ -115,8 +117,22 @@ class ResultsService(Results):
     def add_observer(self, observer: ResultsObserver) -> None:
         self._observers.append(observer)
 
+    def _delivery_lock(self, project_id: str) -> asyncio.Lock:
+        """The project's delivery lock. Held from reading undelivered rows to marking them,
+        so two deliveries for one project never hand the same rows to the observers."""
+        lock = self._delivery_locks.get(project_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._delivery_locks[project_id] = lock
+        return lock
+
     async def deliver_undelivered(self, project_id: str, now: datetime) -> None:
         """Delivers any previously committed but undelivered results to observers."""
+        async with self._delivery_lock(project_id):
+            await self._deliver_undelivered_locked(project_id, now)
+
+    async def _deliver_undelivered_locked(self, project_id: str, now: datetime) -> None:
+        """`deliver_undelivered` for a caller already holding the project's delivery lock."""
         if not self._observers:
             return
 
@@ -191,8 +207,25 @@ class ResultsService(Results):
 
     async def collect(self, project_id: str, now: datetime) -> CollectionReport:
         """Runs a collection cycle for all derived sources."""
+        # The rows a cycle stores stay undelivered until its own delivery marks them, so the
+        # whole cycle holds the project's delivery lock.
+        async with self._delivery_lock(project_id):
+            report = await self._collect_locked(project_id, now)
+
+        # 5. Emit results.collected event
+        await self._events.record(
+            project_id,
+            source="results",
+            type="results.collected",
+            payload=report.model_dump(),
+        )
+
+        return report
+
+    async def _collect_locked(self, project_id: str, now: datetime) -> CollectionReport:
+        """Steps 1 to 4 of `collect`, for a caller holding the project's delivery lock."""
         # 1. Deliver any undelivered records first
-        await self.deliver_undelivered(project_id, now)
+        await self._deliver_undelivered_locked(project_id, now)
 
         # 2. Derive sources
         sources = await self._derive_sources(project_id)
@@ -346,21 +379,11 @@ class ResultsService(Results):
                 project_id, [r.id for r in all_newly_stored], delivered_at=now
             )
 
-        report = CollectionReport(
+        return CollectionReport(
             stored=stored_total,
             by_source=by_source,
             failures=failures,
         )
-
-        # 5. Emit results.collected event
-        await self._events.record(
-            project_id,
-            source="results",
-            type="results.collected",
-            payload=report.model_dump(),
-        )
-
-        return report
 
     async def ingest(
         self,
