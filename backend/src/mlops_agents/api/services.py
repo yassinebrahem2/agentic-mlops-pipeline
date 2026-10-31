@@ -54,6 +54,11 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.service import HooksService
+from mlops_agents.monitoring.incidents.contract import MediumSeverity
+from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
+from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -134,6 +139,8 @@ class Services:
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
+    hooks: HooksService
+    incidents: IncidentsService
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
@@ -258,12 +265,19 @@ async def build_services(
     on_call = SqliteOnCallPeople(databases)
     on_call_seeder = OnCallSeeder(on_call, handoffs, databases)
     handoffs.add_observer(on_call_seeder)
+    hooks = HooksService(
+        databases=databases,
+        secrets=project_secrets,
+        events=events,
+        clock=clock,
+    )
+    handoff_hooks = HandoffHooks(hooks, handoffs)
+    handoffs.add_observer(handoff_hooks)
     proposal_kinds = ProposalKinds()
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
     maintenance = NeverSuspended()
-    _ = maintenance
 
     tracking = TrackingService(
         databases=databases,
@@ -298,15 +312,17 @@ async def build_services(
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
-    hooks = HookRegistry()
+    turn_hooks = HookRegistry()
     status_board_hook = StatusBoardHook()
-    hooks.register(status_board_hook)
-    hooks.register(KnowledgeHook(knowledge))
+    turn_hooks.register(status_board_hook)
+    turn_hooks.register(KnowledgeHook(knowledge))
     # One instance for the hook and the table-detail route: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
-    hooks.register(DataSummaryHook(connections, data_summaries))
-    hooks.register(TrackingSummaryHook(tracking))
-    catalog = await asyncio.to_thread(AgentCatalog.load, tools.names(), hook_names=hooks.names())
+    turn_hooks.register(DataSummaryHook(connections, data_summaries))
+    turn_hooks.register(TrackingSummaryHook(tracking))
+    catalog = await asyncio.to_thread(
+        AgentCatalog.load, tools.names(), hook_names=turn_hooks.names()
+    )
     bus.use_catalog(catalog)
     wakeups.use_catalog(catalog)
     agent_settings = AgentSettingsService(databases, providers, catalog)
@@ -336,7 +352,7 @@ async def build_services(
         approval_store=approval_store,
         observers=[turn_observer, inbound, pr_sync],
         bus=bus,
-        hooks=hooks,
+        hooks=turn_hooks,
         audit_log=audit,
         event_log=events,
     )
@@ -395,6 +411,17 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,
+        severity=MediumSeverity(),
+        maintenance=maintenance,
+        clock=clock,
+    )
+    # Registered before the startup `deliver_undelivered` below, so a result stored before a
+    # restart still opens its incident.
+    results.add_observer(SignalsFromResults(incidents, maintenance))
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -431,6 +458,9 @@ async def build_services(
             await on_call_seeder.reconcile(project.id)
         except Exception:
             logger.exception("Failed to reconcile on-call for project %s", project.id)
+
+    # Reconcile handoff hooks across existing projects
+    await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
     return Services(
         settings=settings,
@@ -470,6 +500,8 @@ async def build_services(
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
+        hooks=hooks,
+        incidents=incidents,
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,

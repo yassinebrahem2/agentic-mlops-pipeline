@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
+import ssl
 from email.message import EmailMessage
 from typing import Literal
 
@@ -33,10 +34,14 @@ class EmailChannel(Channel):
         subject = " ".join(message.title.replace("\r", " ").replace("\n", " ").split())
         body = render_message(message)
 
+        target_addr = target.strip()
+        sender_addr = email_settings.sender.strip()
+        address_secrets = [*list(secret_values), target_addr, sender_addr]
+
         em = EmailMessage()
         em["Subject"] = subject
-        em["From"] = email_settings.sender
-        em["To"] = target.strip()
+        em["From"] = sender_addr
+        em["To"] = target_addr
         if message.urgent:
             em["Importance"] = "high"
             em["X-Priority"] = "1"
@@ -49,10 +54,14 @@ class EmailChannel(Channel):
                     "Cannot send email password over a plain connection without TLS (starttls is false)."
                 )
 
+            ssl_context = ssl.create_default_context()
             try:
                 smtp = (
                     smtplib.SMTP_SSL(
-                        email_settings.host, email_settings.port, timeout=SEND_TIMEOUT_S
+                        email_settings.host,
+                        email_settings.port,
+                        timeout=SEND_TIMEOUT_S,
+                        context=ssl_context,
                     )
                     if use_ssl
                     else smtplib.SMTP(
@@ -62,15 +71,19 @@ class EmailChannel(Channel):
                 with smtp:
                     if not use_ssl and email_settings.starttls:
                         smtp.ehlo()
-                        smtp.starttls()
+                        smtp.starttls(context=ssl_context)
                         smtp.ehlo()
                     if password:
                         smtp.login(email_settings.user, password)
                     smtp.send_message(em)
             except ChannelError:
                 raise
+            except smtplib.SMTPRecipientsRefused:
+                raise ChannelError("SMTP recipient address refused by server") from None
+            except smtplib.SMTPSenderRefused:
+                raise ChannelError("SMTP sender address refused by server") from None
             except Exception as exc:
-                scrubbed = scrub_values(error_text(exc), secret_values)[:ERROR_MAX_CHARS]
+                scrubbed = scrub_values(error_text(exc), address_secrets)[:ERROR_MAX_CHARS]
                 raise ChannelError(scrubbed) from None
 
         try:
@@ -78,5 +91,5 @@ class EmailChannel(Channel):
         except ChannelError:
             raise
         except Exception as exc:
-            scrubbed = scrub_values(error_text(exc), secret_values)[:ERROR_MAX_CHARS]
+            scrubbed = scrub_values(error_text(exc), address_secrets)[:ERROR_MAX_CHARS]
             raise ChannelError(scrubbed) from None

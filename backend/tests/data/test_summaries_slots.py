@@ -31,6 +31,8 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.data.summary_env import SummaryEnv, build_summary_env, csv_rows, write
 
+pytestmark = pytest.mark.serial
+
 OTHER_PROJECT = "prj_other"
 # Windows CI is slow to start threads; the bounds only have to be far below the waits that a
 # missing cut would cause.

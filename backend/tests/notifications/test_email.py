@@ -161,3 +161,65 @@ async def test_email_password_never_sent_over_plain_connection(
     assert "tls" in err or "starttls" in err
     assert len(fake_smtp.state.messages) == 0
     assert "my_secret_email_password" not in str(exc_info.value)
+
+
+async def test_email_recipient_address_not_leaked_on_recipients_refused(
+    fake_smtp: RunningFakeSmtp, integration_env: IntegrationSettings
+) -> None:
+    settings = integration_env
+    await settings.set_email(
+        enabled=True,
+        host=fake_smtp.host,
+        port=fake_smtp.port,
+        user="test_user",
+        sender="alerts@example.com",
+        starttls=False,
+    )
+    fake_smtp.state.fail_rcpt = True
+
+    channel = EmailChannel(settings)
+    target_addr = "sensitive-recipient@corp.example.com"
+    msg = Message(title="Alert", severity="high")
+    with pytest.raises(ChannelError) as exc_info:
+        await channel.send(target_addr, msg)
+
+    err = str(exc_info.value)
+    assert target_addr not in err
+    assert "alerts@example.com" not in err
+    assert "refused" in err.lower()
+
+
+async def test_email_password_scrubbed_when_echoed_in_server_error(
+    fake_smtp: RunningFakeSmtp,
+    integration_env: IntegrationSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = integration_env
+    password = "super-secret-smtp-password-999"
+    await settings.set_email(
+        enabled=True,
+        host=fake_smtp.host,
+        port=465,
+        user="test_user",
+        sender="alerts@example.com",
+        starttls=False,
+        password=password,
+    )
+
+    import smtplib
+
+    def _failing_smtp_ssl(*args: object, **kwargs: object) -> smtplib.SMTP_SSL:
+        raise smtplib.SMTPAuthenticationError(
+            535, f"Authentication failed with password: {password}".encode()
+        )
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", _failing_smtp_ssl)
+
+    channel = EmailChannel(settings)
+    msg = Message(title="Outage", severity="critical")
+    with pytest.raises(ChannelError) as exc_info:
+        await channel.send("user@example.com", msg)
+
+    err = str(exc_info.value)
+    assert password not in err
+    assert "[REDACTED]" in err or "***" in err

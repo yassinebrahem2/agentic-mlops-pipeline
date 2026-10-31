@@ -417,9 +417,11 @@ async def test_failing_webhook_error_and_event_scrubs_secrets(
         webhook_url = f"{fake_discord.base_url}/api/webhooks/999/{secret_token}"
         await settings.set_discord(enabled=True, webhook_url=webhook_url)
 
-        # Fail all attempts
+        # Fail all attempts with body echoing the webhook url and secret token
         for _ in range(4):
-            fake_discord.state.fail_next(500)
+            fake_discord.state.fail_next(
+                500, body=f"Error delivering to {webhook_url} with secret {secret_token}"
+            )
 
         async with httpx2.AsyncClient() as http:
             channels = default_channels(settings, http)
@@ -441,6 +443,7 @@ async def test_failing_webhook_error_and_event_scrubs_secrets(
             row = rows[0]
             assert secret_token not in str(row["last_error"])
             assert webhook_url not in str(row["last_error"])
+            assert "[REDACTED]" in str(row["last_error"]) or "***" in str(row["last_error"])
 
             # Check notification.failed event
             evts = await events.history("prj_1", types=["notification.failed"])
@@ -448,6 +451,50 @@ async def test_failing_webhook_error_and_event_scrubs_secrets(
             evt_str = json.dumps(evts[0].model_dump())
             assert secret_token not in evt_str
             assert webhook_url not in evt_str
+    finally:
+        await databases.dispose()
+
+
+async def test_email_contact_address_not_in_notification_log_on_error(
+    tmp_path: Path, fake_smtp: RunningFakeSmtp
+) -> None:
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    try:
+        keystore = MemoryKeyStore()
+        settings = IntegrationSettings(databases, keystore)
+        events = SqliteEventLog(databases)
+        clock = FakeClock()
+
+        await settings.set_email(
+            enabled=True,
+            host=fake_smtp.host,
+            port=fake_smtp.port,
+            user="test_user",
+            sender="alerts@example.com",
+            starttls=False,
+        )
+
+        fake_smtp.state.fail_rcpt = True
+        secret_email = "super-private-oncall@example.com"
+
+        async with httpx2.AsyncClient() as http:
+            channels = default_channels(settings, http)
+            notifier = SqliteNotifier(databases, settings, channels, events, clock)
+
+            person = make_person(contacts=[Contact(channel="email", address=secret_email)])
+            msg = Message(title="Incident alert", severity="critical")
+            await notifier.notify("prj_1", person, msg, kind="incident", incident_id="inc_99")
+
+            engine = await databases.project("prj_1")
+            async with engine.connect() as conn:
+                rows = (await conn.execute(select(notification_log))).mappings().all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert secret_email not in str(row["last_error"])
+            assert "alerts@example.com" not in str(row["last_error"])
+            assert "refused" in str(row["last_error"]).lower()
     finally:
         await databases.dispose()
 

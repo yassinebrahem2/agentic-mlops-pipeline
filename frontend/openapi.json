@@ -1793,6 +1793,42 @@
         "title": "EventRecord",
         "type": "object"
       },
+      "ExpectationKey": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "feed",
+              "job",
+              "check",
+              "training_request"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "title": "ExpectationKey",
+        "type": "object"
+      },
       "Feed": {
         "additionalProperties": false,
         "properties": {
@@ -2275,6 +2311,226 @@
           "ok"
         ],
         "title": "HeartbeatView",
+        "type": "object"
+      },
+      "IncidentView": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cause"
+          },
+          "cause_key": {
+            "title": "Cause Key",
+            "type": "string"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "detected_at": {
+            "format": "date-time",
+            "title": "Detected At",
+            "type": "string"
+          },
+          "held": {
+            "default": false,
+            "title": "Held",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "issues": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "merged_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into"
+          },
+          "mitigated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mitigated At"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prs": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Prs",
+            "type": "array"
+          },
+          "reopened_count": {
+            "default": 0,
+            "title": "Reopened Count",
+            "type": "integer"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_offline": {
+            "default": false,
+            "title": "Resolved Offline",
+            "type": "boolean"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "signal_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "snoozed_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snoozed Until"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "acknowledged",
+              "mitigated",
+              "resolved",
+              "closed",
+              "reopened",
+              "merged"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerdictView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "severity",
+          "status",
+          "cause_key",
+          "started_at",
+          "detected_at"
+        ],
+        "title": "IncidentView",
         "type": "object"
       },
       "InspectConnection": {
@@ -2850,6 +3106,16 @@
             "title": "Model Type",
             "type": "string"
           },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "problem": {
             "anyOf": [
               {
@@ -2909,6 +3175,34 @@
           "problem"
         ],
         "title": "ModelEntry",
+        "type": "object"
+      },
+      "ModelPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_per_mtok": {
+            "title": "Completion Per Mtok",
+            "type": "number"
+          },
+          "prompt_per_mtok": {
+            "title": "Prompt Per Mtok",
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "provider",
+              "user"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt_per_mtok",
+          "completion_per_mtok",
+          "source"
+        ],
+        "title": "ModelPrice",
         "type": "object"
       },
       "ModelSpec": {
@@ -3579,6 +3873,32 @@
           "truncated"
         ],
         "title": "Page[EvaluationRecord]",
+        "type": "object"
+      },
+      "Page_IncidentView_": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/IncidentView"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "truncated"
+        ],
+        "title": "Page[IncidentView]",
         "type": "object"
       },
       "Page_MetricPoint_": {
@@ -4320,6 +4640,16 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4861,6 +5191,149 @@
           "token"
         ],
         "title": "SetGitHubToken",
+        "type": "object"
+      },
+      "SetPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "price"
+        ],
+        "title": "SetPrice",
+        "type": "object"
+      },
+      "SignalView": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "cause_key": {
+            "title": "Cause Key",
+            "type": "string"
+          },
+          "cleared": {
+            "default": false,
+            "title": "Cleared",
+            "type": "boolean"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "expectation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpectationKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fired_result",
+              "silence",
+              "parser_failure",
+              "source_failure",
+              "notification_failure"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "ran_at": {
+            "format": "date-time",
+            "title": "Ran At",
+            "type": "string"
+          },
+          "result_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Id"
+          },
+          "seen_at": {
+            "format": "date-time",
+            "title": "Seen At",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "category",
+          "subject",
+          "ran_at",
+          "detail",
+          "id",
+          "incident_id",
+          "seen_at",
+          "cause_key"
+        ],
+        "title": "SignalView",
         "type": "object"
       },
       "SlotState": {
@@ -5575,6 +6048,103 @@
         "title": "UpdateConnection",
         "type": "object"
       },
+      "UsageRow": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "completion_tokens": {
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "model_address": {
+            "title": "Model Address",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "week_start": {
+            "format": "date",
+            "title": "Week Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "agent",
+          "model_address",
+          "week_start",
+          "prompt_tokens",
+          "completion_tokens"
+        ],
+        "title": "UsageRow",
+        "type": "object"
+      },
+      "UsageView": {
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "unpriced_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "unpriced_models"
+        ],
+        "title": "UsageView",
+        "type": "object"
+      },
+      "UserPrice": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_per_mtok": {
+            "minimum": 0.0,
+            "title": "Completion Per Mtok",
+            "type": "number"
+          },
+          "prompt_per_mtok": {
+            "minimum": 0.0,
+            "title": "Prompt Per Mtok",
+            "type": "number"
+          }
+        },
+        "required": [
+          "prompt_per_mtok",
+          "completion_per_mtok"
+        ],
+        "title": "UserPrice",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -5613,6 +6183,92 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerdictView": {
+        "additionalProperties": false,
+        "properties": {
+          "check_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Check Versions",
+            "type": "object"
+          },
+          "created": {
+            "format": "date-time",
+            "title": "Created",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "right_category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "data_quality",
+                  "drift",
+                  "model_performance",
+                  "operational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Category"
+          },
+          "right_subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Subtype"
+          },
+          "source": {
+            "enum": [
+              "user",
+              "labels"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "enum": [
+              "real_issue",
+              "not_an_issue",
+              "wrong_type"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "value",
+          "source",
+          "created"
+        ],
+        "title": "VerdictView",
         "type": "object"
       },
       "VerifyModel": {
@@ -6271,6 +6927,47 @@
           }
         },
         "summary": "Set Context Window",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/models/price": {
+      "put": {
+        "operationId": "set_price_api_models_price_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPrice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Price",
         "tags": [
           "models"
         ]
@@ -7613,6 +8310,390 @@
         "summary": "Get Current Handoff",
         "tags": [
           "proposals"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents": {
+      "get": {
+        "operationId": "list_incidents_api_projects__project_id__incidents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "open",
+                      "acknowledged",
+                      "mitigated",
+                      "resolved",
+                      "closed",
+                      "reopened",
+                      "merged"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_IncidentView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Incidents",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}": {
+      "get": {
+        "operationId": "get_incident_api_projects__project_id__incidents__incident_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Incident",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/acknowledge": {
+      "post": {
+        "operationId": "acknowledge_incident_api_projects__project_id__incidents__incident_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge Incident",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/close": {
+      "post": {
+        "operationId": "close_incident_api_projects__project_id__incidents__incident_id__close_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close Incident",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/signals": {
+      "get": {
+        "operationId": "get_incident_signals_api_projects__project_id__incidents__incident_id__signals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SignalView"
+                  },
+                  "title": "Response Get Incident Signals Api Projects  Project Id  Incidents  Incident Id  Signals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Incident Signals",
+        "tags": [
+          "incidents"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/incidents/{incident_id}/timeline": {
+      "get": {
+        "operationId": "get_incident_timeline_api_projects__project_id__incidents__incident_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventRecord"
+                  },
+                  "title": "Response Get Incident Timeline Api Projects  Project Id  Incidents  Incident Id  Timeline Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Incident Timeline",
+        "tags": [
+          "incidents"
         ]
       }
     },
@@ -10310,6 +11391,56 @@
         "summary": "Discard Task",
         "tags": [
           "tasks"
+        ]
+      }
+    },
+    "/api/usage": {
+      "get": {
+        "operationId": "get_usage_api_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Usage",
+        "tags": [
+          "usage"
         ]
       }
     }

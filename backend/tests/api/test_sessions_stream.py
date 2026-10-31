@@ -25,6 +25,8 @@ from tests.agents.runtime.hub_spy import watch_hub_subscriptions
 from tests.api.conftest import add_local_project, live_server, signed_in
 from tests.api.fake_sessions import FakeSessions, SseMessage, parse_sse_events
 
+pytestmark = pytest.mark.serial
+
 
 async def _subscribed(fake: FakeSessions) -> None:
     """The server runs on this loop and subscribes after the response headers are out."""

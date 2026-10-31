@@ -46,6 +46,7 @@ def _client(
     )
 
 
+@pytest.mark.serial
 async def test_a_stream_sends_its_first_chunk_before_the_route_finishes(
     live_app: FastAPI, live_client: httpx2.AsyncClient
 ) -> None:
