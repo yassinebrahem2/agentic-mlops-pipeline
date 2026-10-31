@@ -56,6 +56,7 @@ from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.command_runner import CommandRunner
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
+from mlops_agents.monitoring.hooks.kind import HooksKind
 from mlops_agents.monitoring.hooks.placeholders import TrackerPlaceholderResolver
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
@@ -440,6 +441,7 @@ async def build_services(
             secret_values=secret_source,
         )
     )
+    proposal_kinds.register(HooksKind(hooks=hooks))
 
     approvals = ApprovalsService(
         databases=databases,

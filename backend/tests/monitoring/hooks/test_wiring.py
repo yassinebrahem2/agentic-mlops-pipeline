@@ -12,6 +12,7 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.ids import new_id
+from mlops_agents.monitoring.hooks.kind import HooksKind
 from mlops_agents.monitoring.hooks.query import HooksQueryProvider
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.proposals.payloads import HandoffPayload
@@ -52,6 +53,9 @@ async def test_build_services_hooks_wiring(
 
         # Verify hooks query provider is registered
         assert isinstance(services.query_providers.get("hooks"), HooksQueryProvider)
+
+        # Verify hooks proposal kind is registered
+        assert isinstance(services.proposal_kinds.get("hooks"), HooksKind)
 
         # Create a project directly
         project_id = new_id("prj")
