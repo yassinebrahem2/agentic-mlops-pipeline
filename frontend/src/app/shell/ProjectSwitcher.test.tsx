@@ -106,6 +106,20 @@ describe("ProjectSwitcher", () => {
         const providers: components["schemas"]["Provider"][] = [];
         const permissions: components["schemas"]["PermissionsSettings"] = { level: "ask" };
         const issues: components["schemas"]["IssuesSettings"] = { min_priority: "medium" };
+        const monitoring: components["schemas"]["MonitoringSettings"] = {
+          collection_interval_s: 60,
+          grouping_window_minutes: 60,
+          reopen_window_hours: 24,
+          recent_change_window_hours: 24,
+          escalation_timeout_minutes: 15,
+          check_grace_minutes: 30,
+          second_deadline_minutes: 60,
+          parser_disable_after: 3,
+          evaluation_max_age_hours: 72,
+          circuit_breaker_fixes: 3,
+          circuit_breaker_window_days: 30,
+          timezone: null,
+        };
         const sandbox: components["schemas"]["SandboxView"] = {
           docker: { available: true, version: "27.1", detail: null },
           environment: { state: "ready", tag: "env:1", detail: null },
@@ -125,11 +139,13 @@ describe("ProjectSwitcher", () => {
                     ? issues
                     : url.endsWith("/sandbox")
                       ? sandbox
-                      : url.endsWith("/connections")
+                      : url.endsWith("/connections") || url.endsWith("/on-call")
                         ? []
-                        : fakeProjects.find((project) =>
-                            url.endsWith(`/api/projects/${project.id}`),
-                          );
+                        : url.endsWith("/monitoring-settings")
+                          ? monitoring
+                          : fakeProjects.find((project) =>
+                              url.endsWith(`/api/projects/${project.id}`),
+                            );
         if (data !== undefined)
           return Promise.resolve(
             new Response(JSON.stringify(data), {

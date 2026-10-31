@@ -16,6 +16,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorText, unwrap } from "@/lib/api";
+import { DiscordSection } from "./DiscordSection";
+import { EmailSection } from "./EmailSection";
+import { PublicUrlSection } from "./PublicUrlSection";
 
 type GitHubStatus = components["schemas"]["GitHubStatus"];
 
@@ -58,6 +61,9 @@ export function IntegrationsPage() {
           </CardContent>
         </Card>
       </section>
+      <DiscordSection />
+      <EmailSection />
+      <PublicUrlSection />
     </div>
   );
 }

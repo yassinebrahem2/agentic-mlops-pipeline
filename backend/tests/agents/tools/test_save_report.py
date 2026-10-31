@@ -231,6 +231,44 @@ async def test_tool_output_when_evaluation_is_none(tool: SaveReport, ctx: ToolCo
     assert "No evaluation record found" in out.content
 
 
+async def test_tool_output_when_evaluation_reasons_is_none(
+    tool: SaveReport, ctx: ToolContext, reader: FakeEvaluationReader
+) -> None:
+    record = EvaluationRecord(
+        source_id="src_1",
+        model="churn",
+        version="v1",
+        run_key="run_1",
+        schema_version=1,
+        payload={},
+        fetched_at=datetime.now(UTC),
+    )
+    payload = EvaluationPayload(
+        schema_version=1,
+        evaluation_commit="commit1",
+        gate_config_version="v1",
+        decision="promote",
+        reasons=None,
+    )
+    ev = EvaluationView(
+        record=record,
+        payload=payload,
+        not_computed={"reasons": None},
+    )
+    reader.set_evaluation("prj_test", "churn", "v1", ev)
+
+    draft = ReportDraft(
+        model="churn",
+        candidate_version="v1",
+        assessments=_valid_assessments(),
+    )
+    args = SaveReportArgs(draft=draft)
+
+    out = await tool.run(ctx, args)
+    assert not out.is_error
+    assert "Reasons: not computed" in out.content
+
+
 def test_tool_risk_and_permission_levels() -> None:
     assert SaveReport.risk == RiskClass.READ
     for level in cast(list[PermissionLevel], ["suggest", "ask", "autonomous", "bypass"]):

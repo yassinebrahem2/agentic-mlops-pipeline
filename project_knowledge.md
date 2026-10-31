@@ -54,6 +54,8 @@ Anything not listed here is unknown.
 - [USER] A message from another agent reaches the recipient mid-turn; it does not wait for the turn to end.
 - [USER] Scheduled work, whether an agent's own wake-up or a recurring routine, runs in that agent's one session, labeled with its source.
 - [AGREED] Long sessions: the UI keeps the full history; the agent works from a compacted summary plus Knowledge and the status board.
+- [USER] 2026-10-31: a person can compact an agent's session now and clear its context from the session page. Clearing makes the agent start fresh (no earlier message or summary is sent); nothing is deleted, the history stays visible with a divider, and the session stays the agent's one session.
+- [USER] 2026-10-31: no large file or tool output reaches the model whole: a whole-file read that is too large is refused with the file's size, every tool result is capped by the model's request budget, and old tool output is not re-sent in full.
 
 ### Permissions, code changes and execution
 - [USER] Three permission levels: suggest only, ask first, autonomous. Plus a "bypass all permissions" mode (like Claude Code's --dangerously-skip-permissions).
