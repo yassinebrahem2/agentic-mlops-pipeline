@@ -347,7 +347,7 @@ async def build_services(
 
     wakeups = WakeupService(databases, events=events)
     waker = Waker(databases, events, clock)
-    fixes = SqliteFixes(databases, incidents, waker, events, clock)
+    fixes = SqliteFixes(databases, incidents, waker, events, clock, handoffs=handoffs)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,

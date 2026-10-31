@@ -21,9 +21,22 @@ from mlops_agents.training.constants import (
     WHY_MAX_CHARS,
     WHY_NOT_MAX_CHARS,
 )
-from mlops_agents.training.contract import FixChoice, FixRequestView, FixStatus
+from mlops_agents.training.contract import (
+    FixChoice,
+    FixRequestView,
+    FixStatus,
+    GuardRefusal,
+    GuardResult,
+    TrainingWindow,
+)
+from mlops_agents.training.guards import (
+    check_data_held,
+    check_labels_immature,
+    check_open_data_quality_incident,
+)
 
 if TYPE_CHECKING:
+    from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.providers.failover import Clock
 
 _MENU_CHOICES: tuple[FixChoice, ...] = ("re_threshold", "recalibrate", "retrain")
@@ -39,12 +52,53 @@ class SqliteFixes:
         waker: AgentWaker,
         events: EventLog,
         clock: Clock,
+        handoffs: Handoffs,
     ) -> None:
         self._databases = databases
         self._incidents = incidents
         self._waker = waker
         self._events = events
         self._clock = clock
+        self._handoffs = handoffs
+
+    async def guards(
+        self,
+        project_id: str,
+        model: str,
+        window: TrainingWindow,
+        policy_id: str | None = None,
+    ) -> GuardResult:
+        now = self._clock.now()
+        refusals: list[GuardRefusal] = []
+
+        training_tables: set[str] = set()
+        model_spec = None
+
+        handoff = await self._handoffs.current(project_id)
+        if handoff is not None:
+            training_tables = {
+                dr.table for dr in handoff.payload.data_roles if dr.role == "training"
+            }
+            model_spec = next((m for m in handoff.payload.models if m.name == model), None)
+
+        # 1. data_held
+        refusals.extend(
+            await check_data_held(self._incidents, project_id, model, training_tables, window)
+        )
+
+        # 2. open_data_quality_incident
+        refusals.extend(
+            await check_open_data_quality_incident(
+                self._incidents, project_id, training_tables, window, now
+            )
+        )
+
+        # 3. labels_immature
+        immature_refusal = check_labels_immature(model_spec, window, now, model_name=model)
+        if immature_refusal is not None:
+            refusals.append(immature_refusal)
+
+        return GuardResult(ok=len(refusals) == 0, refusals=refusals)
 
     async def request(
         self, project_id: str, incident_id: str, agent: str, evidence: str

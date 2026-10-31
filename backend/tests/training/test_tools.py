@@ -22,7 +22,12 @@ from mlops_agents.training.tools import (
 )
 from tests.agents.gate_helpers import FakeFileAccess
 from tests.providers.fake_clock import FakeClock
-from tests.training.test_fixes_store import FakeAgentWaker, FakeIncidents, make_incident
+from tests.training.test_fixes_store import (
+    FakeAgentWaker,
+    FakeHandoffs,
+    FakeIncidents,
+    make_incident,
+)
 
 
 def make_ctx(project_id: str = "prj_test", agent: str = "model-performance") -> ToolContext:
@@ -68,6 +73,7 @@ def fixes_service(
         waker=fake_waker,
         events=events,
         clock=fake_clock,
+        handoffs=FakeHandoffs(),  # type: ignore[arg-type]
     )
 
 
