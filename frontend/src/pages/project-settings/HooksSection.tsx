@@ -12,8 +12,8 @@ import { policiesKey } from "./policiesKey";
 
 const SHORT_SHA = 12;
 
-function verifiedText(verified: boolean | null): string {
-  if (verified === null) return "Not verified";
+function verifiedText(verified: boolean | null | undefined): string {
+  if (verified === null || verified === undefined) return "Not verified";
   return verified ? "Yes" : "No";
 }
 
