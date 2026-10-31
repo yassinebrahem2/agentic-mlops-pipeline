@@ -54,6 +54,12 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.expectations.contract import NeverSuspended
+from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
+from mlops_agents.monitoring.expectations.query import (
+    ExpectationsQueryProvider,
+    ResultsQueryProvider,
+)
+from mlops_agents.monitoring.expectations.service import ExpectationsService
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
@@ -148,6 +154,7 @@ class Services:
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
+    expectations: ExpectationsService
 
 
 async def _app_secrets(
@@ -439,6 +446,21 @@ async def build_services(
     diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
     incidents.add_observer(diagnosis_dispatch)
 
+    expectations = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        tracking=tracking,
+        maintenance=maintenance,
+        clock=clock,
+    )
+    handoffs.add_observer(expectations.handoff_observer)
+    results.add_observer(expectations.results_observer)
+    scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
+    query_providers.register(ResultsQueryProvider(results))
+    query_providers.register(ExpectationsQueryProvider(expectations))
+
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
     # transition. Later plans register their observers on the store
@@ -479,6 +501,10 @@ async def build_services(
             await on_call_seeder.reconcile(project.id)
         except Exception:
             logger.exception("Failed to reconcile on-call for project %s", project.id)
+        try:
+            await expectations.reconcile(project.id)
+        except Exception:
+            logger.exception("Failed to reconcile expectations for project %s", project.id)
 
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
@@ -527,4 +553,5 @@ async def build_services(
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,
+        expectations=expectations,
     )
