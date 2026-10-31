@@ -24,7 +24,7 @@ from mlops_agents.agents.runtime.contract import (
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
-from mlops_agents.agents.runtime.hub import SessionHub
+from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.repair import ProjectRecovery
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
@@ -397,6 +397,14 @@ class SessionManager(AgentSessions):
             observers=self._observers,
         )
         await self.start_queued_turns(project_id, session_id, agent)
+
+    def session_lock(self, project_id: str, session_id: str) -> AsyncRLock:
+        """The session's one lock, from the registry (the inbound source's `QueuedTurns`)."""
+        return self._registry.lock(project_id, session_id)
+
+    def session_hub(self, project_id: str, session_id: str) -> SessionHub:
+        """The session's one hub, from the registry (the inbound source's `QueuedTurns`)."""
+        return self._registry.hub(project_id, session_id)
 
     async def start_queued_turns(self, project_id: str, session_id: str, agent: str) -> None:
         """Start a worker for the session's queued turns when it has some and none is running.
