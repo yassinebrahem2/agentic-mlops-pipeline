@@ -291,6 +291,23 @@ describe("IncidentPage", () => {
     });
   });
 
+  it.each([
+    ["an expired snooze", "2020-01-01T10:00:00Z", 0],
+    ["a snooze still in force", "2999-01-01T10:00:00Z", 1],
+  ])("shows %s once at most", async (_name, until, count) => {
+    stubStream();
+    stubGet({
+      [INCIDENT]: () => ok(incident("inc_1", { snoozed_until: until })),
+      [SIGNALS]: () => ok([]),
+      [TIMELINE]: () => ok([]),
+    });
+
+    renderPage("/projects/prj_1/incidents/inc_1");
+    await screen.findByRole("button", { name: "Snooze" });
+
+    expect(screen.queryAllByText(/Snoozed until/)).toHaveLength(count);
+  });
+
   it("offers no Snooze on a merged incident", async () => {
     stubStream();
     stubPage();

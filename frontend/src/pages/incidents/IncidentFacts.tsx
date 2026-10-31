@@ -71,11 +71,6 @@ export function IncidentFacts({
       <Fact label="Closed">
         <When iso={incident.closed_at} />
       </Fact>
-      {incident.snoozed_until && (
-        <Fact label="Snoozed until">
-          <When iso={incident.snoozed_until} />
-        </Fact>
-      )}
       <Fact label="Model">{incident.model ?? "–"}</Fact>
       <Fact label="Held" testId="fact-held">
         {yesNo(incident.held)}
