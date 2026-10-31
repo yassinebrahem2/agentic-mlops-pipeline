@@ -31,10 +31,13 @@ async def list_incidents(
     project: ProjectDep,
     services: ServicesDep,
     status: Annotated[list[IncidentStatus] | None, Query()] = None,
+    inbox: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Page[IncidentView]:
-    return await services.incidents.list(project.id, status=status, limit=limit, offset=offset)
+    return await services.incidents.list(
+        project.id, status=status, inbox=inbox, limit=limit, offset=offset
+    )
 
 
 @router.get(

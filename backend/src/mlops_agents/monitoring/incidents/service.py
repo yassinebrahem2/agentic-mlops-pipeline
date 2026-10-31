@@ -400,10 +400,19 @@ class IncidentsService(Incidents):
         self,
         project_id: str,
         status: list[IncidentStatus] | None = None,
+        inbox: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> Page[IncidentView]:
-        rows, total = await self._store.list_incidents(project_id, status, limit, offset)
+        if inbox and status:
+            raise DomainError(
+                "inbox_status_conflict",
+                "Cannot combine 'status' and 'inbox' filters.",
+                status=422,
+            )
+        rows, total = await self._store.list_incidents(
+            project_id, status=status, limit=limit, offset=offset, inbox=inbox
+        )
         inc_ids = [str(r["id"]) for r in rows]
         sig_ids_map = await self._store.get_signal_ids_for_incidents(project_id, inc_ids)
         items: list[IncidentView] = []

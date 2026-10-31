@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import RowMapping, case, func, or_, select, update
+from sqlalchemy import RowMapping, and_, case, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.monitoring.expectations.contract import ExpectationKey
@@ -20,7 +20,7 @@ from mlops_agents.monitoring.incidents.contract import (
 )
 from mlops_agents.monitoring.verdicts.contract import VerdictView
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import events, incidents, recent_changes, signals
+from mlops_agents.storage.tables import events, incidents, recent_changes, signals, verdicts
 
 
 def parse_dt(raw: str) -> datetime:
@@ -352,15 +352,28 @@ class IncidentStore:
     async def list_incidents(
         self,
         project_id: str,
-        status: list[IncidentStatus] | None,
-        limit: int,
-        offset: int,
+        status: list[IncidentStatus] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        inbox: bool = False,
     ) -> tuple[Sequence[RowMapping], int]:
         engine = await self._databases.project(project_id)
         base_query = select(incidents)
         count_query = select(func.count(incidents.c.id))
 
-        if status:
+        if inbox:
+            has_verdict = (
+                select(verdicts.c.incident_id)
+                .where(verdicts.c.incident_id == incidents.c.id)
+                .exists()
+            )
+            inbox_filter = or_(
+                incidents.c.status.in_(ACTIVE_STATUSES),
+                and_(incidents.c.status == "resolved", ~has_verdict),
+            )
+            base_query = base_query.where(inbox_filter)
+            count_query = count_query.where(inbox_filter)
+        elif status:
             base_query = base_query.where(incidents.c.status.in_(status))
             count_query = count_query.where(incidents.c.status.in_(status))
 

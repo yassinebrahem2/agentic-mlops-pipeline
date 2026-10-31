@@ -11387,6 +11387,16 @@
           },
           {
             "in": "query",
+            "name": "inbox",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Inbox",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
