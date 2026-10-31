@@ -103,6 +103,43 @@
         "title": "AddProviderKey",
         "type": "object"
       },
+      "AgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_approval",
+              "waiting_reply",
+              "inactive"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "state"
+        ],
+        "title": "AgentActivity",
+        "type": "object"
+      },
       "AgentInfo": {
         "properties": {
           "chat": {
@@ -1443,6 +1480,81 @@
           "value"
         ],
         "title": "CredentialBody",
+        "type": "object"
+      },
+      "DashboardView": {
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "at_risk": {
+            "items": {
+              "$ref": "#/components/schemas/ExpectationState"
+            },
+            "title": "At Risk",
+            "type": "array"
+          },
+          "baseline_available": {
+            "title": "Baseline Available",
+            "type": "boolean"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "heartbeat_reachable": {
+            "title": "Heartbeat Reachable",
+            "type": "boolean"
+          },
+          "incidents_by_severity": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "title": "Incidents By Severity",
+            "type": "object"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCard"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageStatus"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages",
+          "edges",
+          "models",
+          "incidents_by_severity",
+          "at_risk",
+          "agents",
+          "heartbeat_reachable",
+          "baseline_available"
+        ],
+        "title": "DashboardView",
         "type": "object"
       },
       "DataFeedRef": {
@@ -4049,6 +4161,44 @@
           "url"
         ],
         "title": "MlflowSettings",
+        "type": "object"
+      },
+      "ModelCard": {
+        "additionalProperties": false,
+        "properties": {
+          "latest_metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Latest Metrics",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "open_incidents": {
+            "default": 0,
+            "title": "Open Incidents",
+            "type": "integer"
+          },
+          "production_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Version"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelCard",
         "type": "object"
       },
       "ModelCreate": {
@@ -7217,6 +7367,39 @@
           "set"
         ],
         "title": "SlotState",
+        "type": "object"
+      },
+      "StageStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "incident_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Ids",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "late",
+              "incident",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "StageStatus",
         "type": "object"
       },
       "SyncBody": {
@@ -10562,6 +10745,48 @@
         "summary": "Get Table Detail",
         "tags": [
           "data"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/dashboard": {
+      "get": {
+        "operationId": "get_dashboard_api_projects__project_id__dashboard_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Dashboard",
+        "tags": [
+          "dashboard"
         ]
       }
     },
