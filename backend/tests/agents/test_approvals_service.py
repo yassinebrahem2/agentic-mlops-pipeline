@@ -56,6 +56,7 @@ class FakeSessionsForApproval:
         text: str,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         raise NotImplementedError
 

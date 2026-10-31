@@ -27,7 +27,7 @@ from tests.proposals.samples import connection
 
 
 class MovingTestKind(ScriptedTestKind):
-    def __init__(self, secrets: ProjectSecrets, name: str = "moving_kind") -> None:
+    def __init__(self, secrets: ProjectSecrets, name: str = "connections") -> None:
         super().__init__(name=name)
         self._secrets = secrets
 
@@ -103,7 +103,7 @@ async def test_put_credential_racing_with_decide(
     moves_slot: bool,
 ) -> None:
     test_kind: ProposalKind = (
-        MovingTestKind(project_secrets) if moves_slot else ScriptedTestKind(name="non_moving_kind")
+        MovingTestKind(project_secrets) if moves_slot else ScriptedTestKind(name="connections")
     )
     kinds.register(test_kind)
     project_id = "prj_racesvc"

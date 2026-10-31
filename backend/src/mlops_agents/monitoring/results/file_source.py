@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND, Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
 from mlops_agents.monitoring.results.contract import ResultRecord, parse_source_id
+from mlops_agents.tracking.contract import EvaluationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -22,20 +24,41 @@ class SourceReadOutcome:
     cursor: dict[str, Any]
     consecutive_failures: int
     last_error: str | None
+    evaluations: list[EvaluationRecord] = field(default_factory=list[EvaluationRecord])
 
 
 def _read_files_sync(
-    root: Path, pattern: str, secret_paths: set[str], cursor: dict[str, Any]
+    root: Path,
+    pattern: str,
+    secret_paths: set[str],
+    cursor: dict[str, Any],
+    consecutive_failures: int = 0,
 ) -> SourceReadOutcome:
     """Synchronous file scanner and reader for local folder paths."""
+    files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
+    last_error: str | None = None
+    records: list[tuple[str, ResultRecord]] = []
+    evaluations: list[EvaluationRecord] = []
     candidate_files: list[tuple[str, Path]] = []
-    for match in sorted(root.glob(pattern)):
+
+    try:
+        matches = sorted(root.glob(pattern))
+    except OSError as exc:
+        return SourceReadOutcome(
+            records=[],
+            cursor=cursor,
+            consecutive_failures=consecutive_failures + 1,
+            last_error=scrub_url_secrets(str(exc)),
+        )
+
+    for match in matches:
         try:
             resolved = match.resolve()
-        except OSError:
-            continue
-
-        if not resolved.is_file():
+            if not resolved.is_file():
+                continue
+        except OSError as exc:
+            consecutive_failures += 1
+            last_error = scrub_url_secrets(str(exc))
             continue
 
         try:
@@ -49,11 +72,6 @@ def _read_files_sync(
             continue
 
         candidate_files.append((rel_posix, resolved))
-
-    files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
-    consecutive_failures = 0
-    last_error: str | None = None
-    records: list[tuple[str, ResultRecord]] = []
 
     for rel_posix, resolved_path in candidate_files:
         try:
@@ -124,6 +142,32 @@ def _read_files_sync(
                     raise ValueError("JSON line is not an object")
 
                 raw_dict = cast(dict[str, Any], parsed_json)
+
+                # Check if this is an evaluation copy line
+                if (
+                    "check_id" not in raw_dict
+                    and "schema_version" in raw_dict
+                    and "evaluation_commit" in raw_dict
+                ):
+                    model = raw_dict.get("model")
+                    version = raw_dict.get("version")
+                    if not model or not version:
+                        raise ValueError("Evaluation record missing model or version")
+
+                    run_key = str(raw_dict.get("run_key") or "")
+                    schema_version = int(raw_dict["schema_version"])
+                    eval_rec = EvaluationRecord(
+                        source_id="",
+                        model=str(model),
+                        version=str(version),
+                        run_key=run_key,
+                        schema_version=schema_version,
+                        payload=raw_dict,
+                        fetched_at=datetime.now(UTC),
+                    )
+                    evaluations.append(eval_rec)
+                    continue
+
                 custom_key: Any = raw_dict.pop("source_key", None) or raw_dict.pop("key", None)
                 source_key = (
                     str(custom_key) if custom_key is not None else f"{rel_posix}:{line_offset}"
@@ -156,6 +200,7 @@ def _read_files_sync(
         cursor={"files": files_cursor},
         consecutive_failures=consecutive_failures,
         last_error=last_error,
+        evaluations=evaluations,
     )
 
 
@@ -166,7 +211,12 @@ class FileSourceReader:
         self._connections = connections
 
     async def read(
-        self, project_id: str, source_id: str, cursor: dict[str, Any]
+        self,
+        project_id: str,
+        source_id: str,
+        cursor: dict[str, Any],
+        *,
+        consecutive_failures: int = 0,
     ) -> SourceReadOutcome:
         """Reads new result records from files matching source_id pattern."""
         kind, pattern, connection_name = parse_source_id(source_id)
@@ -174,7 +224,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Invalid file source_id: {source_id}",
             )
 
@@ -183,7 +233,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error="Pattern cannot be absolute or navigate with '..'",
             )
 
@@ -193,7 +243,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection {connection_name!r} not found",
             )
 
@@ -201,7 +251,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection {connection_name!r} is not a {LOCAL_FOLDER_KIND}",
             )
 
@@ -216,7 +266,7 @@ class FileSourceReader:
             return SourceReadOutcome(
                 records=[],
                 cursor=cursor,
-                consecutive_failures=1,
+                consecutive_failures=consecutive_failures + 1,
                 last_error=f"Connection folder {path_setting!r} does not exist",
             )
 
@@ -225,4 +275,14 @@ class FileSourceReader:
         )
         secret_paths = {f.path for f in findings.secret_files}
 
-        return await asyncio.to_thread(_read_files_sync, root, pattern, secret_paths, cursor)
+        try:
+            return await asyncio.to_thread(
+                _read_files_sync, root, pattern, secret_paths, cursor, consecutive_failures
+            )
+        except Exception as exc:
+            return SourceReadOutcome(
+                records=[],
+                cursor=cursor,
+                consecutive_failures=consecutive_failures + 1,
+                last_error=scrub_url_secrets(str(exc)),
+            )

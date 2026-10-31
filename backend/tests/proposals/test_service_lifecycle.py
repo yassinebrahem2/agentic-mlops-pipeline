@@ -13,11 +13,12 @@ from mlops_agents.credentials.project_secrets import (
 )
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.proposals.kinds import ProposalKinds
+from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.proposals.service import ProposalsService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import proposals as proposals_table
 from tests.proposals.conftest import ScriptedTestKind
-from tests.proposals.samples import connection
+from tests.proposals.samples import connection, handoff
 
 
 @pytest.mark.asyncio
@@ -85,12 +86,13 @@ async def test_attach_and_superseding(
     kinds: ProposalKinds,
     project_secrets: ProjectSecrets,
 ) -> None:
-    kind1 = ScriptedTestKind(name="kind_1")
-    kind2 = ScriptedTestKind(name="kind_2")
+    kind1 = ScriptedTestKind(name="connections")
+    kind2 = ScriptedTestKind(name="handoff", payload_model=HandoffPayload)
     kinds.register(kind1)
     kinds.register(kind2)
     project_id = "prj_attach"
     valid_payload = {"connections": [connection()]}
+    handoff_payload = handoff()
 
     # Create draft 1 (kind 1, key_a)
     v1 = await service.create(
@@ -107,7 +109,7 @@ async def test_attach_and_superseding(
 
     # Create draft 2 with DIFFERENT kind (kind 2, same key_a) -> leaves draft 1 untouched
     v2_diff_kind = await service.create(
-        project_id, "architect", kind2.name, "key_a", valid_payload, "trn_2", "call_diff_kind"
+        project_id, "architect", kind2.name, "key_a", handoff_payload, "trn_2", "call_diff_kind"
     )
     assert await service.attach(project_id, v2_diff_kind.id, "apr_2") is None
     v1_check = await service.get_by_approval(project_id, "apr_1")
@@ -148,19 +150,20 @@ async def test_for_call_and_latest_for_turn_across_turns_and_kinds(
     service: ProposalsService,
     kinds: ProposalKinds,
 ) -> None:
-    kind1 = ScriptedTestKind(name="kind_alpha")
-    kind2 = ScriptedTestKind(name="kind_beta")
+    kind1 = ScriptedTestKind(name="connections")
+    kind2 = ScriptedTestKind(name="handoff", payload_model=HandoffPayload)
     kinds.register(kind1)
     kinds.register(kind2)
     project_id = "prj_latest"
     valid_payload = {"connections": [connection()]}
+    handoff_payload = handoff()
 
     # Turn 1: proposal of kind1 and proposal of kind2
     t1_k1 = await service.create(
         project_id, "architect", kind1.name, "k1", valid_payload, "trn_1", "call_1_1"
     )
     t1_k2 = await service.create(
-        project_id, "architect", kind2.name, "k2", valid_payload, "trn_1", "call_1_2"
+        project_id, "architect", kind2.name, "k2", handoff_payload, "trn_1", "call_1_2"
     )
 
     # Turn 2: two proposals of kind1 (first key_2a, then key_2b)

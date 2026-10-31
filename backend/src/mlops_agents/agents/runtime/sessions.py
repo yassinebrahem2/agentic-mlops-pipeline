@@ -207,6 +207,7 @@ class SessionManager(AgentSessions):
         text: str,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         return await self._enqueue(
             project_id,
@@ -216,6 +217,7 @@ class SessionManager(AgentSessions):
             from_agent=from_agent,
             exchange_id=exchange_id,
             hop=hop,
+            system=system,
         )
 
     async def _enqueue(
@@ -228,13 +230,15 @@ class SessionManager(AgentSessions):
         from_agent: str | None,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         await self._workspace.get(project_id)
         if not text.strip():
             raise DomainError("message_empty", "Message cannot be empty.", status=422)
 
         await self._recovery.ensure(project_id)
-        self._check_agent(agent)
+        if not system:
+            self._check_agent(agent)
 
         session_id = await self._registry.session_id(project_id, agent)
         lock = self._registry.lock(project_id, session_id)
