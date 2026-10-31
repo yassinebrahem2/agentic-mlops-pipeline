@@ -74,6 +74,35 @@ async def test_agent_validation(
         await manager.get(project_id, "no-chat")
     assert exc_409_get.value.status == 409
 
+    # post with system=False -> 409
+    with pytest.raises(DomainError) as exc_409_post:
+        await manager.post(
+            project_id,
+            "no-chat",
+            author_name="User",
+            from_agent="user",
+            text="Hello",
+            exchange_id=None,
+            hop=None,
+            system=False,
+        )
+    assert exc_409_post.value.status == 409
+    assert exc_409_post.value.code == "agent_cannot_chat"
+
+    # post with system=True -> skips chat check
+    sys_msg = await manager.post(
+        project_id,
+        "no-chat",
+        author_name="system",
+        from_agent="system",
+        text="Wakeup system message",
+        exchange_id=None,
+        hop=None,
+        system=True,
+    )
+    assert sys_msg.parts[0].type == "text"
+    assert sys_msg.parts[0].text == "Wakeup system message"
+
     # 3. empty text -> 422
     with pytest.raises(DomainError) as exc_422_empty:
         await manager.send(project_id, "orchestrator", "")

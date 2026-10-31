@@ -58,6 +58,7 @@ from mlops_agents.monitoring.expectations.contract import NeverSuspended
 from mlops_agents.monitoring.hooks.handoff import HandoffHooks
 from mlops_agents.monitoring.hooks.service import HooksService
 from mlops_agents.monitoring.incidents.contract import MediumSeverity
+from mlops_agents.monitoring.incidents.dispatch import DiagnosisDispatch
 from mlops_agents.monitoring.incidents.from_results import SignalsFromResults
 from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.query import QueryProviders
@@ -68,6 +69,7 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
+from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.contract import Channel, Notifier, OnCallPeople
 from mlops_agents.notifications.notifier import SqliteNotifier
@@ -142,6 +144,7 @@ class Services:
     reports: Reports
     hooks: HooksService
     incidents: IncidentsService
+    waker: Waker
     integration_settings: IntegrationSettings
     notifier: Notifier
     on_call: OnCallPeople
@@ -280,7 +283,6 @@ async def build_services(
     proposals = ProposalsService(databases, project_secrets, proposal_kinds, events)
 
     query_providers = QueryProviders()
-    maintenance = NeverSuspended()
 
     tracking = TrackingService(
         databases=databases,
@@ -296,6 +298,7 @@ async def build_services(
     reports = SqliteReports(databases, evaluation_reader, events)
 
     wakeups = WakeupService(databases, events=events)
+    waker = Waker(databases, events, clock)
     tools = default_registry(
         tasks=tasks,
         sandbox=sandbox,
@@ -362,6 +365,7 @@ async def build_services(
     inbound.bind(sessions)
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
+    waker.bind(sessions)
     stack.push_async_callback(sessions.close)
     kickoff = Kickoff(databases, sessions, handoffs)
     # Before recovery: it re-applies an approved proposal that has no result yet.
@@ -414,17 +418,22 @@ async def build_services(
         connections=connections,
         events=events,
     )
+    maintenance = NeverSuspended()
+    severity = MediumSeverity()
     incidents = IncidentsService(
         databases=databases,
         events=events,
         results=results,
-        severity=MediumSeverity(),
+        severity=severity,
         maintenance=maintenance,
         clock=clock,
     )
     # Registered before the startup `deliver_undelivered` below, so a result stored before a
     # restart still opens its incident.
-    results.add_observer(SignalsFromResults(incidents, maintenance))
+    signals_from_results = SignalsFromResults(incidents, maintenance)
+    results.add_observer(signals_from_results)
+    diagnosis_dispatch = DiagnosisDispatch(incidents, waker)
+    incidents.add_observer(diagnosis_dispatch)
 
     # Last, because starting fires the due wake-ups, which can recover projects and expire
     # approvals: every service and observer hook must exist before anything can fire a
@@ -436,6 +445,11 @@ async def build_services(
     # Like a due wake-up, a lost kickoff starts turns, so it is finished after everything else
     # exists, and before the app serves.
     await kickoff.resume()
+
+    # Resume pending wakes before starting the scheduler, so a wake fired by a job that has
+    # inserted its row but not posted yet cannot be posted twice.
+    for project in await workspace.list_projects():
+        await waker.resume(project.id)
 
     # Start the scheduler after kickoff.resume(), and push scheduler.stop right after scheduler.start()
     # so it stops first on close (LIFO) and a failure earlier in startup can't leak its task.
@@ -506,6 +520,7 @@ async def build_services(
         reports=reports,
         hooks=hooks,
         incidents=incidents,
+        waker=waker,
         integration_settings=integration_settings,
         notifier=notifier,
         on_call=on_call,

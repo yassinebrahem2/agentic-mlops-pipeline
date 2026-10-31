@@ -223,6 +223,7 @@ class AgentSessions(Protocol):
         text: str,
         exchange_id: str | None,
         hop: int | None,
+        system: bool = False,
     ) -> MessageView:
         """An inbound message from another agent, or a wake-up (author_name "Scheduled wake-up",
         from_agent = the agent itself). Stored as author_kind "user" with a queued turn, like send."""
