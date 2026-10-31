@@ -10,6 +10,7 @@ import pytest
 
 from mlops_agents.agents.approvals.authority import Authority
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.ids import new_id
 from mlops_agents.monitoring.hooks.contract import (
     HookCall,
     HookRefused,
@@ -790,3 +791,140 @@ async def test_end_to_end_hook_run_with_lifecycle(
     trq = await training_store.request(project_id, res.request_id)
     assert trq is not None
     assert trq.status == "started"
+
+
+async def test_non_finite_threshold_refused(
+    training_store: SqliteTraining,
+    fixes_store: SqliteFixes,
+    clock: FakeClock,
+    events: SqliteEventLog,
+    resolver: TrackerPlaceholderResolver,
+) -> None:
+    lifecycle = TrainingLifecycle(
+        training=training_store,
+        fixes=fixes_store,
+        resolver=resolver,
+        clock=clock,
+        events=events,
+    )
+    hook = HookView(
+        id="hook-eval",
+        name="eval",
+        model="churn_model",
+        spec=CommandSpec(
+            kind="evaluate",
+            type="command",
+            template="echo eval",
+            workflow=None,
+            inputs={},
+            placeholders=["threshold"],
+            deploys=False,
+            entry_files=[],
+        ),
+        status="active",
+        credential_set=False,
+        source="proposal",
+        created=datetime.now(UTC),
+    )
+
+    # NaN in call params
+    call_nan = HookCall(
+        hook_id="hook-eval",
+        reason="test",
+        params={
+            "threshold": "nan",
+            "window_start": "2026-10-01T00:00:00Z",
+            "window_end": "2026-10-15T00:00:00Z",
+        },
+    )
+    with pytest.raises(HookRefused, match="Invalid threshold format"):
+        await lifecycle.before("prj_1", hook, call_nan)
+
+    # Inf in call params
+    call_inf = HookCall(
+        hook_id="hook-eval",
+        reason="test",
+        params={
+            "threshold": "inf",
+            "window_start": "2026-10-01T00:00:00Z",
+            "window_end": "2026-10-15T00:00:00Z",
+        },
+    )
+    with pytest.raises(HookRefused, match="Invalid threshold format"):
+        await lifecycle.before("prj_1", hook, call_inf)
+
+    # NaN directly in resolver
+    ctx = RunContext(model="churn_model", threshold=float("nan"))
+    with pytest.raises(HookRefused, match="Refused non-finite threshold"):
+        await resolver.resolve(hook, ctx)
+
+
+async def test_non_training_hook_drops_agent_request_id_and_after_does_not_fail_request(
+    databases: Databases,
+    training_store: SqliteTraining,
+    fixes_store: SqliteFixes,
+    clock: FakeClock,
+    events: SqliteEventLog,
+    resolver: TrackerPlaceholderResolver,
+) -> None:
+    project_id = "prj_safe"
+    _ = await databases.project(project_id)
+
+    # Existing training request in started state
+    target_trq = new_id("trq")
+    await training_store.create_request(
+        project_id=project_id,
+        request_id=target_trq,
+        model="churn_model",
+        hook_id="train-hk",
+        mode="train",
+        status="started",
+    )
+
+    lifecycle = TrainingLifecycle(
+        training=training_store,
+        fixes=fixes_store,
+        resolver=resolver,
+        clock=clock,
+        events=events,
+    )
+
+    rollback_hook = HookView(
+        id="hook-rb",
+        name="rollback",
+        model="churn_model",
+        spec=CommandSpec(
+            kind="rollback",
+            type="command",
+            template="echo rollback",
+            workflow=None,
+            inputs={},
+            placeholders=["model"],
+            deploys=False,
+            entry_files=[],
+        ),
+        status="active",
+        credential_set=False,
+        source="proposal",
+        created=datetime.now(UTC),
+    )
+
+    # Agent supplies a request_id for another request
+    call = HookCall(
+        hook_id="hook-rb",
+        reason="Rollback incident",
+        params={"request_id": target_trq},
+    )
+
+    updated_call = await lifecycle.before(project_id, rollback_hook, call)
+    # request_id must be dropped in before() for non-training hooks
+    assert "request_id" not in updated_call.params
+
+    # Simulate execution failure
+    failed_result = HookResult(ok=False, detail="Rollback failed", request_id=None)
+    await lifecycle.after(project_id, rollback_hook, updated_call, failed_result)
+
+    # Verify target request was NOT marked failed
+    req = await training_store.request(project_id, target_trq)
+    assert req is not None
+    assert req.status == "started"

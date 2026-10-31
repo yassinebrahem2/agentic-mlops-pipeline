@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC
 from typing import TYPE_CHECKING
@@ -106,6 +107,8 @@ class TrackerPlaceholderResolver(PlaceholderResolver):
         if placeholder == "threshold":
             if ctx.threshold is None:
                 raise MissingPlaceholder("threshold")
+            if not math.isfinite(ctx.threshold):
+                raise HookRefused(f"Refused non-finite threshold: {ctx.threshold!r}")
             return str(ctx.threshold)
 
         raise MissingPlaceholder(placeholder)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -59,6 +60,8 @@ class TrainingLifecycle(HookLifecycle):
         if "threshold" in call.params:
             try:
                 threshold = float(call.params["threshold"])
+                if not math.isfinite(threshold):
+                    raise ValueError("non-finite threshold")
             except (ValueError, TypeError) as err:
                 raise HookRefused(
                     f"Invalid threshold format: {call.params['threshold']!r}"
@@ -162,6 +165,8 @@ class TrainingLifecycle(HookLifecycle):
             return call.model_copy(update={"params": new_params})
 
         else:
+            new_params = dict(call.params)
+            new_params.pop("request_id", None)
             ctx = RunContext(
                 model=hook.model or "",
                 window=window,
@@ -172,7 +177,6 @@ class TrainingLifecycle(HookLifecycle):
                 resolved = await self._resolver.resolve(hook, ctx, project_id=project_id)
             else:
                 resolved = await self._resolver.resolve(hook, ctx)
-            new_params = dict(call.params)
             new_params.update(resolved)
             return call.model_copy(update={"params": new_params})
 
@@ -183,6 +187,8 @@ class TrainingLifecycle(HookLifecycle):
         call: HookCall,
         result: HookResult,
     ) -> None:
+        if hook.spec.kind not in ("train", "evaluate"):
+            return
         request_id = result.request_id or call.params.get("request_id")
         if not result.ok and request_id is not None:
             await self._training.set_status(project_id, request_id, "failed")
