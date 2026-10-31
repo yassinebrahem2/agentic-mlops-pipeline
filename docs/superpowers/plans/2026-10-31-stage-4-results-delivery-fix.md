@@ -14,6 +14,7 @@
 |---|---|---|
 | 1 | One delivery at a time per project | merged code |
 | 2 | An expectation never judges a slot from before it existed (bug #586) | task 1 |
+| 3 | `registered_at` follows activation | task 2 (merged) |
 
 ---
 
@@ -57,6 +58,20 @@ Added 2026-10-31: `main` went red on `tests/onboarding/test_onboarding_flow.py::
 - Full backend suite, ruff, pyright; CI green.
 
 When this merges, the lead removes #558's known-debt item "a freshly seeded, never-seen expectation can raise silence for an occurrence just before seeding". The plan PR also says `Closes #586`.
+
+---
+
+### Task 3: `registered_at` follows activation
+
+Added 2026-10-31 after #585's review (both gaps its owner reported): an expectation must never judge a slot from a time it was not active. Today `registered_at` is the first insert, so (1) an expectation registered inactive and activated later (results task 7's activation on a PR's merge; no producer yet) would judge the slots before its activation, and (2) a handoff key retired and re-added later (`retire_handoff_keys_not_in`, then a newer handoff registering it again) keeps its old `registered_at`, and with a `last_seen` the next evaluation judges the slots missed while it was retired: a false silence alarm.
+
+**Files:** `monitoring/expectations/store.py` (the write paths), `service.py` if the anchor needs it; tests under `backend/tests/monitoring/expectations/`. No new migration (the column exists).
+
+**Notes:**
+- `registered_at` means "when this expectation last became active": set on an insert that is active, and reset when an inactive one becomes active (`activate_for_pr`, or a re-registration of a retired key). It is never reset while it stays active (a re-seed, the reconcile, an upsert of an active key).
+- After a re-activation, `evaluate` anchors at `registered_at`, not at an older `last_seen`, so slots from the retired time are never judged.
+
+**Tests (stop condition):** retire a key, let slots pass, re-add it: no silence for those slots, and a slot missed after the re-add still raises it; an inactive expectation activated later is not judged before its activation; a re-seed of an active key keeps `registered_at`; backend suite, ruff, pyright; CI green. No early PR: the plan PR for this task is its own (the plan branch after #585 merges).
 
 ## Known debt added
 
