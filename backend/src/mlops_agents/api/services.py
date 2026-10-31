@@ -70,10 +70,10 @@ from mlops_agents.monitoring.scheduler.sync_jobs import (
     SyncPrsJob,
     SyncTrackingJob,
 )
-from mlops_agents.monitoring.verdicts.baseline import SqliteBaseline
-from mlops_agents.monitoring.verdicts.baseline_observers import (
+from mlops_agents.monitoring.verdicts.baseline import (
     BaselineIncidentObserver,
     BaselineResultsObserver,
+    SqliteBaseline,
 )
 from mlops_agents.monitoring.verdicts.labels import LabelConfirmation
 from mlops_agents.monitoring.verdicts.query import VerdictsQueryProvider

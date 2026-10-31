@@ -48,6 +48,7 @@ async def test_team_fires_are_linked_but_never_raise_a_signal_or_a_notification(
         assert [a.result_id for a in await services.baseline.silent_alerts(project_id)] == [team.id]
         assert (await services.incidents.list(project_id)).total == 0
         types = {e.type for e in await services.events.page(project_id, limit=500)}
+        # A forward guard: nothing records signal.raised yet; raise_signal will.
         assert "signal.raised" not in types
         assert "incident.opened" not in types
         assert not {t for t in types if t.startswith("notification.")}

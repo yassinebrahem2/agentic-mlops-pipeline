@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from itertools import count
 
 import pytest
+from sqlalchemy import update
 
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
@@ -26,12 +27,13 @@ from mlops_agents.monitoring.results.contract import (
     StoredResult,
 )
 from mlops_agents.monitoring.results.service import ResultsService
-from mlops_agents.monitoring.verdicts.baseline import SqliteBaseline
-from mlops_agents.monitoring.verdicts.baseline_observers import (
+from mlops_agents.monitoring.verdicts.baseline import (
     BaselineIncidentObserver,
     BaselineResultsObserver,
+    SqliteBaseline,
 )
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import incidents as incidents_table
 from mlops_agents.tracking.contract import Page
 from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs
 from tests.monitoring.verdicts.conftest import SOURCE, T0, open_incident, verdict_events
@@ -192,6 +194,37 @@ async def test_a_repeated_delivery_or_a_reopen_adds_no_second_link(
     await BaselineIncidentObserver(baseline).changed(project_id, reopen)
 
     assert await baseline.links(project_id, incident_id) == [first]
+
+
+async def test_a_reopen_looks_back_for_a_fire_after_the_old_resolved_at(
+    baseline: SqliteBaseline,
+    databases: Databases,
+    results: ResultsService,
+    incidents: IncidentsService,
+    project_id: str,
+    clock: FakeClock,
+) -> None:
+    incident_id = await open_incident(incidents, project_id, started_at=T0, resolved=True)
+    clock.advance(3600)
+    fire = await _team_fire(results, project_id, clock, T0 + timedelta(minutes=30))
+    assert await baseline.links(project_id, incident_id) == []
+
+    # Nothing reopens an incident through a service yet: the row is set as a reopen leaves it,
+    # with its old resolved_at kept.
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(incidents_table)
+            .where(incidents_table.c.id == incident_id)
+            .values(status="reopened")
+        )
+    await BaselineIncidentObserver(baseline).changed(
+        project_id, IncidentChange(incident_id=incident_id, kind="reopened")
+    )
+
+    [link] = await baseline.links(project_id, incident_id)
+    assert link.first_fired_at == fire.ran_at
+    assert link.lead_seconds == 1800
 
 
 async def test_an_earlier_fire_arriving_later_replaces_the_first_fire_and_its_lead(
