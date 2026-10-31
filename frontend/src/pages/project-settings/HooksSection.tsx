@@ -6,7 +6,7 @@ import { api, unwrap } from "@/lib/api";
 import { ActionError } from "@/pages/incidents/ActionError";
 import { useInvalidateOnEvents } from "@/lib/useInvalidateOnEvents";
 import { HookCredential } from "./HookCredential";
-import { hooksKey, replaceHook, type Hook } from "./hooksCache";
+import { hooksKey, hooksQuery, replaceHook, type Hook } from "./hooksCache";
 import { enableLabel } from "./lifecycleActions";
 import { LifecycleBadge } from "./LifecycleBadge";
 import { policiesKey } from "./policiesKey";
@@ -30,15 +30,7 @@ function verifiedText(verified: boolean | null | undefined): string {
 }
 
 export function HooksSection({ projectId }: { projectId: string }) {
-  const hooks = useQuery({
-    queryKey: hooksKey(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/api/projects/{project_id}/hooks", {
-          params: { path: { project_id: projectId } },
-        }),
-      ),
-  });
+  const hooks = useQuery(hooksQuery(projectId));
   useInvalidateOnEvents(projectId, hooksKey(projectId), [
     "hook.ran",
     "hook.failed",

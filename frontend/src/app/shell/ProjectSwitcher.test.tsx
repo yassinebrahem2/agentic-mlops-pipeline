@@ -145,6 +145,7 @@ describe("ProjectSwitcher", () => {
                             "/hooks",
                             "/expectations",
                             "/training/policies",
+                            "/rules",
                             "/maintenance-windows",
                           ].some((suffix) => url.endsWith(suffix))
                         ? []

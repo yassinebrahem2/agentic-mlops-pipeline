@@ -7,6 +7,7 @@ import { IssuesSection } from "./IssuesSection";
 import { MessagingSection } from "./MessagingSection";
 import { PermissionsSection } from "./PermissionsSection";
 import { PoliciesSection } from "./PoliciesSection";
+import { RulesSection } from "./RulesSection";
 import { SandboxSection } from "./SandboxSection";
 import { ConnectionsSection } from "./ConnectionsSection";
 import { ChecksSection } from "./ChecksSection";
@@ -49,6 +50,7 @@ function ProjectSettings({ projectId }: { projectId: string }) {
           <MonitoringSection projectId={projectId} />
           <HooksSection projectId={projectId} />
           <ChecksSection projectId={projectId} />
+          <RulesSection projectId={projectId} />
           <PoliciesSection projectId={projectId} />
           <MaintenanceSection projectId={projectId} />
           <EmbedderSection projectId={projectId} />

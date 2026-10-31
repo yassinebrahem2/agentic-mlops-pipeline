@@ -126,6 +126,7 @@ function setup(
           "/hooks",
           "/expectations",
           "/training/policies",
+          "/rules",
           "/maintenance-windows",
         ].some((suffix) => path.endsWith(suffix))
       )
