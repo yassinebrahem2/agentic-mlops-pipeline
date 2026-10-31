@@ -78,7 +78,7 @@ venvPath = "."
 venv = ".venv"
 # The fake server polls the gate across threads.
 executionEnvironments = [
-  { root = "tests/fakes", extraPaths = ["src", "../scripts"], reportPrivateUsage = false },
+  { root = "tests/fakes", extraPaths = [".", "src", "../scripts"], reportPrivateUsage = false },
   { root = "." },
 ]
 
