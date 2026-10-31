@@ -606,7 +606,7 @@ def cost_usd(prompt_tokens: int, completion_tokens: int, price: ModelPrice | Non
 | `GET`/`PUT .../monitoring-settings` (`MonitoringSettings`) | contracts 2 |
 | `GET /api/health/heartbeat` (`HeartbeatView`, no session) | results 3 |
 | `GET .../expectations` (`list[ExpectationState]`); `GET .../checks` (`list[CheckView]`) | results 5; results 7 |
-| `GET .../incidents?status=&limit=&offset=` (`Page[IncidentView]`, ranked), `GET .../incidents/{inc}`, `.../signals`, `.../timeline?before=&limit=` (`list[EventRecord]`, newest first), `POST .../incidents/{inc}/acknowledge`, `.../close` | incidents 1 |
+| `GET .../incidents?status=&inbox=&limit=&offset=` (`Page[IncidentView]`, ranked; `inbox=true` (incidents task 8, Decision #576): `ACTIVE_STATUSES` plus `resolved` incidents with no verdict yet, the one "needs a person" rule), `GET .../incidents/{inc}`, `.../signals`, `.../timeline?before=&limit=` (`list[EventRecord]`, newest first), `POST .../incidents/{inc}/acknowledge`, `.../close` | incidents 1 |
 | `POST .../incidents/{inc}/snooze` (`{until}`); `GET`/`POST .../maintenance-windows`, `DELETE .../maintenance-windows/{win}` | incidents 7 |
 | `GET`/`PUT .../on-call` | notifications 2 |
 | `GET`/`PUT /api/integrations/discord`, `.../email`, `.../public-url`; `DELETE .../discord/webhook`, `.../email/password`; `POST .../{discord,email}/test` | notifications 3 |
