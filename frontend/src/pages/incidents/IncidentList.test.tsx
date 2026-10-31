@@ -188,7 +188,10 @@ describe("Inbox incidents section", () => {
 
     expect(await screen.findByTestId("incident-row-inc_2")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more incidents" })).toBeNull();
-    expect(get).toHaveBeenCalled();
+    const offsets = get.mock.calls
+      .filter((c) => c[0] === INCIDENTS)
+      .map((c) => (c[1] as { params: { query: { offset: number } } }).params.query.offset);
+    expect(offsets).toEqual([0, 1]);
   });
 
   it("shows an empty state and an error with a retry", async () => {
