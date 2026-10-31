@@ -311,6 +311,15 @@ class SqliteFixes:
             created=created_dt,
         )
 
+    async def mark_running(self, project_id: str, fix_id: str) -> None:
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(fix_requests)
+                .where(fix_requests.c.id == fix_id, fix_requests.c.status == "chosen")
+                .values(status="running")
+            )
+
     async def get(self, project_id: str, fix_id: str) -> FixRequestView | None:
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
