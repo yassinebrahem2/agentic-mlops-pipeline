@@ -8,6 +8,7 @@ from mlops_agents.agents.tools.bash import BashTool
 from mlops_agents.agents.tools.edit import EditTool
 from mlops_agents.agents.tools.glob import GlobTool
 from mlops_agents.agents.tools.grep import GrepTool
+from mlops_agents.agents.tools.hold import HoldTool
 from mlops_agents.agents.tools.issues import (
     CommentOnIssueTool,
     OpenIssueTool,
@@ -19,6 +20,7 @@ from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.read_handoff import ReadHandoffTool
+from mlops_agents.agents.tools.run_hook import RunHookTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.tools.save_report import SaveReport
 from mlops_agents.agents.tools.schedule_wakeup import ScheduleWakeupTool
@@ -38,6 +40,8 @@ if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
+    from mlops_agents.monitoring.hooks.contract import Hooks
+    from mlops_agents.monitoring.incidents.contract import Incidents
     from mlops_agents.promotion.contract import ProtectionSurfaces, Reports
     from mlops_agents.proposals.contract import Handoffs
     from mlops_agents.proposals.kinds import ProposalKinds
@@ -54,6 +58,7 @@ __all__ = [
     "EditTool",
     "GlobTool",
     "GrepTool",
+    "HoldTool",
     "ListAgentsTool",
     "MergePullRequest",
     "MergePullRequestTool",
@@ -63,6 +68,7 @@ __all__ = [
     "ReadHandoffTool",
     "ReadTool",
     "ResumeTaskTool",
+    "RunHookTool",
     "SaveNote",
     "SaveReport",
     "ScheduleWakeupTool",
@@ -100,6 +106,8 @@ def default_registry(
     tracking: Tracking | None = None,
     handoffs: Handoffs | None = None,
     reports: Reports | None = None,
+    hooks: Hooks | None = None,
+    incidents: Incidents | None = None,
     surfaces: ProtectionSurfaces | None = None,
     pr_sync: PrSyncObserver | None = None,
 ) -> ToolRegistry:
@@ -179,4 +187,8 @@ def default_registry(
         registry.register(ReadHandoffTool(handoffs))
     if reports is not None:
         registry.register(SaveReport(reports))
+    if hooks is not None:
+        registry.register(RunHookTool(hooks))
+        if incidents is not None:
+            registry.register(HoldTool(hooks, incidents))
     return registry
