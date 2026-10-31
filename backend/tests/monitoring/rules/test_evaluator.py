@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,7 +11,15 @@ import pytest
 from mlops_agents.clock import to_iso
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.expr import Compare
-from mlops_agents.monitoring.results.contract import ResultRecord, source_id
+from mlops_agents.monitoring.results.contract import (
+    CollectionReport,
+    ResultQuery,
+    ResultRecord,
+    Results,
+    ResultsObserver,
+    StoredResult,
+    source_id,
+)
 from mlops_agents.monitoring.results.store import ResultsStore
 from mlops_agents.monitoring.rules.contract import (
     RuleLimits,
@@ -24,6 +33,7 @@ from mlops_agents.monitoring.rules.evaluator import (
 )
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import hook_runs
+from mlops_agents.tracking.contract import Page
 from tests.monitoring.rules.conftest import ResultsAdapter
 
 
@@ -417,3 +427,145 @@ async def test_evaluator_pages_through_results(databases: Databases) -> None:
     passed, evidence = await evaluate_rule(results, project_id, rule, now)
     assert passed is False
     assert evidence == []
+
+
+class InterceptingResults(Results):
+    """Wraps Results to observe queries/pages and invoke callbacks between pages."""
+
+    def __init__(self, inner: Results) -> None:
+        self.inner = inner
+        self.queries: list[ResultQuery] = []
+        self.pages: list[Page[StoredResult]] = []
+        self.on_query_after_page_1: Any = None
+
+    def add_observer(self, observer: ResultsObserver) -> None:
+        self.inner.add_observer(observer)
+
+    async def ingest(
+        self,
+        project_id: str,
+        source_id: str,
+        items: Sequence[tuple[str, ResultRecord]],
+        seen_at: datetime,
+    ) -> list[StoredResult]:
+        return await self.inner.ingest(project_id, source_id, items, seen_at)
+
+    async def collect(self, project_id: str, now: datetime) -> CollectionReport:
+        return await self.inner.collect(project_id, now)
+
+    async def query(self, project_id: str, q: ResultQuery) -> Page[StoredResult]:
+        self.queries.append(q)
+        page = await self.inner.query(project_id, q)
+        self.pages.append(page)
+        if len(self.pages) == 1 and self.on_query_after_page_1 is not None:
+            await self.on_query_after_page_1()
+        return page
+
+    async def latest_per_check(
+        self, project_id: str, subject: str, model: str | None
+    ) -> list[StoredResult]:
+        return await self.inner.latest_per_check(project_id, subject, model)
+
+
+@pytest.mark.asyncio
+async def test_evaluator_deduplicates_shifted_page(databases: Databases) -> None:
+    """Case A: Storing a record between page reads shifts offsets.
+
+    Deduplicating by record ID prevents the duplicate record from satisfying min_records.
+    """
+    store = ResultsStore(databases)
+    adapter = ResultsAdapter(store)
+    interceptor = InterceptingResults(adapter)
+    project_id = new_id("prj")
+    s_id = source_id("file", "*.jsonl", "data_conn")
+    t0 = datetime(2026, 10, 31, 6, 0, 0, tzinfo=UTC)
+    now = t0 + timedelta(minutes=30)
+
+    # Ingest 2 records initially:
+    # rec1 at t0+20m (value 0.8), rec2 at t0+10m (value 0.8)
+    rec1 = _make_record(ran_at=t0 + timedelta(minutes=20), value=0.8)
+    rec2 = _make_record(ran_at=t0 + timedelta(minutes=10), value=0.8)
+    await store.insert_items(project_id, s_id, [("k1", rec1), ("k2", rec2)], seen_at=t0)
+
+    # After page 1 (which reads rec1 at offset 0), store a new record rec_new (ran_at=t0+25m, value=0.8).
+    # In offset paging over ran_at desc, rec_new shifts rec1 to offset 1.
+    # Page 2 (offset 1) reads rec1 again (a duplicate).
+    # min_records is set to 3. Without deduplication, all_rows has [rec1, rec1, rec2] (len 3),
+    # so min_records passes.
+    # With deduplication by record id, rec1 is dropped on page 2, leaving only 2 unique records,
+    # so min_records fails (passed is False).
+    async def insert_between_pages() -> None:
+        rec_new = _make_record(ran_at=t0 + timedelta(minutes=25), value=0.8)
+        await store.insert_items(project_id, s_id, [("k_new", rec_new)], seen_at=t0)
+
+    interceptor.on_query_after_page_1 = insert_between_pages
+
+    term = RuleTerm(
+        check_id="chk_drift",
+        model="churn",
+        when=Compare(op="gt", field="value", value=0.5),
+        window_minutes=60,
+        quantifier="any",
+        min_records=3,
+    )
+    rule = _make_rule([term])
+    passed, evidence = await evaluate_rule(interceptor, project_id, rule, now, page_limit=1)
+    assert passed is False
+    assert evidence == []
+
+
+@pytest.mark.asyncio
+async def test_evaluator_bounds_query_by_until_now(databases: Databases) -> None:
+    """Case B: Storing a record with ran_at > now between page reads shifts offsets.
+
+    Bounding queries by until=now ensures the new record is ignored and page 2 reads the
+    failing record, properly failing 'all'.
+    """
+    store = ResultsStore(databases)
+    adapter = ResultsAdapter(store)
+    interceptor = InterceptingResults(adapter)
+    project_id = new_id("prj")
+    s_id = source_id("file", "*.jsonl", "data_conn")
+    now = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+
+    # rec1 passes (value 0.9), rec2 fails (value 0.1)
+    rec1 = _make_record(ran_at=now - timedelta(minutes=10), value=0.9)
+    rec2 = _make_record(ran_at=now - timedelta(minutes=20), value=0.1)
+    inserted = await store.insert_items(project_id, s_id, [("k1", rec1), ("k2", rec2)], seen_at=now)
+    rec2_id = next(r.id for r in inserted if r.value == 0.1)
+
+    # After page 1 (which reads rec1 at offset 0), store a new record with ran_at > now.
+    # Without until=now:
+    # rec_future is at offset 0, shifting rec1 to offset 1.
+    # Page 2 (offset 1) reads rec1 again instead of rec2.
+    # With until=now:
+    # rec_future is filtered out by until=now.
+    # Page 2 (offset 1) reads failing rec2, causing quantifier 'all' to fail.
+    async def insert_future_record() -> None:
+        rec_future = _make_record(ran_at=now + timedelta(minutes=5), value=0.9)
+        await store.insert_items(project_id, s_id, [("k_future", rec_future)], seen_at=now)
+
+    interceptor.on_query_after_page_1 = insert_future_record
+
+    term = RuleTerm(
+        check_id="chk_drift",
+        model="churn",
+        when=Compare(op="gt", field="value", value=0.5),
+        window_minutes=60,
+        quantifier="all",
+        min_records=1,
+    )
+    rule = _make_rule([term])
+    passed, evidence = await evaluate_rule(interceptor, project_id, rule, now, page_limit=1)
+    assert passed is False
+    assert evidence == []
+
+    # Verify query bounding:
+    # Every query must have until == now
+    assert len(interceptor.queries) >= 2
+    for q in interceptor.queries:
+        assert q.until == now
+
+    # On page 2, rec2 (the failing record) was read directly
+    assert len(interceptor.pages) == 2
+    assert interceptor.pages[1].rows[0].id == rec2_id

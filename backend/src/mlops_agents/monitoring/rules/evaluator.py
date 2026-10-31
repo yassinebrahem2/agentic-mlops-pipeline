@@ -23,6 +23,8 @@ async def evaluate_rule(
     project_id: str,
     rule: RuleView,
     now: datetime,
+    *,
+    page_limit: int = 500,
 ) -> tuple[bool, list[str]]:
     """Evaluate whether rule conditions hold over the results store.
 
@@ -36,6 +38,7 @@ async def evaluate_rule(
     for term in rule.spec.terms:
         since = now - timedelta(minutes=term.window_minutes)
         all_rows: list[StoredResult] = []
+        seen_ids: set[str] = set()
         offset = 0
         while True:
             page = await results.query(
@@ -44,11 +47,15 @@ async def evaluate_rule(
                     check_id=term.check_id,
                     model=term.model,
                     since=since,
-                    limit=500,
+                    until=now,
+                    limit=page_limit,
                     offset=offset,
                 ),
             )
-            all_rows.extend(page.rows)
+            for r in page.rows:
+                if r.id not in seen_ids:
+                    seen_ids.add(r.id)
+                    all_rows.append(r)
             if not page.truncated or not page.rows:
                 break
             offset += len(page.rows)
