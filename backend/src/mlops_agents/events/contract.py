@@ -29,6 +29,7 @@ EventType = Literal[
     "fix.requested", "fix.chosen", "fix.declined", "fix.escalated",
     "training.requested", "training.linked", "policy.suspended",
     "report.saved", "promotion.applied", "promotion.refused", "pr.merged_by_agent",
+    "session.compacted", "session.cleared",
 ]  # fmt: skip
 
 AuditDecision = Literal[
