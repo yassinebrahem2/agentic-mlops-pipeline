@@ -37,7 +37,7 @@ data/
   bookings/YYYY-MM-DD.parquet      booking_id, booking_date, arrival_date, then the booking columns   (world)
   labels/YYYY-MM-DD.parquet        booking_id, is_canceled, label_date, booking_changes               (world)
   predictions/YYYY-MM-DD.parquet   booking_id, business_date, model_version, p_cancel                 (company)
-  monitoring/YYYY-MM-DD.jsonl      the legacy monitoring's results for that day, one line per check    (company)
+  monitoring/YYYY-MM-DD.jsonl      the legacy monitoring's results for that day, one line per check: check, ran_at, fired, value, threshold, detail[, not_enough_data]   (company)
   jobs/YYYY-MM-DD.jsonl            one line per job run: job, business_date, started, ended, status, error (company)
 ```
 
@@ -77,6 +77,7 @@ data/
 
 - The world converts the source's `"NULL"` (`agent`, `company`, `country`), `"NA"` (`children`) and `"Undefined"` (`meal`, `market_segment`, `distribution_channel`) markers to nulls.
 - `bookings`, `labels` and `predictions` files are written to a temporary name in the same folder and renamed, so a reader never sees half a file. `monitoring` and `jobs` files are append-only JSON Lines: each line is one complete record, written in one append.
+- **Real times.** File names carry business dates; the times inside a line are real UTC times (ISO-8601 with offset): a `jobs` line's `started` and `ended`, a `monitoring` line's `ran_at` (when the check ran). The app runs on the real clock and judges silence, ordering and an incident's start by `ran_at`. (`ran_at` added 2026-11-01, plan `2026-11-01-demo-check-times.md`.)
 - Injected problems (demo-world) break this contract on purpose; the contract test runs with no scenario.
 - **Contract test.** The demo-world CI workflow checks out the demo repository's `main`, generates five days with the world (no scenario), and runs the company's real `daily` on them; a schema disagreement fails it. It runs on changes under `bench/demo-world/` and once a day on a schedule, so a company change that breaks the contract shows within a day.
 
@@ -93,6 +94,7 @@ data/
 | Plan | Repository, branch | Covers | Consumes | Starts |
 |---|---|---|---|---|
 | demo-company | demo repo, `plan/demo-company` | Package, train, evaluate, deploy, rollback, score, the daily job, legacy monitoring, CI and the scheduled workflow | the layout above | now |
+| demo-check-times | demo repo, `plan/demo-check-times` | Every monitoring line carries `ran_at` (added 2026-11-01) | the demo repo's `main` | now |
 | demo-world | this repo, `plan/demo-world` | `bench/demo-world/`: fetch, history backfill, the day loop, injected problems, the answer key, the planted-flaws list, the PR merger for evaluation runs, `up` | the layout above; task 3 also the company's CLI on the demo repo's `main` | tasks 1 and 2 now; task 3 after demo-company merges |
 
 The planted flaws and the injected scenarios are listed in the demo-world plan (the evaluation's answer key). The demo-company plan describes the company's setup as plain choices, not as flaws.

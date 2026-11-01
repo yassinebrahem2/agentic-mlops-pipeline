@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mlops_agents.agents.runtime.budget import cut_text
 from mlops_agents.agents.tools.base import (
     AgentTool,
     RiskClass,
@@ -47,7 +48,31 @@ class ReadArgs(BaseModel):
     )
 
 
-def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, bool]:
+def _count_lines_and_check_binary(path: Path) -> tuple[int, bool]:
+    """(line_count, is_binary). Fast check that avoids loading whole file into memory."""
+    lines = 0
+    ends_with_newline = True
+    has_bytes = False
+    with path.open("rb") as handle:
+        first = handle.read(BINARY_SNIFF)
+        if b"\0" in first:
+            return 0, True
+        if first:
+            has_bytes = True
+            lines += first.count(b"\n")
+            ends_with_newline = first.endswith(b"\n")
+        while chunk := handle.read(CHUNK_SIZE):
+            has_bytes = True
+            lines += chunk.count(b"\n")
+            ends_with_newline = chunk.endswith(b"\n")
+    if has_bytes and not ends_with_newline:
+        lines += 1
+    return lines, False
+
+
+def _read_lines(
+    path: Path, offset: int, limit: int, max_chars: int = MAX_CHARS
+) -> tuple[list[str], bool, bool]:
     """(numbered lines, is_binary, more_lines_follow). Stops early; never loads the whole file."""
     with path.open("rb") as handle:
         if b"\0" in handle.read(BINARY_SNIFF):
@@ -68,13 +93,13 @@ def _read_lines(path: Path, offset: int, limit: int) -> tuple[list[str], bool, b
                         break
             if number < offset:
                 continue
-            if len(out) >= limit or chars >= MAX_CHARS:
-                return out, False, True
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
             if len(line) > MAX_LINE_CHARS:
                 line = line[:MAX_LINE_CHARS] + " [line cut]"
             out.append(f"{number:>6}\t{line}")
             chars += len(line)
+            if len(out) >= limit or chars >= max_chars:
+                return out, False, True
         return out, False, False
 
 
@@ -102,16 +127,12 @@ class ReadTool(AgentTool[ReadArgs]):
         rel = await ctx.files.resolve_file(args.file_path)
         offset = args.offset or 1
         full_path = ctx.files.root / rel
-        try:
-            lines, binary, more = await asyncio.to_thread(
-                _read_lines, full_path, offset, args.limit or MAX_LINES
-            )
-        except OSError as exc:
-            raise ToolFailure(f"{rel} could not be read: {exc.strerror or exc}") from None
 
-        if ctx.task is not None and self._tasks is not None:
-            sha256 = await asyncio.to_thread(_compute_sha256, full_path)
-            await self._tasks.record_read(ctx.project_id, ctx.task, rel, sha256)
+        cap = (
+            min(ctx.tool_result_max_chars, MAX_CHARS)
+            if ctx.tool_result_max_chars is not None
+            else MAX_CHARS
+        )
 
         note = (
             pop_pending_note(self._tasks, ctx.project_id, ctx.task.id)
@@ -124,6 +145,34 @@ class ReadTool(AgentTool[ReadArgs]):
                 content = f"{content}\n\n{note}"
             return ToolOutput(content)
 
+        if ctx.tool_result_max_chars is not None and args.offset is None and args.limit is None:
+            try:
+                st = await asyncio.to_thread(full_path.stat)
+            except OSError as exc:
+                raise ToolFailure(f"{rel} could not be read: {exc.strerror or exc}") from None
+
+            if st.st_size > cap:
+                line_count, is_binary = await asyncio.to_thread(
+                    _count_lines_and_check_binary, full_path
+                )
+                if is_binary:
+                    return _out(f"{rel} is a binary file; its contents are not shown.")
+                raise ToolFailure(
+                    f"{rel} is too large to read whole ({st.st_size} bytes, {line_count} lines; cap is {cap} characters). "
+                    "Read it in parts with offset and limit, or search it with Grep."
+                )
+
+        try:
+            lines, binary, more = await asyncio.to_thread(
+                _read_lines, full_path, offset, args.limit or MAX_LINES, cap
+            )
+        except OSError as exc:
+            raise ToolFailure(f"{rel} could not be read: {exc.strerror or exc}") from None
+
+        if ctx.task is not None and self._tasks is not None:
+            sha256 = await asyncio.to_thread(_compute_sha256, full_path)
+            await self._tasks.record_read(ctx.project_id, ctx.task, rel, sha256)
+
         if binary:
             return _out(f"{rel} is a binary file; its contents are not shown.")
         if not lines:
@@ -131,7 +180,9 @@ class ReadTool(AgentTool[ReadArgs]):
                 f"{rel} has no lines from line {offset}." if offset > 1 else f"{rel} is empty."
             )
         text = "\n".join(lines)
-        if more:
+        if len(text) > cap:
+            text = cut_text(text, cap)
+        elif more:
             last = offset + len(lines) - 1
             text += f"\n[{rel} continues after line {last}. Read again with offset={last + 1} to see more.]"
         return _out(text)

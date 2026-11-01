@@ -25,6 +25,11 @@ class SendMessage(BaseModel):
     text: str = Field(min_length=1)
 
 
+class CompactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    compacted: bool
+
+
 @router.get(
     "/projects/{project_id}/agents/{agent}/session",
     response_model=SessionView,
@@ -64,6 +69,35 @@ async def stop_session(
     _project: ProjectDep,
 ) -> Response:
     await services.sessions.stop(project_id, agent)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/projects/{project_id}/agents/{agent}/session/compact",
+    response_model=CompactResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def compact_session(
+    project_id: str,
+    agent: str,
+    services: ServicesDep,
+    _project: ProjectDep,
+) -> CompactResponse:
+    compacted = await services.sessions.compact(project_id, agent)
+    return CompactResponse(compacted=compacted)
+
+
+@router.post(
+    "/projects/{project_id}/agents/{agent}/session/clear",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def clear_session(
+    project_id: str,
+    agent: str,
+    services: ServicesDep,
+    _project: ProjectDep,
+) -> Response:
+    await services.sessions.clear(project_id, agent)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

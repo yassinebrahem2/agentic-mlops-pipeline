@@ -89,8 +89,8 @@ def test_working_rules_alert_prioritization() -> None:
     defn_text = """---
 name: alert-prioritization
 display_name: Alert Prioritization
-description: Tests routing rules
-tools: [Read, ListAgents, SendMessage]
+description: Tests the rules of an agent without OpenPullRequest
+tools: [Read, Glob, Grep, MonitoringQuery, IncidentMerge, IncidentUpdate, AdjustSeverity]
 chat: false
 schedules: false
 can_message: []
@@ -102,10 +102,11 @@ You are Alert Prioritization.
 """
     defn = parse_definition(defn_text, "alert-prioritization.md")
     rules = working_rules(defn)
-    assert (
-        "Changes to the team's system go through PRs by the agent whose area it is; you route, you do not open them."
-        in rules
-    )
+    low = rules.lower()
+    assert "you open none" in low
+    assert "merge duplicate incidents" in low and "by at most one level" in low
+    # Routing is code since stage 4: the agent no longer routes.
+    assert "you route" not in low
     # No PR rules
     assert "decision-semantics" not in rules
     assert "search open PRs" not in rules

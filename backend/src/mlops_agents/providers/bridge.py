@@ -261,6 +261,7 @@ def build_chat_model(
     *,
     http: httpx2.AsyncClient,
     timeout: float = 120.0,
+    max_tokens: int | None = None,
     model_address: str | None = None,
     is_gemini: bool | None = None,
 ) -> ChatOpenAI:
@@ -276,6 +277,7 @@ def build_chat_model(
         max_retries=0,
         timeout=timeout,
         http_async_client=http,
+        max_completion_tokens=max_tokens,
     )
     model.set_model_address(model_address or wire_model_id)
     gemini_flag = (
@@ -316,15 +318,24 @@ class ResolvedModel:
     wire_model_id: str
     context_window: int
     keys: tuple[str, ...] = field(repr=False)
+    request_token_limit: int | None = None
 
     def build(self, http: httpx2.AsyncClient, key_index: int = 0) -> ChatOpenAI:
+        from mlops_agents.agents.runtime.budget import reply_reserve_tokens, request_budget_tokens
+
         key = self.keys[key_index] if self.keys else None
+        max_tokens = (
+            reply_reserve_tokens(request_budget_tokens(self))
+            if self.request_token_limit is not None
+            else None
+        )
         is_gem = self.provider_name == "gemini" or "gemini" in self.address.lower()
         return build_chat_model(
             self.base_url,
             key,
             self.wire_model_id,
             http=http,
+            max_tokens=max_tokens,
             model_address=self.address,
             is_gemini=is_gem,
         )

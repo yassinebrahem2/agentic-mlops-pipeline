@@ -631,3 +631,99 @@ describe("model prices", () => {
     expect(within(row).queryByRole("button", { name: /price/i })).not.toBeInTheDocument();
   });
 });
+
+describe("model request limit", () => {
+  it("shows when a model has no request limit and sets one", async () => {
+    let currentModel = verified;
+    const sent = stubApi({
+      "GET /api/models": () => json([currentModel]),
+      "PUT /api/models/request-limit": (req) => {
+        const body = req.body as { address: string; value: number | null };
+        currentModel = { ...verified, request_token_limit: body.value };
+        return json(currentModel);
+      },
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    expect(within(row).getByText("None")).toBeInTheDocument();
+    await user.click(
+      within(row).getByRole("button", { name: "Set request limit for fake:fake-tools" }),
+    );
+    expect(
+      await screen.findByText(/free tier's tokens-per-minute cap|tokens-per-minute/i),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Request limit"), "8000");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await within(row).findByText("8000")).toBeInTheDocument();
+    expect(writes(sent).map((s) => [s.method, s.url.pathname, s.body])).toEqual([
+      [
+        "PUT",
+        "/api/models/request-limit",
+        {
+          address: "fake:fake-tools",
+          value: 8000,
+        },
+      ],
+    ]);
+  });
+
+  it("clears the request limit", async () => {
+    let currentModel: ModelEntry = { ...verified, request_token_limit: 8000 };
+    const sent = stubApi({
+      "GET /api/models": () => json([currentModel]),
+      "PUT /api/models/request-limit": (req) => {
+        const body = req.body as { address: string; value: number | null };
+        currentModel = { ...verified, request_token_limit: body.value };
+        return json(currentModel);
+      },
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    expect(within(row).getByText("8000")).toBeInTheDocument();
+    await user.click(
+      within(row).getByRole("button", { name: "Clear request limit for fake:fake-tools" }),
+    );
+
+    expect(await within(row).findByText("None")).toBeInTheDocument();
+    expect(writes(sent).map((s) => s.body)).toEqual([{ address: "fake:fake-tools", value: null }]);
+  });
+
+  it("shows server error on invalid request limit", async () => {
+    stubApi({
+      "GET /api/models": () => json([verified]),
+      "PUT /api/models/request-limit": () =>
+        json(
+          {
+            code: "invalid_request_limit",
+            message: "Enter a positive number of tokens.",
+            detail: {},
+          },
+          422,
+        ),
+    });
+    const user = userEvent.setup();
+    renderPage("/providers");
+
+    const row = await findRow("fake:fake-tools");
+    await user.click(
+      within(row).getByRole("button", { name: "Set request limit for fake:fake-tools" }),
+    );
+    await user.type(await screen.findByLabelText("Request limit"), "0");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Enter a positive number of tokens.")).toBeInTheDocument();
+  });
+
+  it("shows Not applicable for an embedder request limit", async () => {
+    stubApi({ "GET /api/models": () => json([verifiedEmbedder]) });
+    renderPage("/providers");
+
+    const row = await findRow("fake:verified-embed");
+    expect(within(row).queryByRole("button", { name: /request limit/i })).not.toBeInTheDocument();
+  });
+});

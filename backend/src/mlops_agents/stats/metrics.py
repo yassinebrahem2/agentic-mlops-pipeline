@@ -1,7 +1,9 @@
 """One function per metric of `STAT_METRICS` (I41), each over the rows the service gathered.
 
 A metric over no rows is `value=None, n=0`, never 0. Verdict-based numbers are `collecting`
-below `STATS_MIN_VERDICTS`; numbers that need the baseline are `None` without one.
+below `STATS_MIN_VERDICTS`; numbers that need the baseline are `None` without one,
+never `collecting` either (they are not on their way). Cost per incident is `None` under a
+category: tokens carry no category.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from typing import Final
 
 from mlops_agents.monitoring.hooks.contract import HookRunView
 from mlops_agents.monitoring.incidents.contract import ACTIVE_STATUSES, IncidentView
+from mlops_agents.monitoring.results.contract import ResultCategory
 from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert, VerdictValue, VerdictView
 from mlops_agents.providers.usage import cost_usd
 from mlops_agents.providers.usage_contract import ModelPrice
@@ -36,12 +39,12 @@ class Impact:
 @dataclass(frozen=True)
 class StatsInputs:
     """Every row a metric reads, already windowed. `incidents` are the in-window, non-merged
-    incidents of the category asked; `incidents_opened` counts them in every category."""
+    incidents of the category asked."""
 
     span: Span
+    category: ResultCategory | None
     baseline_available: bool
     incidents: Sequence[IncidentView]
-    incidents_opened: int
     verdicts: Mapping[str, VerdictView]
     matched: set[str]
     judged: Sequence[SilentTeamAlert]
@@ -68,6 +71,12 @@ def _stat(value: float | None, n: int, *, verdicts: bool = False) -> StatValue:
         n=n,
         collecting=verdicts and n < STATS_MIN_VERDICTS,
     )
+
+
+def _needing_baseline(inputs: StatsInputs, stat: StatValue) -> StatValue:
+    if inputs.baseline_available:
+        return stat
+    return stat.model_copy(update={"value": None, "collecting": False})
 
 
 def _count(n: int) -> StatValue:
@@ -101,14 +110,12 @@ def precision(inputs: StatsInputs) -> StatValue:
 def caught_baseline_missed(inputs: StatsInputs) -> StatValue:
     n = len(_with_verdict(inputs, "real_issue", "not_an_issue", "wrong_type"))
     missed = [i for i in _with_verdict(inputs, "real_issue") if i.id not in inputs.matched]
-    stat = _stat(len(missed), n, verdicts=True)
-    return stat if inputs.baseline_available else stat.model_copy(update={"value": None})
+    return _needing_baseline(inputs, _stat(len(missed), n, verdicts=True))
 
 
 def false_alarms_avoided(inputs: StatsInputs) -> StatValue:
     avoided = sum(1 for a in inputs.judged if a.verdict == "not_an_issue")
-    stat = _stat(avoided, len(inputs.judged), verdicts=True)
-    return stat if inputs.baseline_available else stat.model_copy(update={"value": None})
+    return _needing_baseline(inputs, _stat(avoided, len(inputs.judged), verdicts=True))
 
 
 def misses(inputs: StatsInputs) -> StatValue:
@@ -226,8 +233,9 @@ def _dollars(inputs: StatsInputs) -> float | None:
 
 
 def cost_per_incident(inputs: StatsInputs) -> StatValue:
-    n = inputs.incidents_opened
-    dollars = _dollars(inputs) if n else None
+    n = len(inputs.incidents)
+    # The window's spend is not split by category, so a category has no cost to divide.
+    dollars = _dollars(inputs) if n and inputs.category is None else None
     return _stat(dollars / n if dollars is not None else None, n)
 
 

@@ -8,6 +8,9 @@ const USD = new Intl.NumberFormat("en-US", {
 const TOKENS = new Intl.NumberFormat("en-US");
 
 export function formatUsd(amount: number): string {
+  if (amount === 0) return "$0";
+  // A priced call can cost less than the 4 decimals shown; "$0.0000" would read as free.
+  if (amount < 0.0001) return "<$0.0001";
   return USD.format(amount);
 }
 

@@ -1,12 +1,23 @@
-import { AlertCircle, AlertTriangle } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { errorText } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { api, errorText, unwrap } from "@/lib/api";
 import { useAgentStatus } from "@/lib/useAgentStatus";
 import { useProject } from "@/lib/useProject";
 import { useProjectAgents } from "@/lib/useProjectAgents";
+import { useProjectEvents } from "@/lib/useProjectEvents";
 import { useProjectPermissions } from "@/lib/useProjectPermissions";
 import { AgentList, AgentSelect } from "./AgentList";
 import { Composer } from "./Composer";
@@ -38,6 +49,90 @@ function Agents({ projectId }: { projectId: string }) {
 
   const session = useSession(projectId, selectedAgentName);
   const currentTask = session.state?.current_task;
+
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  const compactMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.POST("/api/projects/{project_id}/agents/{agent}/session/compact", {
+        params: { path: { project_id: projectId, agent: selectedAgentName } },
+      });
+      return unwrap(res);
+    },
+    onSuccess: (data) => {
+      setActionError(null);
+      if (!data.compacted) {
+        setActionNotice("Nothing to compact: context is within budget.");
+      } else {
+        setActionNotice(null);
+      }
+      void session.reload();
+    },
+    onError: (err) => {
+      setActionNotice(null);
+      setActionError(errorText(err));
+    },
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.POST("/api/projects/{project_id}/agents/{agent}/session/clear", {
+        params: { path: { project_id: projectId, agent: selectedAgentName } },
+      });
+      unwrap(res);
+    },
+    onSuccess: () => {
+      setClearDialogOpen(false);
+      setActionError(null);
+      setActionNotice(null);
+      void session.reload();
+      void clearedEventsQuery.refetch();
+    },
+    onError: (err) => {
+      setClearDialogOpen(false);
+      setActionNotice(null);
+      setActionError(errorText(err));
+    },
+  });
+
+  const clearedEventsQuery = useQuery({
+    queryKey: ["projects", projectId, "cleared-events", selectedAgentName],
+    queryFn: async () => {
+      const res = await api.GET("/api/projects/{project_id}/activity", {
+        params: {
+          path: { project_id: projectId },
+          query: { type: "session.cleared", limit: 200 },
+        },
+      });
+      if (res.error) return [];
+      return res.data.entries
+        .filter((e): e is Extract<typeof e, { kind: "event" }> => e.kind === "event")
+        .map((e) => e.event)
+        .filter(
+          (ev) =>
+            typeof ev.payload === "object" &&
+            (ev.payload as Record<string, unknown>).agent === selectedAgentName,
+        )
+        .map((ev) => {
+          const payload = ev.payload as { person?: string; last_message_id?: string | null };
+          return {
+            person: payload.person || "user",
+            last_message_id: payload.last_message_id ?? null,
+          };
+        });
+    },
+    enabled: Boolean(projectId && selectedAgentName),
+  });
+
+  useProjectEvents(projectId, {
+    onEvent: (event) => {
+      if (event.type === "session.cleared") {
+        void clearedEventsQuery.refetch();
+      }
+    },
+  });
 
   if (agentsQuery.isLoading) {
     return (
@@ -147,6 +242,42 @@ function Agents({ projectId }: { projectId: string }) {
               </AlertDescription>
             </Alert>
           )}
+          {actionError && (
+            <Alert variant="destructive">
+              <AlertCircle className="size-4" />
+              <AlertDescription className="flex items-center justify-between gap-4">
+                <span>{actionError}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setActionError(null);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {actionNotice && (
+            <Alert>
+              <Info className="size-4" />
+              <AlertDescription className="flex items-center justify-between gap-4">
+                <span>{actionNotice}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setActionNotice(null);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
         {session.connection === "reconnecting" && (
@@ -158,20 +289,91 @@ function Agents({ projectId }: { projectId: string }) {
           </div>
         )}
 
-        <AgentSelect
-          className="md:hidden"
-          agents={chatAgents}
-          selectedAgent={selectedAgentName}
-          onSelectAgent={(value) => {
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("agent", value);
-              return next;
-            });
-          }}
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <div className="flex items-center gap-2">
+            <AgentSelect
+              className="md:hidden"
+              agents={chatAgents}
+              selectedAgent={selectedAgentName}
+              onSelectAgent={(value) => {
+                setActionError(null);
+                setActionNotice(null);
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set("agent", value);
+                  return next;
+                });
+              }}
+            />
+            <span className="hidden md:inline text-sm font-semibold text-foreground">
+              {selectedAgentDisplayName}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={compactMutation.isPending}
+              onClick={() => {
+                compactMutation.mutate();
+              }}
+            >
+              Compact now
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={clearMutation.isPending}
+              onClick={() => {
+                setClearDialogOpen(true);
+              }}
+            >
+              Clear context
+            </Button>
+          </div>
+        </div>
+
+        <MessageList
+          messages={session.state?.messages ?? []}
+          sessionAgent={selectedAgentName}
+          clearedEvents={clearedEventsQuery.data ?? []}
         />
 
-        <MessageList messages={session.state?.messages ?? []} sessionAgent={selectedAgentName} />
+        <Dialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Clear conversation context?</DialogTitle>
+              <DialogDescription>
+                Clear conversation context? The agent will forget earlier messages and start fresh.
+                Earlier messages remain visible in the history. An agent working on an active task
+                or incident may need to re-read repository context.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setClearDialogOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={clearMutation.isPending}
+                onClick={() => {
+                  clearMutation.mutate();
+                }}
+              >
+                Confirm clear
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {currentTask && (
           <TaskBar

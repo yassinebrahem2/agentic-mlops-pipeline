@@ -7,6 +7,7 @@ import { ActionError } from "./ActionError";
 import { CategoryText, SeverityBadge, StatusBadge, VerdictSummary } from "./IncidentBadges";
 import { IncidentFacts } from "./IncidentFacts";
 import { incidentActions } from "./incidentActions";
+import { SnoozeControl } from "./SnoozeControl";
 import { Signals } from "./Signals";
 import { Timeline } from "./Timeline";
 import { VerdictButtons } from "./VerdictButtons";
@@ -35,8 +36,8 @@ function Actions({ projectId, incident }: { projectId: string; incident: Inciden
   const target = { projectId, incidentId: incident.id };
   const acknowledge = useAcknowledge(target);
   const close = useCloseIncident(target);
-  const { canAcknowledge, canClose } = incidentActions(incident);
-  if (!canAcknowledge && !canClose) return null;
+  const { canAcknowledge, canClose, canSnooze } = incidentActions(incident);
+  if (!canAcknowledge && !canClose && !canSnooze) return null;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -64,6 +65,7 @@ function Actions({ projectId, incident }: { projectId: string; incident: Inciden
         )}
       </div>
       <ActionError error={acknowledge.error ?? close.error} />
+      {canSnooze && <SnoozeControl projectId={projectId} incident={incident} />}
     </div>
   );
 }

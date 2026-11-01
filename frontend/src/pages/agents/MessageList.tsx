@@ -3,13 +3,38 @@ import { cn } from "@/lib/utils";
 import { MessageView } from "./MessageView";
 import type { MessageView as MessageViewType } from "./session/events";
 
+export interface ClearedContextEvent {
+  person: string;
+  last_message_id: string | null;
+}
+
 export interface MessageListProps {
   messages: MessageViewType[];
   sessionAgent?: string;
   className?: string;
+  clearedEvents?: ClearedContextEvent[];
 }
 
-export function MessageList({ messages, sessionAgent, className }: MessageListProps) {
+function ClearedDivider({ person }: { person: string }) {
+  return (
+    <div
+      role="separator"
+      className="relative flex items-center justify-center py-2 text-xs text-muted-foreground"
+    >
+      <div className="absolute inset-0 flex items-center">
+        <div className="w-full border-t border-border" />
+      </div>
+      <span className="relative bg-background px-3 font-medium">Context cleared by {person}</span>
+    </div>
+  );
+}
+
+export function MessageList({
+  messages,
+  sessionAgent,
+  className,
+  clearedEvents,
+}: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -36,9 +61,22 @@ export function MessageList({ messages, sessionAgent, className }: MessageListPr
       role="log"
       aria-label="Messages"
     >
-      {messages.map((message) => (
-        <MessageView key={message.id} message={message} sessionAgent={sessionAgent} />
-      ))}
+      {clearedEvents
+        ?.filter((c) => c.last_message_id === null)
+        .map((c, i) => (
+          <ClearedDivider key={`cleared-start-${String(i)}`} person={c.person} />
+        ))}
+      {messages.map((message) => {
+        const matchingCleared = clearedEvents?.filter((c) => c.last_message_id === message.id);
+        return (
+          <div key={message.id} className="space-y-4">
+            <MessageView message={message} sessionAgent={sessionAgent} />
+            {matchingCleared?.map((c, i) => (
+              <ClearedDivider key={`cleared-${message.id}-${String(i)}`} person={c.person} />
+            ))}
+          </div>
+        );
+      })}
       <div ref={bottomRef} />
     </div>
   );

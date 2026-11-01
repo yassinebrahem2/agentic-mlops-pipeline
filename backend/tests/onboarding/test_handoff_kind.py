@@ -35,6 +35,7 @@ from tests.onboarding.handoff_env import (
     payload,
 )
 from tests.onboarding.kickoff_env import all_idle, handoff_messages
+from tests.proposals.samples import handoff
 from tests.tracking.conftest import FakeHandoffs
 
 ALL_PARTS = ["handoff", "tracking:0", "tracking:1", "network", "level", "sync", "event", "kickoff"]
@@ -134,6 +135,34 @@ def test_warnings_name_an_unauthenticated_tracker_with_network_on(
     if warned:
         assert "autonomous" in NETWORK_WARNING and "bypass" in NETWORK_WARNING
         assert "audit" in NETWORK_WARNING
+
+
+def test_warnings_name_each_mistyped_on_call_contact(henv: HandoffEnv) -> None:
+    hours = {"days": ["mon"], "start": "09:00", "end": "17:00"}
+    base = handoff()
+    base["operations"]["on_call"] = [
+        {
+            "name": "Dana",
+            "contacts": [
+                {"channel": "email", "address": "dana-at-acme"},
+                {"channel": "discord", "address": "u_dana"},
+            ],
+            "hours": hours,
+            "timezone": "UTC",
+            "escalation_order": 1,
+        },
+        {
+            "name": "Eli",
+            "contacts": [{"channel": "discord", "address": " "}],
+            "hours": hours,
+            "timezone": "UTC",
+            "escalation_order": 2,
+        },
+    ]
+    found = henv.kind().warnings(HandoffPayload.model_validate(base))
+    assert len(found) == 2
+    assert "Dana" in found[0] and "email" in found[0] and "dana-at-acme" not in found[0]
+    assert "Eli" in found[1] and "discord" in found[1]
 
 
 # Apply
