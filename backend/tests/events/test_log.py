@@ -5,15 +5,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from mlops_agents.clock import to_iso
 from mlops_agents.events.contract import EventRecord
 from mlops_agents.events.hub import EventHub
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.storage.databases import Databases
+from tests.providers.fake_clock import FakeClock
 
 
 @pytest.mark.asyncio
@@ -52,6 +55,22 @@ async def test_event_log_record_and_history(databases: Databases) -> None:
     # History for nonexistent project returns empty list
     other_history = await event_log.history("prj_other1", types=["turn.started"], limit=10)
     assert other_history == []
+
+
+@pytest.mark.asyncio
+async def test_event_log_stamps_ts_from_its_clock(databases: Databases) -> None:
+    instant = datetime(2026, 6, 1, 3, 0, tzinfo=UTC)
+    clock = FakeClock(instant)
+    event_log = SqliteEventLog(databases, clock=clock)
+
+    first = await event_log.record("prj_clock1", source="user", type="turn.started", payload={})
+    clock.advance(90)
+    second = await event_log.record("prj_clock1", source="user", type="turn.ended", payload={})
+
+    assert first.ts == to_iso(instant)
+    assert second.ts == to_iso(clock.current)
+    stored = await event_log.page("prj_clock1")
+    assert [(e.seq, e.ts) for e in stored] == [(2, second.ts), (1, first.ts)]
 
 
 @pytest.mark.asyncio
