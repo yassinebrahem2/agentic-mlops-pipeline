@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         deployment_rollback_reply,
         model_performance_reply,
         onboarding_night_reply,
+        onboarding_promotion_reply,
         retraining_reply,
     )
     from onboarding_script import audit_reply, onboarding_reply
@@ -43,6 +44,7 @@ else:
         deployment_rollback_reply,
         model_performance_reply,
         onboarding_night_reply,
+        onboarding_promotion_reply,
         retraining_reply,
     )
     from tests.fakes.onboarding_script import audit_reply, onboarding_reply
@@ -63,6 +65,7 @@ MODELS: dict[str, int] = {
     "fake-model-performance": 131072,
     "fake-retraining": 131072,
     "fake-deployment-promotion": 131072,
+    "fake-onboarding-promotion": 131072,
 }
 EMBEDDING_MODELS: dict[str, int] = {
     "fake-embed": 16,
@@ -269,6 +272,8 @@ def _reply(
         return retraining_reply(messages, tools)
     if model == "fake-deployment-promotion":
         return deployment_promotion_reply(messages, tools)
+    if model == "fake-onboarding-promotion":
+        return onboarding_promotion_reply(messages, tools)
     if last.get("role") == "tool":
         content = str(last.get("content") or "").strip()
         first_line = content.splitlines()[0] if content else "(empty)"

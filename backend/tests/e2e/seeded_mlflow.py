@@ -26,6 +26,7 @@ CHALLENGER_VERSION: Final = "2"
 CHAMPION_RUN: Final = "run_champion"
 CHALLENGER_RUN: Final = "run_challenger"
 EXPERIMENT_NAME: Final = "hotel-cancel"
+UNREQUESTED_RUN: Final = "req_seeded"
 
 
 def millis(moment: datetime) -> int:
@@ -129,7 +130,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     args = parser.parse_args()
     state = FakeMlflowState()
-    seed_champion(state, now=datetime.now(UTC))
+    now = datetime.now(UTC)
+    experiment = seed_champion(state, now=now)
+    # The challenger a person is asked to promote: a request nobody made, so no fix links to it.
+    play_pipeline(state, request_id=UNREQUESTED_RUN, now=now, experiment=experiment)
     uvicorn.run(
         create_fake_mlflow_app(state), host="127.0.0.1", port=args.port, log_level="warning"
     )

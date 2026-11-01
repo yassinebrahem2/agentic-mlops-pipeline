@@ -11,6 +11,8 @@ import {
   FAKE_MLFLOW_URL,
   FAKE_PORT,
   MLFLOW_PORT,
+  SEEDED_MLFLOW_PORT,
+  SEEDED_MLFLOW_URL,
 } from "./e2e/env";
 
 // Every server runs from the backend folder, so the plain `uv run ...` commands work on every OS.
@@ -42,6 +44,14 @@ export default defineConfig({
       cwd: backendDir,
       // The fake has no root page; this list answers 200 once it serves.
       url: `${FAKE_MLFLOW_URL}/api/2.0/mlflow/registered-models/search`,
+      reuseExistingServer: false,
+      timeout: startupTimeout,
+    },
+    {
+      command: `uv run python -m tests.e2e.seeded_mlflow --port ${String(SEEDED_MLFLOW_PORT)}`,
+      cwd: backendDir,
+      // The champion and the challenger of actions.spec.ts are seeded when it starts.
+      url: `${SEEDED_MLFLOW_URL}/api/2.0/mlflow/registered-models/search`,
       reuseExistingServer: false,
       timeout: startupTimeout,
     },

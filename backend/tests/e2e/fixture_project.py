@@ -583,6 +583,16 @@ def deploy_command_spec() -> CommandSpec:
     )
 
 
+def promotion_handoff_payload(mlflow_url: str) -> dict[str, Any]:
+    """The Playwright handoff of a `person` model with a deploy hook and a tracker-alias
+    production signal: what a promotion proposal needs to validate."""
+    payload = playwright_handoff_payload(mlflow_url)
+    model = payload["models"][0]
+    model["commands"] = [*model["commands"], deploy_command_spec().model_dump()]
+    model["production_signal"] = {"kind": "tracker_alias", "ref": PRODUCTION_ALIAS}
+    return payload
+
+
 def fix_story_handoff_payload(
     mlflow_url: str,
     promotion: PromotionMode,

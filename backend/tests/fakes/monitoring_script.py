@@ -4,6 +4,7 @@ and onboarding-night.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -23,16 +24,22 @@ if TYPE_CHECKING:
     from onboarding_script import connections_payload
 
     from tests.e2e.fixture_project import (
+        MODEL_NAME,
         ROLLBACK_HOOK_ID,
         ROLLBACK_RULE_ID,
         playwright_handoff_payload,
+        promotion_handoff_payload,
     )
+    from tests.e2e.seeded_mlflow import CHALLENGER_VERSION, CHAMPION_VERSION
 else:
     from tests.e2e.fixture_project import (
+        MODEL_NAME,
         ROLLBACK_HOOK_ID,
         ROLLBACK_RULE_ID,
         playwright_handoff_payload,
+        promotion_handoff_payload,
     )
+    from tests.e2e.seeded_mlflow import CHALLENGER_VERSION, CHAMPION_VERSION
     from tests.fakes.onboarding_script import connections_payload
 
 SCRIPTED_DATA_QUALITY_CAUSE: Final = (
@@ -76,6 +83,7 @@ EVALUATION_PR_TITLE: Final = "add expected_cost to the evaluation record"
 POST_DEPLOY_FOLLOW_UP: Final = "Compare the live label results with the evaluation record."
 FIX_EVIDENCE: Final = "The label-based check mp-label-check fired: f1 0.52 on 480 labels."
 PROMOTION_KIND_NAME: Final = "promotion"
+PROMOTE_REQUEST: Final = "Propose the promotion of the newest candidate."
 START_TASK: Final = "StartTask"
 WRITE: Final = "Write"
 READ: Final = "Read"
@@ -219,11 +227,16 @@ def deployment_rollback_reply(
 
 
 def onboarding_night_reply(
-    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    with_deploy_hook: bool = False,
 ) -> tuple[str, list[ToolCall] | None]:
     """Scripted onboarding model for the e2e night fixture (Playwright variant).
     Asks for data, proposes connections, proposes the night/playwright handoff, and finishes.
+    With `with_deploy_hook` the handoff also declares the deploy hook a promotion needs.
     """
+    handoff = promotion_handoff_payload if with_deploy_hook else playwright_handoff_payload
     asked = [
         i
         for i, m in enumerate(messages)
@@ -253,11 +266,18 @@ def onboarding_night_reply(
                 "name": PROPOSE_TOOL_NAME,
                 "arguments": {
                     "kind": "handoff",
-                    "payload": playwright_handoff_payload(mlflow_url),
+                    "payload": handoff(mlflow_url),
                 },
             }
         ]
     return ONBOARDING_COMPLETE, None
+
+
+def onboarding_promotion_reply(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> tuple[str, list[ToolCall] | None]:
+    """The night's onboarding, with a deploy hook in the handoff."""
+    return onboarding_night_reply(messages, tools, with_deploy_hook=True)
 
 
 def _last_user_text(messages: list[dict[str, Any]], markers: tuple[str, ...]) -> tuple[str, str]:
@@ -308,6 +328,55 @@ def _report_assessments() -> dict[str, dict[str, str]]:
     }
 
 
+def _deploy_hook_id(hooks_result: str) -> str | None:
+    """The ID of the deploy hook in a `MonitoringQuery` result for hooks."""
+    start, end = hooks_result.find("["), hooks_result.rfind("]")
+    if start < 0 or end < start:
+        return None
+    rows = cast(list[dict[str, Any]], json.loads(hooks_result[start : end + 1]))
+    return next((str(r["id"]) for r in rows if r["spec"]["kind"] == "deploy"), None)
+
+
+def _promote_request_reply(results: list[str]) -> tuple[str, list[ToolCall] | None]:
+    """A person's request to promote the seeded challenger (the e2e server's fake MLflow): find
+    the deploy hook, save the report, propose the promotion. The versions and the model are the
+    seeded ones; nothing here reads server state beyond the two tool results."""
+    if len(results) == 0:
+        return "", [{"name": MONITORING_QUERY, "arguments": {"what": "hooks", "model": MODEL_NAME}}]
+    if len(results) == 1:
+        return "", [
+            {
+                "name": SAVE_REPORT,
+                "arguments": {
+                    "draft": {
+                        "model": MODEL_NAME,
+                        "candidate_version": CHALLENGER_VERSION,
+                        "assessments": _report_assessments(),
+                    }
+                },
+            }
+        ]
+    hook_id = _deploy_hook_id(results[0])
+    report_id = _first_id("rep", results[1])
+    if len(results) == 2 and hook_id is not None and report_id is not None:
+        return "", [
+            {
+                "name": PROPOSE_TOOL_NAME,
+                "arguments": {
+                    "kind": PROMOTION_KIND_NAME,
+                    "payload": {
+                        "model": MODEL_NAME,
+                        "report_id": report_id,
+                        "candidate_version": CHALLENGER_VERSION,
+                        "champion_version": CHAMPION_VERSION,
+                        "deploy_hook_id": hook_id,
+                    },
+                },
+            }
+        ]
+    return "The promotion is proposed.", None
+
+
 def retraining_reply(
     messages: list[dict[str, Any]], tools: list[dict[str, Any]]
 ) -> tuple[str, list[ToolCall] | None]:
@@ -319,10 +388,12 @@ def retraining_reply(
     promotion with the report's ID from the tool result.
     """
     ids = _fix_story
-    marker, text = _last_user_text(messages, (FIX_WAKE, LINKED_WAKE))
+    marker, text = _last_user_text(messages, (FIX_WAKE, LINKED_WAKE, PROMOTE_REQUEST))
     if not marker:
         return "Nothing to do.", None
     results = _tool_results_after(messages, text)
+    if marker == PROMOTE_REQUEST:
+        return _promote_request_reply(results)
     fix_id = _first_id("fix", text)
     if marker == FIX_WAKE:
         if len(results) == 0 and fix_id is not None:
