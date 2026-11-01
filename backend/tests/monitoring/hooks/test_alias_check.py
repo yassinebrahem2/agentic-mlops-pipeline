@@ -462,3 +462,59 @@ async def test_non_production_alias_move_and_production_move_to_another_run_do_n
     assert updated_hook.status == "active"
     assert updated_hook.deploys_verified is True
     assert len(incidents.signals) == 0
+
+
+@pytest.mark.asyncio
+async def test_alias_check_skips_baseline_deployments(
+    databases: Databases,
+    events: SqliteEventLog,
+    handoffs: SqliteHandoffs,
+) -> None:
+    """A baseline deployment is ignored when checking if a run moved a production alias."""
+    project_id = new_id("prj")
+    clock = FakeClock()
+    training = SqliteTraining(databases, events, clock)
+
+    payload = _setup_handoff_payload(has_prod_signal=True)
+    await handoffs.store(project_id, "prp_sig", payload)
+
+    t0 = datetime(2026, 10, 20, 10, 0, 0, tzinfo=UTC)
+    req = await training.create_request(
+        project_id=project_id,
+        request_id="trq_base",
+        model="churn",
+        hook_id="hok_1",
+        mode="train",
+        status="started",
+        window=TrainingWindow(start=t0, end=t0 + timedelta(hours=1)),
+    )
+    await training.link(project_id, req.id, run_key="run_base")
+
+    # A baseline deployment pointing to version produced by run_base
+    version = ModelVersionRow(
+        source_id="src_1",
+        model="churn",
+        version="v1",
+        run_key="run_base",
+        aliases=[],
+        created=t0 + timedelta(minutes=10),
+        evaluation="absent",
+    )
+    dep_baseline = DeploymentRow(
+        source_id="src_1",
+        model="churn",
+        alias="prod",
+        from_version=None,
+        to_version="v1",
+        seen_at=t0 + timedelta(minutes=15),
+        baseline=True,
+    )
+
+    tracking = FakeTracking(runs=[], versions=[version], deployments=[dep_baseline])
+    verifier = HookAliasVerifier(tracking, handoffs, training)
+
+    result = await verifier.check_run(
+        project_id, "hok_1", req.id, TrainingWindow(start=t0, end=t0 + timedelta(hours=1))
+    )
+    assert result.moved is False
+    assert result.detail == "No production alias move"

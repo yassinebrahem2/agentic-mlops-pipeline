@@ -1888,6 +1888,11 @@
             "title": "Alias",
             "type": "string"
           },
+          "baseline": {
+            "default": false,
+            "title": "Baseline",
+            "type": "boolean"
+          },
           "from_version": {
             "anyOf": [
               {

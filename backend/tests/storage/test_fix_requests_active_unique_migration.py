@@ -53,7 +53,7 @@ def test_v9_migrates_to_v10_and_enforces_one_active_fix_per_incident(tmp_path: P
     conn.close()
 
     # Apply migration 0010
-    assert migrate(db, "project", tmp_path / "bk") == [10]
+    assert migrate(db, "project", tmp_path / "bk") == [10, 11]
 
     conn = connect_sync(db)
 
@@ -161,7 +161,7 @@ def test_v9_with_duplicate_active_fixes_migrates_cleanly_to_v10(tmp_path: Path) 
     conn.close()
 
     # Migration 0010 must succeed despite duplicates
-    assert migrate(db, "project", tmp_path / "bk") == [10]
+    assert migrate(db, "project", tmp_path / "bk") == [10, 11]
 
     conn = connect_sync(db)
     rows = conn.execute(

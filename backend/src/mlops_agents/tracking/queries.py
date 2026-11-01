@@ -286,6 +286,7 @@ async def query_deployments(conn: AsyncConnection, q: TrackingQuery) -> Page[Dep
             from_version=r["from_version"],
             to_version=r["to_version"],
             seen_at=_require_dt(r["seen_at"]),
+            baseline=bool(r.get("baseline", 0)),
         )
 
     return await _page_query(conn, stmt, order_clauses, _mapper, q.limit, q.offset)
