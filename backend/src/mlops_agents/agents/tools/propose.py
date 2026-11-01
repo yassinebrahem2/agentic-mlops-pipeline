@@ -60,6 +60,21 @@ class ProposeTool(AgentTool[ProposeArgs]):
         self._proposals = proposals
         self._kinds = kinds
 
+    def schema(self) -> dict[str, Any]:
+        """The tool as the model sees it, with the script contract a `parser` proposal's code
+        is written against (the same text its approval card shows)."""
+        # parser_kind imports this package (for Preview), so its contract is read here, at call
+        # time, not when this module loads.
+        from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
+
+        out = super().schema()
+        out["function"]["description"] = (
+            f"{self.description}\n\n"
+            f"A `parser` proposal with `code` runs its script under this contract:\n"
+            f"{CODE_PARSER_CONTRACT}"
+        )
+        return out
+
     async def preview(self, ctx: ToolContext, args: ProposeArgs) -> Preview:
         try:
             kind_obj = self._kinds.get(args.kind)
