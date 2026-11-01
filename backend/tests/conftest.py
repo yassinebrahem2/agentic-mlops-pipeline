@@ -14,8 +14,10 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_MERGE,
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
+    MERGE_PULL_REQUEST,
     MONITORING_QUERY,
     RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
     REQUEST_FIX,
     RUN_HOOK,
     SAVE_REPORT,
@@ -59,6 +61,8 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         REQUEST_FIX,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,
+        MERGE_PULL_REQUEST,
+        REGISTER_CHECK,
     }
 )
 

@@ -5,7 +5,12 @@ from typing import Any
 
 import httpx2
 
-from mlops_agents.agents.tools.names import ADJUST_SEVERITY, RECORD_FIX_CHOICE, SAVE_REPORT
+from mlops_agents.agents.tools.names import (
+    ADJUST_SEVERITY,
+    RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
+    SAVE_REPORT,
+)
 from tests.conftest import STAGE_2_TOOLS, make_repo
 from tests.fakes.fake_openai import RunningFake
 
@@ -51,6 +56,7 @@ async def test_agents_listing_and_default_model(
         ADJUST_SEVERITY,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,
+        REGISTER_CHECK,
     }
     assert orchestrator["settings"]["default_model"] is None
     assert orchestrator["settings"]["effective_model"] is None
