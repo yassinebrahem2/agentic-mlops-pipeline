@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from mlops_agents.agents.runtime.budget import (
+    COMPACT_AT_SHARE,
+    SUMMARY_MAX_SHARE,
+    cut_text,
+    fixed_tokens,
+    reply_reserve_tokens,
+    request_budget_tokens,
+    room_tokens,
+    tool_result_max_chars,
+)
 from mlops_agents.agents.runtime.contract import (
     MessageView,
     TextPart,
@@ -16,7 +27,7 @@ from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.providers.bridge import ResolvedModel
 
 
-def _group_turns(messages: list[MessageView]) -> list[list[MessageView]]:
+def group_turns(messages: list[MessageView]) -> list[list[MessageView]]:
     grouped: list[list[MessageView]] = []
     current: list[MessageView] = []
     for msg in messages:
@@ -31,7 +42,10 @@ def _group_turns(messages: list[MessageView]) -> list[list[MessageView]]:
     return grouped
 
 
-def _message_len(msg: MessageView) -> int:
+_group_turns = group_turns
+
+
+def message_len(msg: MessageView) -> int:
     total = 0
     for p in msg.parts:
         if isinstance(p, TextPart):
@@ -43,6 +57,9 @@ def _message_len(msg: MessageView) -> int:
     return total
 
 
+_message_len = message_len
+
+
 async def compact_if_needed(
     store: SessionStore,
     caller: ModelCaller,
@@ -52,10 +69,12 @@ async def compact_if_needed(
     history: list[MessageView],
     system_text: str,
     *,
-    turn_id: str,
+    turn_id: str | None = None,
     agent_name: str,
-) -> None:
-    """Summarize older whole turns if estimated size exceeds 75% of context window."""
+    tools: list[dict[str, Any]] | None = None,
+    force: bool = False,
+) -> bool:
+    """Summarize older whole turns if estimated size exceeds COMPACT_AT_SHARE of room."""
     old_summary, old_compacted_through = await store.summary(project_id, session_id)
     if old_compacted_through:
         compacted_idx = -1
@@ -69,94 +88,157 @@ async def compact_if_needed(
 
     uncompacted_turns = _group_turns(uncompacted_history)
     if len(uncompacted_turns) <= 2:
-        return
+        return False
 
-    # Check for prompt tokens reported for the session's last model call
-    last_call = await store.last_llm_call_prompt_tokens(project_id, session_id)
-    if last_call is not None:
-        prompt_tokens, call_created_at, call_turn_id, trigger_msg_id = last_call
+    fixed = fixed_tokens(system_text, tools or [])
+    room = room_tokens(model, fixed)
+    threshold = COMPACT_AT_SHARE * room
 
-        last_turn_idx = -1
-        for i, m in enumerate(history):
-            if (call_turn_id and m.turn_id == call_turn_id) or (
-                trigger_msg_id and m.id == trigger_msg_id
-            ):
-                last_turn_idx = i
+    if not force:
+        # Check for prompt tokens reported for the session's last model call
+        last_call = await store.last_llm_call_prompt_tokens(project_id, session_id)
+        if last_call is not None:
+            prompt_tokens, call_created_at, call_turn_id, trigger_msg_id = last_call
 
-        if last_turn_idx >= 0:
-            messages_after = history[last_turn_idx + 1 :]
+            last_turn_idx = -1
+            for i, m in enumerate(history):
+                if (call_turn_id and m.turn_id == call_turn_id) or (
+                    trigger_msg_id and m.id == trigger_msg_id
+                ):
+                    last_turn_idx = i
+
+            if last_turn_idx >= 0:
+                messages_after = history[last_turn_idx + 1 :]
+            else:
+                messages_after = [m for m in history if m.created_at > call_created_at]
+
+            conversation_tokens = (
+                max(0.0, float(prompt_tokens) - fixed)
+                + sum(_message_len(m) for m in messages_after) / 4.0
+            )
         else:
-            messages_after = [m for m in history if m.created_at > call_created_at]
+            conversation_tokens = sum(_message_len(m) for m in uncompacted_history) / 4.0
 
-        estimated_size = float(prompt_tokens) + sum(_message_len(m) for m in messages_after) / 4.0
-    else:
-        # Count only messages after compacted_through, plus system_text (which holds previous summary)
-        estimated_size = (
-            float(len(system_text)) / 4.0 + sum(_message_len(m) for m in uncompacted_history) / 4.0
-        )
-
-    threshold = 0.75 * model.context_window
-    if estimated_size <= threshold:
-        return
+        if conversation_tokens <= threshold:
+            return False
 
     # Keep last 2 turns, summarize everything earlier from uncompacted turns
     turns_to_summarize = uncompacted_turns[:-2]
     new_compacted_through = turns_to_summarize[-1][-1].id
 
-    lines: list[str] = []
-    if old_summary:
-        lines.append(f"Previous summary:\n{old_summary}\n")
+    budget = request_budget_tokens(model)
+    reserve = reply_reserve_tokens(budget)
+    tr_max_chars = tool_result_max_chars(model, fixed)
+    max_summary_chars = max(0, int(room * SUMMARY_MAX_SHARE * 4))
 
-    lines.append("Conversation to summarize:")
+    all_lines: list[str] = []
     for turn in turns_to_summarize:
         for m in turn:
             if m.author_kind == "user":
                 user_text = "".join(p.text for p in m.parts if isinstance(p, TextPart))
-                lines.append(f"User: {user_text}")
+                all_lines.append(f"User: {user_text}")
             elif m.author_kind == "agent":
                 for p in m.parts:
                     if isinstance(p, TextPart):
-                        lines.append(f"Agent: {p.text}")
+                        all_lines.append(f"Agent: {p.text}")
                     elif isinstance(p, ToolCallPart):
-                        lines.append(f"Agent tool call: {p.name}({p.input})")
+                        all_lines.append(f"Agent tool call: {p.name}({p.input})")
                     elif isinstance(p, ToolResultPart):
-                        lines.append(f"Tool result: {p.content}")
+                        trimmed = cut_text(p.content, tr_max_chars)
+                        all_lines.append(f"Tool result: {trimmed}")
 
     instruction = (
         "Provide a concise summary of the conversation above, focusing on decisions made, "
         "facts learned about the repository, and open questions."
     )
-    prompt_messages: list[BaseMessage] = [
-        SystemMessage(content=instruction),
-        HumanMessage(content="\n".join(lines)),
-    ]
+    inst_tokens = len(instruction) // 4
+    if budget >= 1500:
+        max_human_tokens = budget - reserve - inst_tokens
+    else:
+        max_human_tokens = max(budget - reserve - inst_tokens, budget)
+    max_human_chars = max(100, max_human_tokens * 4)
+
+    current_summary = old_summary or ""
 
     async def _noop(_: str) -> None:
         pass
 
-    t0 = time.monotonic()
-    reply = await caller.call(model, prompt_messages, tools=[], on_text=_noop)
-    latency_ms = int((time.monotonic() - t0) * 1000)
+    line_idx = 0
+    while line_idx < len(all_lines) or (not all_lines and old_summary and not current_summary):
+        if current_summary:
+            summary_prefix = f"Previous summary:\n{current_summary}\n\nConversation to summarize:\n"
+        else:
+            summary_prefix = "Conversation to summarize:\n"
 
-    await store.add_llm_call(
-        project_id,
-        turn_id,
-        agent=agent_name,
-        model_address=model.address,
-        prompt_tokens=reply.prompt_tokens,
-        completion_tokens=reply.completion_tokens,
-        latency_ms=latency_ms,
-    )
+        avail_chars = max_human_chars - len(summary_prefix)
+        if avail_chars <= 0:
+            if current_summary:
+                current_summary = cut_text(current_summary, max(50, max_human_chars // 2))
+                summary_prefix = (
+                    f"Previous summary:\n{current_summary}\n\nConversation to summarize:\n"
+                )
+                avail_chars = max(50, max_human_chars - len(summary_prefix))
+            else:
+                avail_chars = max(50, max_human_chars)
 
-    new_summary = (
-        reply.message.content
-        if isinstance(reply.message.content, str)
-        else "".join(str(c) for c in reply.message.content)
-    )
+        chunk_lines: list[str] = []
+        chunk_len = 0
+        while line_idx < len(all_lines):
+            line = all_lines[line_idx]
+            cost = len(line) + (1 if chunk_lines else 0)
+            if chunk_len + cost <= avail_chars:
+                chunk_lines.append(line)
+                chunk_len += cost
+                line_idx += 1
+            else:
+                if not chunk_lines:
+                    chunk_lines.append(cut_text(line, avail_chars))
+                    line_idx += 1
+                break
+
+        human_content = (
+            f"{summary_prefix}{'\n'.join(chunk_lines)}" if chunk_lines else summary_prefix
+        )
+        prompt_messages: list[BaseMessage] = [
+            SystemMessage(content=instruction),
+            HumanMessage(content=human_content),
+        ]
+
+        t0 = time.monotonic()
+        reply = await caller.call(model, prompt_messages, tools=[], on_text=_noop)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        effective_turn_id = turn_id
+        if not effective_turn_id and turns_to_summarize:
+            for m in reversed(turns_to_summarize[-1]):
+                if m.turn_id:
+                    effective_turn_id = m.turn_id
+                    break
+
+        if effective_turn_id:
+            await store.add_llm_call(
+                project_id,
+                effective_turn_id,
+                agent=agent_name,
+                model_address=model.address,
+                prompt_tokens=reply.prompt_tokens,
+                completion_tokens=reply.completion_tokens,
+                latency_ms=latency_ms,
+            )
+
+        new_summary = (
+            reply.message.content
+            if isinstance(reply.message.content, str)
+            else "".join(str(c) for c in reply.message.content)
+        )
+        if max_summary_chars > 0 and len(new_summary) > max_summary_chars:
+            new_summary = new_summary[:max_summary_chars]
+        current_summary = new_summary
 
     await store.set_summary(
         project_id,
         session_id,
-        summary=new_summary,
+        summary=current_summary,
         compacted_through=new_compacted_through,
     )
+    return True

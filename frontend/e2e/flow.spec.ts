@@ -69,6 +69,7 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
       "Yes",
       // The fake reports its own context window; any positive size it reports will do.
       /^[1-9]\d*$/,
+      /None|Set/,
       "Not applicable",
       /No price/,
       "Verified",
@@ -157,6 +158,7 @@ test("stage 1 flow: a provider, a local project and a question the agent answers
       "Yes",
       "Yes",
       /^[1-9]\d*$/,
+      /None|Set/,
       "Not applicable",
       /No price/,
       "Verified",

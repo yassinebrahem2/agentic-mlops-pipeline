@@ -367,3 +367,44 @@ def test_prompt_messages_appends_the_hook_context_as_the_last_system_section() -
     # Without hook context
     messages_without = prompt_messages(definition, project, layout, None, [])
     assert '<data source="hook:' not in str(messages_without[0].content)
+
+
+def test_prompt_messages_trims_older_tool_results_and_keeps_stored_intact() -> None:
+    definition = _make_definition()
+    project = _make_project()
+
+    large_content = "x" * 2000
+    stored_part = ToolResultPart(
+        type="tool_result", tool_call_id="call_old", content=large_content, is_error=False
+    )
+    history = [
+        MessageView(
+            id="msg_old",
+            turn_id="trn_old",
+            author_kind="agent",
+            author_name="orchestrator",
+            from_agent=None,
+            parts=[
+                ToolCallPart(
+                    type="tool_call", id="call_old", name="Read", input={"file_path": "a.txt"}
+                ),
+                stored_part,
+            ],
+            status="complete",
+            created_at="2026-10-21T18:00:00Z",
+        )
+    ]
+
+    messages = prompt_messages(definition, project, "", None, history)
+    # messages: [SystemMessage, AIMessage, ToolMessage]
+    assert len(messages) == 3
+    tool_msg = messages[2]
+    assert isinstance(tool_msg, ToolMessage)
+    assert tool_msg.tool_call_id == "call_old"
+    # Content must be trimmed to head (500) + notice
+    assert len(str(tool_msg.content)) < 2000
+    assert str(tool_msg.content).startswith("x" * 500)
+    assert "characters cut to fit context budget" in str(tool_msg.content)
+
+    # Stored part in message view remains untouched
+    assert stored_part.content == large_content

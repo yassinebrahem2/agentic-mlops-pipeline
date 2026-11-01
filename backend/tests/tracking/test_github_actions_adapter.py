@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -21,7 +22,7 @@ from mlops_agents.tracking.contract import (
 )
 from mlops_agents.tracking.service import TrackingService
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
-from tests.tracking.conftest import TrackingEnv
+from tests.tracking.conftest import APP_INSTANT, TrackingEnv, app_at_instant
 
 
 @pytest.fixture
@@ -352,3 +353,33 @@ async def test_sync_through_tracking_service_updates_in_place(
         assert updated_row.key == "42"
         assert updated_row.status == "succeeded"
         assert updated_row.duration_s == 300.0
+
+
+async def test_scheduled_sync_reads_the_app_clock(
+    fake_github: RunningFakeGitHub, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    created = APP_INSTANT.isoformat().replace("+00:00", "Z")
+    fake_github.state.workflow_runs["octo/repo"] = [
+        _make_raw_run(
+            1,
+            status="completed",
+            conclusion="failure",
+            created_at=created,
+            run_started_at=created,
+            updated_at=created,
+        )
+    ]
+    async with app_at_instant(tmp_path, git_env) as (services, project_id):
+        await services.github.set_token("ghp_app_clock_token")
+        source = await services.tracking.create_source(
+            project_id, "github_actions", {"repository": "octo/repo"}
+        )
+
+        await services.scheduler.run_due(project_id, APP_INSTANT)
+
+        ci = await services.tracking.query(project_id, TrackingQuery(what="ci_runs"))
+        assert [(r.key, r.status) for r in ci.rows] == [("1", "failed")]
+        [synced] = await services.tracking.sources(project_id)
+        assert synced.id == source.id
+        assert synced.last_error is None
+        assert synced.last_sync == APP_INSTANT

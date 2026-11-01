@@ -11,6 +11,12 @@ from langchain_core.messages import (
 )
 
 from mlops_agents.agents.catalog import AgentDefinition
+from mlops_agents.agents.runtime.budget import (
+    OLD_TOOL_RESULT_CHARS,
+    cut_text,
+    reply_reserve_tokens,
+    request_budget_tokens,
+)
 from mlops_agents.agents.runtime.contract import (
     MessageStatus,
     MessageView,
@@ -48,8 +54,21 @@ async def top_level_layout(files: FileAccess) -> str:
 def system_message(agent: Agent, summary: str | None) -> SystemMessage:
     """The turn's system message, with this build's hook context: the one place it is built for
     a turn (the graph's `prepare` node and a resume)."""
+    reply_limit_text: str | None = None
+    if getattr(agent.model, "request_token_limit", None) is not None:
+        budget = request_budget_tokens(agent.model)
+        reserve = reply_reserve_tokens(budget)
+        reply_limit_text = (
+            f"Reply limit: your reply must fit within {reserve} tokens (~{reserve * 4} characters). "
+            "For large outputs (e.g. file writes), write in smaller parts."
+        )
     return _system_message(
-        agent.definition, agent.project, agent.layout, summary, agent.hook_context
+        agent.definition,
+        agent.project,
+        agent.layout,
+        summary,
+        agent.hook_context,
+        reply_limit_text=reply_limit_text,
     )
 
 
@@ -59,6 +78,7 @@ def _system_message(
     layout: str,
     summary: str | None,
     hook_context: str | None,
+    reply_limit_text: str | None = None,
 ) -> SystemMessage:
     sections = [definition.prompt.strip()]
     sections.append(working_rules(definition))
@@ -81,10 +101,19 @@ def _system_message(
     if hook_context:
         sections.append(hook_context)
 
+    if reply_limit_text:
+        sections.append(reply_limit_text)
+
     return SystemMessage(content="\n\n".join(sections))
 
 
-def history_messages(history: list[MessageView], model: str | None = None) -> list[BaseMessage]:
+def history_messages(
+    history: list[MessageView],
+    current_turn_id: str | None = None,
+    *,
+    trim_current_turn_tools: bool = False,
+    model: str | None = None,
+) -> list[BaseMessage]:
     """The session's stored messages as the model reads them; queued and system ones are left
     out."""
     messages: list[BaseMessage] = []
@@ -163,10 +192,18 @@ def history_messages(history: list[MessageView], model: str | None = None) -> li
                     flush_ai()
                     if part.tool_call_id in unresolved_calls:
                         unresolved_calls.remove(part.tool_call_id)
+                    content = part.content
+                    should_trim = (
+                        trim_current_turn_tools
+                        or current_turn_id is None
+                        or message.turn_id != current_turn_id
+                    )
+                    if should_trim and len(content) > OLD_TOOL_RESULT_CHARS:
+                        content = cut_text(content, OLD_TOOL_RESULT_CHARS)
                     messages.append(
                         ToolMessage(
                             tool_call_id=part.tool_call_id,
-                            content=part.content,
+                            content=content,
                         )
                     )
 

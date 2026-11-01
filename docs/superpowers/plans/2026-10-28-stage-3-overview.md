@@ -253,7 +253,7 @@ class OnCall(BaseModel): name: str; contacts: list[Contact]; hours: OnCallHours;
 class FileResults(BaseModel): connection: str; path_pattern: str
 class CiResults(BaseModel): workflow: str
 class MlflowResults(BaseModel): metric: str; threshold: float | None; fires_when: Literal["above", "below"] | None
-class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: Cadence; timezone: str; results: FileResults | CiResults | MlflowResults
+class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: Cadence | None = None; timezone: str; results: FileResults | CiResults | MlflowResults   # cadence None: read and compared, never judged silent (2026-11-01, #645)
 class Scheduler(BaseModel): name: str; config_location: str
 class Operations(BaseModel): scheduler: Scheduler | None; feeds: list[Feed]; on_call: list[OnCall]; checks: list[CheckSpec]; results_location: FileResults | MlflowResults
 class TrackingSourceSpec(BaseModel): type: SourceType; settings: MlflowSettings | GithubActionsSettings; auth: Literal["none", "credential"]   # settings models in tracking/contract.py (contracts task 1), extra="forbid"; MlflowSettings.url passes base_url_problem (no userinfo)

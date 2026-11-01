@@ -66,6 +66,12 @@ class FakeSessionsForApproval:
     async def stop(self, project_id: str, agent: str) -> None:
         pass
 
+    async def compact(self, project_id: str, agent: str) -> bool:
+        return True
+
+    async def clear(self, project_id: str, agent: str, person: str = "user") -> None:
+        pass
+
     async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         self.stopped_turns.append((project_id, session_id, turn_id))
 

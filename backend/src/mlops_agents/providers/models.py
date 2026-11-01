@@ -80,6 +80,7 @@ class ModelEntry(BaseModel):
     model_type: ModelType = "chat"
     dimensions: int | None = None
     price: ModelPrice | None = None
+    request_token_limit: int | None = None
 
     @computed_field
     @property
