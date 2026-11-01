@@ -76,6 +76,17 @@ EVALUATION_PR_TITLE: Final = "add expected_cost to the evaluation record"
 POST_DEPLOY_FOLLOW_UP: Final = "Compare the live label results with the evaluation record."
 FIX_EVIDENCE: Final = "The label-based check mp-label-check fired: f1 0.52 on 480 labels."
 PROMOTION_KIND_NAME: Final = "promotion"
+START_TASK: Final = "StartTask"
+WRITE: Final = "Write"
+READ: Final = "Read"
+OPEN_PULL_REQUEST: Final = "OpenPullRequest"
+SCHEDULE_WAKEUP: Final = "ScheduleWakeup"
+TRACKING_HISTORY: Final = "TrackingHistory"
+EVALUATION_FILE: Final = "evaluate.py"
+EVALUATION_FIELD: Final = "expected_cost"
+TEAM_GATE_TITLE: Final = "Team gate"  # the title the app's team gate message starts with
+NEW_VERSION_LINE: Final = "New version: "  # a line of the app's post_deploy wake text
+FIRST_ON_CALL: Final = "alice"  # the fixture's first on-call person, as the log stores it
 
 
 @dataclass
@@ -349,7 +360,7 @@ def retraining_reply(
     if len(results) == 0:
         return "", [
             {
-                "name": "TrackingHistory",
+                "name": TRACKING_HISTORY,
                 "arguments": {"what": "evaluations", "model": ids.model},
             }
         ]
@@ -403,30 +414,30 @@ def deployment_promotion_reply(
         if len(results) == 0:
             return "", [
                 {
-                    "name": "ScheduleWakeup",
+                    "name": SCHEDULE_WAKEUP,
                     "arguments": {"delay_seconds": 3600, "note": POST_DEPLOY_FOLLOW_UP},
                 }
             ]
         return "I will look at the new version again in an hour.", None
     if len(results) == 0:
-        return "", [{"name": "StartTask", "arguments": {"title": EVALUATION_PR_TITLE}}]
+        return "", [{"name": START_TASK, "arguments": {"title": EVALUATION_PR_TITLE}}]
     if len(results) == 1:
         # An existing file is read before it is written.
-        return "", [{"name": "Read", "arguments": {"file_path": "evaluate.py"}}]
+        return "", [{"name": READ, "arguments": {"file_path": EVALUATION_FILE}}]
     if len(results) == 2:
         return "", [
             {
-                "name": "Write",
+                "name": WRITE,
                 "arguments": {
-                    "file_path": "evaluate.py",
-                    "content": "print('evaluating with expected_cost')\n",
+                    "file_path": EVALUATION_FILE,
+                    "content": f"print('evaluating with {EVALUATION_FIELD}')\n",
                 },
             }
         ]
     if len(results) == 3:
         return "", [
             {
-                "name": "OpenPullRequest",
+                "name": OPEN_PULL_REQUEST,
                 "arguments": {
                     "title": EVALUATION_PR_TITLE,
                     "body": "The evaluation record gains expected_cost.",

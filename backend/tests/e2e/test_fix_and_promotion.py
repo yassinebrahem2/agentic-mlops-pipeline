@@ -17,8 +17,8 @@ Story progression:
    (basis `approval`). `team_gate`: no deploy hook runs; the gate's decision is read from the
    evaluation record and the first on-call person is notified.
 4. The production alias moves: Deployment & Rollback is woken once with `post_deploy` for that
-   move and registers a follow-up. That the whole story wakes it exactly once is a separate,
-   strict xfail test: bug #638 (the clock is not passed to the tracking service) makes the
+   move and registers a follow-up. That the whole story wakes it exactly once is a separate
+   test that fails until bug #638 is fixed (the clock is not passed to the tracking service) makes the
    baseline deployment row wake it too.
 5. Messaged by the test, Deployment & Rollback opens a pull request improving the evaluation
    step against the fake GitHub (its own test: the pull request needs the origin served from a
@@ -88,9 +88,17 @@ from tests.e2e.seeded_mlflow import (
 )
 from tests.fakes.fake_mlflow import FakeMlflowState, start_fake_mlflow
 from tests.fakes.monitoring_script import (
+    EVALUATION_FIELD,
+    EVALUATION_FILE,
     EVALUATION_PR_MESSAGE,
     EVALUATION_PR_TITLE,
+    FIRST_ON_CALL,
+    NEW_VERSION_LINE,
+    OPEN_PULL_REQUEST,
     POST_DEPLOY_FOLLOW_UP,
+    START_TASK,
+    TEAM_GATE_TITLE,
+    WRITE,
     FixStoryIds,
     reset_fix_story_ids,
     set_fix_story_ids,
@@ -500,10 +508,10 @@ async def promotion_applied(story: Story, linked: Linked) -> None:
     assert "promotion.applied" in await all_event_types(services, project_id)
 
     # The incident's page went out before; the gate's decision is one more message.
-    gate_posts = [p for p in harness.fake_discord.state.posts if "Team gate" in json.dumps(p)]
+    gate_posts = [p for p in harness.fake_discord.state.posts if TEAM_GATE_TITLE in json.dumps(p)]
     assert len(gate_posts) == 1
     text = json.dumps(gate_posts[0])
-    assert "Team gate promote" in text
+    assert f"{TEAM_GATE_TITLE} promote" in text
     assert GATE_REASONS[0] in text
     engine = await services.databases.project(project_id)
     async with engine.connect() as conn:
@@ -516,7 +524,7 @@ async def promotion_applied(story: Story, linked: Linked) -> None:
             .mappings()
             .all()
         )
-    assert [r["person"] for r in rows] == ["alice"]
+    assert [r["person"] for r in rows] == [FIRST_ON_CALL]
 
 
 async def alias_moves(story: Story) -> None:
@@ -550,10 +558,11 @@ async def test_incident_to_fix_to_promotion(
         # The move of the alias to the new version woke Deployment & Rollback once with
         # post_deploy, and its scripted turn registered the follow-up.
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
+        # Only the wake of the real move: the baseline row's wake is the separate #638 failure.
         moved = [w for w in wakes if moved_to_challenger(w)]
         assert len(moved) == 1
         assert moved[0]["agent"] == "deployment"
-        assert "New version: " in moved[0]["text"]
+        assert NEW_VERSION_LINE in moved[0]["text"]
         pending = await story.services.wakeups.list_pending(story.project_id, agent="deployment")
         assert pending
         assert {w.note for w in pending} == {POST_DEPLOY_FOLLOW_UP}
@@ -562,24 +571,21 @@ async def test_incident_to_fix_to_promotion(
         story.clock.advance(timedelta(minutes=10))
         await run_due(story.services, story.project_id, story.clock.now())
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
+        # Filtered as above (#638).
         assert len([w for w in wakes if moved_to_challenger(w)]) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Bug #638: create_app(clock=...) is not passed to TrackingService, so the baseline "
-        "deployment row (none to the champion) is seen on the wall clock, after the shared "
-        "clock's cursor, and wakes Deployment & Rollback too."
-    ),
-)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("promotion", ["person", "team_gate"])
 async def test_alias_move_wakes_deployment_once(
     tmp_path: Path, git_env: dict[str, str], promotion: PromotionMode
 ) -> None:
     """Both modes: the whole story wakes Deployment & Rollback exactly once with post_deploy,
-    for the move of the alias and for nothing else."""
+    for the move of the alias and for nothing else.
+
+    Fails today because of bug #638: create_app(clock=...) is not passed to TrackingService, so
+    the baseline deployment row (none to the champion) has a wall-clock seen_at, after the
+    shared clock's cursor, and wakes Deployment & Rollback a second time."""
     async with story_env(tmp_path, git_env, promotion) as story:
         dispatched = await decay_to_dispatch(story)
         linked = await pipeline_links(story, dispatched)
@@ -604,7 +610,7 @@ async def test_deployment_opens_a_pull_request(tmp_path: Path, git_env: dict[str
         )
         assert sent.status_code == 201, sent.text
         approved = await approve_all_until_idle(services, http, project_id, "deployment")
-        assert approved == ["StartTask", "Write", "OpenPullRequest"]
+        assert approved == [START_TASK, WRITE, OPEN_PULL_REQUEST]
 
         pulls = [
             r
@@ -616,6 +622,6 @@ async def test_deployment_opens_a_pull_request(tmp_path: Path, git_env: dict[str
         assert pulls[0]["body"]["base"] == "main"
         # The pushed branch holds the written file.
         pushed = await asyncio.to_thread(
-            git_show, story.bare, f"{pulls[0]['body']['head']}:evaluate.py"
+            git_show, story.bare, f"{pulls[0]['body']['head']}:{EVALUATION_FILE}"
         )
-        assert "expected_cost" in pushed
+        assert EVALUATION_FIELD in pushed
