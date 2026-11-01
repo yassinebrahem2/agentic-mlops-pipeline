@@ -98,7 +98,7 @@ class ResultsService(Results):
         self._file_reader = file_reader or FileSourceReader(connections)
         self._ci_reader = ci_reader or (CiSourceReader(tracking, handoffs) if tracking else None)
         self._mlflow_reader = mlflow_reader or (
-            MlflowSourceReader(tracking, handoffs) if tracking else None
+            MlflowSourceReader(tracking, handoffs, checks) if tracking else None
         )
         self._evaluation_copies = evaluation_copies or SqliteEvaluationCopies(databases)
         self._incidents = incidents
@@ -115,6 +115,8 @@ class ResultsService(Results):
     def bind_checks(self, checks: ChecksStore) -> None:
         """Binds checks store to results service."""
         self._checks = checks
+        if self._mlflow_reader is not None:
+            self._mlflow_reader.bind_checks(checks)
 
     def bind_incidents(self, incidents: SignalSink) -> None:
         """Binds incidents service to results service."""
@@ -126,7 +128,7 @@ class ResultsService(Results):
         if self._ci_reader is None:
             self._ci_reader = CiSourceReader(tracking, self._handoffs)
         if self._mlflow_reader is None:
-            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs)
+            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs, self._checks)
 
     def bind_maintenance(self, maintenance: Maintenance) -> None:
         """Binds maintenance service to results service."""
