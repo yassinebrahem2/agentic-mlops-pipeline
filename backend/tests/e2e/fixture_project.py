@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
 from mlops_agents.monitoring.expr import Compare
+from mlops_agents.monitoring.results.contract import (
+    ParserMapping,
+    ParserPayload,
+    ParserSpec,
+    ResultRecord,
+    source_id,
+)
 from mlops_agents.monitoring.rules.contract import RuleLimits, RuleSpec, RuleTerm
 from mlops_agents.proposals.payloads import CommandSpec
 
@@ -25,6 +33,10 @@ ROLLBACK_RULE_ID: Final = "rule-rollback"
 WEATHER_FEED_NAME: Final = "weather"
 TEAM_CHECK_ID: Final = "team-bookings-check"
 AGENT_CHECK_ID: Final = "agent-bookings-check"
+
+TEAM_FEED_NAME: Final = "team-check-job"
+TEAM_RESULTS_PATTERN: Final = "team/*.jsonl"
+TEAM_SOURCE_ID: Final = source_id("file", TEAM_RESULTS_PATTERN, CONNECTION_NAME)
 
 TIMEZONE: Final = "UTC"
 SECOND_DEADLINE_MINUTES: Final[int] = 600  # 10 hours: second deadline falls after morning (09:00)
@@ -218,7 +230,23 @@ def handoff_payload(
                     "cadence": {"cron": "0 2 * * *", "every_minutes": None},
                     "grace_minutes": 30,
                     "timezone": TIMEZONE,
-                }
+                },
+                {
+                    # The team's own check job: its output is in the team's format, so a
+                    # mapping parser reads it. Its deadline falls after the night.
+                    "name": TEAM_FEED_NAME,
+                    "kind": "job",
+                    "ref": {
+                        "ci_workflow": None,
+                        "file": {
+                            "connection": CONNECTION_NAME,
+                            "path_pattern": TEAM_RESULTS_PATTERN,
+                        },
+                    },
+                    "cadence": {"cron": "0 12 * * *", "every_minutes": None},
+                    "grace_minutes": 30,
+                    "timezone": TIMEZONE,
+                },
             ],
             "on_call": [
                 {
@@ -251,7 +279,10 @@ def handoff_payload(
                     "category": "data_quality",
                     "cadence": {"cron": "0 1 * * *", "every_minutes": None},
                     "timezone": TIMEZONE,
-                    "results": {"connection": CONNECTION_NAME, "path_pattern": "checks/*.jsonl"},
+                    "results": {
+                        "connection": CONNECTION_NAME,
+                        "path_pattern": TEAM_RESULTS_PATTERN,
+                    },
                 },
                 {
                     "check_id": AGENT_CHECK_ID,
@@ -391,6 +422,62 @@ def write_results_record(
     with target.open("a", encoding="utf-8") as f:
         f.write(line)
     return target
+
+
+def team_check_line(*, ran_at: datetime, table: str, failed_rows: int) -> dict[str, Any]:
+    """One line of the team's own check output, in the team's format (not ours)."""
+    return {
+        "ts": ran_at.isoformat(),
+        "table": table,
+        "failed_rows": failed_rows,
+        "info": {"issue": f"team {table} anomaly"},
+    }
+
+
+def write_team_check_record(
+    folder: Path, *, ran_at: datetime, table: str, failed_rows: int = 3
+) -> Path:
+    """Appends one team-format line to the team's JSON Lines file in the connection folder."""
+    return write_results_record(
+        folder,
+        team_check_line(ran_at=ran_at, table=table, failed_rows=failed_rows),
+        "bookings-check.jsonl",
+    )
+
+
+def team_parser_payload(*, ran_at: datetime) -> dict[str, Any]:
+    """The proposal payload of the team check's mapping parser; its sample is a real line of
+    the team's format with the record the mapping gives."""
+    mapping = ParserMapping(
+        format="jsonl",
+        fields={
+            "ran_at": "ts",
+            "subject": "table",
+            "value": "failed_rows",
+            "detail": "info",
+        },
+        # The mapping condition reads the mapped fields
+        fired_when=Compare(op="gt", field="value", value=0),
+        defaults={"check_id": TEAM_CHECK_ID, "category": "data_quality"},
+    )
+    sample = team_check_line(ran_at=ran_at, table=TABLE_BOOKINGS, failed_rows=3)
+    record = ResultRecord(
+        check_id=TEAM_CHECK_ID,
+        origin="team",
+        ran_at=ran_at,
+        fired=True,
+        category="data_quality",
+        subject=TABLE_BOOKINGS,
+        value=3.0,
+        detail=sample["info"],
+        source_ref="team/bookings-check.jsonl",
+    )
+    payload = ParserPayload(
+        spec=ParserSpec(source_id=TEAM_SOURCE_ID, mapping=mapping),
+        sample_input=json.dumps(sample),
+        sample_records=[record],
+    )
+    return payload.model_dump(mode="json")
 
 
 def create_fixture_repo(path: Path, git_env: dict[str, str]) -> Path:

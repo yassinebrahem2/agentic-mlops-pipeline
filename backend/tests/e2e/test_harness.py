@@ -34,6 +34,7 @@ from tests.e2e.fixture_project import (
     TABLE_PREDICTIONS,
     TABLE_WEATHER,
     TEAM_CHECK_ID,
+    TEAM_FEED_NAME,
     WEATHER_FEED_NAME,
     create_fixture_repo,
     handoff_payload,
@@ -181,9 +182,7 @@ def test_fixture_project_payloads() -> None:
     assert is_downstream(TABLE_WEATHER, TABLE_PREDICTIONS, validated) is True
 
     # Feed
-    assert len(validated.operations.feeds) == 1
-    feed = validated.operations.feeds[0]
-    assert feed.name == WEATHER_FEED_NAME
+    assert [f.name for f in validated.operations.feeds] == [WEATHER_FEED_NAME, TEAM_FEED_NAME]
 
     # On-call
     assert len(validated.operations.on_call) == 2

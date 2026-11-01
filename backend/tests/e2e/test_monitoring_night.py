@@ -52,6 +52,7 @@ from sqlalchemy import select
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
 from mlops_agents.monitoring.results.contract import ResultQuery, ResultRecord
 from mlops_agents.monitoring.settings import set_monitoring_settings
+from mlops_agents.proposals.contract import PARSER_KIND
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.tables import agent_wakes, notification_log
 from tests.e2e.fixture_project import (
@@ -61,13 +62,16 @@ from tests.e2e.fixture_project import (
     TABLE_BOOKINGS,
     TABLE_PREDICTIONS,
     TEAM_CHECK_ID,
+    TEAM_SOURCE_ID,
     WEATHER_FEED_NAME,
     create_fixture_repo,
     handoff_payload,
     monitoring_settings_payload,
     rollback_rule_spec,
+    team_parser_payload,
     write_fixture_data_folder,
     write_results_record,
+    write_team_check_record,
 )
 from tests.e2e.harness import (
     create_e2e_harness,
@@ -149,6 +153,22 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                     project_id, spec=rule_spec, proposal_id="prp_rule_night"
                 )
 
+                # The team check's mapping parser, approved before the night; no agent proposes it
+                parser_proposal = await services1.proposals.create(
+                    project_id,
+                    agent="architect",
+                    kind=PARSER_KIND,
+                    key=TEAM_SOURCE_ID,
+                    payload=team_parser_payload(ran_at=harness.clock.now()),
+                    turn_id="trn_night_parser",
+                    tool_call_id="call_night_parser",
+                )
+                parser_result = await services1.proposals.decide(
+                    project_id, parser_proposal.id, approved=True
+                )
+                assert parser_result is not None
+                assert parser_result.failed == {}
+
                 # Configure deployment rollback scripted reply IDs
                 set_deployment_ids(hook_id=rollback_hook.id, rule_id=rule.id)
 
@@ -170,22 +190,11 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 # -----------------------------------------------------------------
                 # 1a. Team check fires on bookings at 01:00 UTC
                 harness.clock.set(datetime(2026, 10, 31, 1, 0, 0, tzinfo=UTC))
-                rec_team = ResultRecord(
-                    check_id=TEAM_CHECK_ID,
-                    origin="team",
+                write_team_check_record(
+                    data_path / "team",
                     ran_at=harness.clock.now(),
-                    fired=True,
-                    category="data_quality",
-                    subject=TABLE_BOOKINGS,
-                    model=None,
-                    detail={"issue": "team bookings anomaly"},
-                    source_ref="checks/bookings.jsonl",
+                    table=TABLE_BOOKINGS,
                 )
-                s_id = f"file:{CONNECTION_NAME}:checks/*.jsonl"
-                await services1.results._store.insert_items(
-                    project_id, s_id, [("team_b1", rec_team)], seen_at=harness.clock.now()
-                )
-                await services1.results.deliver_undelivered(project_id, harness.clock.now())
                 await run_due(services1, project_id, harness.clock.now())
 
                 # Stored in results, no incident, no notification
@@ -193,6 +202,10 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                     project_id, ResultQuery(check_id=TEAM_CHECK_ID)
                 )
                 assert q_res.total == 1
+                # It came through the approved mapping parser, as the team's own record
+                assert q_res.rows[0].source_id == TEAM_SOURCE_ID
+                assert q_res.rows[0].origin == "team"
+                assert q_res.rows[0].fired is True
                 inc_page = await services1.incidents.list(project_id)
                 assert inc_page.total == 0
                 assert len(harness.fake_discord.state.posts) == 0
