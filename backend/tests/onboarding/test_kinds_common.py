@@ -33,7 +33,7 @@ async def test_a_reason_holding_a_secret_is_stored_masked() -> None:
     assert reason == "the tracker refused the key ***"
 
 
-async def test_an_unexpected_error_stores_the_generic_reason_and_logs_its_traceback(
+async def test_an_unexpected_error_stores_the_generic_reason_and_logs_without_raw_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     parts = Parts(_secrets)
@@ -45,9 +45,29 @@ async def test_an_unexpected_error_stores_the_generic_reason_and_logs_its_traceb
         assert not await parts.run("network", breaks)
 
     assert parts.result().failed == {"network": UNEXPECTED_REASON}
-    [record] = [r for r in caplog.records if r.exc_info is not None]
+    [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert "network" in record.getMessage()
-    assert record.exc_info is not None and record.exc_info[0] is KeyError
+    assert "boom" in record.getMessage()
+    assert record.exc_info is None
+
+
+async def test_an_apply_failing_with_credential_leaves_it_out_of_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    parts = Parts(_secrets)
+
+    async def leaks() -> None:
+        raise RuntimeError(f"connection to postgres://user:{SECRET}@db failed with key {SECRET}")
+
+    with caplog.at_level(logging.ERROR, logger="mlops_agents.onboarding.kinds_common"):
+        assert not await parts.run("network", leaks)
+
+    assert parts.result().failed == {"network": UNEXPECTED_REASON}
+    assert SECRET not in caplog.text
+    [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert "network" in record.getMessage()
+    assert "***" in record.getMessage()
+    assert record.exc_info is None
 
 
 async def test_a_failing_secret_source_keeps_the_reason_url_scrubbed(

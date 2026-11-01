@@ -58,7 +58,7 @@ def _insert_approval(
 @pytest.fixture
 def fresh_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     conn = connect_sync(db)
     _seed_turn(conn)
     yield conn
@@ -88,7 +88,7 @@ def test_a_version_5_database_settles_its_decided_approvals_only(tmp_path: Path)
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [6, 7, 8, 9, 10]
 
     conn = connect_sync(db)
     try:

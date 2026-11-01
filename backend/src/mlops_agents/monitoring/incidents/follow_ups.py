@@ -12,6 +12,7 @@ from mlops_agents.monitoring.jobs import JobDue, JobKind
 from mlops_agents.monitoring.scheduler.contract import ScheduledJob
 from mlops_agents.monitoring.scheduler.times import interval_dues
 from mlops_agents.monitoring.settings import get_monitoring_settings
+from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.storage.tables import incident_follow_ups, incidents
 
 if TYPE_CHECKING:
@@ -141,7 +142,7 @@ class FollowUpsJob(ScheduledJob):
                     agent=agent,
                     label="follow_up",
                     subject_id=inc_id,
-                    text=f"Follow-up for incident {inc_id}: {note}",
+                    text=f"Follow-up for incident {inc_id}: {untrusted(note, source='follow_up')}",
                     key=fol_id,
                 )
                 async with engine.begin() as conn:
