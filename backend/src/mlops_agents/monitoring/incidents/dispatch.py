@@ -47,10 +47,10 @@ class DiagnosisDispatch(IncidentObserver):
             new_agent = diagnoser(incident.category, incident.subtype)
             prev_agent = self._current_diagnoser.get(incident_key)
             if prev_agent is None:
-                sigs = await self._incidents.signals(project_id, incident.id)
-                prev_agent = diagnoser(sigs[0].category, None) if sigs else new_agent
+                prev_agent = change.before or diagnoser(incident.category, incident.subtype)
 
             if new_agent == prev_agent:
+                self._current_diagnoser[incident_key] = new_agent
                 self._cause_woken_severity.pop(incident_key, None)
                 return
 
