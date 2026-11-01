@@ -33,6 +33,9 @@ T_RUN_1 = datetime(2026, 10, 30, 9, 30, 0, tzinfo=UTC)
 T_RUN_2 = datetime(2026, 10, 30, 10, 30, 0, tzinfo=UTC)
 T_EVALUATE = datetime(2026, 10, 30, 11, 20, 0, tzinfo=UTC)
 COMMIT_RUN_1 = "3f2a9c1"
+# The version of mp_recall registered with RECALL in PR 7: pinned as a literal, so a change
+# to how it is computed (or a process-dependent hash) fails here.
+RECALL_VERSION = "477c8867a0f0"
 
 RECALL = MlflowResults(metric="recall", threshold=0.8, fires_when="below")
 HANDOFF_CHECKS = [
@@ -289,14 +292,16 @@ def checks_store(
     )
 
 
-async def _register_recall(checks: SqliteChecks, project_id: str, *, merge: bool) -> None:
+async def _register_recall(
+    checks: SqliteChecks, project_id: str, *, merge: bool, location: MlflowResults = RECALL
+) -> None:
     await checks.register(
         project_id,
         check_id="mp_recall",
         category="model_performance",
         cadence=Cadence(every_minutes=60, cron=None),
         timezone="UTC",
-        results_location=RECALL,
+        results_location=location,
         pr_number=7,
         agent="model-performance",
     )
@@ -358,10 +363,10 @@ async def test_active_registered_mlflow_check_meets_its_expectation_with_its_own
     stored = sorted(
         (r for r in page.rows if r.source_id == "mlflow:recall"), key=lambda r: r.ran_at
     )
-    # A check's version is the git commit of the run that produced the record (S4 4).
+    # The version comes from the registration, not from the run's git commit.
     assert [(r.value, r.fired, r.version) for r in stored] == [
-        (0.7, True, COMMIT_RUN_1),
-        (0.9, False, None),
+        (0.7, True, RECALL_VERSION),
+        (0.9, False, RECALL_VERSION),
     ]
     for record in stored:
         assert record.check_id == "mp_recall"
@@ -369,6 +374,121 @@ async def test_active_registered_mlflow_check_meets_its_expectation_with_its_own
         assert record.origin == "agent"
         assert record.threshold == 0.8
         assert is_label_evidence(record)
+
+
+T_RUN_3 = datetime(2026, 10, 30, 11, 30, 0, tzinfo=UTC)
+
+
+async def _sync_run_3(env: TrackingEnv) -> None:
+    """A third run arrives after the first collect, logging recall 0.75."""
+    s = (await env.service.sources(env.project_id))[0].id
+    env.adapters["mlflow"].result = SyncResult(
+        versions=[],
+        runs=[_run(s, "run_3", T_RUN_3, "9e8d7c6")],
+        metrics=[_point(s, "run_3", "recall", 0.75, T_RUN_3)],
+        aliases={},
+        ci_runs=[],
+        evaluations=[],
+        error=None,
+    )
+    await env.service.run_sync(env.project_id, s)
+
+
+def _results(env: TrackingEnv, checks: SqliteChecks) -> ResultsService:
+    service = ResultsService(
+        databases=env.databases,
+        handoffs=FakeHandoffs(),
+        connections=FakeConnections(),
+        events=env.events,
+        tracking=env.service,
+    )
+    service.bind_checks(checks)
+    return service
+
+
+async def _stored_recall(
+    results: ResultsService, project_id: str
+) -> list[tuple[float | None, float | None, str | None]]:
+    page = await results.store.query(project_id, ResultQuery(check_id="mp_recall"))
+    stored = sorted(
+        (r for r in page.rows if r.source_id == "mlflow:recall"), key=lambda r: r.ran_at
+    )
+    return [(r.value, r.threshold, r.version) for r in stored]
+
+
+async def test_version_is_the_same_after_a_restart(
+    tracking_env: TrackingEnv, checks_store: SqliteChecks, fake_clock: FakeClock
+) -> None:
+    env = tracking_env
+    await _seed_mlflow(env)
+    await _register_recall(checks_store, env.project_id, merge=True)
+    await _results(env, checks_store).collect(env.project_id, T_EVALUATE)
+
+    # A fresh checks store and results service read the next run, as after a restart.
+    await _sync_run_3(env)
+    restarted_checks = SqliteChecks(
+        databases=env.databases,
+        expectations=ExpectationsService(
+            databases=env.databases,
+            handoffs=FakeHandoffs(),
+            connections=FakeConnections(),
+            incidents=FakeIncidents(),
+            tracking=None,
+            maintenance=_Maintenance(),
+            clock=fake_clock,
+        ),
+        events=env.events,
+        clock=fake_clock,
+    )
+    restarted = _results(env, restarted_checks)
+    await restarted.collect(env.project_id, datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC))
+
+    assert await _stored_recall(restarted, env.project_id) == [
+        (0.7, 0.8, RECALL_VERSION),
+        (0.9, 0.8, RECALL_VERSION),
+        (0.75, 0.8, RECALL_VERSION),
+    ]
+
+
+async def test_changed_threshold_gives_later_records_a_new_version_and_keeps_stored_ones(
+    tracking_env: TrackingEnv, checks_store: SqliteChecks
+) -> None:
+    env = tracking_env
+    await _seed_mlflow(env)
+    await _register_recall(checks_store, env.project_id, merge=True)
+    results = _results(env, checks_store)
+    await results.collect(env.project_id, T_EVALUATE)
+
+    lower = MlflowResults(metric="recall", threshold=0.6, fires_when="below")
+    await _register_recall(checks_store, env.project_id, merge=True, location=lower)
+    await _sync_run_3(env)
+    await results.collect(env.project_id, datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC))
+
+    stored = await _stored_recall(results, env.project_id)
+    assert stored[:2] == [(0.7, 0.8, RECALL_VERSION), (0.9, 0.8, RECALL_VERSION)]
+    value, threshold, version = stored[2]
+    assert (value, threshold) == (0.75, 0.6)
+    assert version not in {RECALL_VERSION, "9e8d7c6", None}
+    assert len(stored) == 3
+
+
+async def test_changed_fires_when_gives_a_new_version(
+    tracking_env: TrackingEnv, checks_store: SqliteChecks
+) -> None:
+    env = tracking_env
+    await _seed_mlflow(env)
+    await _register_recall(checks_store, env.project_id, merge=True)
+    reader = MlflowSourceReader(tracking=env.service, handoffs=FakeHandoffs(), checks=checks_store)
+    before = await reader.read(env.project_id, "mlflow:recall", cursor={})
+
+    above = MlflowResults(metric="recall", threshold=0.8, fires_when="above")
+    await _register_recall(checks_store, env.project_id, merge=True, location=above)
+    after = await reader.read(env.project_id, "mlflow:recall", cursor={})
+
+    assert {r.version for _, r in before.records} == {RECALL_VERSION}
+    new_versions = {r.version for _, r in after.records}
+    assert len(new_versions) == 1
+    assert new_versions.isdisjoint({RECALL_VERSION, COMMIT_RUN_1, None})
 
 
 async def test_pending_registered_check_does_not_change_the_records(
@@ -430,8 +550,8 @@ async def test_registered_check_wins_over_a_later_handoff_naming_its_metric(
 
     records = [r for _, r in outcome.records]
     assert [(r.value, r.fired, r.version) for r in records] == [
-        (0.7, True, COMMIT_RUN_1),
-        (0.9, False, None),
+        (0.7, True, RECALL_VERSION),
+        (0.9, False, RECALL_VERSION),
     ]
     for record in records:
         assert record.check_id == "mp_recall"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -36,18 +38,35 @@ class RegisteredChecks(Protocol):
     async def list_active(self, project_id: str) -> list[CheckView]: ...
 
 
+def mlflow_check_version(location: MlflowResults, pr_number: int) -> str:
+    """The version of an MLflow-located registered check: a short hash of what defines it.
+
+    The check's threshold lives in its registration, not in the code a run executes, so its
+    version comes from there: the same registration gives the same version on every run and
+    after a restart, and a changed threshold or direction is a new version (S4 4). The run's
+    git commit would name the training code, and is often absent.
+    """
+    canonical = json.dumps(
+        {
+            "metric": location.metric,
+            "threshold": location.threshold,
+            "fires_when": location.fires_when,
+            "pr_number": pr_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class MetricOwner:
-    """Whose records an MLflow metric gives, and what makes them fire.
-
-    A check's version is the git commit in its records (S4 4), so a registered check's
-    records take their run's commit; tracker records carry none, as before #628.
-    """
+    """Whose records an MLflow metric gives, and what makes them fire."""
 
     check_id: str
     origin: ResultOrigin
     category: ResultCategory
-    version_is_run_commit: bool
+    version: str | None
     threshold: float | None
     fires_when: Literal["above", "below"] | None
 
@@ -84,7 +103,7 @@ def _handoff_owner(source_id: str, metric: str, handoff: HandoffView | None) -> 
         check_id=user.check.check_id if user.check is not None else source_id,
         origin="tracker",
         category=user.check.category if user.check is not None else "model_performance",
-        version_is_run_commit=False,
+        version=None,
         threshold=user.results.threshold,
         fires_when=user.results.fires_when,
     )
@@ -117,7 +136,7 @@ def metric_owner(
                 check_id=chk.check_id,
                 origin="agent",
                 category=chk.category,
-                version_is_run_commit=True,
+                version=mlflow_check_version(location, chk.pr_number),
                 threshold=location.threshold,
                 fires_when=location.fires_when,
             )
@@ -127,7 +146,7 @@ def metric_owner(
         check_id=source_id,
         origin="tracker",
         category="model_performance",
-        version_is_run_commit=False,
+        version=None,
         threshold=None,
         fires_when=None,
     )
@@ -283,7 +302,7 @@ class MlflowSourceReader:
                             "value": point.value,
                         },
                         source_ref=f"run:{run.key}",
-                        version=run.git_commit if owner.version_is_run_commit else None,
+                        version=owner.version,
                     )
                     source_key = f"{run.key}:{point.metric}:{point.step}:{point.time.isoformat()}"
                     records.append((source_key, rec))
