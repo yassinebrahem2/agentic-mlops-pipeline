@@ -405,9 +405,18 @@ describe("AgentsPage", () => {
     expect(composer).toBeInTheDocument();
   });
 
-  it("Compact now sends POST to compact endpoint", async () => {
+  it("Compact now sends POST to compact endpoint and shows notice if not compacted", async () => {
     const user = userEvent.setup();
     setupDefaultMocks();
+    postSpy?.mockImplementation((path: string) => {
+      if (path.includes("/compact")) {
+        return Promise.resolve({
+          data: { compacted: false },
+          response: new Response(JSON.stringify({ compacted: false }), { status: 200 }),
+        });
+      }
+      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) });
+    });
     renderPage("/projects/prj_1/agents", { routes: testRoutes });
 
     const compactButton = await screen.findByRole("button", { name: "Compact now" });
@@ -419,6 +428,9 @@ describe("AgentsPage", () => {
         params: { path: { project_id: "prj_1", agent: "orchestrator" } },
       }),
     );
+    expect(
+      await screen.findByText("Nothing to compact: context is within budget."),
+    ).toBeInTheDocument();
   });
 
   it("Clear context opens confirmation dialog and confirming sends POST to clear endpoint", async () => {

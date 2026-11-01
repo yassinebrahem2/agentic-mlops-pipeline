@@ -27,7 +27,7 @@ from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import TurnHooks
 from mlops_agents.agents.runtime.hooks import Gate, InboundSource, TurnEndCheck, TurnObserver
 from mlops_agents.agents.runtime.hub import AsyncRLock, SessionHub
-from mlops_agents.agents.runtime.model_caller import ModelCaller
+from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelKeysExhausted, TurnFailed
 from mlops_agents.agents.runtime.repair import ProjectRecovery
 from mlops_agents.agents.runtime.session_registry import SessionRegistry
 from mlops_agents.agents.runtime.stall import LateApprovals
@@ -39,6 +39,7 @@ from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools import ToolRegistry
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import AuditLog, EventLog
+from mlops_agents.providers.errors import ProviderCallError
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
@@ -340,7 +341,7 @@ class SessionManager(AgentSessions):
         await self._recovery.ensure(project_id)
         await self._stop(project_id, agent, None)
 
-    async def compact(self, project_id: str, agent: str) -> None:
+    async def compact(self, project_id: str, agent: str) -> bool:
         await self._workspace.get(project_id)
         self._check_agent(agent)
         await self._recovery.ensure(project_id)
@@ -365,18 +366,26 @@ class SessionManager(AgentSessions):
             system_text = str(system_message(built_agent, summary).content)
             tool_schemas = [t.schema() for t in built_agent.tools]
 
-            compacted = await compact_if_needed(
-                self._store,
-                self._caller,
-                built_agent.model,
-                project_id,
-                session_id,
-                history,
-                system_text,
-                agent_name=agent,
-                tools=tool_schemas,
-                force=True,
-            )
+            try:
+                compacted = await compact_if_needed(
+                    self._store,
+                    self._caller,
+                    built_agent.model,
+                    project_id,
+                    session_id,
+                    history,
+                    system_text,
+                    agent_name=agent,
+                    tools=tool_schemas,
+                    force=True,
+                )
+            except ModelKeysExhausted as exc:
+                reason = f"{exc.headline}. {exc.description}" if exc.description else exc.headline
+                raise DomainError("model_keys_exhausted", reason, status=409) from exc
+            except TurnFailed as exc:
+                raise DomainError("turn_failed", exc.message, status=503) from exc
+            except ProviderCallError as exc:
+                raise DomainError("provider_error", exc.message, status=503) from exc
 
             if compacted and self._event_log is not None:
                 await self._event_log.record(
@@ -386,6 +395,7 @@ class SessionManager(AgentSessions):
                     subject_id=session_id,
                     payload={"agent": agent},
                 )
+            return compacted
 
     async def clear(self, project_id: str, agent: str, person: str = "user") -> None:
         await self._workspace.get(project_id)

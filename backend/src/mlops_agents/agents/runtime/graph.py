@@ -333,6 +333,18 @@ def create_turn_graph(
                             tools=tool_schemas,
                             force=True,
                         )
+                    except ModelKeysExhausted as comp_exhausted:
+                        stall = await record_stall(
+                            hooks.approvals,
+                            hooks.events,
+                            project_id=project_id,
+                            agent=agent.definition.name,
+                            turn_id=turn_id,
+                            step=step_count,
+                            exhausted=comp_exhausted,
+                            node="model",
+                        )
+                        return {"messages": inbound, "stall": stall}
                     except ProviderCallError as comp_err:
                         if comp_err.kind is not ProviderErrorKind.REQUEST_TOO_LARGE:
                             raise
@@ -344,6 +356,7 @@ def create_turn_graph(
                     [m for m in active if m.id != message_id],
                     current_turn_id=turn_id,
                     trim_current_turn_tools=True,
+                    model=agent.model.address,
                 )
                 new_request = [system_message(agent, summary), *trimmed_history, *inbound]
                 if end_note:

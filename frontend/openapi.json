@@ -1256,6 +1256,20 @@
         "title": "CommandSpec",
         "type": "object"
       },
+      "CompactResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "compacted": {
+            "title": "Compacted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "compacted"
+        ],
+        "title": "CompactResponse",
+        "type": "object"
+      },
       "Compare": {
         "additionalProperties": false,
         "properties": {
@@ -11150,7 +11164,14 @@
           }
         ],
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactResponse"
+                }
+              }
+            },
             "description": "Successful Response"
           },
           "422": {

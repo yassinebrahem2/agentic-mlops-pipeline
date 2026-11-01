@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import AIMessage
 
+from mlops_agents.agents.approvals.service import ApprovalsService
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.budget import (
     NOTICE_SUFFIX,
@@ -24,11 +25,13 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.runtime.executor import TurnExecutor
 from mlops_agents.agents.runtime.graph import create_turn_graph
-from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelReply
+from mlops_agents.agents.runtime.model_caller import ModelCaller, ModelKeysExhausted, ModelReply
+from mlops_agents.agents.runtime.stall import LateApprovals, StallState
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
 from mlops_agents.providers.bridge import ResolvedModel
 from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind
+from mlops_agents.providers.models import Provider
 from mlops_agents.storage.databases import Databases
 from tests.agents.runtime.compaction_fakes import MockSummaryCaller, make_model
 from tests.agents.runtime.graph_env import RecordingSink, graph_hooks
@@ -385,6 +388,7 @@ class FakeTooLargeCaller(ModelCaller):
         too_large_times: int,
         success_reply: ModelReply | None = None,
         fail_compaction: bool = False,
+        fail_compaction_exhausted: ModelKeysExhausted | None = None,
     ) -> None:
         self.too_large_times = too_large_times
         self.success_reply = success_reply or ModelReply(
@@ -393,6 +397,7 @@ class FakeTooLargeCaller(ModelCaller):
             completion_tokens=10,
         )
         self.fail_compaction = fail_compaction
+        self.fail_compaction_exhausted = fail_compaction_exhausted
         self.call_count = 0
         self.model_calls = 0
         self.calls: list[dict[str, Any]] = []
@@ -408,12 +413,15 @@ class FakeTooLargeCaller(ModelCaller):
         self.call_count += 1
         self.calls.append({"model": model, "messages": list(messages), "tools": tools})
         is_compaction = len(tools) == 0
-        if is_compaction and not self.fail_compaction:
-            return ModelReply(
-                message=AIMessage(content="Compacted summary"),
-                prompt_tokens=30,
-                completion_tokens=10,
-            )
+        if is_compaction:
+            if self.fail_compaction_exhausted is not None:
+                raise self.fail_compaction_exhausted
+            if not self.fail_compaction:
+                return ModelReply(
+                    message=AIMessage(content="Compacted summary"),
+                    prompt_tokens=30,
+                    completion_tokens=10,
+                )
         self.model_calls += 1
         if self.model_calls <= self.too_large_times:
             raise ProviderCallError(
@@ -508,6 +516,113 @@ async def test_request_too_large_compacts_and_retries_once_and_succeeds(
     assert compacted_through is not None
     # Turn finished successfully
     assert any(isinstance(p, TextPart) and "Final reply" in p.text for p in current_parts)
+
+
+async def test_request_too_large_retry_compaction_stalls_on_model_keys_exhausted(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    git_env: dict[str, str],
+) -> None:
+    repo_dir = make_repo(tmp_path / "repo", {"README.md": "hi"}, git_env)
+    agent = _make_custom_agent(repo_dir, paths.bin, fixed_prompt_len=100, request_limit=10000)
+    store = SessionStore(databases)
+    sink = RecordingSink()
+    provider = Provider(
+        id="prv_test",
+        name="openai",
+        kind="hosted",
+        base_url="https://api.openai.com/v1",
+        status="ok",
+        status_detail=None,
+        keys=[],
+    )
+    exhausted_err = ModelKeysExhausted(
+        provider=provider,
+        model="fake:fake-model",
+        keys=[],
+        description="Keys exhausted during retry compaction",
+    )
+    caller = FakeTooLargeCaller(too_large_times=1, fail_compaction_exhausted=exhausted_err)
+
+    session_id = await store.session_id("prj_test", agent.definition.name)
+
+    # Prior turns
+    for i in range(1, 4):
+        mu = await store.add_message(
+            "prj_test",
+            session_id,
+            author_kind="user",
+            author_name="user",
+            parts=[TextPart(type="text", text=f"Q{i} " + "u" * 100)],
+            status="complete",
+        )
+        ti = await store.add_turn("prj_test", session_id, mu.id, "done")
+        await store.add_message(
+            "prj_test",
+            session_id,
+            turn_id=ti,
+            author_kind="agent",
+            author_name=agent.definition.name,
+            parts=[TextPart(type="text", text=f"A{i}")],
+            status="complete",
+        )
+
+    # Current turn
+    u_curr = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Current question")],
+        status="complete",
+    )
+    turn_id = await store.add_turn("prj_test", session_id, u_curr.id, "running")
+    agent_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        turn_id=turn_id,
+        author_kind="agent",
+        author_name=agent.definition.name,
+        parts=[],
+        status="streaming",
+    )
+
+    current_parts: list[Any] = []
+    hooks = graph_hooks(agent, databases)
+    approvals_service = ApprovalsService(
+        databases=databases, sessions=cast(Any, None), store=hooks.approval_store
+    )
+    cast(LateApprovals, hooks.approvals).bind(approvals_service)
+    graph = create_turn_graph(
+        agent=agent,
+        caller=caller,
+        store=store,
+        sink=sink,
+        project_id="prj_test",
+        session_id=session_id,
+        turn_id=turn_id,
+        message_id=agent_msg.id,
+        current_parts=current_parts,
+        lock=asyncio.Lock(),
+        hooks=hooks,
+    )
+
+    # The graph will interrupt / stall cleanly on wait node
+    res = await graph.ainvoke({"messages": [], "step_count": 0, "stopped_reason": None})  # pyright: ignore[reportUnknownMemberType]
+
+    stall_val = res.get("stall")
+    assert stall_val is not None
+    assert isinstance(stall_val, StallState)
+    assert stall_val.node == "model"
+    assert stall_val.step == 0
+
+    stall_rec = await hooks.approval_store.get("prj_test", stall_val.approval_id)
+    assert stall_rec is not None
+    assert stall_rec.kind == "stall"
+    assert stall_rec.status == "pending"
+    assert stall_rec.step == 0
+    assert "no usable key" in stall_rec.preview.title
 
 
 async def test_request_too_large_retries_once_then_fails_cleanly(

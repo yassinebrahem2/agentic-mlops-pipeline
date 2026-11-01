@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertCircle, AlertTriangle } from "lucide-react";
+import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -52,19 +52,26 @@ function Agents({ projectId }: { projectId: string }) {
 
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   const compactMutation = useMutation({
     mutationFn: async () => {
       const res = await api.POST("/api/projects/{project_id}/agents/{agent}/session/compact", {
         params: { path: { project_id: projectId, agent: selectedAgentName } },
       });
-      unwrap(res);
+      return unwrap(res);
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setActionError(null);
+      if (!data.compacted) {
+        setActionNotice("Nothing to compact: context is within budget.");
+      } else {
+        setActionNotice(null);
+      }
       void session.reload();
     },
     onError: (err) => {
+      setActionNotice(null);
       setActionError(errorText(err));
     },
   });
@@ -79,11 +86,13 @@ function Agents({ projectId }: { projectId: string }) {
     onSuccess: () => {
       setClearDialogOpen(false);
       setActionError(null);
+      setActionNotice(null);
       void session.reload();
       void clearedEventsQuery.refetch();
     },
     onError: (err) => {
       setClearDialogOpen(false);
+      setActionNotice(null);
       setActionError(errorText(err));
     },
   });
@@ -251,6 +260,24 @@ function Agents({ projectId }: { projectId: string }) {
               </AlertDescription>
             </Alert>
           )}
+          {actionNotice && (
+            <Alert>
+              <Info className="size-4" />
+              <AlertDescription className="flex items-center justify-between gap-4">
+                <span>{actionNotice}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setActionNotice(null);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
         {session.connection === "reconnecting" && (
@@ -269,6 +296,8 @@ function Agents({ projectId }: { projectId: string }) {
               agents={chatAgents}
               selectedAgent={selectedAgentName}
               onSelectAgent={(value) => {
+                setActionError(null);
+                setActionNotice(null);
                 setSearchParams((prev) => {
                   const next = new URLSearchParams(prev);
                   next.set("agent", value);

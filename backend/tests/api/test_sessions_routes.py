@@ -167,7 +167,8 @@ async def test_compact_and_clear_routes(
     resp_compact = await client.post(
         f"/api/projects/{project_id}/agents/orchestrator/session/compact"
     )
-    assert resp_compact.status_code == 204
+    assert resp_compact.status_code == 200
+    assert resp_compact.json() == {"compacted": True}
     assert fake.compacted == [(project_id, "orchestrator")]
 
     resp_clear = await client.post(f"/api/projects/{project_id}/agents/orchestrator/session/clear")

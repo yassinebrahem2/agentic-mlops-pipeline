@@ -221,9 +221,10 @@ class FakeSessions(AgentSessions):
         self._check_agent(agent)
         self.stopped.append((project_id, agent))
 
-    async def compact(self, project_id: str, agent: str) -> None:
+    async def compact(self, project_id: str, agent: str) -> bool:
         self._check_agent(agent)
         self.compacted.append((project_id, agent))
+        return True
 
     async def clear(self, project_id: str, agent: str, person: str = "user") -> None:
         self._check_agent(agent)
