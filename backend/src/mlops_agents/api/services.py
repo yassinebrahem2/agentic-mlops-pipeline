@@ -317,7 +317,7 @@ async def build_services(
     async def secret_source() -> list[str]:
         return await _app_secrets(providers, github, settings, integration_settings)
 
-    events = SqliteEventLog(databases)
+    events = SqliteEventLog(databases, clock=clock)
     audit = SqliteAuditLog(databases, secrets=secret_source)
     vectors = SqliteVectorStore(databases)
     knowledge = KnowledgeService(databases, embedders, vectors, events, secret_source)

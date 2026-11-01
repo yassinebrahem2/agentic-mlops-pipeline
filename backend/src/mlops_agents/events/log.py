@@ -10,10 +10,11 @@ from typing import Any
 from sqlalchemy import insert, select
 
 from mlops_agents.agents.runtime.contract import Resync
-from mlops_agents.clock import now_iso
+from mlops_agents.clock import to_iso
 from mlops_agents.events.contract import EventLog, EventRecord, EventType
 from mlops_agents.events.hub import EventHub, row_to_event
 from mlops_agents.ids import new_id
+from mlops_agents.providers.failover import Clock, SystemClock
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import events
 
@@ -21,9 +22,12 @@ from mlops_agents.storage.tables import events
 class SqliteEventLog(EventLog):
     """Event log backed by project.db and an in-memory EventHub."""
 
-    def __init__(self, databases: Databases, hub: EventHub | None = None) -> None:
+    def __init__(
+        self, databases: Databases, hub: EventHub | None = None, clock: Clock | None = None
+    ) -> None:
         self._databases = databases
         self._hub = hub if hub is not None else EventHub()
+        self._clock: Clock = clock if clock is not None else SystemClock()
         self._record_locks: dict[str, asyncio.Lock] = {}
 
     def _get_record_lock(self, project_id: str) -> asyncio.Lock:
@@ -45,7 +49,7 @@ class SqliteEventLog(EventLog):
         lock = self._get_record_lock(project_id)
         async with lock:
             evt_id = new_id("evt")
-            ts = now_iso()
+            ts = to_iso(self._clock.now())
             payload_json = json.dumps(payload)
 
             engine = await self._databases.project(project_id)
