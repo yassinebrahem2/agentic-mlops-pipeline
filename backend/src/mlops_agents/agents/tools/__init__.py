@@ -250,6 +250,6 @@ def default_registry(
     if fixes is not None:
         registry.register(RequestFix(fixes))
         registry.register(RecordFixChoice(fixes))
-    if checks is not None:
-        registry.register(RegisterCheck(checks))
+    if checks is not None and handoffs is not None:
+        registry.register(RegisterCheck(checks, handoffs))
     return registry

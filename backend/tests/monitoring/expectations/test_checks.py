@@ -363,7 +363,7 @@ async def test_reregistering_replaces_check_and_expectation(
 async def test_register_check_tool_contract_and_refuses_malformed(
     checks_store: SqliteChecks,
 ) -> None:
-    tool = RegisterCheck(checks_store)
+    tool = RegisterCheck(checks_store, FakeHandoffs())
     assert tool.name == "RegisterCheck"
     assert tool.risk == RiskClass.READ
 

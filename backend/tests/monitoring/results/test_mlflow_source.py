@@ -8,115 +8,27 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import insert
 
-from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.results.mlflow_source import MlflowSourceReader
 from mlops_agents.monitoring.results.service import ResultsService
-from mlops_agents.paths import DataPaths
-from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import (
     Cadence,
     CheckSpec,
-    FileResults,
-    HandoffPayload,
     MlflowResults,
-    Operations,
 )
-from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import projects
 from mlops_agents.tracking.contract import (
     MetricPoint,
     ModelVersionRow,
     RunRow,
-    SourceType,
     SyncResult,
 )
-from mlops_agents.tracking.service import TrackingService
-from tests.conftest import MemoryKeyStore
-from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs, FakeObserver
-from tests.proposals.samples import handoff as sample_handoff_dict
-from tests.tracking.conftest import (
-    FakeHandoffs as TrackingFakeHandoffs,
+from tests.monitoring.results.conftest import (
+    FakeConnections,
+    FakeHandoffs,
+    FakeObserver,
+    build_mlflow_handoff,
 )
-from tests.tracking.conftest import (
-    FakeTrackingAdapter,
-    TrackingEnv,
-)
-from tests.tracking.conftest import TestClock as ClockForTest
-
-
-def _build_handoff_with_mlflow_checks(checks: list[CheckSpec] | None = None) -> HandoffView:
-    ops = Operations(
-        scheduler=None,
-        feeds=[],
-        on_call=[],
-        checks=checks or [],
-        results_location=FileResults(connection="conn_a", path_pattern="*.jsonl"),
-    )
-    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
-    return HandoffView(
-        proposal_id="prop_mlflow",
-        version=1,
-        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
-        payload=payload,
-    )
-
-
-@pytest.fixture
-async def tracking_env(
-    paths: DataPaths,
-    databases: Databases,
-    keystore: MemoryKeyStore,
-) -> TrackingEnv:
-    project_id = "prj_mlflowtest"
-    engine = await databases.app()
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(projects).values(
-                id=project_id,
-                name="MLflow Test Project",
-                source="github",
-                github_full_name="org/demo",
-                github_key="org/demo",
-                default_branch="main",
-                status="ok",
-                created_at=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC).isoformat(),
-            )
-        )
-    await databases.project(project_id)
-    clock = ClockForTest(datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC))
-    secrets: Any = None
-    events = SqliteEventLog(databases)
-    adapter = FakeTrackingAdapter("mlflow")
-    adapters: dict[SourceType, FakeTrackingAdapter] = {"mlflow": adapter}
-    handoffs = TrackingFakeHandoffs()
-
-    async def _async_token() -> str | None:
-        return "fake-token"
-
-    service = TrackingService(
-        databases=databases,
-        keystore=keystore,
-        secrets=secrets,
-        events=events,
-        adapters=adapters,
-        github_token=_async_token,
-        clock=clock,
-        handoffs=handoffs,
-    )
-
-    return TrackingEnv(
-        service=service,
-        databases=databases,
-        keystore=keystore,
-        secrets=secrets,
-        events=events,
-        adapters=adapters,
-        project_id=project_id,
-        clock=clock,  # type: ignore[arg-type]
-        handoffs=handoffs,
-    )
+from tests.tracking.conftest import TrackingEnv
 
 
 async def test_mlflow_metric_points_fire_above_and_below_threshold(
@@ -227,7 +139,7 @@ async def test_mlflow_metric_points_fire_above_and_below_threshold(
             results=MlflowResults(metric="drift_ks", threshold=0.05, fires_when="above"),
         ),
     ]
-    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks(checks))
+    handoffs = FakeHandoffs(build_mlflow_handoff(checks))
     reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
 
     # 1. Test accuracy source (fires_when below)
@@ -320,7 +232,7 @@ async def test_mlflow_running_run_holds_cursor_and_reread_stores_nothing_twice(
             results=MlflowResults(metric="eval_loss", threshold=0.5, fires_when="above"),
         )
     ]
-    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks(checks))
+    handoffs = FakeHandoffs(build_mlflow_handoff(checks))
     reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
 
     # Initial read while run is running
@@ -446,7 +358,7 @@ async def test_mlflow_metrics_query_error_stops_before_run_and_retains_cursor(
         timezone="UTC",
         results=MlflowResults(metric="loss", threshold=None, fires_when=None),
     )
-    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks([check]))
+    handoffs = FakeHandoffs(build_mlflow_handoff([check]))
     reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
 
     conn_dir = tmp_path / "dummy_conn_a"
@@ -552,7 +464,7 @@ async def test_mlflow_source_reader_scrubs_credentials_in_all_failure_sites(
     # 1. Site 1: Source id parse failure carrying credential
     secret_s1 = "site1_secret_pass_111"
     raw_s1_url = f"https://user:{secret_s1}@mlflow.discovery/api?token=tok_s1"
-    handoffs = FakeHandoffs(_build_handoff_with_mlflow_checks([]))
+    handoffs = FakeHandoffs(build_mlflow_handoff([]))
     reader = MlflowSourceReader(tracking=env.service, handoffs=handoffs)
 
     out_s1 = await reader.read(env.project_id, f"invalid_source_{raw_s1_url}", cursor={})
