@@ -233,3 +233,50 @@ async def test_route_edit_survives_restart_reconcile(
     assert len(data) == 1
     assert data[0]["name"] == "Route Edited Person"
     assert data[0]["id"] == "route-edited-person"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("channel", "address"),
+    [
+        ("email", "not-an-email"),
+        ("email", ""),
+        ("email", "a@b"),
+        ("discord", ""),
+        ("discord", "  "),
+    ],
+)
+async def test_on_call_put_refuses_a_mistyped_contact(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    channel: str,
+    address: str,
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    good = _valid_on_call_payload("Alice")
+    bad = _valid_on_call_payload("Bob", escalation_order=2)
+    bad["contacts"] = [{"channel": channel, "address": address}]
+
+    res = await client.put(f"/api/projects/{project_id}/on-call", json=[good, bad])
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid_contact"
+    assert "Bob" in res.json()["message"] and channel in res.json()["message"]
+    # Nothing was stored: the refusal comes before the replace.
+    assert (await client.get(f"/api/projects/{project_id}/on-call")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_on_call_put_accepts_discord_ids_and_emails(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    person = _valid_on_call_payload("Alice")
+    person["contacts"] = [
+        {"channel": "discord", "address": "123456789"},
+        {"channel": "email", "address": "alice+oncall@mail.acme.test"},
+    ]
+    res = await client.put(f"/api/projects/{project_id}/on-call", json=[person])
+    assert res.status_code == 200
