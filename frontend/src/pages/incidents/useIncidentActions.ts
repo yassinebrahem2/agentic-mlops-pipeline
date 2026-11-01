@@ -36,6 +36,17 @@ export function useCloseIncident({ projectId, incidentId }: Target) {
   );
 }
 
+export function useSnooze({ projectId, incidentId }: Target) {
+  return useIncidentMutation(projectId, async (until: Date) =>
+    unwrap(
+      await api.POST("/api/projects/{project_id}/incidents/{incident_id}/snooze", {
+        params: { path: { project_id: projectId, incident_id: incidentId } },
+        body: { until: until.toISOString() },
+      }),
+    ),
+  );
+}
+
 export function useRecordVerdict({ projectId, incidentId }: Target) {
   return useIncidentMutation(projectId, async (body: VerdictDraft) =>
     unwrap(

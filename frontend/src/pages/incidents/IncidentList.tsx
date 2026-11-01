@@ -13,6 +13,7 @@ import {
   VerdictSummary,
 } from "./IncidentBadges";
 import { incidentActions } from "./incidentActions";
+import { SnoozeControl } from "./SnoozeControl";
 import { VerdictButtons } from "./VerdictButtons";
 import type { IncidentView } from "./labels";
 import { useAcknowledge } from "./useIncidentActions";
@@ -55,6 +56,9 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Inc
         )}
       </div>
       <ActionError error={acknowledge.error} />
+      {incidentActions(incident).canSnooze && (
+        <SnoozeControl projectId={projectId} incident={incident} />
+      )}
       {incident.verdict ? (
         <VerdictSummary verdict={incident.verdict} />
       ) : (
