@@ -240,6 +240,10 @@ async def test_route_edit_survives_restart_reconcile(
     ("channel", "address"),
     [
         ("email", "not-an-email"),
+        ("email", " alice@acme.test"),
+        ("email", "alice@acme.test\t"),
+        ("discord", " 123"),
+        ("discord", "123 "),
         ("email", ""),
         ("email", "a@b"),
         ("discord", ""),

@@ -533,6 +533,7 @@ async def test_window_route_refuses_an_inert_window(
     res = await client.post(f"/api/projects/{project_id}/maintenance-windows", json=body)
 
     assert res.status_code == 422
+    assert res.json()["code"] == "window_inert"
     listed = await client.get(f"/api/projects/{project_id}/maintenance-windows")
     assert listed.json() == []
 

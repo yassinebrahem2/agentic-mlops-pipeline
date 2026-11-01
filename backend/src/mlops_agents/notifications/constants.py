@@ -22,10 +22,13 @@ EMAIL_PATTERN: Final = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 def contact_problem(contact: Contact) -> str | None:
     """What is wrong with a contact's address, or None. The one rule the on-call route, the
     handoff seeder and the handoff card's warnings share."""
-    address = contact.address.strip()
+    # The raw address is what is stored and sent, so padding is refused, not trimmed.
+    address = contact.address
     if contact.channel == "email":
         return None if EMAIL_PATTERN.fullmatch(address) else "is not a valid email address"
-    return None if address else "has an empty Discord user ID"
+    if not address.strip():
+        return "has an empty Discord user ID"
+    return None if address == address.strip() else "has spaces around the Discord user ID"
 
 
 def contact_problems(people: Sequence[OnCall]) -> list[str]:
