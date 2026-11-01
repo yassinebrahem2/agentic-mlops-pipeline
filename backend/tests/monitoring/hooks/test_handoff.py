@@ -354,3 +354,51 @@ async def test_one_failing_register_among_three_the_other_two_register_and_dropp
     # Dropped hook (deploy) is disabled
     assert "deploy" in hook_by_name
     assert hook_by_name["deploy"].status == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_failed_reregistration_keeps_existing_hook_enabled(
+    service: HooksService,
+    handoff_hooks: HandoffHooks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When an existing hook's re-registration raises, it stays enabled because it is still wanted."""
+    project_id = new_id("prj")
+    cmd = command(kind="rollback", template="echo rollback 1")
+    payload1 = _make_payload(project_commands=[cmd])
+    view1 = HandoffView(
+        proposal_id="prp_1",
+        version=1,
+        approved=datetime.now(UTC),
+        payload=payload1,
+    )
+    await handoff_hooks.stored(project_id, view1)
+
+    hooks1 = await service.list(project_id)
+    assert len(hooks1) == 1
+    assert hooks1[0].name == "rollback"
+    assert hooks1[0].status == "active"
+
+    # Newer handoff still includes rollback (e.g. updated template)
+    cmd2 = command(kind="rollback", template="echo rollback 2")
+    payload2 = _make_payload(project_commands=[cmd2])
+    view2 = HandoffView(
+        proposal_id="prp_2",
+        version=2,
+        approved=datetime.now(UTC),
+        payload=payload2,
+    )
+
+    async def flaky_register(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Transient DB error during re-registration")
+
+    monkeypatch.setattr(service, "register", flaky_register)
+
+    await handoff_hooks.stored(project_id, view2)
+
+    hooks2 = await service.list(project_id)
+    assert len(hooks2) == 1
+    assert hooks2[0].name == "rollback"
+    # Even though re-registration raised, the hook was NOT dropped from the handoff,
+    # so it must stay active, NOT disabled!
+    assert hooks2[0].status == "active"

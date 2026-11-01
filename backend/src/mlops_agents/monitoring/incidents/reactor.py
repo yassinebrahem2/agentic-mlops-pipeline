@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -9,6 +10,7 @@ import httpx2
 from sqlalchemy import select
 
 from mlops_agents.integrations.github.issues import create_issue, ensure_labels
+from mlops_agents.monitoring.incidents.severity import SEVERITY_RANKS
 from mlops_agents.notifications.contract import Message
 from mlops_agents.storage.tables import notification_log
 
@@ -88,16 +90,32 @@ class Reactor:
         # 1. Send immediate deliveries (when == "now")
         now_deliveries = [d for d in route_plan.deliveries if d.when == "now"]
         if now_deliveries:
-            already_paged: set[str] = set()
-            if self._databases is not None:
+            paged_max_rank: dict[str, int] = {}
+            if change.kind == "severity_raised" and self._databases is not None:
                 engine = await self._databases.project(project_id)
                 async with engine.connect() as conn:
-                    stmt = select(notification_log.c.person).where(
+                    stmt = select(
+                        notification_log.c.person,
+                        notification_log.c.message,
+                    ).where(
                         notification_log.c.incident == inc.id,
                         notification_log.c.kind.in_(["incident", "escalation"]),
                     )
                     rows = (await conn.execute(stmt)).all()
-                    already_paged = {r[0] for r in rows}
+                    for r in rows:
+                        person_id = r[0]
+                        raw_msg = r[1]
+                        sev_rank = 0
+                        if raw_msg:
+                            try:
+                                msg_data = (
+                                    json.loads(raw_msg) if isinstance(raw_msg, str) else raw_msg
+                                )
+                                sev = msg_data.get("severity")
+                                sev_rank = SEVERITY_RANKS.get(sev, 0)
+                            except Exception:
+                                sev_rank = 0
+                        paged_max_rank[person_id] = max(paged_max_rank.get(person_id, 0), sev_rank)
 
             people = await self._on_call.list(project_id)
             people_by_id = {p.id: p for p in people}
@@ -123,8 +141,12 @@ class Reactor:
                 if not lines:
                     lines.append("Hold placed on production")
 
+            current_sev_rank = SEVERITY_RANKS.get(inc.severity, 0)
             for d in now_deliveries:
-                if d.person in already_paged:
+                if (
+                    change.kind == "severity_raised"
+                    and paged_max_rank.get(d.person, 0) >= current_sev_rank
+                ):
                     continue
                 person = people_by_id.get(d.person)
                 if person is None:

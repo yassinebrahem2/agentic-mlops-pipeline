@@ -95,8 +95,8 @@ class IncidentChange(BaseModel):
         "split",
         "hold",
     ]
-    before: Severity | None = None
-    after: Severity | None = None
+    before: str | None = None
+    after: str | None = None
 
 
 class IncidentView(BaseModel):

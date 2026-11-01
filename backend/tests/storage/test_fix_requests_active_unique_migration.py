@@ -128,3 +128,46 @@ def test_v9_migrates_to_v10_and_enforces_one_active_fix_per_incident(tmp_path: P
     assert len(rows) == 3  # fix_1 (requested), fix_done (done), fix_declined (declined)
 
     conn.close()
+
+
+def test_v9_with_duplicate_active_fixes_migrates_cleanly_to_v10(tmp_path: Path) -> None:
+    db = _version_9(tmp_path)
+    conn = connect_sync(db)
+
+    # Insert two active fixes for the same incident at v9 schema
+    conn.execute(
+        """
+        INSERT INTO fix_requests (
+            id, incident_id, model, requested_by, evidence, choice, why, why_not,
+            status, outcome, created
+        ) VALUES (
+            'fix_old', 'inc_dup', 'churn_model', 'diagnoser', 'evidence 1', NULL, NULL, '{}',
+            'requested', 'pending', '2026-10-31T10:00:00Z'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO fix_requests (
+            id, incident_id, model, requested_by, evidence, choice, why, why_not,
+            status, outcome, created
+        ) VALUES (
+            'fix_new', 'inc_dup', 'churn_model', 'diagnoser', 'evidence 2', 'retrain', 'why', '{}',
+            'running', 'pending', '2026-10-31T10:05:00Z'
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Migration 0010 must succeed despite duplicates
+    assert migrate(db, "project", tmp_path / "bk") == [10]
+
+    conn = connect_sync(db)
+    rows = conn.execute(
+        "SELECT id, status FROM fix_requests WHERE incident_id = 'inc_dup' ORDER BY id"
+    ).fetchall()
+    # Newer fix stays active ('running'), older fix marked 'declined'
+    statuses = {r[0]: r[1] for r in rows}
+    assert statuses == {"fix_new": "running", "fix_old": "declined"}
+    conn.close()

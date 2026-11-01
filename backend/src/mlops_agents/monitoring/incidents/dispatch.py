@@ -47,7 +47,7 @@ class DiagnosisDispatch(IncidentObserver):
             new_agent = diagnoser(incident.category, incident.subtype)
             prev_agent = self._current_diagnoser.get(incident_key)
             if prev_agent is None:
-                prev_agent = diagnoser(incident.category, incident.subtype)
+                prev_agent = change.before or diagnoser(incident.category, incident.subtype)
 
             if new_agent == prev_agent:
                 self._current_diagnoser[incident_key] = new_agent

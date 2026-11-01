@@ -17,7 +17,23 @@ class HandoffHooks(HandoffObserver):
         self._handoffs = handoffs
 
     async def stored(self, project_id: str, handoff: HandoffView) -> None:
-        registered_pairs: set[tuple[str | None, str]] = set()
+        wanted_pairs: set[tuple[str | None, str]] = set()
+
+        # Precompute wanted pairs from handoff payload
+        p_counts: dict[str, int] = {}
+        for cmd in handoff.payload.commands:
+            count = p_counts.get(cmd.kind, 0) + 1
+            p_counts[cmd.kind] = count
+            name = cmd.kind if count == 1 else f"{cmd.kind}-{count}"
+            wanted_pairs.add((None, name))
+
+        for model_spec in handoff.payload.models:
+            m_counts: dict[str, int] = {}
+            for cmd in model_spec.commands:
+                count = m_counts.get(cmd.kind, 0) + 1
+                m_counts[cmd.kind] = count
+                name = cmd.kind if count == 1 else f"{cmd.kind}-{count}"
+                wanted_pairs.add((model_spec.name, name))
 
         # Project-level commands (model=None)
         project_counts: dict[str, int] = {}
@@ -33,7 +49,6 @@ class HandoffHooks(HandoffObserver):
                     model=None,
                     source="handoff",
                 )
-                registered_pairs.add((None, name))
             except Exception:
                 logger.exception(
                     "Failed to register project handoff hook %s for project %s",
@@ -56,7 +71,6 @@ class HandoffHooks(HandoffObserver):
                         model=model_spec.name,
                         source="handoff",
                     )
-                    registered_pairs.add((model_spec.name, name))
                 except Exception:
                     logger.exception(
                         "Failed to register model handoff hook %s (model %s) for project %s",
@@ -71,7 +85,7 @@ class HandoffHooks(HandoffObserver):
             for existing in existing_hooks:
                 if (
                     existing.source == "handoff"
-                    and (existing.model, existing.name) not in registered_pairs
+                    and (existing.model, existing.name) not in wanted_pairs
                     and existing.status != "disabled"
                 ):
                     try:

@@ -92,18 +92,16 @@ class RequestLinker(SyncObserver):
                     )
                     now_dt = now or datetime.now(UTC)
                     run_start = getattr(item, "start", None) or now_dt
-                    if hasattr(self._expectations, "note_seen"):
-                        await self._expectations.note_seen(
-                            project_id,
-                            ExpectationKey(kind="training_request", ref=req.id, model=req.model),
-                            run_start,
-                        )
+                    await self._expectations.note_seen(
+                        project_id,
+                        ExpectationKey(kind="training_request", ref=req.id, model=req.model),
+                        run_start,
+                    )
                     await self._expectations.retire(
                         project_id,
                         ExpectationKey(kind="training_request", ref=req.id, model=req.model),
                     )
 
-                    now_dt = now or datetime.now(UTC)
                     if self._hooks is not None and req.hook_id:
                         hook = await self._hooks.get(project_id, req.hook_id)
                         if (

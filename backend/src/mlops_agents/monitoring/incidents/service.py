@@ -28,6 +28,7 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalOutcome,
     SignalView,
     cause_key,
+    diagnoser,
 )
 from mlops_agents.monitoring.incidents.grouping import (
     find_matching_active_incident,
@@ -791,7 +792,11 @@ class IncidentsService(Incidents):
         if cat_changed or sub_changed:
             await self._notify_observers(
                 project_id,
-                IncidentChange(incident_id=incident_id, kind="cause"),
+                IncidentChange(
+                    incident_id=incident_id,
+                    kind="cause",
+                    before=diagnoser(row["category"], row["subtype"]),
+                ),
             )
             if sev_change is not None:
                 await self._events.record(

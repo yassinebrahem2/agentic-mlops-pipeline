@@ -800,3 +800,76 @@ async def test_restart_fresh_dispatch_unchanged_subtype_wakes_nobody(
     # and NOT wake retraining again
     assert len(waker_calls) == 0
     assert len(fake_sessions.posted_messages) == 0
+
+
+async def test_fresh_dispatch_after_restart_wakes_new_diagnoser_on_cause_change(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    fake_sessions: FakeSessions,
+    project_id: str,
+) -> None:
+    """After a restart, a cause change to another diagnoser wakes the new one."""
+    waker = Waker(databases, event_log, fake_clock)
+    waker.bind(fake_sessions)
+
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=FakeSeverityPolicy(),
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+    )
+    dispatch1 = DiagnosisDispatch(incidents, waker)
+    incidents.add_observer(dispatch1)
+
+    # 1. Open an operational incident with subtype "failed_training" (diagnoser: retraining)
+    outcome = await incidents.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="operational",
+            subject="job_training",
+            model="churn",
+            ran_at=fake_clock.now(),
+            detail={"step": "training"},
+        ),
+        seen_at=fake_clock.now(),
+    )
+    inc_id = outcome.incident_id
+
+    await incidents.update(
+        project_id,
+        inc_id,
+        agent="orchestrator",
+        patch=IncidentPatch(subtype="failed_training"),
+    )
+    assert len(fake_sessions.posted_messages) == 2
+    assert fake_sessions.posted_messages[1][1] == "retraining"
+
+    # 2. Simulate restart: create fresh IncidentsService and fresh DiagnosisDispatch with empty memory
+    fresh_incidents = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=FakeSeverityPolicy(),
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+    )
+    fresh_dispatch = DiagnosisDispatch(fresh_incidents, waker)
+    fresh_incidents.add_observer(fresh_dispatch)
+    fake_sessions.posted_messages.clear()
+
+    # 3. Update category/subtype to another diagnoser: operational with bad_deploy -> "deployment"
+    await fresh_incidents.update(
+        project_id,
+        inc_id,
+        agent="orchestrator",
+        patch=IncidentPatch(subtype="bad_deploy"),
+    )
+
+    # Fresh dispatch should wake the new diagnoser "deployment"
+    assert len(fake_sessions.posted_messages) == 1
+    assert fake_sessions.posted_messages[0][1] == "deployment"
