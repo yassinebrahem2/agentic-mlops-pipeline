@@ -29,6 +29,7 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalOutcome,
     SignalView,
     cause_key,
+    diagnoser,
 )
 from mlops_agents.monitoring.incidents.grouping import (
     find_matching_active_incident,
@@ -709,15 +710,20 @@ class IncidentsService(Incidents):
                                 status=409,
                             )
             # Latest results check
-            subject = sigs[0].subject if sigs else ""
-            model = row["model"]
-            latest_results = await self._results.latest_per_check(project_id, subject, model)
-            if any(r.fired for r in latest_results):
-                raise DomainError(
-                    "incident_still_firing",
-                    "Latest results for this subject and model are still firing.",
-                    status=409,
-                )
+            pairs: set[tuple[str, str | None]] = set()
+            for s in sigs:
+                pairs.add((s.subject, s.model if s.model is not None else row["model"]))
+            if not pairs:
+                pairs.add(("", row["model"]))
+
+            for subject, model in pairs:
+                latest_results = await self._results.latest_per_check(project_id, subject, model)
+                if any(r.fired for r in latest_results):
+                    raise DomainError(
+                        "incident_still_firing",
+                        "Latest results for this subject and model are still firing.",
+                        status=409,
+                    )
 
         values_to_update: dict[str, Any] = {}
         now = self._clock.now()
@@ -792,7 +798,11 @@ class IncidentsService(Incidents):
         if cat_changed or sub_changed:
             await self._notify_observers(
                 project_id,
-                IncidentChange(incident_id=incident_id, kind="cause"),
+                IncidentChange(
+                    incident_id=incident_id,
+                    kind="cause",
+                    before=diagnoser(row["category"], row["subtype"]),
+                ),
             )
             if sev_change is not None:
                 await self._events.record(
@@ -851,8 +861,9 @@ class IncidentsService(Incidents):
         all_started = [parse_dt(str(r["started_at"])) for r in fetched_rows]
         earliest_started = min(all_started)
 
-        # Move signals to winner
+        # Move signals to winner and reassign notification log rows
         await self._store.move_all_signals(project_id, absorbed_ids, winner_id)
+        await self._store.reassign_notifications(project_id, absorbed_ids, winner_id)
 
         # Mark absorbed as merged
         for other in absorbed:
@@ -874,11 +885,22 @@ class IncidentsService(Incidents):
                 IncidentChange(incident_id=other_id, kind="merged"),
             )
 
+        # Winner takes highest severity
+        winner_cur_sev: Severity = winner_row["severity"]
+        highest_sev: Severity = max(
+            (r["severity"] for r in fetched_rows),
+            key=lambda s: SEVERITY_RANKS.get(s, 0),
+        )
+        sev_raised = SEVERITY_RANKS.get(highest_sev, 0) > SEVERITY_RANKS.get(winner_cur_sev, 0)
+
         # Update winner
+        winner_updates: dict[str, Any] = {"started_at": earliest_started.isoformat()}
+        if sev_raised:
+            winner_updates["severity"] = highest_sev
         await self._store.update_incident(
             project_id,
             winner_id,
-            {"started_at": earliest_started.isoformat()},
+            winner_updates,
         )
         await self._events.record(
             project_id,
@@ -891,6 +913,24 @@ class IncidentsService(Incidents):
             project_id,
             IncidentChange(incident_id=winner_id, kind="merged"),
         )
+
+        if sev_raised:
+            await self._events.record(
+                project_id,
+                source=agent,
+                type="incident.severity_changed",
+                payload={"before": winner_cur_sev, "after": highest_sev},
+                subject_id=winner_id,
+            )
+            await self._notify_observers(
+                project_id,
+                IncidentChange(
+                    incident_id=winner_id,
+                    kind="severity_raised",
+                    before=winner_cur_sev,
+                    after=highest_sev,
+                ),
+            )
 
         view = await self.get(project_id, winner_id)
         if view is None:

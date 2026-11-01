@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
+from sqlalchemy import select
 
 from mlops_agents.agents.tools.issues import set_issue_min_priority
 from mlops_agents.credentials.keystore import KeyStore
@@ -31,6 +32,7 @@ from mlops_agents.monitoring.incidents.severity import RuleSeverity
 from mlops_agents.monitoring.waker import Waker
 from mlops_agents.notifications.channels import default_channels
 from mlops_agents.notifications.contract import Message, OnCallPerson
+from mlops_agents.notifications.escalation import EscalationJob
 from mlops_agents.notifications.notifier import SqliteNotifier
 from mlops_agents.notifications.on_call import SqliteOnCallPeople
 from mlops_agents.notifications.settings import IntegrationSettings
@@ -43,6 +45,7 @@ from mlops_agents.proposals.payloads import (
 )
 from mlops_agents.providers.failover import Clock
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import notification_log
 from mlops_agents.workspace.refs import RepoRef
 from tests.fakes.fake_discord import FakeDiscordState, RunningFakeDiscord, start_fake_discord
 from tests.fakes.fake_github import FakeGitHubState, RunningFakeGitHub, start_fake_github
@@ -964,5 +967,292 @@ async def test_reopen_clears_resolved_offline_and_pages_and_wakes(
     # Now paged and woken!
     assert fake_notifier.notify.call_count >= 1
     assert fake_dispatch.changed.call_count >= 1
+
+    await http.aclose()
+
+
+@pytest.mark.anyio
+async def test_merge_critical_into_medium_keeps_critical_no_duplicate_page_and_escalates(
+    tmp_path: Any,
+    fake_discord: RunningFakeDiscord,
+) -> None:
+    """Merging a critical incident into a medium incident gives a critical winner and a severity change event,
+
+    with no duplicate page to anyone already paged for the critical and escalation continuing to the next person.
+    """
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    project_id = "prj_mergecrit"
+    clock = FakeClock(start=datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC))
+    events = SqliteEventLog(databases)
+    keystore = MemoryKeyStore()
+    settings = IntegrationSettings(databases, keystore)
+    http = httpx2.AsyncClient()
+
+    await settings.set_discord(
+        enabled=True,
+        webhook_url=f"{fake_discord.base_url}/api/webhooks/123/token123",
+    )
+    channels = default_channels(settings, http)
+    notifier = SqliteNotifier(databases, settings, channels, events, clock)
+
+    on_call = SqliteOnCallPeople(databases)
+    alice = _make_on_call_person(id="alice", name="Alice", order=0)
+    bob = _make_on_call_person(id="bob", name="Bob", order=1)
+    await on_call.replace(project_id, [alice, bob])
+
+    severity_policy = FakeSeverityPolicy(default_severity="medium")
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,  # type: ignore[arg-type]
+        severity=severity_policy,  # type: ignore[arg-type]
+        maintenance=NeverSuspended(),
+        clock=clock,
+    )
+
+    sessions = FakeSessions()
+    waker = Waker(databases, events, clock)
+    waker.bind(sessions)  # type: ignore[arg-type]
+    dispatch = DiagnosisDispatch(incidents, waker)
+
+    router = OnCallRouter(on_call=on_call, databases=databases)
+    tasks = TaskDouble()
+    github = DummyGitHubAuth()
+
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=on_call,
+        notifier=notifier,
+        dispatch=dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=events,
+        clock=clock,
+    )
+    incidents.add_observer(reactor)
+
+    escalation_job = EscalationJob(
+        databases=databases,
+        incidents=incidents,
+        on_call=on_call,
+        notifier=notifier,
+        clock=clock,
+    )
+
+    # 1. Raise incident 1 (medium) 20 min ago
+    t_med = clock.now() - timedelta(minutes=20)
+    d1 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="tbl_med",
+        model=None,
+        ran_at=t_med,
+        detail={},
+    )
+    out1 = await incidents.raise_signal(project_id, d1, seen_at=t_med)
+    inc1_id = out1.incident_id
+    # Medium severity does not trigger immediate page
+    assert len(fake_discord.state.posts) == 0
+
+    # 2. Raise incident 2 (critical) 10 min ago
+    severity_policy.default_severity = "critical"
+    t_crit = clock.now() - timedelta(minutes=10)
+    d2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="tbl_crit",
+        model=None,
+        ran_at=t_crit,
+        detail={},
+    )
+    out2 = await incidents.raise_signal(project_id, d2, seen_at=t_crit)
+    inc2_id = out2.incident_id
+    # Critical severity immediately pages Alice (order 0)
+    assert len(fake_discord.state.posts) == 1
+    alice_msg = fake_discord.state.posts[0]
+    assert "[CRITICAL]" in alice_msg["content"]
+    assert inc2_id in alice_msg["content"]
+
+    # 3. Merge inc1 and inc2.
+    # inc1 is older, so it is the winner.
+    winner = await incidents.merge(project_id, [inc1_id, inc2_id], agent="lead")
+    assert winner.id == inc1_id
+    assert winner.severity == "critical"
+
+    # Verify event recorded
+    evs = await events.page(project_id, subject_id=inc1_id)
+    sev_changes = [e for e in evs if e.type == "incident.severity_changed"]
+    assert any(
+        e.payload.get("before") == "medium" and e.payload.get("after") == "critical"
+        for e in sev_changes
+    )
+
+    # Critical winner's severity rise did NOT page Alice again (she was already paged for the critical incident)
+    assert len(fake_discord.state.posts) == 1
+
+    # 4. Advance clock by 15 minutes (escalation timeout)
+    clock.advance(timedelta(minutes=15))
+    dues = await escalation_job.due(
+        project_id,
+        after=clock.now() - timedelta(minutes=30),
+        now=clock.now(),
+    )
+    assert len(dues) == 1
+    assert dues[0].subject == inc1_id
+
+    # 5. Execute escalation: escalation continues to Bob (the next person)
+    await escalation_job.run(project_id, dues[0])
+    assert len(fake_discord.state.posts) == 2
+    bob_msg = fake_discord.state.posts[1]
+    assert "[CRITICAL]" in bob_msg["content"]
+
+    # Verify notification_log has exactly 2 rows for winner: Alice (incident) and Bob (escalation)
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    select(notification_log).where(notification_log.c.incident == inc1_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        assert len(rows) == 2
+        people = {r["person"]: r["kind"] for r in rows}
+        assert people == {"alice": "incident", "bob": "escalation"}
+
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_severity_rise_reopen_and_hold_still_page_with_real_notifier(
+    tmp_path: Any,
+    fake_discord: RunningFakeDiscord,
+) -> None:
+    """Proves that a severity rise, a reopen, and a hold still page when using a real notifier."""
+    from mlops_agents.monitoring.incidents.contract import IncidentPatch
+
+    paths = DataPaths(tmp_path)
+    paths.ensure()
+    databases = Databases(paths)
+    project_id = "prj_reactorreal"
+    clock = FakeClock(start=datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC))
+    events = SqliteEventLog(databases)
+    keystore = MemoryKeyStore()
+    settings = IntegrationSettings(databases, keystore)
+    http = httpx2.AsyncClient()
+
+    await settings.set_discord(
+        enabled=True,
+        webhook_url=f"{fake_discord.base_url}/api/webhooks/123/token123",
+    )
+    channels = default_channels(settings, http)
+    notifier = SqliteNotifier(databases, settings, channels, events, clock)
+
+    on_call = SqliteOnCallPeople(databases)
+    alice = _make_on_call_person(id="alice", name="Alice", order=0)
+    await on_call.replace(project_id, [alice])
+
+    severity_policy = FakeSeverityPolicy(default_severity="high")
+    results = FakeResults()
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=results,  # type: ignore[arg-type]
+        severity=severity_policy,  # type: ignore[arg-type]
+        maintenance=NeverSuspended(),
+        clock=clock,
+    )
+
+    sessions = FakeSessions()
+    waker = Waker(databases, events, clock)
+    waker.bind(sessions)  # type: ignore[arg-type]
+    dispatch = DiagnosisDispatch(incidents, waker)
+
+    router = OnCallRouter(on_call=on_call, databases=databases)
+    tasks = TaskDouble()
+    github = DummyGitHubAuth()
+
+    reactor = Reactor(
+        incidents=incidents,
+        router=router,
+        on_call=on_call,
+        notifier=notifier,
+        dispatch=dispatch,
+        tasks=tasks,
+        github=github,
+        http=http,
+        events=events,
+        clock=clock,
+    )
+    incidents.add_observer(reactor)
+
+    # 1. Open an incident at 'high' severity.
+    # Alice is in-hours, so high severity pages Alice immediately.
+    d1 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="tbl_high",
+        model=None,
+        ran_at=clock.now(),
+        detail={},
+    )
+    out1 = await incidents.raise_signal(project_id, d1, seen_at=clock.now())
+    inc1_id = out1.incident_id
+    assert len(fake_discord.state.posts) == 1
+    assert "[HIGH]" in fake_discord.state.posts[0]["content"]
+
+    # 2. Severity rises to critical: Alice was previously paged only at high,
+    # so the rise MUST page Alice.
+    await incidents.set_severity(
+        project_id,
+        inc1_id,
+        severity="critical",
+        reason="Impact escalated",
+        by="agent",
+    )
+    assert len(fake_discord.state.posts) == 2
+    assert "[CRITICAL]" in fake_discord.state.posts[1]["content"]
+
+    # 3. Production hold is placed: hold must NOT be suppressed by previous pages.
+    scope = HoldScope(tables=["tbl_high"])
+    await incidents.record_hold(
+        project_id,
+        inc1_id,
+        scope=scope,
+        reason="data corrupted",
+        by="agent",
+    )
+    assert len(fake_discord.state.posts) == 3
+    assert "Held: Tables: tbl_high (data corrupted)" in fake_discord.state.posts[2]["content"]
+
+    # 4. Resolve the incident, then reopen it: reopen must NOT be suppressed by previous pages.
+    await incidents.update(
+        project_id,
+        inc1_id,
+        agent="operator",
+        patch=IncidentPatch(status="resolved"),
+    )
+    # Fire another signal within reopen window (reopen_window_hours default is 24)
+    clock.advance(timedelta(minutes=10))
+    d2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="tbl_high",
+        model=None,
+        ran_at=clock.now(),
+        detail={},
+    )
+    out2 = await incidents.raise_signal(project_id, d2, seen_at=clock.now())
+    assert out2.incident_id == inc1_id
+    assert out2.change == "reopened"
+    assert len(fake_discord.state.posts) == 4
+    assert "[CRITICAL]" in fake_discord.state.posts[3]["content"]
 
     await http.aclose()

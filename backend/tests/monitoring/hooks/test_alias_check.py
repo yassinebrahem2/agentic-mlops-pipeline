@@ -113,9 +113,13 @@ class FakeIncidents:
 class FakeExpectations:
     def __init__(self) -> None:
         self.retired: list[tuple[str, ExpectationKey]] = []
+        self.seen: list[tuple[str, ExpectationKey, datetime]] = []
 
     async def states(self, project_id: str) -> list[ExpectationState]:
         return []
+
+    async def note_seen(self, project_id: str, key: ExpectationKey, at: datetime) -> None:
+        self.seen.append((project_id, key, at))
 
     async def retire(self, project_id: str, key: ExpectationKey) -> None:
         self.retired.append((project_id, key))
