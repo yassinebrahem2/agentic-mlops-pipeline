@@ -52,7 +52,7 @@ When assembling the handoff proposal, find and specify:
   - The `scheduler` and where it is configured (config location).
   - Data and job `feeds`: connection table or CI/file job, cadence cron or interval, grace in minutes, and time zone.
   - Who is `on call`: on call contacts (Discord or email address), weekday-hours window, time zone, and escalation order.
-  - Team's existing `checks`: check ID, category, cadence, time zone, and where results land.
+  - Team's existing `checks`: check ID, category, cadence (optional, see its description in `Propose`), time zone, and where results land.
   - Overall `results location` where results are kept.
 - Gaps and Grants:
   - Project `gaps`: what could not be found, each with its next step. Ask the user once about missing items, then record as a gap; never invent a command, feed, or contact.

@@ -291,7 +291,16 @@ class CheckSpec(_Strict):
     check_id: str
     name: str
     category: Literal["data_quality", "drift", "model_performance", "operational"]
-    cadence: Cadence
+    cadence: Cadence | None = Field(
+        default=None,
+        description=(
+            "the schedule the team runs the check on; leave it out for a check run on demand "
+            "(after training, by hand): it is then read, compared with the agents' incidents and "
+            "counted as the team's baseline, but never judged silent. A team check whose records "
+            "carry no time they ran cannot be read: leave it out of `checks` and list it under "
+            "`gaps`, with adding a run time to its records as the next step"
+        ),
+    )
     timezone: TimeZoneName
     results: FileResults | CiResults | MlflowResults
 
