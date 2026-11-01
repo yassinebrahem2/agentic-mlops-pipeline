@@ -18,8 +18,8 @@ Story progression:
    evaluation record and the first on-call person is notified.
 4. The production alias moves: Deployment & Rollback is woken once with `post_deploy` for that
    move and registers a follow-up. That the whole story wakes it exactly once is a separate
-   test that fails until bug #638 is fixed: the clock is not passed to the tracking service, so
-   the baseline deployment row wakes it too.
+   test that fails until bug #649 is fixed: the champion's first appearance (none to version 1)
+   is recorded after the trigger's cursor was seeded, so it wakes it too.
 5. Messaged by the test, Deployment & Rollback opens a pull request improving the evaluation
    step against the fake GitHub (its own test: the pull request needs the origin served from a
    bare repository, which the workflow dispatch of scene 1 cannot share).
@@ -558,7 +558,7 @@ async def test_incident_to_fix_to_promotion(
         # The move of the alias to the new version woke Deployment & Rollback once with
         # post_deploy, and its scripted turn registered the follow-up.
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
-        # Only the wake of the real move: the baseline row's wake is the separate #638 failure.
+        # Only the wake of the real move: the baseline row's wake is the separate #649 failure.
         moved = [w for w in wakes if moved_to_challenger(w)]
         assert len(moved) == 1
         assert moved[0]["agent"] == "deployment"
@@ -571,7 +571,7 @@ async def test_incident_to_fix_to_promotion(
         story.clock.advance(timedelta(minutes=10))
         await run_due(story.services, story.project_id, story.clock.now())
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
-        # Filtered as above (#638).
+        # Filtered as above (#649).
         assert len([w for w in wakes if moved_to_challenger(w)]) == 1
 
 
@@ -583,9 +583,9 @@ async def test_alias_move_wakes_deployment_once(
     """Both modes: the whole story wakes Deployment & Rollback exactly once with post_deploy,
     for the move of the alias and for nothing else.
 
-    Fails today because of bug #638: create_app(clock=...) is not passed to TrackingService, so
-    the baseline deployment row (none to the champion) has a wall-clock seen_at, after the
-    shared clock's cursor, and wakes Deployment & Rollback a second time."""
+    Fails today because of bug #649: the champion's first deployment row (none to the champion)
+    is recorded by the second tracking sync, after the post-deploy cursor was seeded on the first
+    pass, so it counts as a move and wakes Deployment & Rollback a second time."""
     async with story_env(tmp_path, git_env, promotion) as story:
         dispatched = await decay_to_dispatch(story)
         linked = await pipeline_links(story, dispatched)
