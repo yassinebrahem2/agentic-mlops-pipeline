@@ -16,6 +16,7 @@ from mlops_agents.agents.tools.base import (
 )
 from mlops_agents.agents.tools.names import REGISTER_CHECK
 from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.mlflow_source import handoff_metric_user
 from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 
 if TYPE_CHECKING:
@@ -67,15 +68,11 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
                 return None
             others.append(f"registered check {chk.check_id!r}")
 
-        handoff = await self._handoffs.current(project_id)
-        if handoff is not None:
-            ops = handoff.payload.operations
-            for spec in ops.checks:
-                if isinstance(spec.results, MlflowResults) and spec.results.metric == metric:
-                    return f"handoff check {spec.check_id!r}"
-            location = ops.results_location
-            if isinstance(location, MlflowResults) and location.metric == metric:
-                return "the handoff's results location"
+        user = handoff_metric_user(await self._handoffs.current(project_id), metric)
+        if user is not None:
+            if user.check is not None:
+                return f"handoff check {user.check.check_id!r}"
+            return "the handoff's results location"
         return others[0] if others else None
 
     async def run(self, ctx: ToolContext, args: RegisterCheckInput) -> ToolOutput:

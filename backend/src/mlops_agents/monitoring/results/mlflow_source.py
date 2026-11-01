@@ -18,7 +18,7 @@ from mlops_agents.monitoring.results.contract import (
 )
 from mlops_agents.monitoring.results.file_source import SourceReadOutcome
 from mlops_agents.proposals.contract import Handoffs, HandoffView
-from mlops_agents.proposals.payloads import MlflowResults
+from mlops_agents.proposals.payloads import CheckSpec, MlflowResults
 from mlops_agents.tracking.contract import (
     MetricPoint,
     ModelVersionRow,
@@ -38,42 +38,56 @@ class RegisteredChecks(Protocol):
 
 @dataclass(frozen=True)
 class MetricOwner:
-    """Whose records an MLflow metric gives, and what makes them fire."""
+    """Whose records an MLflow metric gives, and what makes them fire.
+
+    A check's version is the git commit in its records (S4 4), so a registered check's
+    records take their run's commit; tracker records carry none, as before #628.
+    """
 
     check_id: str
     origin: ResultOrigin
     category: ResultCategory
-    version: str | None
+    version_is_run_commit: bool
     threshold: float | None
     fires_when: Literal["above", "below"] | None
 
 
-def _handoff_owner(source_id: str, metric: str, handoff: HandoffView | None) -> MetricOwner | None:
-    """The handoff's claim on a metric: its check naming it, else its results location."""
+@dataclass(frozen=True)
+class HandoffMetricUser:
+    """What in the handoff reads an MLflow metric: one of its checks (`check`), or else its
+    results location (`check` is None); `results` is that user's MLflow location."""
+
+    check: CheckSpec | None
+    results: MlflowResults
+
+
+def handoff_metric_user(handoff: HandoffView | None, metric: str) -> HandoffMetricUser | None:
+    """The handoff's user of an MLflow metric: its check naming it, else its results location
+    when that names it."""
     if handoff is None:
         return None
     ops = handoff.payload.operations
     for check in ops.checks:
         if isinstance(check.results, MlflowResults) and check.results.metric == metric:
-            return MetricOwner(
-                check_id=check.check_id,
-                origin="tracker",
-                category=check.category,
-                version=None,
-                threshold=check.results.threshold,
-                fires_when=check.results.fires_when,
-            )
+            return HandoffMetricUser(check=check, results=check.results)
     location = ops.results_location
     if isinstance(location, MlflowResults) and location.metric == metric:
-        return MetricOwner(
-            check_id=source_id,
-            origin="tracker",
-            category="model_performance",
-            version=None,
-            threshold=location.threshold,
-            fires_when=location.fires_when,
-        )
+        return HandoffMetricUser(check=None, results=location)
     return None
+
+
+def _handoff_owner(source_id: str, metric: str, handoff: HandoffView | None) -> MetricOwner | None:
+    user = handoff_metric_user(handoff, metric)
+    if user is None:
+        return None
+    return MetricOwner(
+        check_id=user.check.check_id if user.check is not None else source_id,
+        origin="tracker",
+        category=user.check.category if user.check is not None else "model_performance",
+        version_is_run_commit=False,
+        threshold=user.results.threshold,
+        fires_when=user.results.fires_when,
+    )
 
 
 def metric_owner(
@@ -103,7 +117,7 @@ def metric_owner(
                 check_id=chk.check_id,
                 origin="agent",
                 category=chk.category,
-                version=chk.version,
+                version_is_run_commit=True,
                 threshold=location.threshold,
                 fires_when=location.fires_when,
             )
@@ -113,7 +127,7 @@ def metric_owner(
         check_id=source_id,
         origin="tracker",
         category="model_performance",
-        version=None,
+        version_is_run_commit=False,
         threshold=None,
         fires_when=None,
     )
@@ -269,7 +283,7 @@ class MlflowSourceReader:
                             "value": point.value,
                         },
                         source_ref=f"run:{run.key}",
-                        version=owner.version,
+                        version=run.git_commit if owner.version_is_run_commit else None,
                     )
                     source_key = f"{run.key}:{point.metric}:{point.step}:{point.time.isoformat()}"
                     records.append((source_key, rec))

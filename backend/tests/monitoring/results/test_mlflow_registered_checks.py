@@ -32,6 +32,7 @@ T_REGISTER = datetime(2026, 10, 30, 9, 0, 0, tzinfo=UTC)
 T_RUN_1 = datetime(2026, 10, 30, 9, 30, 0, tzinfo=UTC)
 T_RUN_2 = datetime(2026, 10, 30, 10, 30, 0, tzinfo=UTC)
 T_EVALUATE = datetime(2026, 10, 30, 11, 20, 0, tzinfo=UTC)
+COMMIT_RUN_1 = "3f2a9c1"
 
 RECALL = MlflowResults(metric="recall", threshold=0.8, fires_when="below")
 HANDOFF_CHECKS = [
@@ -52,7 +53,7 @@ class _Maintenance:
         return False
 
 
-def _run(env_source: str, key: str, at: datetime) -> RunRow:
+def _run(env_source: str, key: str, at: datetime, git_commit: str | None) -> RunRow:
     return RunRow(
         source_id=env_source,
         key=key,
@@ -62,7 +63,7 @@ def _run(env_source: str, key: str, at: datetime) -> RunRow:
         end=at,
         params={},
         tags={},
-        git_commit=None,
+        git_commit=git_commit,
         datasets=[],
     )
 
@@ -74,7 +75,8 @@ def _point(env_source: str, run_key: str, metric: str, value: float, at: datetim
 
 
 async def _seed_mlflow(env: TrackingEnv) -> None:
-    """Two runs, an hour apart, each logging recall, accuracy, loss and an unnamed metric."""
+    """Two runs, an hour apart, each logging recall, accuracy, loss and an unnamed metric;
+    only the first names the git commit it ran."""
     source = await env.service.create_source(
         project_id=env.project_id,
         type="mlflow",
@@ -94,7 +96,7 @@ async def _seed_mlflow(env: TrackingEnv) -> None:
                 evaluation="absent",
             )
         ],
-        runs=[_run(s, "run_1", T_RUN_1), _run(s, "run_2", T_RUN_2)],
+        runs=[_run(s, "run_1", T_RUN_1, COMMIT_RUN_1), _run(s, "run_2", T_RUN_2, None)],
         metrics=[
             _point(s, "run_1", "recall", 0.7, T_RUN_1),
             _point(s, "run_2", "recall", 0.9, T_RUN_2),
@@ -343,28 +345,6 @@ async def test_active_registered_mlflow_check_meets_its_expectation_with_its_own
     )
     results.bind_checks(checks_store)
     results.add_observer(expectations_service.results_observer)
-    # The check's version comes from its latest versioned result, stored before it was active.
-    await results.store.insert_items(
-        env.project_id,
-        "file:seed:versions.jsonl",
-        [
-            (
-                "seed_v3",
-                ResultRecord(
-                    check_id="mp_recall",
-                    origin="agent",
-                    ran_at=datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC),
-                    fired=False,
-                    category="model_performance",
-                    subject="recall",
-                    detail={},
-                    source_ref="seed",
-                    version="v3",
-                ),
-            )
-        ],
-        datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC),
-    )
     await _register_recall(checks_store, env.project_id, merge=True)
 
     report = await results.collect(env.project_id, T_EVALUATE)
@@ -378,12 +358,15 @@ async def test_active_registered_mlflow_check_meets_its_expectation_with_its_own
     stored = sorted(
         (r for r in page.rows if r.source_id == "mlflow:recall"), key=lambda r: r.ran_at
     )
-    assert [(r.value, r.fired) for r in stored] == [(0.7, True), (0.9, False)]
+    # A check's version is the git commit of the run that produced the record (S4 4).
+    assert [(r.value, r.fired, r.version) for r in stored] == [
+        (0.7, True, COMMIT_RUN_1),
+        (0.9, False, None),
+    ]
     for record in stored:
         assert record.check_id == "mp_recall"
         assert record.category == "model_performance"
         assert record.origin == "agent"
-        assert record.version == "v3"
         assert record.threshold == 0.8
         assert is_label_evidence(record)
 
@@ -446,7 +429,10 @@ async def test_registered_check_wins_over_a_later_handoff_naming_its_metric(
         outcome = await reader.read(tracking_env.project_id, "mlflow:recall", cursor={})
 
     records = [r for _, r in outcome.records]
-    assert [(r.value, r.fired) for r in records] == [(0.7, True), (0.9, False)]
+    assert [(r.value, r.fired, r.version) for r in records] == [
+        (0.7, True, COMMIT_RUN_1),
+        (0.9, False, None),
+    ]
     for record in records:
         assert record.check_id == "mp_recall"
         assert record.category == "model_performance"
