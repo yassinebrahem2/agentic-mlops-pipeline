@@ -18,8 +18,8 @@ Story progression:
    evaluation record and the first on-call person is notified.
 4. The production alias moves: Deployment & Rollback is woken once with `post_deploy` for that
    move and registers a follow-up. That the whole story wakes it exactly once is a separate
-   test that fails until bug #638 is fixed (the clock is not passed to the tracking service) makes the
-   baseline deployment row wake it too.
+   test that fails until bug #638 is fixed: the clock is not passed to the tracking service, so
+   the baseline deployment row wakes it too.
 5. Messaged by the test, Deployment & Rollback opens a pull request improving the evaluation
    step against the fake GitHub (its own test: the pull request needs the origin served from a
    bare repository, which the workflow dispatch of scene 1 cannot share).
