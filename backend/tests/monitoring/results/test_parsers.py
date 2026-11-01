@@ -1453,3 +1453,95 @@ def test_code_parser_preview_shows_the_script_contract(databases: Databases) -> 
     assert CODE_PARSER_CONTRACT in preview.body
     assert "sys.argv[3]" in CODE_PARSER_CONTRACT
     assert "print(1)" in preview.body
+
+
+@pytest.mark.asyncio
+async def test_mapping_parser_with_ran_at_in_defaults_is_refused(databases: Databases) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.csv",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"ran_at": "2026-11-01T00:00:00Z"},
+        ),
+    )
+    payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) > 0
+    assert any("defaults" in r and "ran_at" in r for r in refusals)
+    assert any("time the check ran" in r for r in refusals)
+
+
+@pytest.mark.asyncio
+async def test_mapping_parser_without_ran_at_in_fields_is_refused(databases: Databases) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.csv",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={},
+        ),
+    )
+    payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) > 0
+    assert any("fields" in r or "mapped" in r for r in refusals)
+    assert any("time the check ran" in r for r in refusals)
+
+
+@pytest.mark.asyncio
+async def test_mapping_parser_with_ran_at_mapped_from_field_is_accepted(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.csv",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={},
+        ),
+    )
+    payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
+    refusals = await kind.check("prj_test", payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_stored_parser_with_ran_at_default_still_loads_and_parses(
+    databases: Databases, project_id: str
+) -> None:
+    parsers = SqliteParsers(databases)
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={
+                "ran_at": "2026-11-01T06:00:00Z",
+                "category": "data_quality",
+                "subject": "tbl",
+            },
+        ),
+    )
+    await parsers.store(project_id, spec, proposal_id="prop_stored_default")
+    loaded = await parsers.current(project_id, "file:conn_feed:feed.jsonl")
+    assert loaded is not None
+    assert loaded.spec.mapping is not None
+    assert loaded.spec.mapping.defaults.get("ran_at") == "2026-11-01T06:00:00Z"
+
+    outcome = await parsers.parse(
+        project_id,
+        "file:conn_feed:feed.jsonl",
+        '{"id": "chk_1", "fired": false}\n',
+        "feed.jsonl",
+    )
+    assert len(outcome.errors) == 0
+    assert len(outcome.records) == 1
+    assert outcome.records[0][1].ran_at == datetime(2026, 11, 1, 6, 0, 0, tzinfo=UTC)
