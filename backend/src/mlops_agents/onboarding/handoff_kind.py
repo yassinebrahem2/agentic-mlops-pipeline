@@ -11,6 +11,7 @@ from mlops_agents.agents.tools.base import Preview
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.events.contract import EventLog
+from mlops_agents.notifications.constants import contact_problems
 from mlops_agents.onboarding import handoff_parts as part
 from mlops_agents.onboarding.handoff_parts import KickoffStarter, NetworkSetting
 from mlops_agents.onboarding.handoff_preview import render
@@ -79,7 +80,9 @@ class HandoffKind:
         handoff = _payload(payload)
         # A github_actions source is always auth "none" and uses the app's GitHub login.
         open_tracker = any(s.type == "mlflow" and s.auth == "none" for s in handoff.tracking)
-        return [NETWORK_WARNING] if open_tracker and handoff.grants.network else []
+        found = [NETWORK_WARNING] if open_tracker and handoff.grants.network else []
+        # Shown before approval, where it can still be fixed; the seeder skips these contacts.
+        return found + contact_problems(handoff.operations.on_call)
 
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]:
         return [

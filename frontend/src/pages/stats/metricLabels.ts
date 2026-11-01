@@ -11,6 +11,8 @@ export type MetricUnit = "seconds" | "percent" | "usd" | "count" | "ratio" | "nu
 interface MetricLabel {
   label: string;
   unit: MetricUnit;
+  /** Why the value is missing when a category is picked. */
+  categoryNote?: string;
 }
 
 // Display only: the page lists whatever the API returns and falls back to the raw name.
@@ -33,7 +35,14 @@ const METRIC_LABELS: ReadonlyMap<string, MetricLabel> = new Map<string, MetricLa
   ["metric_before", { label: "Model metric before", unit: "number" }],
   ["metric_after", { label: "Model metric after", unit: "number" }],
   ["tokens_per_agent", { label: "Tokens per agent", unit: "count" }],
-  ["cost_per_incident", { label: "Cost per incident", unit: "usd" }],
+  [
+    "cost_per_incident",
+    {
+      label: "Cost per incident",
+      unit: "usd",
+      categoryNote: "Cost is not split by category.",
+    },
+  ],
   ["failed_runs", { label: "Failed runs", unit: "count" }],
   ["tool_errors", { label: "Tool errors", unit: "count" }],
   ["sandbox_failures", { label: "Sandbox failures", unit: "count" }],
