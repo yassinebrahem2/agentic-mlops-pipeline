@@ -7,6 +7,7 @@ and the world stops the whole group on every exit: the end of the loop, Ctrl+C, 
 SIGHUP (`kill`, a closed terminal), an error, or a server that never answered.
 """
 
+import json
 import logging
 import os
 import signal
@@ -14,10 +15,11 @@ import time
 import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from types import FrameType
 
-from demo_world import paths
+from demo_world import paths, simulate
 from demo_world.company import Company, tail
 from demo_world.process_group import ProcessGroup
 
@@ -136,6 +138,8 @@ def up[T](
     play: Callable[[], T],
     *,
     health_timeout: float = HEALTH_TIMEOUT_SECONDS,
+    hold_before_start: bool = False,
+    cutoff: date | None = None,
 ) -> T:
     """Serve the company's MLflow on `port`, run `play` against it, then stop the server."""
     _prepare(the_company)
@@ -156,6 +160,22 @@ def up[T](
             log.info("the company's MLflow server answers at %s (log: %s)", uri, output)
             # The company and the production-model probe inherit it: one tracking URI.
             os.environ[paths.TRACKING_URI_VARIABLE] = uri
+            if hold_before_start:
+                if cutoff is None:
+                    state_file = world / simulate.STATE_FILE
+                    if state_file.exists():
+                        data = json.loads(state_file.read_text(encoding="utf-8"))
+                        if "last_done" in data:
+                            cutoff = date.fromisoformat(data["last_done"]) + timedelta(days=1)
+                    else:
+                        bookings_dir = the_company.data / "bookings"
+                        if bookings_dir.exists():
+                            files = sorted(bookings_dir.glob("*.parquet"))
+                            if files:
+                                cutoff = date.fromisoformat(files[-1].stem) + timedelta(days=1)
+                if cutoff is not None:
+                    the_company.bootstrap(cutoff=cutoff)
+                (world / simulate.HOLD_FILE).touch()
             return play()
         finally:
             server.stop()

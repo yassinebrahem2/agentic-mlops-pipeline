@@ -129,7 +129,14 @@ def _up(args: argparse.Namespace) -> None:
             f"up runs the company's MLflow server from its checkout; set {paths.COMPANY_VARIABLE} "
             "or use --run"
         )
-    up.up(world.company, paths.world_dir(), paths.mlflow_port(), lambda: _play(world, args))
+    up.up(
+        world.company,
+        paths.world_dir(),
+        paths.mlflow_port(),
+        lambda: _play(world, args),
+        hold_before_start=args.hold_before_start,
+        cutoff=args.start,
+    )
 
 
 def _play(world: simulate.World, args: argparse.Namespace) -> None:
@@ -206,6 +213,11 @@ def _parser() -> argparse.ArgumentParser:
         "up",
         parents=[run, play],
         help="start the company's MLflow server, then simulate against it; Ctrl+C stops both",
+    )
+    up_command.add_argument(
+        "--hold-before-start",
+        action="store_true",
+        help="hold the day loop before the first simulated day, with MLflow served",
     )
     up_command.set_defaults(run_command=_up)
     return parser

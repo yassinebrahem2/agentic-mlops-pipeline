@@ -23,7 +23,7 @@ Settings, each an environment variable; the folders default under `~/hotel-demo/
 |---|---|---|
 | `HOTEL_DEMO_SOURCE` | `source/` | the downloaded `hotels.csv`, shared by every run |
 | `HOTEL_DEMO_DATA` | `data/` | the company's production data: `bookings/` and `labels/`, one parquet file per business date |
-| `HOTEL_DEMO_WORLD` | `world/` | the world's own folder, never inside the data folder: `state.json`, `answer_key.jsonl`, `planted_flaws.json`, and with a repository `ci_dispatches.jsonl`, `pull_requests.json`, `ci_failure.json` (only while a CI failure is in place) and, under `up`, `mlflow-server.log` |
+| `HOTEL_DEMO_WORLD` | `world/` | the world's own folder, never inside the data folder: `state.json`, `answer_key.jsonl`, `planted_flaws.json`, `hold` (only while held), and with a repository `ci_dispatches.jsonl`, `pull_requests.json`, `ci_failure.json` (only while a CI failure is in place) and, under `up`, `mlflow-server.log` |
 | `HOTEL_DEMO_MLFLOW` | `mlflow/` | the company's MLflow store, passed to every company command |
 | `HOTEL_DEMO_COMPANY` | none | a checkout of the demo repository; without it `simulate` writes the files only |
 | `HOTEL_DEMO_REPO` | none | the company's repository on GitHub (`owner/name`), a run's own copy; without it the world touches nothing on GitHub |
@@ -86,6 +86,10 @@ With `HOTEL_DEMO_REPO` set (by `--run`), the world also acts on the copy through
 ## `up`
 
 `demo-world up` takes the options of `simulate`. It first runs `mlflow --version` from the company's environment, which in a fresh clone builds that environment (this can take minutes; a failure stops `up` with MLflow's output). Then it starts the company's MLflow server from that environment (`uv run --locked --project <checkout> mlflow server`) on the company's store (`sqlite:///<HOTEL_DEMO_MLFLOW>/mlflow.db`, artifacts in `<HOTEL_DEMO_MLFLOW>/artifacts`), at `127.0.0.1:HOTEL_DEMO_MLFLOW_PORT`, its output in the world's `mlflow-server.log`. Once the server answers `/health` (within 2 minutes, or `up` stops it with an error), it sets `MLFLOW_TRACKING_URI` to it and runs `simulate`. Ctrl+C stops both, on Windows too: the server runs in a process group of its own, which the world stops, with every process it started, on every exit. On Windows that is a console process group asked to stop with `CTRL_BREAK_EVENT`, inside a job object that is then terminated; the system also terminates the job if the world is killed outright. Elsewhere it is a new session, sent `SIGTERM`, then `SIGKILL`; the `SIGKILL` is sent even if a second Ctrl+C interrupts the wait. While `up` runs, `SIGTERM` and `SIGHUP` sent to the world (`kill <pid>`, a closed terminal) stop it the same way, with exit code 128 plus the signal's number. A run stopped this way resumes with the same command. Only a `SIGKILL` of the world itself leaves the server running on Linux and macOS; stop it then with `kill -- -<server pid>`.
+
+When a marker file `hold` exists in the world folder, the day loop checks before each day: while it exists, the loop waits (MLflow stays served, nothing is written, no jobs run, no simulated time advances). Once `hold` is removed, the day loop resumes; the `--seconds-per-day` pace restarts from the resume (a hold is not a day). A held run that is stopped and started again resumes as today.
+
+With `--hold-before-start`, `up` creates the `hold` file after the first model is trained and deployed and the history is backfilled, before the first simulated day. MLflow serves while held, allowing agents or the user to inspect the first model and history before simulation begins.
 
 ```
 uv run demo-world up --run rehearsal --start 2016-07-01 --end 2017-03-31 --seconds-per-day 120 --scenario scenarios/default.toml

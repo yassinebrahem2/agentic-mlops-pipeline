@@ -23,6 +23,8 @@ from demo_world.company import Company
 from demo_world.scenarios import NO_SCENARIO, Scenario
 
 STATE_FILE = "state.json"
+HOLD_FILE = "hold"
+HOLD_POLL_SECONDS = 0.5
 
 
 class SimulateError(Exception):
@@ -160,12 +162,24 @@ def _first_day(state: _State | None, start: date, end: date) -> date:
     return resume
 
 
+def _wait_while_held(world: World, pace: Pace) -> bool:
+    hold = world.folder / HOLD_FILE
+    if not hold.exists():
+        return False
+    while hold.exists():
+        pace.sleep(HOLD_POLL_SECONDS)
+    return True
+
+
 def _play_days(world: World, first: date, days: int, origin: date, pace: Pace) -> None:
     next_day_at: float | None = None
     for offset in range(days):
         day = first + timedelta(days=offset)
-        if next_day_at is not None and (wait := next_day_at - pace.clock()) > 0:
+        held = _wait_while_held(world, pace)
+        if not held and next_day_at is not None and (wait := next_day_at - pace.clock()) > 0:
             pace.sleep(wait)
+            if _wait_while_held(world, pace):
+                held = True
         began = pace.clock()
         answer_key.append_new(world.folder, world.scenario.key_records(day))
         for step in world.steps:
