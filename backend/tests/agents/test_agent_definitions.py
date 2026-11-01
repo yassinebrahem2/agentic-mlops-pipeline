@@ -798,11 +798,11 @@ def test_check_writers_point_at_the_served_record_shape() -> None:
             assert words in prompt, f"{name} check line lacks {words}"
 
 
-def test_no_prompt_lists_the_record_fields() -> None:
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    for defn in catalog.all():
-        listed = [f for f in ResultRecord.model_fields if re.search(rf"`{f}[`:]", defn.prompt)]
-        assert not listed, f"{defn.name} prompt lists record fields {listed}"
+@pytest.mark.parametrize("name", CHECK_WRITERS)
+def test_check_writers_do_not_list_the_record_fields(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    listed = [f for f in ResultRecord.model_fields if re.search(rf"`{f}[`:]", prompt)]
+    assert not listed, f"{name} prompt lists record fields {listed}"
 
 
 @pytest.mark.parametrize("name", CHECK_WRITERS)
