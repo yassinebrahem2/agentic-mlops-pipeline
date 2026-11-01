@@ -31,11 +31,11 @@ class Problem:
     columns: tuple[str | None, ...]
 
 
-def problems(key: Iterable[Record]) -> list[Problem]:
+def problems(key: Iterable[object]) -> list[Problem]:
     """Groups Record lines by kind, start, end; skips every other line kind."""
     groups: dict[tuple[str, date, date], list[Record]] = {}
     for item in key:
-        if type(item) is not Record:
+        if not isinstance(item, Record):
             continue
         start_date = date.fromisoformat(item.start)
         end_date = date.fromisoformat(item.end)
@@ -82,6 +82,32 @@ def _rank_candidate(
     )
 
 
+async def _fetch_incidents(
+    client: BenchClient,
+    project_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    incidents: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        raw_page = await client.get(
+            f"/projects/{project_id}/incidents",
+            params={"limit": str(limit), "offset": str(offset)},
+        )
+        page_data: dict[str, Any] = (
+            cast(dict[str, Any], raw_page) if isinstance(raw_page, dict) else {}
+        )
+        raw_rows = page_data.get("rows")
+        rows: list[dict[str, Any]] = (
+            cast(list[dict[str, Any]], raw_rows) if isinstance(raw_rows, list) else []
+        )
+        incidents.extend(rows)
+        if len(rows) < limit:
+            break
+        offset += len(rows)
+    return incidents
+
+
 class AlreadyScored(Exception):
     """Raised when the project has already been scored."""
 
@@ -91,6 +117,8 @@ async def score(
     project_id: str,
     key: Sequence[Record],
     starts: DayStarts,
+    *,
+    page_limit: int = 100,
 ) -> Score:
     """Scores a project's incidents and silent alerts against an answer key."""
     # 1. Before writing anything: check for existing user verdicts or misses
@@ -113,25 +141,7 @@ async def score(
     all_problems = problems(key)
 
     # 3. Paging incidents
-    incidents: list[dict[str, Any]] = []
-    limit = 100
-    offset = 0
-    while True:
-        raw_page = await client.get(
-            f"/projects/{project_id}/incidents",
-            params={"limit": str(limit), "offset": str(offset)},
-        )
-        page_data: dict[str, Any] = (
-            cast(dict[str, Any], raw_page) if isinstance(raw_page, dict) else {}
-        )
-        raw_rows = page_data.get("rows")
-        rows: list[dict[str, Any]] = (
-            cast(list[dict[str, Any]], raw_rows) if isinstance(raw_rows, list) else []
-        )
-        incidents.extend(rows)
-        if len(rows) < limit:
-            break
-        offset += len(rows)
+    incidents = await _fetch_incidents(client, project_id, limit=page_limit)
 
     matched: dict[str, Problem] = {}
     verdicts: dict[str, VerdictDraft] = {}

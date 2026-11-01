@@ -515,6 +515,116 @@ async def test_candidate_in_window_beats_grace_days(app_factory: AppMaker, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_candidate_category_match_beats_earlier_mismatched_problem(
+    app_factory: AppMaker, tmp_path: Path
+) -> None:
+    """A problem whose category matches incident.category beats an earlier problem of a different category."""
+    async with app_factory("test-token") as (app, token, _):
+        client = in_process(app, token)
+        project_id = await _create_project(client, tmp_path)
+
+        starts = _day_starts(date(2026, 7, 1), 20)
+        # Problem 1: start 2026-07-02, end 2026-07-05, category "drift" (earlier)
+        # Problem 2: start 2026-07-03, end 2026-07-06, category "data_quality" (later)
+        p1 = Record(
+            kind="covariate_shift",
+            category="drift",
+            column="col_a",
+            start="2026-07-02",
+            end="2026-07-05",
+        )
+        p2 = Record(
+            kind="null_spike",
+            category="data_quality",
+            column="col_b",
+            start="2026-07-03",
+            end="2026-07-06",
+        )
+        key = [p1, p2]
+
+        services = app.state.services
+        # Incident on 2026-07-04 (in window for both): category "data_quality"
+        inc_dt = datetime(2026, 7, 4, 10, 0, 0, tzinfo=UTC)
+        draft = SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="col_b",
+            model=None,
+            ran_at=inc_dt,
+            detail={},
+            result_id=None,
+            cleared=False,
+        )
+        outcome = await services.incidents.raise_signal(project_id, draft, seen_at=inc_dt)
+
+        res = await score(client, project_id, key, starts)
+        assert isinstance(res, Score)
+
+        # p2 matches category -> must beat p1 despite p1 having earlier start date
+        assert outcome.incident_id in res.matched
+        assert res.matched[outcome.incident_id].kind == "null_spike"
+        assert res.verdicts[outcome.incident_id] == VerdictDraft(value="real_issue")
+        # p1 was uncaught -> miss
+        assert len(res.misses) == 1
+        assert res.misses[0].kind == "covariate_shift"
+
+
+@pytest.mark.asyncio
+async def test_candidate_earlier_problem_beats_later_problem_same_category(
+    app_factory: AppMaker, tmp_path: Path
+) -> None:
+    """An earlier problem beats a later problem when both match category and window tier."""
+    async with app_factory("test-token") as (app, token, _):
+        client = in_process(app, token)
+        project_id = await _create_project(client, tmp_path)
+
+        starts = _day_starts(date(2026, 7, 1), 20)
+        # Problem 1: start 2026-07-01, end 2026-07-04, category "data_quality" (earlier)
+        # Problem 2: start 2026-07-03, end 2026-07-06, category "data_quality" (later)
+        p1 = Record(
+            kind="null_spike_1",
+            category="data_quality",
+            column="col_a",
+            start="2026-07-01",
+            end="2026-07-04",
+        )
+        p2 = Record(
+            kind="null_spike_2",
+            category="data_quality",
+            column="col_b",
+            start="2026-07-03",
+            end="2026-07-06",
+        )
+        key = [p1, p2]
+
+        services = app.state.services
+        # Incident on 2026-07-03 (in window for both): category "data_quality"
+        inc_dt = datetime(2026, 7, 3, 10, 0, 0, tzinfo=UTC)
+        draft = SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="col_a",
+            model=None,
+            ran_at=inc_dt,
+            detail={},
+            result_id=None,
+            cleared=False,
+        )
+        outcome = await services.incidents.raise_signal(project_id, draft, seen_at=inc_dt)
+
+        res = await score(client, project_id, key, starts)
+        assert isinstance(res, Score)
+
+        # Both match category and window tier; earlier problem p1 wins
+        assert outcome.incident_id in res.matched
+        assert res.matched[outcome.incident_id].kind == "null_spike_1"
+        assert res.verdicts[outcome.incident_id] == VerdictDraft(value="real_issue")
+        # p2 was uncaught -> miss
+        assert len(res.misses) == 1
+        assert res.misses[0].kind == "null_spike_2"
+
+
+@pytest.mark.asyncio
 async def test_merged_incident_is_excluded(app_factory: AppMaker, tmp_path: Path) -> None:
     """A merged incident is excluded."""
     async with app_factory("test-token") as (app, token, _):
@@ -832,7 +942,8 @@ async def test_incidents_paging(app_factory: AppMaker, tmp_path: Path) -> None:
             outcome = await services.incidents.raise_signal(project_id, draft, seen_at=dt)
             inc_ids.append(outcome.incident_id)
 
-        res = await score(client, project_id, key, starts)
+        # Exercise multi-page pagination by setting page_limit=20 for 55 incidents (3 pages: 20, 20, 15)
+        res = await score(client, project_id, key, starts, page_limit=20)
         assert isinstance(res, Score)
 
         assert len(res.verdicts) == 55
