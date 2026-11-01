@@ -20,6 +20,7 @@ from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 
 if TYPE_CHECKING:
     from mlops_agents.monitoring.expectations.checks import ChecksStore
+    from mlops_agents.proposals.contract import Handoffs
 
 
 class RegisterCheckInput(BaseModel):
@@ -43,8 +44,39 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = RegisterCheckInput
 
-    def __init__(self, checks: ChecksStore) -> None:
+    def __init__(self, checks: ChecksStore, handoffs: Handoffs) -> None:
         self._checks = checks
+        self._handoffs = handoffs
+
+    async def _metric_user(self, project_id: str, check_id: str, metric: str) -> str | None:
+        """Who else already reads this MLflow metric, so two checks never share one source.
+
+        The same check registering its metric again is not a conflict, even when the handoff
+        names that metric too: the registered check already wins it in the MLflow source.
+        """
+        others: list[str] = []
+        for chk in await self._checks.list(project_id):
+            location = chk.results_location
+            if (
+                chk.status == "retired"
+                or not isinstance(location, MlflowResults)
+                or location.metric != metric
+            ):
+                continue
+            if chk.check_id == check_id:
+                return None
+            others.append(f"registered check {chk.check_id!r}")
+
+        handoff = await self._handoffs.current(project_id)
+        if handoff is not None:
+            ops = handoff.payload.operations
+            for spec in ops.checks:
+                if isinstance(spec.results, MlflowResults) and spec.results.metric == metric:
+                    return f"handoff check {spec.check_id!r}"
+            location = ops.results_location
+            if isinstance(location, MlflowResults) and location.metric == metric:
+                return "the handoff's results location"
+        return others[0] if others else None
 
     async def run(self, ctx: ToolContext, args: RegisterCheckInput) -> ToolOutput:
         # Validate timezone
@@ -71,6 +103,24 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
             if not args.results_location.metric:
                 return ToolOutput(
                     content="Malformed mlflow results location: metric is required.",
+                    is_error=True,
+                )
+
+        if isinstance(args.results_location, MlflowResults):
+            try:
+                user = await self._metric_user(
+                    ctx.project_id, args.check_id, args.results_location.metric
+                )
+            except Exception as exc:
+                return ToolOutput(
+                    content=f"Failed to check the metric's users: {exc}", is_error=True
+                )
+            if user is not None:
+                return ToolOutput(
+                    content=(
+                        f"MLflow metric {args.results_location.metric!r} is already used by "
+                        f"{user}; one metric feeds one check."
+                    ),
                     is_error=True,
                 )
 

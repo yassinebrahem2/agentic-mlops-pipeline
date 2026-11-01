@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import insert
 
 from mlops_agents.connections.contract import (
     LOCAL_FOLDER_KIND,
@@ -37,20 +38,30 @@ from mlops_agents.monitoring.results.contract import (
 from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.results.store import ResultsStore
+from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import HandoffObserver, HandoffView
 from mlops_agents.proposals.payloads import (
     Cadence,
+    CheckSpec,
     Feed,
     FileResults,
     HandoffPayload,
     JobFeedRef,
+    MlflowResults,
     Operations,
 )
 from mlops_agents.sandbox.contract import EnvironmentStatus
 from mlops_agents.sandbox.docker import DockerResult, StreamCapture
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import projects
+from mlops_agents.tracking.contract import SourceType
+from mlops_agents.tracking.service import TrackingService
+from tests.conftest import MemoryKeyStore
 from tests.proposals.samples import handoff as sample_handoff_dict
 from tests.providers.fake_clock import FakeClock
+from tests.tracking.conftest import FakeHandoffs as TrackingFakeHandoffs
+from tests.tracking.conftest import FakeTrackingAdapter, TrackingEnv
+from tests.tracking.conftest import TestClock as ClockForTest
 
 
 class FakeObserver(ResultsObserver):
@@ -290,6 +301,83 @@ def build_feed_handoff(
         version=1,
         approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
         payload=payload,
+    )
+
+
+def build_mlflow_handoff(
+    checks: list[CheckSpec] | None = None,
+    results_location: FileResults | MlflowResults | None = None,
+) -> HandoffView:
+    ops = Operations(
+        scheduler=None,
+        feeds=[],
+        on_call=[],
+        checks=checks or [],
+        results_location=results_location
+        or FileResults(connection="conn_a", path_pattern="*.jsonl"),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    return HandoffView(
+        proposal_id="prop_mlflow",
+        version=1,
+        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+        payload=payload,
+    )
+
+
+@pytest.fixture
+async def tracking_env(
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+) -> TrackingEnv:
+    project_id = "prj_mlflowtest"
+    engine = await databases.app()
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(projects).values(
+                id=project_id,
+                name="MLflow Test Project",
+                source="github",
+                github_full_name="org/demo",
+                github_key="org/demo",
+                default_branch="main",
+                status="ok",
+                created_at=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC).isoformat(),
+            )
+        )
+    await databases.project(project_id)
+    clock = ClockForTest(datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC))
+    secrets: Any = None
+    events = SqliteEventLog(databases)
+    adapter = FakeTrackingAdapter("mlflow")
+    adapters: dict[SourceType, FakeTrackingAdapter] = {"mlflow": adapter}
+    handoffs = TrackingFakeHandoffs()
+
+    async def _async_token() -> str | None:
+        return "fake-token"
+
+    service = TrackingService(
+        databases=databases,
+        keystore=keystore,
+        secrets=secrets,
+        events=events,
+        adapters=adapters,
+        github_token=_async_token,
+        clock=clock,
+        handoffs=handoffs,
+    )
+
+    return TrackingEnv(
+        service=service,
+        databases=databases,
+        keystore=keystore,
+        secrets=secrets,
+        events=events,
+        adapters=adapters,
+        project_id=project_id,
+        clock=clock,  # type: ignore[arg-type]
+        handoffs=handoffs,
     )
 
 
