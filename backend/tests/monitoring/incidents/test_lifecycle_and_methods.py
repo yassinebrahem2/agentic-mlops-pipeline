@@ -691,3 +691,40 @@ async def test_merge_critical_into_medium_gives_critical_winner_and_reassigns_no
         )
         assert row is not None
         assert row["incident"] == inc1_id
+
+
+@pytest.mark.asyncio
+async def test_snooze_refusal_order_is_not_found_then_not_live_then_past(
+    service: IncidentsService, project_id: str, fake_clock: FakeClock
+) -> None:
+    now = fake_clock.now()
+    past = now - timedelta(hours=1)
+    drafts = [
+        SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject=subject,
+            model=None,
+            ran_at=now - timedelta(minutes=minutes),
+            detail={},
+        )
+        for subject, minutes in (("s1", 20), ("s2", 10), ("s3", 5))
+    ]
+    ids = [
+        (await service.raise_signal(project_id, d, seen_at=d.ran_at)).incident_id for d in drafts
+    ]
+    await service.merge(project_id, ids[:2], agent="a")  # the later one is merged
+    await service.close(project_id, ids[2])
+
+    with pytest.raises(DomainError) as unknown:
+        await service.snooze(project_id, "inc_nope", until=past)
+    assert (unknown.value.status, unknown.value.code) == (404, "incident_not_found")
+
+    for dead in (ids[1], ids[2]):
+        with pytest.raises(DomainError) as not_live:
+            await service.snooze(project_id, dead, until=past)
+        assert (not_live.value.status, not_live.value.code) == (409, "incident_not_live")
+
+    with pytest.raises(DomainError) as in_past:
+        await service.snooze(project_id, ids[0], until=past)
+    assert (in_past.value.status, in_past.value.code) == (422, "snooze_in_past")

@@ -25,6 +25,12 @@ class SetContextWindow(BaseModel):
     value: int
 
 
+class SetRequestLimit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    address: str
+    value: int | None = None
+
+
 class UserPrice(BaseModel):
     # No `source`: the server marks a price set here as the user's. NaN and infinity are refused
     # because Starlette's JSON parser accepts them.
@@ -62,6 +68,11 @@ async def verify_model(body: VerifyModel, services: ServicesDep) -> ModelEntry:
 @router.put("/models/context-window", response_model=ModelEntry)
 async def set_context_window(body: SetContextWindow, services: ServicesDep) -> ModelEntry:
     return await services.providers.set_context_window(body.address, body.value)
+
+
+@router.put("/models/request-limit", response_model=ModelEntry)
+async def set_request_limit(body: SetRequestLimit, services: ServicesDep) -> ModelEntry:
+    return await services.providers.set_request_limit(body.address, body.value)
 
 
 @router.put("/models/price", response_model=ModelEntry)

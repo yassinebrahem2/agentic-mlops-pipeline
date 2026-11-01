@@ -9,7 +9,10 @@ import re
 # Only the tag name "data" counts: "<database>" or "<dataset>" are ordinary text.
 _DATA_TAG = re.compile(r"<(?=\s*/?\s*data(?![\w-]))", re.IGNORECASE)
 
+DATA_TAG = "data"
+DATA_CLOSE_TAG = "</data>"
+
 
 def untrusted(text: str, source: str) -> str:
     """Wraps text in a <data source="..."> block with inner <data tags neutralised."""
-    return f'<data source="{source}">\n{_DATA_TAG.sub(r"<\\", text)}\n</data>'
+    return f'<{DATA_TAG} source="{source}">\n{_DATA_TAG.sub(r"<\\", text)}\n{DATA_CLOSE_TAG}'

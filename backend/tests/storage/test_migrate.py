@@ -101,7 +101,7 @@ def test_newer_database_is_refused(tmp_path: Path) -> None:
 
 
 def test_packaged_migrations_apply(tmp_path: Path) -> None:
-    assert migrate(tmp_path / "app.db", "app", tmp_path / "bk") == [1, 2, 3]
+    assert migrate(tmp_path / "app.db", "app", tmp_path / "bk") == [1, 2, 3, 4]
     assert migrate(tmp_path / "project.db", "project", tmp_path / "bk") == [
         1,
         2,

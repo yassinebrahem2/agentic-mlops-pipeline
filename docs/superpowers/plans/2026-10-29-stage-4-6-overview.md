@@ -87,7 +87,7 @@ SourceKind = Literal["file", "ci", "mlflow"]
 class ResultRecord(BaseModel):          # what a check, a parser or a mapping produces
     check_id: str; origin: ResultOrigin; ran_at: datetime; fired: bool; value: float | None; threshold: float | None
     category: ResultCategory; subject: str; model: str | None; detail: dict[str, Any]
-    source_ref: str; version: str | None; not_enough_data: bool = False   # version: the git commit of an agent's check; not_enough_data: a record, never a fire
+    source_ref: str; version: str | None; not_enough_data: bool = False   # version: the git commit of an agent's check; not_enough_data: a record, never a fire; ran_at: when the check ran, never the data's date (2026-11-01, #645)
 class StoredResult(ResultRecord): id: str; source_id: str; source_key: str; seen_at: datetime   # res_...
 class ResultQuery(BaseModel): ids: list[str] | None = None; check_id: str | None = None; model: str | None = None; origin: ResultOrigin | None = None; subject: str | None = None; fired: bool | None = None; since: datetime | None = None; until: datetime | None = None; latest: bool = False; limit: int = 50; offset: int = 0   # limit max 500; since and until inclusive, on ran_at
 class SourceState(BaseModel): source_id: str; kind: SourceKind; cursor: dict[str, Any]; last_read: datetime | None; last_error: str | None; consecutive_failures: int

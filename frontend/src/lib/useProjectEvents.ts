@@ -78,6 +78,8 @@ export const PROJECT_EVENT_TYPES = [
   "promotion.applied",
   "promotion.refused",
   "pr.merged_by_agent",
+  "session.compacted",
+  "session.cleared",
 ] as const satisfies readonly ProjectEventType[];
 
 export type UseProjectEventsOptions = {

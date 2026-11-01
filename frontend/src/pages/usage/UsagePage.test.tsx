@@ -90,7 +90,7 @@ describe("usage page", () => {
 
     expect(await screen.findByText(/tokens only/i)).toBeInTheDocument();
     expect(screen.queryByText("Total cost")).not.toBeInTheDocument();
-    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
     expect(screen.getByText("Total tokens").nextElementSibling).toHaveTextContent("55");
   });
 

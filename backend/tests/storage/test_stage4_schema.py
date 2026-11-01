@@ -49,7 +49,7 @@ def project_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 @pytest.fixture
 def app_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "app.db"
-    assert migrate(db, "app", tmp_path / "bk") == [1, 2, 3]
+    assert migrate(db, "app", tmp_path / "bk") == [1, 2, 3, 4]
     conn = connect_sync(db)
     yield conn
     conn.close()
@@ -58,7 +58,7 @@ def app_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 def test_fresh_databases_migrate_to_latest(tmp_path: Path) -> None:
     app_db_path = tmp_path / "app.db"
     project_db_path = tmp_path / "project.db"
-    assert migrate(app_db_path, "app", tmp_path / "bk") == [1, 2, 3]
+    assert migrate(app_db_path, "app", tmp_path / "bk") == [1, 2, 3, 4]
     assert migrate(project_db_path, "project", tmp_path / "bk") == [
         1,
         2,
@@ -148,7 +148,7 @@ def test_v2_app_db_migrates_to_v3_preserving_data(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "app", tmp_path / "bk") == [3]
+    assert migrate(db, "app", tmp_path / "bk") == [3, 4]
 
     conn = connect_sync(db)
     try:

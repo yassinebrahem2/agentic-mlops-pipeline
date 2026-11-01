@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import RowMapping
 
+from mlops_agents.clock import as_utc
 from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.ids import new_id
@@ -490,6 +491,11 @@ class IncidentsService(Incidents):
                 f"Incident '{incident_id}' not found.",
                 status=404,
             )
+        if row["status"] in DONE_STATUSES:
+            raise _not_live(incident_id, row["status"])
+        # as_utc: comparing a naive time with an aware one raises.
+        if as_utc(until) <= self._clock.now():
+            raise DomainError("snooze_in_past", "A snooze must end in the future.", status=422)
         await self._store.update_incident(
             project_id,
             incident_id,

@@ -77,6 +77,7 @@ class ToolContext:
     task: TaskRef | None
     tool_call_id: str  # the model's ID for this call; an approval of it stores the same ID
     authority: Authority | None = None
+    tool_result_max_chars: int | None = None
 
 
 class Preview(BaseModel):

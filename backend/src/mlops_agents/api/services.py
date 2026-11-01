@@ -462,9 +462,10 @@ async def build_services(
         keystore=keystore,
         secrets=project_secrets,
         events=events,
-        adapters=default_adapters(http),
+        adapters=default_adapters(http, clock.now),
         github_token=github.token,
         handoffs=handoffs,
+        clock=clock.now,
     )
     results.bind_tracking(tracking)
     stack.push_async_callback(tracking.close)

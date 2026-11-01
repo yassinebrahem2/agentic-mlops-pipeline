@@ -115,6 +115,14 @@ def bad_generation() -> openai.BadRequestError:
     )
 
 
+def request_too_large() -> openai.BadRequestError:
+    return openai.BadRequestError(
+        "Context length exceeded",
+        response=response(400),
+        body={"error": {"code": "context_length_exceeded"}},
+    )
+
+
 def at(seconds: float) -> datetime:
     return START + timedelta(seconds=seconds)
 

@@ -58,7 +58,7 @@ backend/src/mlops_agents/
 ## 2. Results
 
 **The standard result record** (`res`), stored in `project.db`:
-`check_id`, `origin` (`team` for the handoff's existing monitoring, `agent` for checks agents delivered), `ran_at` (the time the result describes, from the source), `seen_at` (when the app read it), `fired` (bool), `value` (number or null), `threshold` (number or null), `category` (data quality, drift, model performance, operational), `subject` (what it is about: a table, column, model version, job), `detail` (JSON), `source_ref` (where it came from).
+`check_id`, `origin` (`team` for the handoff's existing monitoring, `agent` for checks agents delivered), `ran_at` (when the check ran, from the source; the date of the data it covers goes in `detail`. Changed 2026-11-01, bug #645: "the time the result describes" let a daily check stamp yesterday's date and look silent every day), `seen_at` (when the app read it), `fired` (bool), `value` (number or null), `threshold` (number or null), `category` (data quality, drift, model performance, operational), `subject` (what it is about: a table, column, model version, job), `detail` (JSON), `source_ref` (where it came from).
 
 **Sources**, one interface per kind, read every minute (a project setting) by the scheduler:
 - `file`: records found under a connection's path pattern (JSON Lines, JSON, CSV, log lines), read incrementally. Job runs a scheduler logs to files are a `file` source.
@@ -74,7 +74,7 @@ backend/src/mlops_agents/
 
 **Reading never misses or repeats.** Each source keeps a cursor: per file, its size, modified time and the byte offset read (an appended JSON Lines file is read from its offset); for `ci` and `mlflow`, the last run ID or time. A file that shrank or changed before the offset (restated data) is read again from the start. Records are idempotent by source and source key (from the record, else the file, offset and line), so a re-read stores nothing twice. After downtime the scheduler reads every source from its cursor, oldest first, before the live loop resumes.
 
-**Times.** `ran_at` (the time the result describes) decides silence, ordering and `started_at`; `seen_at` decides detection time. Cadences, deadlines, on-call hours and the morning report use the IANA time zone given with them in the handoff, else the project's time zone (a new project setting, defaulting to the server's), daylight saving included.
+**Times.** `ran_at` (when the check ran) decides silence, ordering and `started_at`; `seen_at` decides detection time. Cadences, deadlines, on-call hours and the morning report use the IANA time zone given with them in the handoff, else the project's time zone (a new project setting, defaulting to the server's), daylight saving included.
 
 **Untrusted text.** Everything read from the team's data, results, logs and parsers is data, never instructions. It reaches agents marked as untrusted content, the agents' prompts say so, and any action it might suggest still goes through the gates and the rules evaluated in code.
 

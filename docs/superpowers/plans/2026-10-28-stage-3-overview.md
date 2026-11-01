@@ -147,7 +147,7 @@ class ModelVersionRow(BaseModel): source_id: str; model: str; version: str; run_
 class ModelSummary(BaseModel): source_id: str; name: str; production_version: str | None; latest_version: str | None; versions: int
 class RunRow(BaseModel): source_id: str; key: str; experiment: str; status: RunStatus; start: datetime | None; end: datetime | None; params: dict[str, str]; tags: dict[str, str]; git_commit: str | None; datasets: list[str]
 class MetricPoint(BaseModel): source_id: str; run_key: str; metric: str; step: int; value: float; time: datetime
-class DeploymentRow(BaseModel): source_id: str; model: str; alias: str; from_version: str | None; to_version: str | None; seen_at: datetime   # to_version None: the alias was removed
+class DeploymentRow(BaseModel): source_id: str; model: str; alias: str; from_version: str | None; to_version: str | None; seen_at: datetime; baseline: bool = False   # to_version None: the alias was removed; baseline: recorded by the source's first successful sync, where the alias already was, not a move (2026-11-01, #649)
 class CiRunRow(BaseModel): source_id: str; key: str; workflow: str; status: RunStatus; start: datetime; duration_s: float | None; commit: str; url: str
 class EvaluationRecord(BaseModel): source_id: str; model: str; version: str; run_key: str; schema_version: int; payload: dict[str, Any]; fetched_at: datetime   # mlops_agents/evaluation.json (stage 5)
 class SyncResult(BaseModel): versions: list[ModelVersionRow]; runs: list[RunRow]; metrics: list[MetricPoint]; aliases: dict[str, dict[str, str]]; ci_runs: list[CiRunRow]; evaluations: list[EvaluationRecord]; error: str | None   # aliases: model -> alias -> version; Tracking derives DeploymentRows
@@ -253,7 +253,7 @@ class OnCall(BaseModel): name: str; contacts: list[Contact]; hours: OnCallHours;
 class FileResults(BaseModel): connection: str; path_pattern: str
 class CiResults(BaseModel): workflow: str
 class MlflowResults(BaseModel): metric: str; threshold: float | None; fires_when: Literal["above", "below"] | None
-class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: Cadence; timezone: str; results: FileResults | CiResults | MlflowResults
+class CheckSpec(BaseModel): check_id: str; name: str; category: Literal["data_quality", "drift", "model_performance", "operational"]; cadence: Cadence | None = None; timezone: str; results: FileResults | CiResults | MlflowResults   # cadence None: read and compared, never judged silent (2026-11-01, #645)
 class Scheduler(BaseModel): name: str; config_location: str
 class Operations(BaseModel): scheduler: Scheduler | None; feeds: list[Feed]; on_call: list[OnCall]; checks: list[CheckSpec]; results_location: FileResults | MlflowResults
 class TrackingSourceSpec(BaseModel): type: SourceType; settings: MlflowSettings | GithubActionsSettings; auth: Literal["none", "credential"]   # settings models in tracking/contract.py (contracts task 1), extra="forbid"; MlflowSettings.url passes base_url_problem (no userinfo)

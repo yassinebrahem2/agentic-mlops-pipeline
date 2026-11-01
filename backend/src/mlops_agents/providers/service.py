@@ -308,6 +308,7 @@ class ProvidersService:
                     verified_at=None,
                     model_type=data.model_type,
                     dimensions=None,
+                    request_token_limit=None,
                     **_price_values(price),
                 )
             )
@@ -320,6 +321,15 @@ class ProvidersService:
             )
         await self.require_model(address)
         await self._update_model(address, context_window=value)
+        return await self.require_model(address)
+
+    async def set_request_limit(self, address: str, value: int | None) -> ModelEntry:
+        if value is not None and value <= 0:
+            raise DomainError(
+                "invalid_request_limit", "Enter a positive number of tokens.", status=422
+            )
+        await self.require_model(address)
+        await self._update_model(address, request_token_limit=value)
         return await self.require_model(address)
 
     async def set_price(self, address: str, price: ModelPrice | None) -> ModelEntry:

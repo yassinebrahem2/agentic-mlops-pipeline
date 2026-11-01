@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
 
 from mlops_agents.agents.runtime.agent import Agent
+from mlops_agents.agents.runtime.budget import cut_text, tool_result_max_chars
 from mlops_agents.agents.runtime.contract import Part, ToolResultPart
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
@@ -21,6 +22,7 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+from mlops_agents.providers.bridge import ResolvedModel
 
 if TYPE_CHECKING:
     from mlops_agents.agents.approvals.store import ApprovalStore
@@ -56,8 +58,15 @@ class ToolStep:
         lock: AbstractAsyncContextManager[Any],
         update_parts: Callable[[], Awaitable[None]],
         approval_store: ApprovalStore,
+        fixed: int = 0,
+        model: ResolvedModel | None = None,
     ) -> None:
         self._agent = agent
+        self._model = model or getattr(agent, "model", None)
+        self._fixed = fixed
+        self._tool_result_max_chars = (
+            tool_result_max_chars(self._model, self._fixed) if self._model is not None else None
+        )
         self._tools = {t.name: t for t in agent.tools}
         self._gate = gate
         self._workspaces = workspaces
@@ -90,6 +99,7 @@ class ToolStep:
             files=files,
             task=task,
             tool_call_id=tool_call_id,
+            tool_result_max_chars=self._tool_result_max_chars,
         )
 
     async def decide(self, state: TurnState) -> dict[str, Any]:
@@ -154,10 +164,15 @@ class ToolStep:
                 output = await self._run_decided(
                     self._tools[call["name"]], call, decisions[call_id]
                 )
+            capped_content = (
+                cut_text(output.content, self._tool_result_max_chars)
+                if self._tool_result_max_chars is not None
+                else output.content
+            )
             result = ToolResultPart(
                 type="tool_result",
                 tool_call_id=call_id,
-                content=output.content,
+                content=capped_content,
                 is_error=output.is_error,
             )
             async with self._lock:

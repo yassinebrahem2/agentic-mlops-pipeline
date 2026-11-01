@@ -171,6 +171,7 @@ class AgentSettingsService:
             wire_model_id=result.entry.wire_model_id,
             context_window=result.context_window,
             keys=tuple(result.keys),
+            request_token_limit=result.entry.request_token_limit,
         )
         return resolved, max_steps
 
