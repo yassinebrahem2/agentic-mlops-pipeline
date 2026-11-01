@@ -6,6 +6,8 @@ import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from benchmarks.report import register_report_cli, run_report_cli
+
 
 @dataclass(frozen=True)
 class Command:
@@ -15,7 +17,14 @@ class Command:
     run: Callable[[argparse.Namespace], int | None] | None = None
 
 
-COMMANDS: list[Command] = []
+COMMANDS: list[Command] = [
+    Command(
+        name="report",
+        help="Compare one or more benchmark runs in a single table",
+        register=register_report_cli,
+        run=run_report_cli,
+    ),
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
