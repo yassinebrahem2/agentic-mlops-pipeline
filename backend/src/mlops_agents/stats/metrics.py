@@ -36,12 +36,11 @@ class Impact:
 @dataclass(frozen=True)
 class StatsInputs:
     """Every row a metric reads, already windowed. `incidents` are the in-window, non-merged
-    incidents of the category asked; `incidents_opened` counts them in every category."""
+    incidents of the category asked."""
 
     span: Span
     baseline_available: bool
     incidents: Sequence[IncidentView]
-    incidents_opened: int
     verdicts: Mapping[str, VerdictView]
     matched: set[str]
     judged: Sequence[SilentTeamAlert]
@@ -226,7 +225,7 @@ def _dollars(inputs: StatsInputs) -> float | None:
 
 
 def cost_per_incident(inputs: StatsInputs) -> StatValue:
-    n = inputs.incidents_opened
+    n = len(inputs.incidents)
     dollars = _dollars(inputs) if n else None
     return _stat(dollars / n if dollars is not None else None, n)
 

@@ -91,7 +91,6 @@ class StatsService(Stats):
             span=span,
             baseline_available=await self._baseline.available(project_id),
             incidents=incidents,
-            incidents_opened=len(opened),
             verdicts=verdicts,
             matched=await self._baseline.matched_incidents(project_id),
             judged=[a for a in judged if span.contains(a.ran_at)],

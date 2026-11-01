@@ -347,12 +347,21 @@ async def test_a_category_narrows_the_incident_groups_only(
         "prs_merged",
         "prs_closed",
         "tokens_per_agent",
-        "cost_per_incident",
         "failed_runs",
         "tool_errors",
         "sandbox_failures",
     ):
         assert got[name] == unfiltered[name], name
+
+
+async def test_a_category_filter_changes_cost_per_incident(
+    stats: StatsService, fixture_project: str
+) -> None:
+    got = _flat(await stats.compute(fixture_project, "30d", "data_quality", NOW))
+
+    # The window's spend is not split by category, so it is divided by the 2 incidents asked for.
+    assert got["cost_per_incident"][1] == 2
+    assert got["cost_per_incident"][0] == pytest.approx(8200 / 1_000_000 / 2)
 
 
 async def test_a_used_model_without_a_price_makes_cost_per_incident_none(
