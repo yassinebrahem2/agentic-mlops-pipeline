@@ -108,8 +108,8 @@ PLANTED_FLAWS: tuple[Flaw, ...] = (
         "manual_retraining_only",
         "operational",
         "the production schedule (ops/schedule.toml)",
-        "Nothing schedules it, so once the model decays (task 4) the drop persists until someone "
-        "retrains.",
+        "Nothing schedules it, so once the model decays (task 4) the drop persists; a retrain "
+        "with the company's own pipeline recovers it only partly (Decision #627).",
     ),
     Flaw(
         "drift_check_blind_to_categories",
