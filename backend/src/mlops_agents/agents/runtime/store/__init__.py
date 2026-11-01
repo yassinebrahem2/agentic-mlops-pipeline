@@ -193,7 +193,11 @@ class SessionStore(MessagesStore, TurnsStore, UsageStore, InboundStore):
 
     @shielded
     async def set_summary(
-        self, project_id: str, session_id: str, summary: str, compacted_through: str
+        self,
+        project_id: str,
+        session_id: str,
+        summary: str | None,
+        compacted_through: str | None,
     ) -> None:
         """Update summary and compacted_through on the session row."""
         engine = await self._databases.project(project_id)

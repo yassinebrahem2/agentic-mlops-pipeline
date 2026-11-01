@@ -1256,6 +1256,20 @@
         "title": "CommandSpec",
         "type": "object"
       },
+      "CompactResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "compacted": {
+            "title": "Compacted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "compacted"
+        ],
+        "title": "CompactResponse",
+        "type": "object"
+      },
       "Compare": {
         "additionalProperties": false,
         "properties": {
@@ -2723,7 +2737,9 @@
               "report.saved",
               "promotion.applied",
               "promotion.refused",
-              "pr.merged_by_agent"
+              "pr.merged_by_agent",
+              "session.compacted",
+              "session.cleared"
             ],
             "title": "Type",
             "type": "string"
@@ -4814,6 +4830,17 @@
           "provider_name": {
             "title": "Provider Name",
             "type": "string"
+          },
+          "request_token_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Token Limit"
           },
           "streaming": {
             "title": "Streaming",
@@ -7769,6 +7796,31 @@
         "title": "SetPrice",
         "type": "object"
       },
+      "SetRequestLimit": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "SetRequestLimit",
+        "type": "object"
+      },
       "SignalView": {
         "additionalProperties": false,
         "properties": {
@@ -10372,6 +10424,47 @@
         ]
       }
     },
+    "/api/models/request-limit": {
+      "put": {
+        "operationId": "set_request_limit_api_models_request_limit_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRequestLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Request Limit",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/api/models/verify": {
       "post": {
         "operationId": "verify_model_api_models_verify_post",
@@ -10652,7 +10745,9 @@
                     "report.saved",
                     "promotion.applied",
                     "promotion.refused",
-                    "pr.merged_by_agent"
+                    "pr.merged_by_agent",
+                    "session.compacted",
+                    "session.cleared"
                   ],
                   "type": "string"
                 },
@@ -10996,6 +11091,101 @@
           }
         },
         "summary": "Get Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/clear": {
+      "post": {
+        "operationId": "clear_session_api_projects__project_id__agents__agent__session_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/agents/{agent}/session/compact": {
+      "post": {
+        "operationId": "compact_session_api_projects__project_id__agents__agent__session_compact_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "title": "Agent",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compact Session",
         "tags": [
           "sessions"
         ]

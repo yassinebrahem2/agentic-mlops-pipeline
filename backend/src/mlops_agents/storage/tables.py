@@ -62,6 +62,7 @@ models = Table(
     Column("price_prompt_per_mtok", Float()),
     Column("price_completion_per_mtok", Float()),
     Column("price_source", Text),
+    Column("request_token_limit", Integer),
 )
 
 agent_model_defaults = Table(

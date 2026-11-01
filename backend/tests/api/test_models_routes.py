@@ -11,6 +11,7 @@ async def test_anonymous_cannot_access_models(anonymous: httpx2.AsyncClient) -> 
     assert (await anonymous.delete("/api/models?address=fake:fake-tools")).status_code == 401
     assert (await anonymous.post("/api/models/verify", json={})).status_code == 401
     assert (await anonymous.put("/api/models/context-window", json={})).status_code == 401
+    assert (await anonymous.put("/api/models/request-limit", json={})).status_code == 401
 
 
 async def test_models_crud_verification_and_context_window(
@@ -120,3 +121,66 @@ async def test_models_crud_verification_and_context_window(
     assert "fake:meta-llama/llama-3.1-8b-instruct" not in listed_addresses
     assert "fake:fake-tools" in listed_addresses
     assert "fake:fake-no-tools" in listed_addresses
+
+
+async def test_set_and_clear_request_limit(
+    client: httpx2.AsyncClient,
+    fake_openai: RunningFake,
+) -> None:
+    res = await client.post(
+        "/api/providers",
+        json={"name": "fake", "kind": "self_hosted", "base_url": fake_openai.base_url},
+    )
+    assert res.status_code == 201
+
+    res = await client.post(
+        "/api/models",
+        json={"provider": "fake", "wire_model_id": "fake-tools"},
+    )
+    assert res.status_code == 201
+    assert res.json().get("request_token_limit") is None
+
+    # Set request limit -> 200 with new limit
+    res = await client.put(
+        "/api/models/request-limit",
+        json={"address": "fake:fake-tools", "value": 8000},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["request_token_limit"] == 8000
+
+    # Model in list also has request_token_limit
+    res = await client.get("/api/models")
+    assert res.status_code == 200
+    model = next(m for m in res.json() if m["address"] == "fake:fake-tools")
+    assert model["request_token_limit"] == 8000
+
+    # Clear request limit with null -> 200 with request_token_limit is None
+    res = await client.put(
+        "/api/models/request-limit",
+        json={"address": "fake:fake-tools", "value": None},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["request_token_limit"] is None
+
+    # Invalid values: 0 -> 422 invalid_request_limit
+    res = await client.put(
+        "/api/models/request-limit",
+        json={"address": "fake:fake-tools", "value": 0},
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid_request_limit"
+
+    # Invalid values: -50 -> 422 invalid_request_limit
+    res = await client.put(
+        "/api/models/request-limit",
+        json={"address": "fake:fake-tools", "value": -50},
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid_request_limit"
+
+    # Unknown model -> 404
+    res = await client.put(
+        "/api/models/request-limit",
+        json={"address": "fake:nonexistent", "value": 8000},
+    )
+    assert res.status_code == 404

@@ -82,6 +82,7 @@ export function ModelsTable() {
             <TableHead>Tool calling</TableHead>
             <TableHead>Streaming</TableHead>
             <TableHead>Context window</TableHead>
+            <TableHead>Request limit</TableHead>
             <TableHead>Dimensions</TableHead>
             <TableHead>Price</TableHead>
             <TableHead>Availability</TableHead>
@@ -161,6 +162,7 @@ function ModelRow({ model }: { model: ModelEntry }) {
           model.context_window
         )}
       </TableCell>
+      <TableCell>{isEmbedder ? "–" : <RequestLimitCell model={model} />}</TableCell>
       <TableCell>
         {isEmbedder
           ? model.dimensions !== null && model.dimensions !== undefined
@@ -310,6 +312,153 @@ function SetContextWindowDialog({ model }: { model: ModelEntry }) {
               </p>
             ) : (
               save.isError && <p className="text-destructive">{errorText(save.error)}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={save.isPending || value === ""}>
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RequestLimitCell({ model }: { model: ModelEntry }) {
+  const queryClient = useQueryClient();
+  const clear = useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.PUT("/api/models/request-limit", {
+          body: { address: model.address, value: null },
+        }),
+      ),
+    onSuccess: (updated) => {
+      storeModel(queryClient, updated);
+    },
+  });
+
+  const limit = model.request_token_limit;
+
+  return (
+    <div className="flex flex-col items-start gap-1">
+      {limit !== null && limit !== undefined ? (
+        <span>{limit}</span>
+      ) : (
+        <span className="text-muted-foreground">None</span>
+      )}
+      <div className="flex gap-2">
+        <SetRequestLimitDialog model={model} />
+        {limit !== null && limit !== undefined && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={clear.isPending}
+            aria-label={`Clear request limit for ${model.address}`}
+            onClick={() => {
+              clear.mutate();
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      {clear.isError && <p className="text-destructive">{errorText(clear.error)}</p>}
+    </div>
+  );
+}
+
+function SetRequestLimitDialog({ model }: { model: ModelEntry }) {
+  const queryClient = useQueryClient();
+  const inputId = useId();
+  const errorId = useId();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    if (model.request_token_limit !== null && model.request_token_limit !== undefined) {
+      setValue(String(model.request_token_limit));
+    } else {
+      setValue("");
+    }
+  }, [open, model.request_token_limit]);
+
+  const save = useMutation({
+    mutationFn: async (tokens: number) =>
+      unwrap(
+        await api.PUT("/api/models/request-limit", {
+          body: { address: model.address, value: tokens },
+        }),
+      ),
+    onSuccess: (updated) => {
+      storeModel(queryClient, updated);
+      setOpen(false);
+    },
+  });
+
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    save.mutate(Number(value));
+  }
+
+  const valueError = fieldErrors(save.error).value;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          setValue("");
+          save.reset();
+        }
+        setOpen(next);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`${model.request_token_limit ? "Edit" : "Set"} request limit for ${model.address}`}
+        >
+          {model.request_token_limit ? "Edit" : "Set"}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Set request limit</DialogTitle>
+          <DialogDescription>
+            Caps each request to fit within a provider's tokens-per-minute rate limit (useful for a
+            free tier's tokens-per-minute cap).
+          </DialogDescription>
+        </DialogHeader>
+        <form noValidate onSubmit={submit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={inputId}>Request limit</Label>
+            <Input
+              id={inputId}
+              aria-invalid={valueError !== undefined || save.isError ? true : undefined}
+              aria-describedby={valueError !== undefined || save.isError ? errorId : undefined}
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={value}
+              onChange={(event) => {
+                setValue(event.target.value);
+              }}
+            />
+            {valueError !== undefined ? (
+              <p id={errorId} className="text-destructive">
+                {valueError}
+              </p>
+            ) : (
+              save.isError && (
+                <p id={errorId} className="text-destructive">
+                  {errorText(save.error)}
+                </p>
+              )
             )}
           </div>
           <DialogFooter>

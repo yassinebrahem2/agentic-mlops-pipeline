@@ -404,4 +404,90 @@ describe("AgentsPage", () => {
     const composer = screen.getByRole("textbox", { name: "Message Orchestrator" });
     expect(composer).toBeInTheDocument();
   });
+
+  it("Compact now sends POST to compact endpoint and shows notice if not compacted", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks();
+    postSpy?.mockImplementation((path: string) => {
+      if (path.includes("/compact")) {
+        return Promise.resolve({
+          data: { compacted: false },
+          response: new Response(JSON.stringify({ compacted: false }), { status: 200 }),
+        });
+      }
+      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) });
+    });
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const compactButton = await screen.findByRole("button", { name: "Compact now" });
+    await user.click(compactButton);
+
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/projects/{project_id}/agents/{agent}/session/compact",
+      expect.objectContaining({
+        params: { path: { project_id: "prj_1", agent: "orchestrator" } },
+      }),
+    );
+    expect(
+      await screen.findByText("Nothing to compact: context is within budget."),
+    ).toBeInTheDocument();
+  });
+
+  it("Clear context opens confirmation dialog and confirming sends POST to clear endpoint", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks();
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const clearButton = await screen.findByRole("button", { name: "Clear context" });
+    await user.click(clearButton);
+
+    expect(
+      screen.getByText(
+        "Clear conversation context? The agent will forget earlier messages and start fresh. Earlier messages remain visible in the history. An agent working on an active task or incident may need to re-read repository context.",
+      ),
+    ).toBeInTheDocument();
+
+    const dialogClearButton = screen.getByRole("button", { name: "Confirm clear" });
+    await user.click(dialogClearButton);
+
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/projects/{project_id}/agents/{agent}/session/clear",
+      expect.objectContaining({
+        params: { path: { project_id: "prj_1", agent: "orchestrator" } },
+      }),
+    );
+  });
+
+  it("shows server's error message on 409 session_busy", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks();
+    postSpy?.mockImplementation((path: string) => {
+      if (path.includes("/compact") || path.includes("/clear")) {
+        return Promise.resolve({
+          data: null,
+          error: {
+            code: "session_busy",
+            message: "The agent is busy. Try again when it finishes.",
+          },
+          response: new Response(
+            JSON.stringify({
+              code: "session_busy",
+              message: "The agent is busy. Try again when it finishes.",
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } },
+          ),
+        });
+      }
+      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) });
+    });
+
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const compactButton = await screen.findByRole("button", { name: "Compact now" });
+    await user.click(compactButton);
+
+    expect(
+      await screen.findByText("The agent is busy. Try again when it finishes."),
+    ).toBeInTheDocument();
+  });
 });

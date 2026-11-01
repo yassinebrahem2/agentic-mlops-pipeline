@@ -249,6 +249,10 @@ class AgentSessions(Protocol):
 
     async def stop(self, project_id: str, agent: str) -> None: ...
 
+    async def compact(self, project_id: str, agent: str) -> bool: ...
+
+    async def clear(self, project_id: str, agent: str, person: str = "user") -> None: ...
+
     async def stop_turn(self, project_id: str, session_id: str, turn_id: str) -> None:
         """Stops that turn if it waits, without the agent's chat check (a rejected stall ends its
         turn, whatever the agent); does nothing when it does not wait."""

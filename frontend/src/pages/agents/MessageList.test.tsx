@@ -77,3 +77,25 @@ describe("MessageList stick-to-bottom", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });
+
+describe("MessageList context cleared divider", () => {
+  it("renders 'Context cleared by <person>' divider below the matching message", () => {
+    const { getByText } = render(
+      <MessageList
+        messages={[createMessage("m1", "First"), createMessage("m2", "Second")]}
+        clearedEvents={[{ person: "alice", last_message_id: "m1" }]}
+      />,
+    );
+    expect(getByText("Context cleared by alice")).toBeInTheDocument();
+  });
+
+  it("renders divider at the start when last_message_id is null", () => {
+    const { getByText } = render(
+      <MessageList
+        messages={[createMessage("m1", "First")]}
+        clearedEvents={[{ person: "bob", last_message_id: null }]}
+      />,
+    );
+    expect(getByText("Context cleared by bob")).toBeInTheDocument();
+  });
+});

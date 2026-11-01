@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 
+import openai
 import pytest
 
 from mlops_agents.providers.failover import (
@@ -22,6 +23,7 @@ from tests.providers.fake_clock import (
     overloaded,
     provider,
     rate_limit,
+    request_too_large,
     statuses,
     unreachable,
 )
@@ -322,3 +324,21 @@ async def test_a_cancel_during_the_wait_propagates_and_leaves_the_state_valid(
     attempt = Script("reply")
     assert await failover.call(one, MODEL, attempt, cooldown_minutes=COOLDOWN) == "reply"
     assert statuses(failover.states(one, MODEL)) == ["ok"]
+
+
+async def test_request_too_large_raises_immediately_without_retry_or_key_rotation(
+    clock: FakeClock, failover: KeyFailover
+) -> None:
+    two = provider(2)
+    attempt = Script(request_too_large(), "reply")
+
+    with pytest.raises(openai.BadRequestError):
+        await failover.call(two, MODEL, attempt, cooldown_minutes=COOLDOWN)
+
+    # Key 0 was tried, key 1 was never tried, no sleep, and key state was not marked
+    assert attempt.keys == [0]
+    assert clock.sleeps == []
+    assert failover.states(two, MODEL) == [
+        KeyState(key_index=0, status="ok", since=None),
+        KeyState(key_index=1, status="ok", since=None),
+    ]

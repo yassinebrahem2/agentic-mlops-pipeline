@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
+from mlops_agents.agents.runtime.budget import REQUEST_TOO_LARGE_MESSAGE
 from mlops_agents.agents.runtime.contract import (
     AuthorKind,
     MessageStatus,
@@ -23,6 +24,7 @@ from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
 from mlops_agents.credentials.scrub import error_text
+from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +326,16 @@ class TurnExecutor:
                     project_id, session_id, turn_id, sink, lock, err.message, parts=message.parts
                 )
                 return ("failed", err.message)
+            except ProviderCallError as err:
+                msg = (
+                    REQUEST_TOO_LARGE_MESSAGE
+                    if err.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+                    else err.message
+                )
+                await self.record_failure(
+                    project_id, session_id, turn_id, sink, lock, msg, parts=message.parts
+                )
+                return ("failed", msg)
             except Exception:
                 logger.exception("Turn %s failed unexpectedly", turn_id)
                 await self.record_failure(

@@ -66,6 +66,7 @@ test("embedder settings flow: verify, app default, project override, and fallbac
       "Not applicable",
       "Not applicable",
       "Not applicable",
+      "–",
       "16",
       "–",
       "Verified",
@@ -171,7 +172,7 @@ test("embedder settings flow: verify, app default, project override, and fallbac
 
     await page.getByRole("button", { name: `Verify ${wideEmbedAddress}`, exact: true }).click();
     const wideRow = page.getByRole("row").filter({ hasText: wideEmbedAddress });
-    await expect(wideRow.getByRole("cell").nth(5)).toHaveText("32");
+    await expect(wideRow.getByRole("cell").nth(6)).toHaveText("32");
 
     // Return to project settings
     await page.goto(`${APP_URL}/projects/${projectId}/settings`);
