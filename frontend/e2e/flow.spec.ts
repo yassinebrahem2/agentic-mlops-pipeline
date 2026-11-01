@@ -245,7 +245,7 @@ test("stage 3 flow: Onboarding proposes the connection and the handoff, and the 
         await modelDialog.getByRole("combobox", { name: "Provider" }).click();
         await page.getByRole("option", { name: providerName }).click();
         await modelDialog.getByRole("combobox", { name: "Model" }).click();
-        await page.getByRole("option", { name: model }).click();
+        await page.getByRole("option", { name: new RegExp(`^${model}(?![-\\w])`) }).click();
         await expect(modelDialog.getByRole("combobox", { name: "Model" })).toHaveValue(model);
         await modelDialog.getByRole("button", { name: "Add model" }).click();
         await expect(modelDialog).toBeHidden();
