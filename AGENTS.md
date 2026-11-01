@@ -56,6 +56,7 @@ Run from `frontend/`:
 - Regenerate API types after the backend API changes: `npm run gen:api`
 
 Demo world (`bench/demo-world/`, a developer tool with its own uv project), run from there: `uv sync`, `uv run demo-world --help`, `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`.
+Benchmarks (`bench/benchmarks/`, a developer tool with its own uv project), run from there: `uv sync`, `uv run bench --help`, `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`.
 
 ## Team workflow
 
