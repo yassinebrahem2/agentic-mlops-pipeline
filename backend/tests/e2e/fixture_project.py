@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
 from mlops_agents.monitoring.expr import Compare
@@ -527,3 +530,139 @@ def write_fixture_data_folder(folder: Path) -> None:
         (TABLE_LABELS, labels),
     ):
         (folder / f"{table}.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------------------------
+# The stage 5 story: a confirmed decay, the fix, the promotion (test_fix_and_promotion.py).
+# ---------------------------------------------------------------------------------------------
+
+PromotionMode = Literal["person", "team_gate"]
+
+# The workflow sits at the repository root so that the fake GitHub's one-segment route takes it.
+TRAIN_WORKFLOW: Final = "train.yml"
+TRAIN_ENTRY: Final = "train.py"
+DEPLOY_ENTRY: Final = "deploy.py"
+GITHUB_REPOSITORY: Final = "octo/repo"
+GITHUB_ORIGIN: Final = f"https://github.com/{GITHUB_REPOSITORY}.git"
+PRODUCTION_ALIAS: Final = "production"
+LABEL_CHECK_ID: Final = "mp-label-check"
+LABEL_MATURITY_DAYS: Final = 14
+DEPLOY_COMMAND: Final = "python deploy.py {candidate_version}"
+
+
+def train_command_spec(*, deploys: bool) -> CommandSpec:
+    """The `train` hook: a dispatch of the team's workflow, which writes the request ID it
+    receives as the run's `REQUEST_TAG`."""
+    return CommandSpec(
+        kind="train",
+        type="ci_dispatch",
+        template=None,
+        workflow=TRAIN_WORKFLOW,
+        inputs={
+            "request_id": "{request_id}",
+            "window_start": "{window_start}",
+            "window_end": "{window_end}",
+        },
+        placeholders=["request_id", "window_start", "window_end"],
+        deploys=deploys,
+        entry_files=[TRAIN_ENTRY],
+    )
+
+
+def deploy_command_spec() -> CommandSpec:
+    """The `deploy` hook of a `person` model: a command that runs in the sandbox."""
+    return CommandSpec(
+        kind="deploy",
+        type="command",
+        template=DEPLOY_COMMAND,
+        workflow=None,
+        inputs={},
+        placeholders=["candidate_version"],
+        deploys=True,
+        entry_files=[DEPLOY_ENTRY],
+    )
+
+
+def fix_story_handoff_payload(
+    mlflow_url: str,
+    promotion: PromotionMode,
+) -> dict[str, Any]:
+    """The handoff of the fix story: one model with a tracker-alias production signal and its
+    train hook (and, for `person`, its deploy hook), an MLflow tracking source, one on-call
+    person, and no feed or check whose deadline could open an incident of its own."""
+    payload = playwright_handoff_payload(mlflow_url)
+    model = payload["models"][0]
+    commands = [train_command_spec(deploys=promotion == "team_gate").model_dump()]
+    if promotion == "person":
+        commands.append(deploy_command_spec().model_dump())
+    model["commands"] = commands
+    model["promotion"] = promotion
+    model["production_signal"] = {"kind": "tracker_alias", "ref": PRODUCTION_ALIAS}
+    model["environments"] = {PRODUCTION_ALIAS: "production"}
+    model["profile"]["label_maturity_days"] = LABEL_MATURITY_DAYS
+    return payload
+
+
+def create_fix_repo(path: Path, git_env: dict[str, str]) -> Path:
+    """The team's repository at the approved commit: the train hook's workflow file and every
+    declared entry file (the pin check reads them), with a GitHub origin."""
+    from tests.agents.tasks.helpers import cmd
+    from tests.conftest import make_repo
+
+    files = {
+        "README.md": "# Hotel Cancel Pipeline\n",
+        TRAIN_WORKFLOW: "name: train\non: workflow_dispatch\n",
+        TRAIN_ENTRY: "print('training')\n",
+        DEPLOY_ENTRY: "print('deploying')\n",
+        "evaluate.py": "print('evaluating')\n",
+        "ingest_bookings.py": "print('Bookings ingested')\n",
+        "score.py": "print('Scored')\n",
+    }
+    repo = make_repo(path, files, git_env)
+    cmd(["git", "remote", "add", "origin", GITHUB_ORIGIN], cwd=repo, env=git_env)
+    return repo
+
+
+def make_bare_origin(path: Path, git_env: dict[str, str], repo: Path) -> Path:
+    """A bare repository holding the project's branch, which `git_instead_of` serves for the
+    GitHub origin so that a pushed pull request branch has somewhere to go."""
+    from tests.agents.tasks.helpers import cmd
+
+    cmd(["git", "clone", "--bare", str(repo), str(path)], env=git_env)
+    return path
+
+
+@contextmanager
+def git_instead_of(config: Path, bare: Path) -> Generator[None]:
+    """Serves the GitHub origin from `bare` for the git commands of this process: a task's
+    fetch and a pull request branch's push. `git remote get-url` then answers the bare path, so
+    a test that dispatches a workflow (which reads the GitHub URL from it) does not use this."""
+    from tests.agents.tasks.helpers import cmd
+
+    cmd(["git", "config", "--file", str(config), f"url.{bare.as_uri()}.insteadOf", GITHUB_ORIGIN])
+    previous = os.environ.get("GIT_CONFIG_GLOBAL")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(config)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = previous
+
+
+def label_check_record(*, ran_at: datetime) -> ResultRecord:
+    """The Model Performance agent's label-based check firing on the model: the labels
+    confirm the decay."""
+    return ResultRecord(
+        check_id=LABEL_CHECK_ID,
+        origin="agent",
+        ran_at=ran_at,
+        fired=True,
+        category="model_performance",
+        subject=TABLE_PREDICTIONS,
+        model=MODEL_NAME,
+        value=0.52,
+        detail={"f1": 0.52, "labels": 480},
+        source_ref="checks/mp-labels.jsonl",
+    )

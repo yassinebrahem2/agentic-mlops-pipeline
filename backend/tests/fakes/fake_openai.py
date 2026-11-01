@@ -28,16 +28,22 @@ if TYPE_CHECKING:
     from monitoring_script import (
         alert_prioritization_reply,
         data_quality_reply,
+        deployment_promotion_reply,
         deployment_rollback_reply,
+        model_performance_reply,
         onboarding_night_reply,
+        retraining_reply,
     )
     from onboarding_script import audit_reply, onboarding_reply
 else:
     from tests.fakes.monitoring_script import (
         alert_prioritization_reply,
         data_quality_reply,
+        deployment_promotion_reply,
         deployment_rollback_reply,
+        model_performance_reply,
         onboarding_night_reply,
+        retraining_reply,
     )
     from tests.fakes.onboarding_script import audit_reply, onboarding_reply
 
@@ -54,6 +60,9 @@ MODELS: dict[str, int] = {
     "fake-data-quality": 131072,
     "fake-deployment-rollback": 131072,
     "fake-onboarding-night": 131072,
+    "fake-model-performance": 131072,
+    "fake-retraining": 131072,
+    "fake-deployment-promotion": 131072,
 }
 EMBEDDING_MODELS: dict[str, int] = {
     "fake-embed": 16,
@@ -254,6 +263,12 @@ def _reply(
         return deployment_rollback_reply(messages, tools)
     if model == "fake-onboarding-night":
         return onboarding_night_reply(messages, tools)
+    if model == "fake-model-performance":
+        return model_performance_reply(messages, tools)
+    if model == "fake-retraining":
+        return retraining_reply(messages, tools)
+    if model == "fake-deployment-promotion":
+        return deployment_promotion_reply(messages, tools)
     if last.get("role") == "tool":
         content = str(last.get("content") or "").strip()
         first_line = content.splitlines()[0] if content else "(empty)"

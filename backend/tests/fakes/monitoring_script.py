@@ -5,14 +5,19 @@ and onboarding-night.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from mlops_agents.agents.tools.names import (
     INCIDENT_UPDATE,
     MONITORING_QUERY,
+    RECORD_FIX_CHOICE,
+    REQUEST_FIX,
     RUN_HOOK,
+    SAVE_REPORT,
 )
 from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
 
 if TYPE_CHECKING:
     from onboarding_script import connections_payload
@@ -60,6 +65,42 @@ def reset_deployment_ids() -> None:
 
 
 ToolCall = dict[str, Any]
+
+# The fix story's scripted models (model-performance, retraining, deployment). Like the
+# deployment ids above, the test sets what they cite; they never read server state.
+FIX_WAKE: Final = "Fix request "
+LINKED_WAKE: Final = "Training run linked for fix "
+POST_DEPLOY_WAKE: Final = "Deployment of model "
+EVALUATION_PR_MESSAGE: Final = "Improve the evaluation step: add expected_cost."
+EVALUATION_PR_TITLE: Final = "add expected_cost to the evaluation record"
+POST_DEPLOY_FOLLOW_UP: Final = "Compare the live label results with the evaluation record."
+FIX_EVIDENCE: Final = "The label-based check mp-label-check fired: f1 0.52 on 480 labels."
+PROMOTION_KIND_NAME: Final = "promotion"
+
+
+@dataclass
+class FixStoryIds:
+    """What the retraining and deployment scripts cite in the fix story."""
+
+    model: str = ""
+    train_hook_id: str = ""
+    deploy_hook_id: str | None = None
+    window_start: str = ""
+    window_end: str = ""
+    candidate_version: str = ""
+    champion_version: str | None = None
+
+
+_fix_story = FixStoryIds()
+
+
+def set_fix_story_ids(ids: FixStoryIds) -> None:
+    global _fix_story
+    _fix_story = ids
+
+
+def reset_fix_story_ids() -> None:
+    set_fix_story_ids(FixStoryIds())
 
 
 def _text(content: object) -> str:
@@ -206,3 +247,190 @@ def onboarding_night_reply(
             }
         ]
     return ONBOARDING_COMPLETE, None
+
+
+def _last_user_text(messages: list[dict[str, Any]], markers: tuple[str, ...]) -> tuple[str, str]:
+    """The newest user message that holds one of the markers: (marker, text), or ("", "")."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        text = _text(m.get("content"))
+        for marker in markers:
+            if marker in text:
+                return marker, text
+    return "", ""
+
+
+def _tool_results_after(messages: list[dict[str, Any]], text: str) -> list[str]:
+    """The tool results since the newest user message holding `text`, oldest first."""
+    start = 0
+    for i, m in enumerate(messages):
+        if m.get("role") == "user" and text in _text(m.get("content")):
+            start = i
+    return [_text(m.get("content")) for m in messages[start + 1 :] if m.get("role") == "tool"]
+
+
+def _first_id(prefix: str, text: str) -> str | None:
+    match = re.search(rf"\b({prefix}_[A-Za-z0-9]+)", text)
+    return match.group(1) if match else None
+
+
+def model_performance_reply(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> tuple[str, list[ToolCall] | None]:
+    """Model Performance: woken on a model performance incident its label-based check
+    confirmed, it requests a fix with the evidence and concludes."""
+    last = messages[-1] if messages else {}
+    if last.get("role") == "tool":
+        return "Fix requested: Retraining chooses and runs it.", None
+    inc_id = _find_incident_id(messages)
+    if inc_id is None:
+        return "No active incident found.", None
+    return "", [
+        {"name": REQUEST_FIX, "arguments": {"incident_id": inc_id, "evidence": FIX_EVIDENCE}}
+    ]
+
+
+def _report_assessments() -> dict[str, dict[str, str]]:
+    return {
+        name: {"value": f"Assessed {name.replace('_', ' ')}."} for name in REQUIRED_REPORT_FIELDS
+    }
+
+
+def retraining_reply(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> tuple[str, list[ToolCall] | None]:
+    """Retraining, in the order of its definition.
+
+    A `fix_request` wake: record `retrain` (and why not each other option), then `RunHook` the
+    train hook with the training window; the run asks a person first. The wake that follows the
+    run linking back: read the evaluation, save the report, and (in `person` mode) propose the
+    promotion with the report's ID from the tool result.
+    """
+    ids = _fix_story
+    marker, text = _last_user_text(messages, (FIX_WAKE, LINKED_WAKE))
+    if not marker:
+        return "Nothing to do.", None
+    results = _tool_results_after(messages, text)
+    fix_id = _first_id("fix", text)
+    if marker == FIX_WAKE:
+        if len(results) == 0 and fix_id is not None:
+            return "", [
+                {
+                    "name": RECORD_FIX_CHOICE,
+                    "arguments": {
+                        "fix_id": fix_id,
+                        "choice": "retrain",
+                        "why": "The relationship changed: the labels confirm the decay.",
+                        "why_not": {
+                            "re_threshold": "The ranking itself degraded, not only the threshold.",
+                            "recalibrate": "The ranking is off, so recalibrating would not help.",
+                            "decline": "The labels confirm a real decay.",
+                        },
+                    },
+                }
+            ]
+        if len(results) == 1:
+            return "", [
+                {
+                    "name": RUN_HOOK,
+                    "arguments": {
+                        "hook_id": ids.train_hook_id,
+                        "reason": "Retrain on the labelled window",
+                        "fix_id": fix_id,
+                        "params": {
+                            "window_start": ids.window_start,
+                            "window_end": ids.window_end,
+                        },
+                    },
+                }
+            ]
+        return "The training run is dispatched; I will read it when it links back.", None
+    if len(results) == 0:
+        return "", [
+            {
+                "name": "TrackingHistory",
+                "arguments": {"what": "evaluations", "model": ids.model},
+            }
+        ]
+    if len(results) == 1:
+        return "", [
+            {
+                "name": SAVE_REPORT,
+                "arguments": {
+                    "draft": {
+                        "model": ids.model,
+                        "candidate_version": ids.candidate_version,
+                        "fix_id": fix_id,
+                        "assessments": _report_assessments(),
+                    }
+                },
+            }
+        ]
+    report_id = _first_id("rep", results[1])
+    if len(results) == 2 and ids.deploy_hook_id is not None and report_id is not None:
+        return "", [
+            {
+                "name": PROPOSE_TOOL_NAME,
+                "arguments": {
+                    "kind": PROMOTION_KIND_NAME,
+                    "payload": {
+                        "model": ids.model,
+                        "report_id": report_id,
+                        "candidate_version": ids.candidate_version,
+                        "champion_version": ids.champion_version,
+                        "deploy_hook_id": ids.deploy_hook_id,
+                    },
+                },
+            }
+        ]
+    return "The report is saved.", None
+
+
+def deployment_promotion_reply(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> tuple[str, list[ToolCall] | None]:
+    """Deployment & Rollback in the fix story.
+
+    A `post_deploy` wake: schedule a wake-up to look again. A message from the test asking for
+    a better evaluation step: start a task, read and write the file, open the pull request.
+    """
+    marker, text = _last_user_text(messages, (POST_DEPLOY_WAKE, EVALUATION_PR_MESSAGE))
+    if not marker:
+        return "Nothing to do.", None
+    results = _tool_results_after(messages, text)
+    if marker == POST_DEPLOY_WAKE:
+        if len(results) == 0:
+            return "", [
+                {
+                    "name": "ScheduleWakeup",
+                    "arguments": {"delay_seconds": 3600, "note": POST_DEPLOY_FOLLOW_UP},
+                }
+            ]
+        return "I will look at the new version again in an hour.", None
+    if len(results) == 0:
+        return "", [{"name": "StartTask", "arguments": {"title": EVALUATION_PR_TITLE}}]
+    if len(results) == 1:
+        # An existing file is read before it is written.
+        return "", [{"name": "Read", "arguments": {"file_path": "evaluate.py"}}]
+    if len(results) == 2:
+        return "", [
+            {
+                "name": "Write",
+                "arguments": {
+                    "file_path": "evaluate.py",
+                    "content": "print('evaluating with expected_cost')\n",
+                },
+            }
+        ]
+    if len(results) == 3:
+        return "", [
+            {
+                "name": "OpenPullRequest",
+                "arguments": {
+                    "title": EVALUATION_PR_TITLE,
+                    "body": "The evaluation record gains expected_cost.",
+                },
+            }
+        ]
+    return "The pull request is open.", None
