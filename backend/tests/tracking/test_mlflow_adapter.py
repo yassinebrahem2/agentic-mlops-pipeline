@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -19,8 +20,8 @@ from mlops_agents.tracking.contract import (
     TrackingSourceView,
 )
 from mlops_agents.tracking.service import TrackingService
-from tests.fakes.fake_mlflow import FakeMlflowState, create_fake_mlflow_app
-from tests.tracking.conftest import TrackingEnv
+from tests.fakes.fake_mlflow import FakeMlflowState, create_fake_mlflow_app, start_fake_mlflow
+from tests.tracking.conftest import APP_INSTANT, TrackingEnv, app_at_instant
 
 
 def _make_source_view(
@@ -682,3 +683,29 @@ async def test_adapter_model_name_with_single_quotes() -> None:
     assert result.error is None
     assert len(result.versions) == 1
     assert result.versions[0].model == model_name
+
+
+async def test_scheduled_sync_reads_the_app_clock(tmp_path: Path, git_env: dict[str, str]) -> None:
+    state = FakeMlflowState()
+    state.add_experiment("Default")
+    t0_ms = int(APP_INSTANT.timestamp() * 1000)
+    state.add_run(experiment_id="0", run_id="run_1", start_time=t0_ms)
+    state.register_version("ModelA", "1", run_id="run_1", creation_timestamp=t0_ms)
+    state.set_alias("ModelA", "champion", "1")
+    state.put_artifact("run_1", "mlops_agents/evaluation.json", b'{"schema_version": 1}')
+    mlflow = start_fake_mlflow(state)
+    try:
+        async with app_at_instant(tmp_path, git_env) as (services, project_id):
+            await services.tracking.create_source(project_id, "mlflow", {"url": mlflow.base_url})
+
+            await services.scheduler.run_due(project_id, APP_INSTANT)
+
+            evals = await services.tracking.query(
+                project_id, TrackingQuery(what="evaluations", model="ModelA", version="1")
+            )
+            assert [e.fetched_at for e in evals.rows] == [APP_INSTANT]
+            [synced] = await services.tracking.sources(project_id)
+            assert synced.last_error is None
+            assert synced.last_sync == APP_INSTANT
+    finally:
+        mlflow.stop()
