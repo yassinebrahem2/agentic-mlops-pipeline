@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from mlops_agents.api.services import Services
 from mlops_agents.clock import to_iso
+from mlops_agents.errors import DomainError
 from mlops_agents.monitoring.expectations.contract import ExpectationKey
 from mlops_agents.monitoring.incidents.contract import (
     IncidentChange,
@@ -446,3 +447,139 @@ async def test_snooze_route_sets_snoozed_until_and_snoozed_incident_pages_no_one
     # Snoozed incident pages no one!
     assert fake_notifier.notify.call_count == 0
     assert fake_dispatch.changed.call_count == 0
+
+
+_T1 = datetime(2026, 11, 1, 10, 0, 0, tzinfo=UTC)
+_T2 = datetime(2026, 11, 1, 12, 0, 0, tzinfo=UTC)
+
+
+def _bad_specs() -> list[WindowSpec]:
+    return [
+        WindowSpec(start=_T2, end=_T1, scope=["feed:a"], reason="reversed"),
+        WindowSpec(start=_T1, end=_T1, scope=["feed:a"], reason="empty range"),
+        WindowSpec(start=_T1, end=_T2, scope=[], reason="no scope"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [0, 1, 2])
+async def test_create_refuses_an_inert_window(tmp_path: Path, index: int) -> None:
+    paths = DataPaths(tmp_path / "data")
+    paths.ensure()
+    databases = Databases(paths)
+    windows = MaintenanceWindows(databases, FakeClock(start=_T1))
+
+    with pytest.raises(DomainError) as refused:
+        await windows.create("prj_inert", _bad_specs()[index], created_by="user")
+
+    assert refused.value.status == 422
+    assert await windows.list("prj_inert") == []
+
+
+@pytest.mark.asyncio
+async def test_apply_refuses_an_inert_window_without_storing_it(tmp_path: Path) -> None:
+    paths = DataPaths(tmp_path / "data")
+    paths.ensure()
+    databases = Databases(paths)
+    windows = MaintenanceWindows(databases, FakeClock(start=_T1))
+    kind = MaintenanceKind(windows=windows)
+
+    with pytest.raises(DomainError) as refused:
+        await kind.apply("prj_inert", "prp_inert", MaintenancePayload(window=_bad_specs()[2]))
+
+    assert refused.value.status == 422
+    assert await windows.list("prj_inert") == []
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_a_naive_start_as_utc(tmp_path: Path) -> None:
+    paths = DataPaths(tmp_path / "data")
+    paths.ensure()
+    databases = Databases(paths)
+    windows = MaintenanceWindows(databases, FakeClock(start=_T1))
+
+    ok = WindowSpec(start=_T1.replace(tzinfo=None), end=_T2, scope=["feed:a"], reason="naive")
+    win = await windows.create("prj_naive", ok, created_by="user")
+    assert win.start == _T1
+
+    reversed_naive = WindowSpec(
+        start=_T2.replace(tzinfo=None), end=_T1, scope=["feed:a"], reason="naive reversed"
+    )
+    with pytest.raises(DomainError):
+        await windows.create("prj_naive", reversed_naive, created_by="user")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [{"start": to_iso(_T2), "end": to_iso(_T1)}, {"scope": []}],
+)
+async def test_window_route_refuses_an_inert_window(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+    overrides: dict[str, object],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    body: dict[str, object] = {
+        "start": to_iso(_T1),
+        "end": to_iso(_T2),
+        "scope": ["feed:orders"],
+        "reason": "x",
+        **overrides,
+    }
+
+    res = await client.post(f"/api/projects/{project_id}/maintenance-windows", json=body)
+
+    assert res.status_code == 422
+    listed = await client.get(f"/api/projects/{project_id}/maintenance-windows")
+    assert listed.json() == []
+
+
+async def _live_incident(app: FastAPI, project_id: str) -> str:
+    services: Services = app.state.services
+    now = services.clock.now()
+    draft = SignalDraft(
+        kind="fired_result",
+        category="operational",
+        subject="job_pipeline.py",
+        ran_at=now,
+        detail={},
+    )
+    return (await services.incidents.raise_signal(project_id, draft, now)).incident_id
+
+
+@pytest.mark.asyncio
+async def test_snooze_route_refuses_a_past_time_and_a_closed_incident(
+    app: FastAPI,
+    client: httpx2.AsyncClient,
+    tmp_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    project_id = await add_local_project(app, tmp_path, git_env)
+    services: Services = app.state.services
+    inc_id = await _live_incident(app, project_id)
+    url = f"/api/projects/{project_id}/incidents/{inc_id}/snooze"
+    now = services.clock.now()
+
+    past = await client.post(url, json={"until": to_iso(now - timedelta(minutes=1))})
+    assert past.status_code == 422
+    naive_past = await client.post(
+        url, json={"until": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")}
+    )
+    assert naive_past.status_code == 422
+    unknown = await client.post(
+        f"/api/projects/{project_id}/incidents/inc_nope/snooze",
+        json={"until": to_iso(now + timedelta(hours=1))},
+    )
+    assert unknown.status_code == 404
+
+    naive_future = await client.post(
+        url, json={"until": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")}
+    )
+    assert naive_future.status_code == 200
+
+    await services.incidents.close(project_id, inc_id)
+    closed = await client.post(url, json={"until": to_iso(now + timedelta(hours=1))})
+    assert closed.status_code == 409
