@@ -4,7 +4,12 @@ import pytest
 
 from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_definition
 from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
-from mlops_agents.agents.tools.names import ADJUST_SEVERITY, RECORD_FIX_CHOICE, SAVE_REPORT
+from mlops_agents.agents.tools.names import (
+    ADJUST_SEVERITY,
+    RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
+    SAVE_REPORT,
+)
 from mlops_agents.errors import DomainError
 from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS
 
@@ -129,6 +134,7 @@ def test_packaged_orchestrator() -> None:
         ADJUST_SEVERITY,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,
+        REGISTER_CHECK,
     }
     assert orchestrator.chat
     assert catalog.all()[0].name == "orchestrator"

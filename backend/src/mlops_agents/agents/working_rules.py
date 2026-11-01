@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mlops_agents.agents.catalog import AgentDefinition
 
-_ROUTING_LINE = (
+_NO_PULL_REQUESTS_LINE = (
     "Changes to the team's system go through PRs by the agent whose area it is; "
-    "you route, you do not open them."
+    "you open none. Your part is to merge duplicate incidents and to move a severity "
+    "by at most one level."
 )
 
 
@@ -25,4 +26,4 @@ def working_rules(definition: AgentDefinition) -> str:
     if "OpenPullRequest" in definition.tools:
         team_system = _load_prompt("team_system.md")
         return f"{hard_limits}\n\n{team_system}"
-    return f"{hard_limits}\n\n{_ROUTING_LINE}"
+    return f"{hard_limits}\n\n{_NO_PULL_REQUESTS_LINE}"

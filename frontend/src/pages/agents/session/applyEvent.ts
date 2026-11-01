@@ -52,6 +52,8 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
             id: event.tool_call_id,
             name: event.name,
             input: event.input,
+            extra_content: null,
+            model: null,
           },
         ],
         status: "streaming",

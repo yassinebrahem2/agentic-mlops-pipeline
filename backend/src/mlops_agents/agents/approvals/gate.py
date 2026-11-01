@@ -16,7 +16,7 @@ from mlops_agents.agents.policy.table import PermissionLevel
 from mlops_agents.agents.policy.table import decide as policy_decide
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
 from mlops_agents.agents.runtime.tool_step import REJECTED_TEXT
-from mlops_agents.agents.tools.base import RiskClass
+from mlops_agents.agents.tools.base import RiskClass, ToolFailure
 from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.storage.databases import Databases
 
@@ -253,7 +253,17 @@ class ApprovalGate(Gate):
                         detail=detail,
                     )
 
-                preview = await call.tool.preview(call.ctx, call.args)
+                try:
+                    preview = await call.tool.preview(call.ctx, call.args)
+                except ToolFailure as exc:
+                    results[call.tool_call_id] = GateDecision(
+                        outcome="deny",
+                        message=str(exc),
+                        approval_id=None,
+                        preview=None,
+                        authority=None,
+                    )
+                    continue
                 task_id = call.ctx.task.id if call.ctx.task is not None else None
                 proposal_kind = _proposal_kind(call)
                 approval = await self._store.create(

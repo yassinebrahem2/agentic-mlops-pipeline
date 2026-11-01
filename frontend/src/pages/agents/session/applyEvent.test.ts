@@ -175,7 +175,14 @@ describe("applyEvent", () => {
     expect(msg?.parts).toHaveLength(4);
     expect(msg?.parts).toEqual([
       { type: "text", text: "Before tool. " },
-      { type: "tool_call", id: "t1", name: "Read", input: { path: "a.txt" } },
+      {
+        type: "tool_call",
+        id: "t1",
+        name: "Read",
+        input: { path: "a.txt" },
+        extra_content: null,
+        model: null,
+      },
       { type: "tool_result", tool_call_id: "t1", content: "data", is_error: false },
       { type: "text", text: "After tool." },
     ]);

@@ -110,6 +110,32 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
         prompt_tokens = usage.get("input_tokens")
         completion_tokens = usage.get("output_tokens")
 
+    tool_call_indices: dict[str, int] = {}
+    if total_chunk is not None and total_chunk.tool_call_chunks:
+        for tc_chunk in total_chunk.tool_call_chunks:
+            cid = tc_chunk.get("id")
+            idx = tc_chunk.get("index")
+            if cid and idx is not None:
+                tool_call_indices[str(cid)] = int(idx)
+
+    additional_kwargs: dict[str, Any] = {}
+    if total_chunk is not None:
+        additional_kwargs = dict(total_chunk.additional_kwargs)
+        extra_by_idx = additional_kwargs.get("tool_calls_extra_content", {})
+        model_by_idx = additional_kwargs.get("tool_calls_model", {})
+        if extra_by_idx and tool_call_indices:
+            extra_by_id: dict[str, Any] = dict(extra_by_idx)
+            model_by_id: dict[str, str] = dict(model_by_idx)
+            for cid, idx in tool_call_indices.items():
+                idx_str = str(idx)
+                if idx_str in extra_by_idx:
+                    extra_by_id[cid] = extra_by_idx[idx_str]
+                if idx_str in model_by_idx:
+                    model_by_id[cid] = model_by_idx[idx_str]
+            additional_kwargs["tool_calls_extra_content"] = extra_by_id
+            if model_by_id:
+                additional_kwargs["tool_calls_model"] = model_by_id
+
     if total_chunk is None:
         final_message = AIMessage(content="")
     else:
@@ -119,15 +145,8 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
             invalid_tool_calls=total_chunk.invalid_tool_calls,
             response_metadata=total_chunk.response_metadata,
             id=total_chunk.id,
+            additional_kwargs=additional_kwargs,
         )
-
-    tool_call_indices: dict[str, int] = {}
-    if total_chunk is not None and total_chunk.tool_call_chunks:
-        for tc_chunk in total_chunk.tool_call_chunks:
-            cid = tc_chunk.get("id")
-            idx = tc_chunk.get("index")
-            if cid and idx is not None:
-                tool_call_indices[str(cid)] = int(idx)
 
     return ModelReply(
         message=final_message,

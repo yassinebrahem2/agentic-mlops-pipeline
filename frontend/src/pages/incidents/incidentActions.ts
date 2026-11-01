@@ -1,6 +1,6 @@
 import type { IncidentView } from "./labels";
 
-type Actions = { canAcknowledge: boolean; canClose: boolean };
+type Actions = { canAcknowledge: boolean; canClose: boolean; canSnooze: boolean };
 
 /**
  * Which person actions an incident still takes, for the Inbox row and the incident page alike.
@@ -13,5 +13,7 @@ export function incidentActions(incident: IncidentView): Actions {
   return {
     canAcknowledge: live && incident.acknowledged_at === null && incident.resolved_at === null,
     canClose: live,
+    // The backend snoozes any incident it knows; a closed or merged one has nothing left to silence.
+    canSnooze: live,
   };
 }

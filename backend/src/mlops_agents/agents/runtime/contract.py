@@ -47,6 +47,8 @@ class ToolCallPart(BaseModel):
     id: str
     name: str
     input: dict[str, Any]
+    extra_content: dict[str, Any] | None = None
+    model: str | None = None
 
 
 class ToolResultPart(BaseModel):
