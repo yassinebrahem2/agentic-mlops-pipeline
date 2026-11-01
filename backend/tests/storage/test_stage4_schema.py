@@ -40,7 +40,7 @@ def _migrated_to(tmp_path: Path, kind: DbKind, names: list[str]) -> Path:
 @pytest.fixture
 def project_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     conn = connect_sync(db)
     yield conn
     conn.close()
@@ -59,7 +59,17 @@ def test_fresh_databases_migrate_to_latest(tmp_path: Path) -> None:
     app_db_path = tmp_path / "app.db"
     project_db_path = tmp_path / "project.db"
     assert migrate(app_db_path, "app", tmp_path / "bk") == [1, 2, 3]
-    assert migrate(project_db_path, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert migrate(project_db_path, "project", tmp_path / "bk") == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+    ]
 
 
 def test_v6_project_db_migrates_to_v7_preserving_data(tmp_path: Path) -> None:
@@ -94,7 +104,7 @@ def test_v6_project_db_migrates_to_v7_preserving_data(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [7, 8, 9]
 
     conn = connect_sync(db)
     try:

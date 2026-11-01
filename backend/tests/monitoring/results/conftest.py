@@ -70,9 +70,23 @@ class InMemoryResultsStore(ResultsStore):
         self.undelivered: dict[str, list[StoredResult]] = {}
         self.mark_calls: list[tuple[str, list[str]]] = []
         self.states: dict[tuple[str, str], SourceState] = {}
+        self.attempts: dict[str, int] = {}
 
-    async def fetch_undelivered(self, project_id: str) -> list[StoredResult]:
-        return list(self.undelivered.get(project_id, []))
+    async def fetch_undelivered(self, project_id: str, limit: int = 500) -> list[StoredResult]:
+        return list(self.undelivered.get(project_id, []))[:limit]
+
+    async def increment_delivery_attempts(
+        self, project_id: str, ids: Sequence[str]
+    ) -> dict[str, int]:
+        res: dict[str, int] = {}
+        for r_id in ids:
+            cnt = self.attempts.get(r_id, 0) + 1
+            self.attempts[r_id] = cnt
+            res[r_id] = cnt
+        return res
+
+    async def get_delivery_attempts(self, project_id: str, ids: Sequence[str]) -> dict[str, int]:
+        return {r_id: self.attempts.get(r_id, 0) for r_id in ids}
 
     async def mark_delivered(
         self, project_id: str, ids: Sequence[str], delivered_at: datetime

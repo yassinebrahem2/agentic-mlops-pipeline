@@ -296,3 +296,43 @@ def test_cap_detail() -> None:
     capped = cap_detail(huge)
     assert capped.get("truncated") is True
     assert len(json.dumps(capped)) <= DETAIL_MAX_BYTES
+
+
+async def test_delivery_attempts_and_bounded_fetch_undelivered(
+    databases: Databases, project_id: str
+) -> None:
+    store = ResultsStore(databases)
+    s_id = source_id("file", "*.jsonl", "data_conn")
+    t0 = datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC)
+
+    items = [
+        (f"k_{i}", _make_record(check_id=f"chk_{i}", ran_at=t0 + timedelta(minutes=i)))
+        for i in range(5)
+    ]
+    inserted = await store.insert_items(project_id, s_id, items, seen_at=t0)
+    assert len(inserted) == 5
+    ids = [r.id for r in inserted]
+
+    # Initial attempts default to 0
+    initial_attempts = await store.get_delivery_attempts(project_id, ids)
+    assert all(cnt == 0 for cnt in initial_attempts.values())
+
+    # Increment attempts on a subset
+    subset = ids[:3]
+    updated = await store.increment_delivery_attempts(project_id, subset)
+    assert len(updated) == 3
+    assert all(cnt == 1 for cnt in updated.values())
+
+    # Re-query attempts
+    current_attempts = await store.get_delivery_attempts(project_id, ids)
+    assert current_attempts[ids[0]] == 1
+    assert current_attempts[ids[1]] == 1
+    assert current_attempts[ids[2]] == 1
+    assert current_attempts[ids[3]] == 0
+    assert current_attempts[ids[4]] == 0
+
+    # Test bounded fetch_undelivered
+    bounded = await store.fetch_undelivered(project_id, limit=2)
+    assert len(bounded) == 2
+    assert bounded[0].id == ids[0]
+    assert bounded[1].id == ids[1]

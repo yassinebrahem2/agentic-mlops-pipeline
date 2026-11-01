@@ -31,7 +31,7 @@ def _migrated_to(tmp_path: Path, kind: DbKind, names: list[str]) -> Path:
 @pytest.fixture
 def project_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     conn = connect_sync(db)
     _seed_turn(conn)
     yield conn
@@ -84,7 +84,7 @@ def test_version_4_database_drops_the_turn_error_kind_keeping_its_rows(tmp_path:
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [5, 6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [5, 6, 7, 8, 9]
 
     conn = connect_sync(db)
     try:
@@ -122,7 +122,7 @@ def test_version_3_database_migrates_with_its_approvals(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert migrate(db, "project", tmp_path / "bk") == [4, 5, 6, 7, 8]
+    assert migrate(db, "project", tmp_path / "bk") == [4, 5, 6, 7, 8, 9]
     backups = list((tmp_path / "bk").glob("*.db"))
     assert len(backups) == 1
     backup = sqlite3.connect(backups[0])

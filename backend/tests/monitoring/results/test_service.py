@@ -412,7 +412,7 @@ async def test_startup_delivers_a_pending_result_once_before_the_scheduler_start
         assert len(undelivered_after) == 0
 
 
-async def test_raising_observer_does_not_stop_next_and_batch_marked_delivered(
+async def test_raising_observer_does_not_stop_next_and_batch_left_undelivered(
     databases: Databases,
     events: SqliteEventLog,
     project_id: str,
@@ -450,9 +450,16 @@ async def test_raising_observer_does_not_stop_next_and_batch_marked_delivered(
     assert len(obs_healthy.batches) == 1
     assert obs_healthy.batches[0][0].check_id == "c1"
 
-    # Batch should be marked delivered in DB
+    # Because an observer raised, batch must remain undelivered for the next tick
     undelivered = await service.store.fetch_undelivered(project_id)
-    assert len(undelivered) == 0
+    assert len(undelivered) == 1
+    assert undelivered[0].check_id == "c1"
+
+    # When observer recovers, next delivery succeeds and marks delivered
+    obs_raising.should_raise = None
+    clock.advance(60)
+    await service.deliver_undelivered(project_id, clock.now())
+    assert len(await service.store.fetch_undelivered(project_id)) == 0
 
 
 async def test_cursor_survives_new_service_instance_restart(

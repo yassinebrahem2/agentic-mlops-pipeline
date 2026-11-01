@@ -65,7 +65,7 @@ def test_a_version_7_database_backfills_registered_at_and_keeps_every_other_valu
         conn.close()
 
     before = datetime.now(UTC).replace(microsecond=0)
-    assert migrate(db, "project", tmp_path / "bk") == [8]
+    assert migrate(db, "project", tmp_path / "bk") == [8, 9]
     after = datetime.now(UTC)
 
     conn = connect_sync(db)
@@ -87,7 +87,7 @@ def test_a_version_7_database_backfills_registered_at_and_keeps_every_other_valu
 
 def test_a_fresh_database_requires_registered_at_last_and_keeps_its_checks(tmp_path: Path) -> None:
     db = tmp_path / "project.db"
-    assert migrate(db, "project", tmp_path / "bk") == list(range(1, 9))
+    assert migrate(db, "project", tmp_path / "bk") == list(range(1, 10))
     conn = connect_sync(db)
     try:
         info = conn.execute("PRAGMA table_info(expectations)").fetchall()

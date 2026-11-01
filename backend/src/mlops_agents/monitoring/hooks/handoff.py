@@ -25,14 +25,21 @@ class HandoffHooks(HandoffObserver):
             count = project_counts.get(cmd.kind, 0) + 1
             project_counts[cmd.kind] = count
             name = cmd.kind if count == 1 else f"{cmd.kind}-{count}"
-            await self._hooks.register(
-                project_id,
-                spec=cmd,
-                name=name,
-                model=None,
-                source="handoff",
-            )
-            registered_pairs.add((None, name))
+            try:
+                await self._hooks.register(
+                    project_id,
+                    spec=cmd,
+                    name=name,
+                    model=None,
+                    source="handoff",
+                )
+                registered_pairs.add((None, name))
+            except Exception:
+                logger.exception(
+                    "Failed to register project handoff hook %s for project %s",
+                    name,
+                    project_id,
+                )
 
         # Model commands (model=model_spec.name)
         for model_spec in handoff.payload.models:
@@ -41,24 +48,45 @@ class HandoffHooks(HandoffObserver):
                 count = model_counts.get(cmd.kind, 0) + 1
                 model_counts[cmd.kind] = count
                 name = cmd.kind if count == 1 else f"{cmd.kind}-{count}"
-                await self._hooks.register(
-                    project_id,
-                    spec=cmd,
-                    name=name,
-                    model=model_spec.name,
-                    source="handoff",
-                )
-                registered_pairs.add((model_spec.name, name))
+                try:
+                    await self._hooks.register(
+                        project_id,
+                        spec=cmd,
+                        name=name,
+                        model=model_spec.name,
+                        source="handoff",
+                    )
+                    registered_pairs.add((model_spec.name, name))
+                except Exception:
+                    logger.exception(
+                        "Failed to register model handoff hook %s (model %s) for project %s",
+                        name,
+                        model_spec.name,
+                        project_id,
+                    )
 
         # Disable any handoff hook no longer present in newer handoff
-        existing_hooks = await self._hooks.list(project_id)
-        for existing in existing_hooks:
-            if (
-                existing.source == "handoff"
-                and (existing.model, existing.name) not in registered_pairs
-                and existing.status != "disabled"
-            ):
-                await self._hooks.set_enabled(project_id, existing.id, False)
+        try:
+            existing_hooks = await self._hooks.list(project_id)
+            for existing in existing_hooks:
+                if (
+                    existing.source == "handoff"
+                    and (existing.model, existing.name) not in registered_pairs
+                    and existing.status != "disabled"
+                ):
+                    try:
+                        await self._hooks.set_enabled(project_id, existing.id, False)
+                    except Exception:
+                        logger.exception(
+                            "Failed to disable dropped handoff hook %s for project %s",
+                            existing.id,
+                            project_id,
+                        )
+        except Exception:
+            logger.exception(
+                "Failed to list or disable dropped handoff hooks for project %s",
+                project_id,
+            )
 
     async def reconcile(self, project_ids: Sequence[str]) -> None:
         for project_id in project_ids:
