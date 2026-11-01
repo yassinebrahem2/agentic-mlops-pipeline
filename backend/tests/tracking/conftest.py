@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import insert
 
+from mlops_agents.api.services import Services
 from mlops_agents.clock import now_iso
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.events.log import SqliteEventLog
@@ -24,7 +27,13 @@ from mlops_agents.tracking.contract import (
     TrackingSourceView,
 )
 from mlops_agents.tracking.service import TrackingService
+from tests.api.conftest import add_local_project, started_app
 from tests.conftest import MemoryKeyStore
+from tests.providers.fake_clock import FakeClock
+
+# More than 30 days before any wall clock these tests run on, so a sync that reads the wall
+# clock instead of the app's misses a run created at this instant (GitHub's first-sync window).
+APP_INSTANT = datetime(2026, 6, 1, 3, 0, tzinfo=UTC)
 
 
 class FakeHandoffs:
@@ -199,3 +208,19 @@ async def tracking_env(
 
     yield env
     await service.close()
+
+
+@asynccontextmanager
+async def app_at_instant(
+    tmp_path: Path, git_env: dict[str, str]
+) -> AsyncGenerator[tuple[Services, str]]:
+    """A started app on a fake clock standing at APP_INSTANT, and a project in it. The
+    scheduler's own loop is stopped (it sleeps on the clock, which moves it on), so the test
+    runs `scheduler.run_due` itself."""
+    clock = FakeClock(APP_INSTANT)
+    async with started_app(tmp_path / "data", clock=clock) as app:
+        services: Services = app.state.services
+        await services.scheduler.stop()
+        clock.current = APP_INSTANT
+        project_id = await add_local_project(app, tmp_path, git_env)
+        yield services, project_id

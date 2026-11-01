@@ -7,11 +7,13 @@ artifacts from an MLflow tracking server using REST. No MLflow package dependenc
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final, cast
 
 import httpx2
 
+from mlops_agents.clock import utc_now
 from mlops_agents.tracking.adapters.mlflow_client import (
     MlflowClient,
     SyncAbortError,
@@ -61,9 +63,14 @@ __all__ = [
 class MlflowAdapter(TrackingAdapter):
     type: SourceType = "mlflow"
 
-    def __init__(self, http: httpx2.AsyncClient) -> None:
+    def __init__(
+        self,
+        http: httpx2.AsyncClient,
+        clock: Callable[[], datetime] = utc_now,
+    ) -> None:
         self._http = http
         self._client = MlflowClient(http)
+        self._clock = clock
 
     async def _request(
         self,
@@ -85,7 +92,7 @@ class MlflowAdapter(TrackingAdapter):
         if credential is not None:
             headers["Authorization"] = f"Bearer {credential}"
 
-        sync_time = datetime.now(UTC)
+        sync_time = self._clock()
         since_utc = (
             since if (since is None or since.tzinfo is not None) else since.replace(tzinfo=UTC)
         )
