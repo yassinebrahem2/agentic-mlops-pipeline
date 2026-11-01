@@ -89,6 +89,7 @@ class StatsService(Stats):
         db = (self._databases, project_id, span)
         return StatsInputs(
             span=span,
+            category=category,
             baseline_available=await self._baseline.available(project_id),
             incidents=incidents,
             verdicts=verdicts,

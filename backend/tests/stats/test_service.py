@@ -72,12 +72,13 @@ async def test_without_team_records_the_baseline_numbers_are_none(
     stats: StatsService, incidents: IncidentsService, verdicts: SqliteVerdicts, project_id: str
 ) -> None:
     await _real_issue(incidents, verdicts, project_id, "s1")
+    await _real_issue(incidents, verdicts, project_id, "s2")
 
     view = await stats.compute(project_id, "30d", None, NOW)
 
     assert not view.baseline_available
-    assert _stat(view, "caught_baseline_missed") == StatValue(value=None, n=1, collecting=True)
-    assert _stat(view, "false_alarms_avoided") == StatValue(value=None, n=0, collecting=True)
+    assert _stat(view, "caught_baseline_missed") == StatValue(value=None, n=2, collecting=False)
+    assert _stat(view, "false_alarms_avoided") == StatValue(value=None, n=0, collecting=False)
     assert _stat(view, "precision").value == 1.0
 
 
@@ -141,6 +142,20 @@ async def test_7d_leaves_out_an_8_day_old_incident_and_all_counts_it(
     assert _stat(every, "alerts_per_week").value == pytest.approx(7 / 8)
     # Incidents but no model calls: a real zero spend.
     assert _stat(every, "cost_per_incident") == StatValue(value=0.0, n=1, collecting=False)
+
+
+async def test_a_category_filter_leaves_cost_per_incident_without_a_value(
+    stats: StatsService, incidents: IncidentsService, project_id: str
+) -> None:
+    await raise_on(incidents, project_id, subject="a", started_at=T, category="drift")
+    await raise_on(incidents, project_id, subject="b", started_at=T, category="operational")
+
+    every = await stats.compute(project_id, "30d", None, NOW)
+    drift = await stats.compute(project_id, "30d", "drift", NOW)
+
+    # No model calls: the window's spend is a real zero, and only without a filter is it told.
+    assert _stat(every, "cost_per_incident") == StatValue(value=0.0, n=2, collecting=False)
+    assert _stat(drift, "cost_per_incident") == StatValue(value=None, n=1, collecting=False)
 
 
 async def test_a_merged_incident_is_not_counted(

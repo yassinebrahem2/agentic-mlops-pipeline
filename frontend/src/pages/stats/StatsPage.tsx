@@ -21,6 +21,7 @@ import { type CategoryChoice, useStats } from "./useStats";
 
 type StatValue = components["schemas"]["StatValue"];
 type StatsView = components["schemas"]["StatsView"];
+type Category = StatsView["category"];
 
 export function StatsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -105,13 +106,21 @@ function Groups({ view }: { view: StatsView }) {
         </Alert>
       )}
       {Object.entries(view.groups).map(([group, metrics]) => (
-        <Group key={group} name={group} metrics={metrics} />
+        <Group key={group} name={group} metrics={metrics} category={view.category} />
       ))}
     </>
   );
 }
 
-function Group({ name, metrics }: { name: string; metrics: Record<string, StatValue> }) {
+function Group({
+  name,
+  metrics,
+  category,
+}: {
+  name: string;
+  metrics: Record<string, StatValue>;
+  category: Category;
+}) {
   const titleId = useId();
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-3">
@@ -120,26 +129,41 @@ function Group({ name, metrics }: { name: string; metrics: Record<string, StatVa
       </h2>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Object.entries(metrics).map(([metric, stat]) => (
-          <Stat key={metric} name={metric} stat={stat} />
+          <Stat key={metric} name={metric} stat={stat} category={category} />
         ))}
       </div>
     </section>
   );
 }
 
-function Stat({ name, stat }: { name: string; stat: StatValue }) {
-  const { label, unit } = metricLabel(name);
+function Stat({ name, stat, category }: { name: string; stat: StatValue; category: Category }) {
+  const { label, unit, categoryNote } = metricLabel(name);
   const basedOn = `based on ${String(stat.n)}`;
 
   return (
     <div role="group" aria-label={label} className="flex flex-col gap-1 rounded-lg border p-4">
       <p className="text-sm text-muted-foreground">{label}</p>
-      <StatBody stat={stat} unit={unit} basedOn={basedOn} />
+      <StatBody
+        stat={stat}
+        unit={unit}
+        basedOn={basedOn}
+        note={category ? categoryNote : undefined}
+      />
     </div>
   );
 }
 
-function StatBody({ stat, unit, basedOn }: { stat: StatValue; unit: MetricUnit; basedOn: string }) {
+function StatBody({
+  stat,
+  unit,
+  basedOn,
+  note,
+}: {
+  stat: StatValue;
+  unit: MetricUnit;
+  basedOn: string;
+  note: string | undefined;
+}) {
   const { value } = stat;
   // Collecting wins over a missing value: below the minimum verdicts (zero included) the
   // number is on its way, and the API alone says when that is.
@@ -150,6 +174,7 @@ function StatBody({ stat, unit, basedOn }: { stat: StatValue; unit: MetricUnit; 
     return (
       <>
         <p className="text-2xl font-semibold text-muted-foreground">not available</p>
+        {note && <p className="text-xs text-muted-foreground">{note}</p>}
         <p className="text-xs text-muted-foreground">{basedOn}</p>
       </>
     );

@@ -81,6 +81,51 @@ describe("stats page", () => {
     expect(within(resolution).queryByText("not available")).not.toBeInTheDocument();
   });
 
+  it("shows not available for a baseline tile with few verdicts and no baseline", async () => {
+    stubApi({
+      stats: () =>
+        json({
+          ...sampleStats,
+          baseline_available: false,
+          groups: {
+            detection: {
+              caught_baseline_missed: { value: null, n: 2, collecting: false },
+            },
+          },
+        }),
+    });
+    renderPage(STATS_PATH);
+
+    const caught = await tile("Caught, team missed");
+    expect(within(caught).getByText("not available")).toBeInTheDocument();
+    expect(within(caught).queryByText(/collecting data/)).not.toBeInTheDocument();
+  });
+
+  it("says why the cost has no value when a category is picked", async () => {
+    stubApi({
+      stats: () =>
+        json({
+          ...sampleStats,
+          category: "drift",
+          groups: { cost: { cost_per_incident: { value: null, n: 2, collecting: false } } },
+        }),
+    });
+    renderPage(STATS_PATH);
+
+    const cost = await tile("Cost per incident");
+    expect(within(cost).getByText("not available")).toBeInTheDocument();
+    expect(within(cost).getByText("Cost is not split by category.")).toBeInTheDocument();
+  });
+
+  it("shows the cost without a category and no reason", async () => {
+    stubApi({});
+    renderPage(STATS_PATH);
+
+    const cost = await tile("Cost per incident");
+    expect(within(cost).getByText("$1.50")).toBeInTheDocument();
+    expect(within(cost).queryByText(/not split by category/)).not.toBeInTheDocument();
+  });
+
   it("says the team's monitoring is not readable yet when the baseline is unavailable", async () => {
     stubApi({
       stats: () =>
