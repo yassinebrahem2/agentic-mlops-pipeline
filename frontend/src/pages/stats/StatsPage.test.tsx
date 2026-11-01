@@ -70,10 +70,15 @@ describe("stats page", () => {
     const failed = await tile("Failed runs");
     expect(within(failed).getByText("not available")).toBeInTheDocument();
     expect(within(failed).queryByText("0")).not.toBeInTheDocument();
-    // A missing value wins over collecting.
+  });
+
+  it("shows collecting data, not not available, when there are no verdicts yet", async () => {
+    stubApi({});
+    renderPage(STATS_PATH);
+
     const resolution = await tile("Time to resolution");
-    expect(within(resolution).getByText("not available")).toBeInTheDocument();
-    expect(within(resolution).queryByText(/collecting data/)).not.toBeInTheDocument();
+    expect(within(resolution).getByText("collecting data (based on 0)")).toBeInTheDocument();
+    expect(within(resolution).queryByText("not available")).not.toBeInTheDocument();
   });
 
   it("says the team's monitoring is not readable yet when the baseline is unavailable", async () => {

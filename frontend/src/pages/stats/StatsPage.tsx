@@ -141,7 +141,11 @@ function Stat({ name, stat }: { name: string; stat: StatValue }) {
 
 function StatBody({ stat, unit, basedOn }: { stat: StatValue; unit: MetricUnit; basedOn: string }) {
   const { value } = stat;
-  // A missing value wins over collecting: a number that cannot be computed is not on its way.
+  // Collecting wins over a missing value: below the minimum verdicts (zero included) the
+  // number is on its way, and the API alone says when that is.
+  if (stat.collecting) {
+    return <p className="text-sm text-muted-foreground">collecting data ({basedOn})</p>;
+  }
   if (value === null || value === undefined) {
     return (
       <>
@@ -149,9 +153,6 @@ function StatBody({ stat, unit, basedOn }: { stat: StatValue; unit: MetricUnit; 
         <p className="text-xs text-muted-foreground">{basedOn}</p>
       </>
     );
-  }
-  if (stat.collecting) {
-    return <p className="text-sm text-muted-foreground">collecting data ({basedOn})</p>;
   }
   return (
     <>
