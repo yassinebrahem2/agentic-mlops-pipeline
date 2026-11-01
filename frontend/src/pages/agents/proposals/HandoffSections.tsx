@@ -352,7 +352,8 @@ export function OperationsSection({ operations }: { operations: Operations }) {
                   </span>
                 </div>
                 <div>
-                  Category: {chk.category} | Cadence: {formatCadence(chk.cadence)} | Timezone:{" "}
+                  Category: {chk.category} | Cadence:{" "}
+                  {chk.cadence ? formatCadence(chk.cadence) : "not judged for silence"} | Timezone:{" "}
                   {chk.timezone}
                 </div>
                 <div>Results: {renderResults(chk.results)}</div>
