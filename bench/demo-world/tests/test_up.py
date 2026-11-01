@@ -41,7 +41,13 @@ def _server_pids(checkout: Path) -> list[int]:
     return [int(pid) for file in files if file.exists() for pid in file.read_text().split()]
 
 
-def _up_with[T](checkout: Path, play: Callable[[], T], timeout: float = 30) -> T:
+def _up_with[T](
+    checkout: Path,
+    play: Callable[[], T],
+    timeout: float = 30,
+    hold_before_start: bool = False,
+    cutoff: date | None = None,
+) -> T:
     def started() -> T:
         # Play only once the server's child runs, so every test stops a whole tree.
         deadline = time.monotonic() + 10
@@ -56,6 +62,8 @@ def _up_with[T](checkout: Path, play: Callable[[], T], timeout: float = 30) -> T
         newrun.free_port(),
         started,
         health_timeout=timeout,
+        hold_before_start=hold_before_start,
+        cutoff=cutoff,
     )
 
 
@@ -297,3 +305,68 @@ def test_sigterm_ends_the_cli_with_128_plus_its_number(
 
     assert_all_stopped(_server_pids(checkout))
     assert f"stopped by signal {signal.SIGTERM}" in capsys.readouterr().err
+
+
+def test_hold_keeps_server_answering_while_loop_waits_until_removed(
+    loaded: pd.DataFrame, checkout: Path
+) -> None:
+    the_company = fake_company(checkout)
+    world = simulate.World(loaded, paths.data_dir(), paths.world_dir(), company=the_company)
+    hold = paths.world_dir() / simulate.HOLD_FILE
+    paths.world_dir().mkdir(parents=True, exist_ok=True)
+    hold.touch()
+
+    checked_server: list[bool] = []
+
+    def sleep_and_check(seconds: float) -> None:
+        uri = os.environ["MLFLOW_TRACKING_URI"]
+        with urllib.request.urlopen(f"{uri}/health", timeout=5) as response:  # noqa: S310
+            assert response.read() == b"OK"
+        # Server is alive, but day has not played yet
+        assert not (world.data / "bookings").exists()
+        checked_server.append(True)
+        if len(checked_server) == 2:
+            hold.unlink()
+
+    pace = simulate.Pace(seconds_per_day=0, sleep=sleep_and_check)
+
+    def play() -> simulate.Summary:
+        return simulate.simulate(world, FIXTURE_START, date(2016, 1, 2), pace)
+
+    summary = _up_with(checkout, play)
+
+    assert summary.days == 2
+    assert len(checked_server) >= 2
+    assert (world.data / "bookings" / f"{FIXTURE_START.isoformat()}.parquet").exists()
+    assert_all_stopped(_server_pids(checkout))
+
+
+def test_hold_before_start_holds_after_first_model_exists_and_before_day_one_files(
+    loaded: pd.DataFrame, checkout: Path
+) -> None:
+    the_company = fake_company(checkout)
+    world = simulate.World(loaded, paths.data_dir(), paths.world_dir(), company=the_company)
+    hold = paths.world_dir() / simulate.HOLD_FILE
+
+    saw_model_before_day_one = False
+
+    def sleep_and_release(seconds: float) -> None:
+        nonlocal saw_model_before_day_one
+        assert hold.exists()
+        # Model was already trained & deployed during bootstrap before day 1's files!
+        assert the_company.production_model() == company.Production.PRESENT
+        assert not (world.data / "bookings").exists()
+        saw_model_before_day_one = True
+        hold.unlink()
+
+    pace = simulate.Pace(seconds_per_day=0, sleep=sleep_and_release)
+
+    def play() -> simulate.Summary:
+        return simulate.simulate(world, FIXTURE_START, date(2016, 1, 2), pace)
+
+    summary = _up_with(checkout, play, hold_before_start=True, cutoff=FIXTURE_START)
+
+    assert saw_model_before_day_one
+    assert summary.days == 2
+    assert (world.data / "bookings" / f"{FIXTURE_START.isoformat()}.parquet").exists()
+    assert_all_stopped(_server_pids(checkout))

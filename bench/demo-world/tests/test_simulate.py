@@ -400,3 +400,82 @@ def test_a_state_file_without_the_first_day_is_refused_by_name(loaded: pd.DataFr
 
     with pytest.raises(simulate.SimulateError, match=r"state.json"):
         _run(world)
+
+
+def test_hold_file_pauses_day_loop_until_removed(loaded: pd.DataFrame) -> None:
+    world = _world(loaded)
+    world.folder.mkdir(parents=True)
+    hold = world.folder / simulate.HOLD_FILE
+    hold.touch()
+
+    sleep_count = 0
+
+    def sleep_and_remove(seconds: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        # While held, no day files have been written
+        assert not (world.data / "bookings").exists()
+        if sleep_count == 2:
+            hold.unlink()
+
+    pace = simulate.Pace(seconds_per_day=0, sleep=sleep_and_remove)
+    summary = simulate.simulate(world, FIXTURE_START, FIXTURE_END, pace)
+
+    assert summary.days == 5
+    assert sleep_count >= 2
+    assert _last_done(world) == "2016-01-05"
+    assert not hold.exists()
+
+
+def test_hold_restarts_pace_from_resume(loaded: pd.DataFrame) -> None:
+    world = _world(loaded)
+    fake = FakeTime()
+    hold = world.folder / simulate.HOLD_FILE
+
+    original_sleep = fake.sleep
+
+    def custom_sleep(seconds: float) -> None:
+        # If sleeping while held, advance fake time and remove hold
+        if hold.exists():
+            hold.unlink()
+        original_sleep(seconds)
+
+    # Day 1 plays, then before day 2 hold is touched in start_of_day or custom hook
+    class HoldStep:
+        def start_of_day(self, day: date, origin: date) -> None:
+            if day == date(2016, 1, 2):
+                pass
+
+        def end_of_day(self, day: date, origin: date) -> None:
+            if day == date(2016, 1, 1):
+                # Put hold after day 1 is done, before day 2
+                hold.touch()
+
+        def close(self) -> None:
+            pass
+
+    world_with_step = simulate.World(
+        loaded=world.loaded,
+        data=world.data,
+        folder=world.folder,
+        scenario=world.scenario,
+        steps=(HoldStep(),),
+    )
+
+    fake.sleep = custom_sleep
+    simulate.simulate(
+        world_with_step,
+        FIXTURE_START,
+        date(2016, 1, 3),
+        simulate.Pace(seconds_per_day=120, clock=fake.clock, sleep=custom_sleep),
+    )
+
+    # Day 1 begins at t=0. Ends. Next day scheduled at t=120.
+    # At end of day 1, hold is touched.
+    # Day 2 loop begins: sees hold! Waits. custom_sleep sleeps 0.5 and unlinks hold.
+    # Fake time advanced by 0.5 to t=0.5.
+    # Resume happens: began restarts at t=0.5! Day 2 plays without waiting 120.
+    # Day 3 scheduled at t=0.5 + 120 = 120.5.
+    # Day 3 waits 120.5 - 0.5 = 120.
+    # Total sleeps: 0.5 (hold wait) and 120 (day 3 pace).
+    assert fake.sleeps == [0.5, 120]

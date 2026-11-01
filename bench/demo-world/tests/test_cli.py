@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,58 @@ def test_simulate_refuses_a_company_checkout_that_is_missing(
 
     assert "nowhere" in capsys.readouterr().err
     assert not paths.data_dir().exists()
+
+
+def test_up_parser_accepts_hold_before_start() -> None:
+    args = cli._parser().parse_args(
+        [
+            "up",
+            "--start",
+            "2016-01-01",
+            "--end",
+            "2016-01-02",
+            "--seconds-per-day",
+            "0",
+            "--hold-before-start",
+        ]
+    )
+    assert args.hold_before_start is True
+
+
+def test_up_runs_with_hold_before_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _place_source()
+    checkout = make_checkout(tmp_path)
+    monkeypatch.setenv("HOTEL_DEMO_COMPANY", str(checkout))
+    monkeypatch.setattr(company, "uv_launcher", lambda _: (sys.executable, str(FAKE_CLI)))
+
+    hold_checked = False
+
+    def check_up(
+        the_company: company.Company,
+        world: Path,
+        port: int,
+        play: object,
+        *,
+        health_timeout: float = 120.0,
+        hold_before_start: bool = False,
+        cutoff: object = None,
+    ) -> None:
+        nonlocal hold_checked
+        assert hold_before_start is True
+        assert cutoff == date(2016, 1, 1)
+        hold_checked = True
+
+    monkeypatch.setattr(cli.up, "up", check_up)
+
+    argv = [
+        "up",
+        "--start",
+        "2016-01-01",
+        "--end",
+        "2016-01-02",
+        "--seconds-per-day",
+        "0",
+        "--hold-before-start",
+    ]
+    assert cli.main(argv) == 0
+    assert hold_checked
