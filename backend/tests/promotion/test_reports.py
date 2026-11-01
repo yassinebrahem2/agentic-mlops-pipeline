@@ -9,6 +9,7 @@ import pytest
 
 from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.ids import new_id
 from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
 from mlops_agents.promotion.contract import (
     EvaluationPayload,
@@ -195,7 +196,20 @@ async def test_report_saved_event_recorded_once(
     assert event.payload["candidate_version"] == "1.0.0"
 
 
-async def test_for_candidate_returns_newest(reports_service: SqliteReports) -> None:
+async def test_for_candidate_returns_newest(
+    reports_service: SqliteReports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Explicit, increasing times, and ids in the opposite order: the newer report has the
+    # smaller id, so only the order by time returns it.
+    times = iter(["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:01.000Z"])
+    ids = iter(sorted((new_id("rep"), new_id("rep")), reverse=True))
+
+    def next_id(prefix: str) -> str:
+        return next(ids)
+
+    monkeypatch.setattr("mlops_agents.promotion.reports.now_iso", lambda: next(times))
+    monkeypatch.setattr("mlops_agents.promotion.reports.new_id", next_id)
+
     project_id = "prj_test"
     draft1 = ReportDraft(
         model="churn",
@@ -213,8 +227,8 @@ async def test_for_candidate_returns_newest(reports_service: SqliteReports) -> N
 
     latest = await reports_service.for_candidate(project_id, "churn", "v2")
     assert latest is not None
+    assert saved2.id < saved1.id
     assert latest.id == saved2.id
-    assert latest.id != saved1.id
 
     unknown = await reports_service.for_candidate(project_id, "churn", "unknown_version")
     assert unknown is None

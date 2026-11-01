@@ -316,3 +316,67 @@ async def test_on_call_seeder_reconcile_updates_when_handoff_version_is_newer(
             select(project_settings.c.value).where(project_settings.c.key == ON_CALL_SEEDED_KEY)
         )
     assert val == "2"
+
+
+def _handoff_with_on_call(people: list[OnCall]) -> HandoffPayload:
+    payload_dict = handoff()
+    payload_dict["operations"]["on_call"] = [p.model_dump() for p in people]
+    return HandoffPayload.model_validate(payload_dict)
+
+
+def _mixed_people() -> list[OnCall]:
+    return [
+        _sample_on_call(
+            name="Alice",
+            contacts=[
+                _sample_contact("email", "typo-no-at.example.com"),
+                _sample_contact("discord", "u_alice"),
+            ],
+        ),
+        _sample_on_call(name="Bob", contacts=[_sample_contact("email", "")]),
+        _sample_on_call(name="Carol", escalation_order=3),
+    ]
+
+
+def _assert_seeded_without_the_bad_contacts(
+    listed: list[OnCallPerson], caplog: pytest.LogCaptureFixture
+) -> None:
+    assert [p.name for p in listed] == ["Alice", "Carol"]
+    assert [(c.channel, c.address) for c in listed[0].contacts] == [("discord", "u_alice")]
+    assert "Alice" in caplog.text and "Bob" in caplog.text
+    assert "typo-no-at.example.com" not in caplog.text
+    assert all(r.levelno == logging.WARNING for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_on_call_seeder_stored_skips_bad_contacts_and_seeds_the_rest(
+    databases: Databases, caplog: pytest.LogCaptureFixture
+) -> None:
+    people = SqliteOnCallPeople(databases)
+    seeder = OnCallSeeder(people, SqliteHandoffs(databases), databases)
+    view = HandoffView(
+        proposal_id="prop_1",
+        version=1,
+        approved=datetime.now(UTC),
+        payload=_handoff_with_on_call(_mixed_people()),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await seeder.stored("prj_test", view)
+
+    _assert_seeded_without_the_bad_contacts(await people.list("prj_test"), caplog)
+
+
+@pytest.mark.asyncio
+async def test_on_call_seeder_reconcile_skips_bad_contacts_and_seeds_the_rest(
+    databases: Databases, caplog: pytest.LogCaptureFixture
+) -> None:
+    people = SqliteOnCallPeople(databases)
+    handoffs = SqliteHandoffs(databases)
+    seeder = OnCallSeeder(people, handoffs, databases)
+    await handoffs.store("prj_test", "prop_1", _handoff_with_on_call(_mixed_people()))
+
+    with caplog.at_level(logging.WARNING):
+        await seeder.reconcile("prj_test")
+
+    _assert_seeded_without_the_bad_contacts(await people.list("prj_test"), caplog)

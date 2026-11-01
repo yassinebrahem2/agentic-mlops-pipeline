@@ -164,10 +164,8 @@ class SessionManager(AgentSessions):
         async with lock:
             is_busy = await self._busy(project_id, session_id)
             if not is_busy:
-                queued = await self._store.next_queued_turn(project_id, session_id)
-                if queued is not None:
-                    self._workers.start(project_id, session_id, agent, hub, lock)
-                    is_busy = True
+                await self.start_queued_turns(project_id, session_id, agent)
+                is_busy = self._workers.running((project_id, session_id))
 
             stored = await self._store.messages(project_id, session_id)
             live = hub.live_message if is_busy else None
@@ -503,9 +501,9 @@ class SessionManager(AgentSessions):
     async def start_queued_turns(self, project_id: str, session_id: str, agent: str) -> None:
         """Start a worker for the session's queued turns when it has some and none is running.
         The caller holds the session lock, or the session's worker is running (then this returns
-        before any await). The worker is started by a Stop or a redelivery, not by the Send of
-        the turn it takes, so a Stop before it takes that turn comes between two turns, and is
-        dropped (`stops_first_turn=False`)."""
+        before any await). The worker is started by a Stop, a redelivery or a `get` after a
+        restart, not by the Send of the turn it takes, so a Stop before it takes that turn comes
+        between two turns, and is dropped (`stops_first_turn=False`)."""
         if self._workers.running((project_id, session_id)):
             return
         if await self._store.next_queued_turn(project_id, session_id) is None:

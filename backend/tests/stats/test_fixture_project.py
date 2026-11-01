@@ -336,6 +336,8 @@ async def test_a_category_narrows_the_incident_groups_only(
     assert got["bad_data_vs_drift_correct"] == (1.0, 1)
     assert got["metric_before"] == (None, 0)
     assert got["metric_after"] == (None, 0)
+    # Tokens carry no category, so the cost has no value under one.
+    assert got["cost_per_incident"] == (None, 2)
     unfiltered = _flat(await stats.compute(fixture_project, "30d", None, NOW))
     for name in (
         "false_alarms_avoided",
@@ -347,12 +349,22 @@ async def test_a_category_narrows_the_incident_groups_only(
         "prs_merged",
         "prs_closed",
         "tokens_per_agent",
-        "cost_per_incident",
         "failed_runs",
         "tool_errors",
         "sandbox_failures",
     ):
         assert got[name] == unfiltered[name], name
+
+
+async def test_a_category_filter_leaves_cost_per_incident_without_a_value(
+    stats: StatsService, fixture_project: str
+) -> None:
+    got = _flat(await stats.compute(fixture_project, "30d", "data_quality", NOW))
+
+    # Tokens carry no category, so no cost can be told for one category's incidents.
+    assert got["cost_per_incident"] == (None, 2)
+    unfiltered = _flat(await stats.compute(fixture_project, "30d", None, NOW))
+    assert unfiltered["cost_per_incident"][0] == pytest.approx(8200 / 1_000_000 / 5)
 
 
 async def test_a_used_model_without_a_price_makes_cost_per_incident_none(

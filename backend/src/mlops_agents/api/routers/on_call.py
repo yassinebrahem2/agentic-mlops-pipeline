@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from mlops_agents.api.deps import ProjectDep, ServicesDep
+from mlops_agents.errors import DomainError
+from mlops_agents.notifications.constants import contact_problems
 from mlops_agents.notifications.contract import OnCallPerson
 from mlops_agents.proposals.payloads import OnCall
 
@@ -31,4 +33,6 @@ async def replace_on_call(
     body: list[OnCall],
     services: ServicesDep,
 ) -> list[OnCallPerson]:
+    if problems := contact_problems(body):
+        raise DomainError("invalid_contact", " ".join(problems), status=422)
     return await services.on_call.replace(project.id, body)

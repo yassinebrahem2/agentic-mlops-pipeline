@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import RowMapping, delete, insert, select
 
 from mlops_agents.agents.tools.base import Preview
-from mlops_agents.clock import to_iso
+from mlops_agents.clock import as_utc, to_iso
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
 from mlops_agents.monitoring.expectations.contract import ExpectationKey, Maintenance
@@ -104,6 +104,16 @@ class MaintenanceWindows(Maintenance):
         created_by: str,
         proposal_id: str | None = None,
     ) -> MaintenanceWindowView:
+        # as_utc: comparing a naive time with an aware one raises.
+        start, end = as_utc(spec.start), as_utc(spec.end)
+        if start >= end:
+            raise DomainError(
+                "window_inert", "A maintenance window must start before it ends.", status=422
+            )
+        if not spec.scope:
+            raise DomainError(
+                "window_inert", "A maintenance window needs at least one scope.", status=422
+            )
         win_id = new_id("win")
         created_dt = self._clock.now()
         created_iso = to_iso(created_dt)
