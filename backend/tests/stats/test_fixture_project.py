@@ -336,6 +336,8 @@ async def test_a_category_narrows_the_incident_groups_only(
     assert got["bad_data_vs_drift_correct"] == (1.0, 1)
     assert got["metric_before"] == (None, 0)
     assert got["metric_after"] == (None, 0)
+    # Tokens carry no category, so the cost has no value under one.
+    assert got["cost_per_incident"] == (None, 2)
     unfiltered = _flat(await stats.compute(fixture_project, "30d", None, NOW))
     for name in (
         "false_alarms_avoided",
