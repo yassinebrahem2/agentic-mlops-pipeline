@@ -659,3 +659,78 @@ async def test_floor_check_does_not_take_or_drop_queued_inbound(
     res = await graph.ainvoke({"messages": [], "step_count": 0, "stopped_reason": None})  # pyright: ignore[reportUnknownMemberType]
     assert res.get("stopped_reason") == "room_below_floor"
     assert not inbound_taken, "Inbound take should not be called when floor check fails"
+
+
+async def test_text_reply_cut_by_length_appends_notice_and_saves_part(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    git_env: dict[str, str],
+) -> None:
+    repo_dir = make_repo(tmp_path / "repo", {"src/app.py": "x\n"}, git_env)
+    agent = _make_custom_agent(repo_dir, paths.bin, fixed_prompt_len=100, request_limit=8000)
+    store = SessionStore(databases)
+    sink = RecordingSink()
+
+    # Plain text reply cut by length (no tool calls)
+    cut_reply = ModelReply(
+        message=AIMessage(
+            content="Here is my partial response that was cut mid-sentence",
+            response_metadata={"finish_reason": "length"},
+        ),
+        prompt_tokens=50,
+        completion_tokens=1200,
+    )
+    caller = MockModelCaller([cut_reply])
+
+    session_id = await store.session_id("prj_test", agent.definition.name)
+    user_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        author_kind="user",
+        author_name="user",
+        parts=[TextPart(type="text", text="Explain the architecture")],
+        status="complete",
+    )
+    turn_id = await store.add_turn("prj_test", session_id, user_msg.id, "running")
+    agent_msg = await store.add_message(
+        "prj_test",
+        session_id,
+        turn_id=turn_id,
+        author_kind="agent",
+        author_name=agent.definition.name,
+        parts=[],
+        status="streaming",
+    )
+
+    current_parts: list[Any] = []
+    graph = create_turn_graph(
+        agent=agent,
+        caller=caller,
+        store=store,
+        sink=sink,
+        project_id="prj_test",
+        session_id=session_id,
+        turn_id=turn_id,
+        message_id=agent_msg.id,
+        current_parts=current_parts,
+        lock=asyncio.Lock(),
+        hooks=graph_hooks(agent, databases),
+    )
+
+    res = await graph.ainvoke({"messages": [], "step_count": 0, "stopped_reason": None})  # pyright: ignore[reportUnknownMemberType]
+    assert caller.call_count == 1
+    # Check text part has the partial content and the notice
+    text_parts = [p for p in current_parts if isinstance(p, TextPart)]
+    assert len(text_parts) == 1
+    text_content = text_parts[0].text
+    assert "Here is my partial response that was cut mid-sentence" in text_content
+    assert "reply cut at model's reply limit" in text_content
+
+    # Check sink received the cut notice text
+    assert any("reply cut at model's reply limit" in text for text in sink.texts)
+
+    # Check state message carries the cut notice
+    ai_msgs = [m for m in res["messages"] if isinstance(m, AIMessage)]
+    assert len(ai_msgs) == 1
+    assert "reply cut at model's reply limit" in str(ai_msgs[0].content)

@@ -14,8 +14,13 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_MERGE,
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
+    MERGE_PULL_REQUEST,
     MONITORING_QUERY,
+    RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
+    REQUEST_FIX,
     RUN_HOOK,
+    SAVE_REPORT,
 )
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.paths import DataPaths
@@ -53,6 +58,11 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         RUN_HOOK,
         HOLD,
         ADJUST_SEVERITY,
+        REQUEST_FIX,
+        RECORD_FIX_CHOICE,
+        SAVE_REPORT,
+        MERGE_PULL_REQUEST,
+        REGISTER_CHECK,
     }
 )
 

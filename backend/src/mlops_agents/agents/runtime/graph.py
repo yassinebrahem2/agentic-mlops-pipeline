@@ -20,6 +20,7 @@ from mlops_agents.agents.approvals.contract import Approvals
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.budget import (
+    REPLY_CUT_NOTICE,
     ROOM_FLOOR_TOKENS,
     fixed_tokens,
     request_budget_tokens,
@@ -149,7 +150,11 @@ def create_turn_graph(
         active = await store.messages(project_id, session_id, after=compacted_through)
         messages: list[BaseMessage] = [system_message(agent, summary)]
         messages.extend(
-            history_messages([m for m in active if m.id != message_id], current_turn_id=turn_id)
+            history_messages(
+                [m for m in active if m.id != message_id],
+                current_turn_id=turn_id,
+                model=agent.model.address,
+            )
         )
         # A resolved stall ends here. The model node, which always runs next, clears it too on
         # success; this keeps the stall's lifetime within the node that set it.
@@ -262,17 +267,33 @@ def create_turn_graph(
             latency_ms=latency_ms,
         )
 
+        finish_reason = (reply.message.response_metadata or {}).get("finish_reason")
+
+        content_str = ""
         if reply.message.content:
             content_str = (
                 reply.message.content
                 if isinstance(reply.message.content, str)
                 else "".join(str(c) for c in reply.message.content)
             )
-            if content_str:
-                current_parts.append(TextPart(type="text", text=content_str))
 
         valid_calls = list(reply.message.tool_calls or [])
         invalid_calls = list(reply.message.invalid_tool_calls or [])
+
+        if finish_reason == "length" and not (valid_calls or invalid_calls):
+            prefix = (
+                "\n\n"
+                if content_str and not content_str.endswith("\n")
+                else ("\n" if content_str.endswith("\n") else "")
+            )
+            notice = f"{prefix}{REPLY_CUT_NOTICE}"
+            content_str += notice
+            async with lock:
+                await sink.text(message_id, notice)
+
+        if content_str:
+            current_parts.append(TextPart(type="text", text=content_str))
+
         if valid_calls or invalid_calls:
             items: list[tuple[int, dict[str, Any]]] = []
             tool_errors: dict[str, str] = {}
@@ -282,7 +303,6 @@ def create_turn_graph(
                 order_key = reply.tool_call_indices.get(call_id, pos)
                 items.append((order_key, dict(tc)))
                 pos += 1
-            finish_reason = (reply.message.response_metadata or {}).get("finish_reason")
             for itc in invalid_calls:
                 call_id = str(itc.get("id") or "")
                 order_key = reply.tool_call_indices.get(call_id, pos)
@@ -312,12 +332,19 @@ def create_turn_graph(
             items.sort(key=lambda x: x[0])
             converted_calls = [item[1] for item in items]
 
+            extra_content_by_call = reply.message.additional_kwargs.get(
+                "tool_calls_extra_content", {}
+            )
             for tc_dict in converted_calls:
+                call_id = str(tc_dict["id"])
+                call_extra = extra_content_by_call.get(call_id)
                 tc_part = ToolCallPart(
                     type="tool_call",
-                    id=str(tc_dict["id"]),
+                    id=call_id,
                     name=str(tc_dict["name"]),
                     input=dict(tc_dict["args"]),
+                    extra_content=call_extra,
+                    model=agent.model.address,
                 )
                 current_parts.append(tc_part)
                 async with lock:
@@ -336,7 +363,15 @@ def create_turn_graph(
                 additional_kwargs=additional_kwargs,
             )
         else:
-            new_message = reply.message
+            if finish_reason == "length" and content_str != reply.message.content:
+                new_message = AIMessage(
+                    content=content_str,
+                    response_metadata=reply.message.response_metadata,
+                    id=reply.message.id,
+                    additional_kwargs=dict(reply.message.additional_kwargs),
+                )
+            else:
+                new_message = reply.message
 
         await _update_parts()
 

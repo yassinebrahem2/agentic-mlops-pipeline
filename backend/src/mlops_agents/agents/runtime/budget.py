@@ -37,6 +37,10 @@ NOTICE_SUFFIX = (
     "or grep to read smaller parts.]"
 )
 
+REPLY_CUT_NOTICE = (
+    "[... reply cut at model's reply limit. For large outputs, write in smaller parts.]"
+)
+
 
 @runtime_checkable
 class HasContextBudget(Protocol):

@@ -314,3 +314,18 @@ def test_gemini_400_input_token_count_is_request_too_large() -> None:
     )
     result = classify(err)
     assert result.kind is ProviderErrorKind.REQUEST_TOO_LARGE
+
+
+def test_gemini_input_token_count_without_400_status_is_not_request_too_large() -> None:
+    # Requires status 400 to match Gemini's input token overage
+    err = openai.APIError(
+        "The input token count (45000) exceeds the maximum number of tokens allowed (32768).",
+        request=REQUEST,
+        body={
+            "error": {
+                "message": "The input token count (45000) exceeds the maximum number of tokens allowed (32768)."
+            }
+        },
+    )
+    result = classify(err)
+    assert result.kind is not ProviderErrorKind.REQUEST_TOO_LARGE

@@ -103,7 +103,8 @@ def _is_request_too_large(e: BaseException) -> bool:
         or "context length exceeded" in msg_lower
         or "request too large for model" in msg_lower
         or (
-            "the input token count" in msg_lower
+            status_code == 400
+            and "the input token count" in msg_lower
             and "exceeds the maximum number of tokens allowed" in msg_lower
         )
     )

@@ -55,6 +55,7 @@ from mlops_agents.knowledge.contract import Knowledge
 from mlops_agents.knowledge.service import KnowledgeService
 from mlops_agents.knowledge.vectors import SqliteVectorStore
 from mlops_agents.monitoring.dashboard import DashboardBuilder
+from mlops_agents.monitoring.expectations.checks import ChecksQueryProvider, SqliteChecks
 from mlops_agents.monitoring.expectations.job import CheckExpectationsJob
 from mlops_agents.monitoring.expectations.query import (
     ExpectationsQueryProvider,
@@ -87,7 +88,11 @@ from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.monitoring.incidents.severity import RuleSeverity
 from mlops_agents.monitoring.incidents.suspects import SuspectLinker
 from mlops_agents.monitoring.query import QueryProviders
+from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.collect_job import CollectResultsJob
+from mlops_agents.monitoring.results.contract import Parsers
+from mlops_agents.monitoring.results.parser_kind import ParserKind
+from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.rules.authority import RuleAuthority
 from mlops_agents.monitoring.rules.kind import RuleKind
@@ -126,6 +131,11 @@ from mlops_agents.onboarding.handoff_kind import HandoffKind
 from mlops_agents.onboarding.kickoff import Kickoff
 from mlops_agents.paths import DataPaths
 from mlops_agents.promotion.contract import EvaluationReader, Promotions, Reports
+from mlops_agents.promotion.deployments import (
+    DeploymentsService,
+    PromotionsQueryProvider,
+    ReportsQueryProvider,
+)
 from mlops_agents.promotion.evaluation import SqliteEvaluationReader
 from mlops_agents.promotion.kind import PromotionKind
 from mlops_agents.promotion.post_deploy import PostDeployObserver
@@ -203,6 +213,7 @@ class Services:
     clock: Clock
     scheduler: AppScheduler
     results: ResultsService
+    parsers: Parsers
     kickoff: Kickoff
     evaluation_reader: EvaluationReader
     reports: Reports
@@ -218,12 +229,14 @@ class Services:
     on_call: OnCallPeople
     notification_channels: Mapping[str, Channel]
     expectations: ExpectationsService
+    checks: SqliteChecks
     fixes: SqliteFixes
     training: SqliteTraining
     rules: SqliteRules
     dashboard: DashboardBuilder
     stats: StatsService
     morning_reports: MorningReports
+    deployments: DeploymentsService
 
 
 async def _app_secrets(
@@ -390,6 +403,13 @@ async def build_services(
     query_providers.register(SignalsQueryProvider(databases))
     query_providers.register(IncidentsQueryProvider(databases))
 
+    code_runner = CodeParserRunner(
+        sandbox=sandbox,
+        docker_runner=runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=code_runner)
+
     notification_channels = default_channels(integration_settings, http)
     notifier = SqliteNotifier(
         databases=databases,
@@ -406,6 +426,7 @@ async def build_services(
         handoffs=handoffs,
         connections=connections,
         events=events,
+        parsers=parsers,
         maintenance=maintenance,
     )
     authorities.register(
@@ -515,6 +536,24 @@ async def build_services(
     authorities.register("policy", policy_authority)
     fixes.bind_policy_authority(policy_authority)
 
+    expectations = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        tracking=tracking,
+        maintenance=maintenance,
+        clock=clock,
+    )
+    checks = SqliteChecks(
+        databases=databases,
+        expectations=expectations,
+        events=events,
+        clock=clock,
+    )
+    pr_sync.add_observer(checks)
+    results.bind_checks(checks)
+
     # One instance for the hook, table-detail route, and follow-ups: they share one cache lock.
     data_summaries = DataSummaries(connections, ProfileCache(paths))
     tools = default_registry(
@@ -543,6 +582,7 @@ async def build_services(
         clock=clock,
         surfaces=surfaces,
         pr_sync=pr_sync,
+        checks=checks,
     )
     # The one hook registry. Each plan registers its hooks here, before the catalog loads; the
     # status board needs the catalog, so its hook is bound once the board exists.
@@ -594,6 +634,7 @@ async def build_services(
     kickoff = Kickoff(databases, sessions, handoffs)
     # Before recovery: it re-applies an approved proposal that has no result yet.
     proposal_kinds.register(ConnectionsKind(connections, secret_source))
+    proposal_kinds.register(ParserKind(parsers))
     proposal_kinds.register(
         HandoffKind(
             databases=databases,
@@ -641,6 +682,7 @@ async def build_services(
     scheduler.register(SyncPrsJob(databases, pr_sync))
     scheduler.register(CollectResultsJob(databases, results))
     scheduler.register(AfterSyncJob(databases, scheduler, clock=clock))
+    scheduler.add_sync_observer(checks)
     scheduler.add_sync_observer(LabelConfirmation(verdicts))
 
     retry_notifications_job = RetryJob(databases, notifier, clock)
@@ -665,25 +707,19 @@ async def build_services(
     scheduler.add_sync_observer(suspect_linker)
     pr_sync.add_observer(suspect_linker)
 
-    expectations = ExpectationsService(
-        databases=databases,
-        handoffs=handoffs,
-        connections=connections,
-        incidents=incidents,
-        tracking=tracking,
-        maintenance=maintenance,
-        clock=clock,
-    )
     incidents.bind_expectations(expectations)
     handoffs.add_observer(expectations.handoff_observer)
     results.add_observer(expectations.results_observer)
     scheduler.register(CheckExpectationsJob(databases, expectations, clock=clock))
     query_providers.register(ResultsQueryProvider(results))
     query_providers.register(ExpectationsQueryProvider(expectations))
+    query_providers.register(ChecksQueryProvider(checks))
     query_providers.register(FixesQueryProvider(fixes))
     query_providers.register(TrainingRequestsQueryProvider(training))
     query_providers.register(PoliciesQueryProvider(training))
     query_providers.register(WindowsQueryProvider(windows=maintenance_windows))
+    query_providers.register(ReportsQueryProvider(databases, reports))
+    query_providers.register(PromotionsQueryProvider(promotions))
     training_lifecycle.bind_expectations(expectations)
     pin_observer = PinCheckObserver(hooks, workspace, git, training=training)
     scheduler.add_sync_observer(pin_observer)
@@ -824,6 +860,16 @@ async def build_services(
     # Reconcile handoff hooks across existing projects
     await handoff_hooks.reconcile([p.id for p in await workspace.list_projects()])
 
+    deployments = DeploymentsService(
+        handoffs=handoffs,
+        tracking=tracking,
+        promotions=promotions,
+        hooks=hooks,
+        tasks=tasks,
+        github=github,
+        http=http,
+    )
+
     return Services(
         settings=settings,
         paths=paths,
@@ -859,6 +905,7 @@ async def build_services(
         clock=clock,
         scheduler=scheduler,
         results=results,
+        parsers=parsers,
         kickoff=kickoff,
         evaluation_reader=evaluation_reader,
         reports=reports,
@@ -874,10 +921,12 @@ async def build_services(
         on_call=on_call,
         notification_channels=notification_channels,
         expectations=expectations,
+        checks=checks,
         fixes=fixes,
         training=training,
         rules=rules,
         dashboard=dashboard,
         stats=stats,
         morning_reports=morning_reports,
+        deployments=deployments,
     )

@@ -108,7 +108,9 @@ def _system_message(
 
 
 def history_messages(
-    history: list[MessageView], current_turn_id: str | None = None
+    history: list[MessageView],
+    current_turn_id: str | None = None,
+    model: str | None = None,
 ) -> list[BaseMessage]:
     """The session's stored messages as the model reads them; queued and system ones are left
     out."""
@@ -126,20 +128,35 @@ def history_messages(
         elif message.author_kind == "agent":
             current_text: list[str] = []
             current_tool_calls: list[dict[str, Any]] = []
+            current_extra_content: dict[str, Any] = {}
+            current_models: dict[str, str] = {}
             unresolved_calls: list[str] = []
 
             def flush_ai() -> None:
-                nonlocal current_text, current_tool_calls, unresolved_calls
+                nonlocal \
+                    current_text, \
+                    current_tool_calls, \
+                    current_extra_content, \
+                    current_models, \
+                    unresolved_calls
                 if current_text or current_tool_calls:
+                    additional_kwargs: dict[str, Any] = {}
+                    if current_extra_content:
+                        additional_kwargs["tool_calls_extra_content"] = dict(current_extra_content)
+                    if current_models:
+                        additional_kwargs["tool_calls_model"] = dict(current_models)
                     messages.append(
                         AIMessage(
                             content="".join(current_text),
                             tool_calls=current_tool_calls,
+                            additional_kwargs=additional_kwargs,
                         )
                     )
                     unresolved_calls = [tc["id"] for tc in current_tool_calls]
                     current_text = []
                     current_tool_calls = []
+                    current_extra_content = {}
+                    current_models = {}
 
             def resolve_synthetic(status: MessageStatus) -> None:
                 nonlocal unresolved_calls
@@ -166,6 +183,9 @@ def history_messages(
                     current_tool_calls.append(
                         {"id": part.id, "name": part.name, "args": part.input}
                     )
+                    if part.extra_content is not None and model is not None and part.model == model:
+                        current_extra_content[part.id] = part.extra_content
+                        current_models[part.id] = model
                 elif isinstance(part, ToolResultPart):
                     flush_ai()
                     if part.tool_call_id in unresolved_calls:

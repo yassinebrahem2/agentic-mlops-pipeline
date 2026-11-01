@@ -1,0 +1,56 @@
+# Stage 4: Agent Checks with MLflow Results Implementation Plan
+
+> **For agentic workers:** Implement this plan as `docs/implementing-plan-tasks.md` says. Two tasks, one PR for the branch, no early PR (`AGENTS.md` rule 5). The task lists its files, tests (its stop condition) and checks.
+
+**Goal:** bug #628. An agent check registered with `RegisterCheck` and an MLflow results location produces records under its own `check_id`, with its category, `origin: "agent"`, its version, threshold and `fires_when`, so its expectation is met on each run (no false silence alarm at every cadence) and confirmation by labels can read it. Today `MlflowSource` takes these only from the handoff, so the records carry the source ID and `origin: "tracker"`.
+
+**Branch:** `plan/stage-4-mlflow-agent-checks`. **Milestone:** Stage 4. **Consumes:** merged code (the results plan, #609). **Produces:** nothing other plans use. The plan PR says `Closes` the plan issue, its task issues and #628.
+
+**Read first:** bug #628 (the code path, with lines); `backend/src/mlops_agents/monitoring/results/mlflow_source.py`; `monitoring/expectations/checks.py` (`ChecksStore`, how an expectation is keyed by the registered `check_id`); `monitoring/expectations/service.py` (`note_seen`, `keys_for_result`); `monitoring/verdicts/store.py` (`is_label_evidence`); `agents/tools/register_check.py`; `proposals/payloads.py` (`MlflowResults`: `metric`, `threshold`, `fires_when`).
+
+## Tasks
+
+| Task | Title | Consumes |
+|---|---|---|
+| 1 | An MLflow-located agent check's records are its own | merged code |
+| 2 | An agent writes records the app accepts (added 2026-11-01, from #630's review) | task 1; the definitions plan merged (#630) |
+
+---
+
+### Task 1: An MLflow-located agent check's records are its own
+
+**Files:** `backend/src/mlops_agents/monitoring/results/mlflow_source.py`; the narrow protocol it reads registered checks through (beside the source, or in `monitoring/expectations/checks.py` next to `ChecksStore`; the owner's choice); `api/services.py` (its wiring line); `agents/tools/register_check.py` and the place it is built (it gets `Handoffs.current`, I20, beside its `ChecksStore`, to see the handoff's checks); tests under `backend/tests/monitoring/results/` and `backend/tests/agents/tools/`.
+
+**Notes:**
+- **One source.** The checks store owns registered checks. `MlflowSource` reads the project's **active** registered checks through a narrow read-only protocol; it never copies them. For a metric that an active registered check names in its `MlflowResults`, the records take that check's `check_id`, category, `origin: "agent"`, version, and its location's `threshold` and `fires_when`. A pending check (its PR not merged) is left out.
+- **Everything else unchanged.** A metric no registered check names gives byte-identical records to today, handoff checks and the handoff's results location included.
+- **One metric, one check.** `RegisterCheck` refuses (a tool error saying which check already uses it) an MLflow metric that a handoff check, the handoff's MLflow results location, or another pending or active registered check already uses, so two checks never fight over one source. The refusal never applies to the same `check_id` registering the same metric again (re-registering a check whose PR already merged stays as #609 left it). Registration enforces this one way only: a later handoff can still name a metric an active registered check uses; then the registered check wins for that metric, decided in one place in `MlflowSource`, with a logged warning (the handoff check does not warn about it yet: known debt, recorded at merge).
+- The e2e fixture uses a file results location only, so these tests are the only cover for this path.
+
+**Tests (stop condition):**
+- First, one that fails on `main`: an active registered check with an MLflow location, whose metric is logged on its cadence, meets its expectation (no silence signal), and its records carry its `check_id`, category, `origin: "agent"`, version and threshold, and fire when the value crosses it.
+- Its records pass `is_label_evidence` when its category is `model_performance`.
+- A pending registered check does not change the records.
+- An unregistered metric gives the same records as on `main`.
+- `RegisterCheck` refuses a metric already used by a handoff check, by the handoff's results location, and by another registered check; re-registering an active MLflow check (same `check_id`, same metric) succeeds.
+- A later handoff naming an active registered check's metric: the registered check's records win, and a warning is logged.
+- Backend suite, ruff, pyright; CI green.
+
+---
+
+### Task 2: An agent writes records the app accepts (added 2026-11-01)
+
+From #630's review: the checks prompts (data-quality, model-performance, retraining, deployment) tell an agent to write "standard result records" with `check_id`, `origin`, `version`, `category` and `not_enough_data`, but `ResultRecord` (`monitoring/results/contract.py`, `extra="forbid"`) also requires `ran_at`, `fired`, `subject`, `detail` and `source_ref`, and the file reader drops a line that fails validation (logged, counted as a source failure). An agent following its prompt writes a check whose every record is dropped: the check is silent and confirmation by labels never fires. The agent also cannot read `CODE_PARSER_CONTRACT`, which only the person's approval card shows.
+
+**Files:** `agents/tools/register_check.py`; the `parser` proposal's tool-facing text (where `Propose` describes a kind, or the parser kind's own description; the owner's choice of the one place); `agents/definitions/{data-quality,model-performance,retraining,deployment}.md` (one line each, only to point at the tool's text); tests under `backend/tests/agents/`.
+
+**Notes:**
+- **Served, never copied.** The record shape an agent must write is generated from `ResultRecord` (its JSON schema, or its required fields and types) and given to the agent by the app: in `RegisterCheck`'s description and in its successful output. `CODE_PARSER_CONTRACT` reaches the agent the same way where it proposes a `parser`. No prompt lists the fields or retypes the contract; a prompt only says to follow what the tool returns.
+- **Model identifier.** For a `model_performance` record, `model` is the model's identifier as the incident names it (confirmation by labels matches on it, `verdicts/store.py`): say so in the served text.
+- `RegisterCheck`'s `category` description lists every `ResultCategory` value, read from the type (today it omits `drift`).
+
+**Tests (stop condition):** `RegisterCheck`'s description and output carry every required `ResultRecord` field (read from the model, so a field added to it fails the test if not served); a record written exactly as that text describes passes `ResultRecord.model_validate`; the parser contract reaches the agent from `CODE_PARSER_CONTRACT` (imported, never retyped); the category description lists every `ResultCategory` value; the definitions tests stay green; backend suite, ruff, pyright; CI green.
+
+## Known debt added
+
+None planned. Anything accepted while implementing goes here and into `docs/known-debt.md`.

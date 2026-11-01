@@ -978,6 +978,94 @@
         "title": "CheckSpec",
         "type": "object"
       },
+      "CheckView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pr_number": {
+            "title": "Pr Number",
+            "type": "integer"
+          },
+          "registered": {
+            "format": "date-time",
+            "title": "Registered",
+            "type": "string"
+          },
+          "results_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileResults"
+              },
+              {
+                "$ref": "#/components/schemas/MlflowResults"
+              }
+            ],
+            "title": "Results Location"
+          },
+          "status": {
+            "enum": [
+              "pending_pr",
+              "active",
+              "retired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "check_id",
+          "category",
+          "cadence",
+          "timezone",
+          "results_location",
+          "pr_number",
+          "agent",
+          "status",
+          "registered"
+        ],
+        "title": "CheckView",
+        "type": "object"
+      },
       "CiResults": {
         "additionalProperties": false,
         "properties": {
@@ -1695,6 +1783,91 @@
         "title": "DecisionRequest",
         "type": "object"
       },
+      "DecisionRow": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "decided_by": {
+            "enum": [
+              "person",
+              "team_gate",
+              "rule",
+              "agent_bypass"
+            ],
+            "title": "Decided By",
+            "type": "string"
+          },
+          "decided_by_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By Ref"
+          },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "kind": {
+            "enum": [
+              "promotion",
+              "rollback",
+              "fall_back"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "to_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Version"
+          }
+        },
+        "required": [
+          "at",
+          "model",
+          "kind",
+          "decided_by"
+        ],
+        "title": "DecisionRow",
+        "type": "object"
+      },
       "DeploymentRow": {
         "properties": {
           "alias": {
@@ -1746,6 +1919,39 @@
           "seen_at"
         ],
         "title": "DeploymentRow",
+        "type": "object"
+      },
+      "DeploymentsView": {
+        "additionalProperties": false,
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionRow"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "environments": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentRow"
+            },
+            "title": "Environments",
+            "type": "array"
+          },
+          "open_prs": {
+            "items": {
+              "$ref": "#/components/schemas/OpenPipelinePr"
+            },
+            "title": "Open Prs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "environments",
+          "decisions",
+          "open_prs"
+        ],
+        "title": "DeploymentsView",
         "type": "object"
       },
       "DetectedKey": {
@@ -2050,6 +2256,41 @@
           "problem"
         ],
         "title": "EmbedderStatus",
+        "type": "object"
+      },
+      "EnvironmentRow": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "model",
+          "environment",
+          "alias"
+        ],
+        "title": "EnvironmentRow",
         "type": "object"
       },
       "EnvironmentStatus": {
@@ -5216,6 +5457,38 @@
         "title": "OnCallPerson",
         "type": "object"
       },
+      "OpenPipelinePr": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "agent",
+          "labels"
+        ],
+        "title": "OpenPipelinePr",
+        "type": "object"
+      },
       "Operations": {
         "additionalProperties": false,
         "properties": {
@@ -8157,6 +8430,18 @@
       },
       "ToolCallPart": {
         "properties": {
+          "extra_content": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Content"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -8165,6 +8450,17 @@
             "additionalProperties": true,
             "title": "Input",
             "type": "object"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "name": {
             "title": "Name",
@@ -11224,6 +11520,52 @@
         ]
       }
     },
+    "/api/projects/{project_id}/checks": {
+      "get": {
+        "operationId": "list_checks_api_projects__project_id__checks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CheckView"
+                  },
+                  "title": "Response List Checks Api Projects  Project Id  Checks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Checks",
+        "tags": [
+          "expectations"
+        ]
+      }
+    },
     "/api/projects/{project_id}/connections": {
       "get": {
         "operationId": "list_connections_api_projects__project_id__connections_get",
@@ -11629,6 +11971,48 @@
         "summary": "Get Dashboard",
         "tags": [
           "dashboard"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/deployments": {
+      "get": {
+        "operationId": "get_deployments_api_projects__project_id__deployments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deployments",
+        "tags": [
+          "promotion"
         ]
       }
     },

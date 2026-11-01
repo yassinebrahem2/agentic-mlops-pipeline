@@ -124,6 +124,28 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
             return err
         return JSONResponse({"login": "fake-user"})
 
+    @app.get("/repos/{owner}/{repo}/pulls")
+    async def list_pulls(owner: str, repo: str, request: Request) -> Response:
+        full_name = f"{owner}/{repo}"
+        state_param = request.query_params.get("state", "open")
+        state.requests.append(
+            {
+                "method": "GET",
+                "path": f"/repos/{full_name}/pulls",
+                "params": dict(request.query_params),
+            }
+        )
+        err = _check_common(request, "pull requests: write")
+        if err is not None:
+            return err
+
+        matching_prs = [
+            {**pr, "labels": pr.get("labels", [])}
+            for (fn, _), pr in state.prs.items()
+            if fn == full_name and (state_param == "all" or pr.get("state", "open") == state_param)
+        ]
+        return JSONResponse(matching_prs)
+
     @app.post("/repos/{owner}/{repo}/pulls")
     async def create_pull(owner: str, repo: str, request: Request) -> Response:
         full_name = f"{owner}/{repo}"

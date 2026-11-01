@@ -16,6 +16,7 @@ export const SIGNALS = "/api/projects/{project_id}/incidents/{incident_id}/signa
 export const TIMELINE = "/api/projects/{project_id}/incidents/{incident_id}/timeline";
 export const ACKNOWLEDGE = "/api/projects/{project_id}/incidents/{incident_id}/acknowledge";
 export const CLOSE = "/api/projects/{project_id}/incidents/{incident_id}/close";
+export const SNOOZE = "/api/projects/{project_id}/incidents/{incident_id}/snooze";
 export const VERDICT = "/api/projects/{project_id}/incidents/{incident_id}/verdict";
 export const MISSES = "/api/projects/{project_id}/misses";
 

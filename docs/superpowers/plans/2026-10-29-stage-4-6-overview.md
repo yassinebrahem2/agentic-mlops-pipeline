@@ -114,7 +114,7 @@ class ParseOutcome(BaseModel): records: list[tuple[str, ResultRecord]]; errors: 
 class Parsers(Protocol):                # results
     async def store(self, project_id: str, spec: ParserSpec, proposal_id: str) -> ParserVersion: ...   # idempotent per proposal
     async def current(self, project_id: str, source_id: str) -> ParserVersion | None: ...
-    async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str) -> ParseOutcome: ...   # validates against ResultRecord; a failure is a signal about the source, never a skip
+    async def parse(self, project_id: str, source_id: str, raw: str, origin_ref: str, *, start_offset: int = 0, csv_header: list[str] | None = None) -> ParseOutcome: ...   # validates against ResultRecord; a failure is a signal about the source, never a skip. start_offset and csv_header added at #609's merge: a chunk's byte offset in its file (record keys use it) and the header a later csv chunk lacks. What a code parser's script receives (whole lines of one bounded chunk on stdin, its start offset and the file's first line) is CODE_PARSER_CONTRACT in monitoring/results/parser_kind.py, its one source
 
 class EvaluationCopies(Protocol):      # results task 4: the one write path of the evaluation copy into stage 3's `evaluations` table (I16 has none; I16 is untouched)
     async def store_copy(self, project_id: str, record: EvaluationRecord) -> bool: ...   # False when the tracker sync already stored (source, model, version)
@@ -568,7 +568,7 @@ class DashboardView(BaseModel): stages: list[StageStatus]; edges: list[PipelineE
 
 ```python
 class EnvironmentRow(BaseModel): model: str; environment: str; alias: str; version: str | None
-class DecisionRow(BaseModel): at: datetime; model: str; kind: Literal["promotion", "rollback", "fall_back"]; from_version: str | None; to_version: str | None; decided_by: Literal["person", "team_gate", "rule", "agent_bypass"]; decided_by_ref: str | None; report_id: str | None   # decided_by_ref: the rule ID or the person
+class DecisionRow(BaseModel): at: datetime; model: str; kind: Literal["promotion", "rollback", "fall_back"]; from_version: str | None; to_version: str | None; decided_by: Literal["person", "team_gate", "rule", "agent_bypass"]; decided_by_ref: str | None; report_id: str | None   # decided_by_ref: the rule ID, or for a person's decision the approval ID (the approval records who decided; changed at #625's merge)
 class OpenPipelinePr(BaseModel): number: int; title: str; agent: str; labels: list[str]
 class DeploymentsView(BaseModel): environments: list[EnvironmentRow]; decisions: list[DecisionRow]; open_prs: list[OpenPipelinePr]
 ```
