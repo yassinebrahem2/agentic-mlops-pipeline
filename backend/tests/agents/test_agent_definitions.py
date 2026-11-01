@@ -34,9 +34,16 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_MERGE,
     INCIDENT_SPLIT,
     INCIDENT_UPDATE,
+    MERGE_PULL_REQUEST,
     MONITORING_QUERY,
+    RECORD_FIX_CHOICE,
+    REGISTER_CHECK,
+    REQUEST_FIX,
     RUN_HOOK,
+    SAVE_REPORT,
 )
+from mlops_agents.agents.tools.propose import ProposeTool
+from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.working_rules import working_rules
 from mlops_agents.config import RunMode, load_settings
@@ -46,16 +53,30 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.monitoring.hooks.constants import HOOK_CREDENTIAL_ENV
 from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
-from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.contract import ResultCategory, ResultOrigin, ResultRecord
+from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
-from mlops_agents.proposals.contract import HandoffPayload
+from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
+from mlops_agents.proposals.contract import (
+    CONNECTIONS_KIND,
+    HANDOFF_KIND,
+    HOOKS_KIND,
+    MAINTENANCE_KIND,
+    PARSER_KIND,
+    PROMOTION_KIND,
+    RULE_KIND,
+    TRAINING_POLICY_KIND,
+    HandoffPayload,
+)
 from mlops_agents.proposals.kinds import ProposalKinds
 from mlops_agents.proposals.payloads import ModelSpec, Operations
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
 from mlops_agents.storage.databases import Databases
+from mlops_agents.training.constants import REQUEST_TAG
+from mlops_agents.training.contract import FixChoice
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
@@ -370,26 +391,10 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
         "display_name": "Alert Prioritization",
         "chat": False,
         "schedules": False,
-        "tools": (
-            "Read",
-            "Glob",
-            "Grep",
-            "ListAgents",
-            "SendMessage",
-            "SearchIssues",
-            "OpenIssue",
-            "CommentOnIssue",
-        ),
+        "tools": ("Read", "Glob", "Grep"),
         "context_hooks": (),
         "max_steps": 25,
-        "can_message": (
-            "orchestrator",
-            "onboarding",
-            "data-quality",
-            "model-performance",
-            "retraining",
-            "deployment",
-        ),
+        "can_message": (),
     },
 ]
 
@@ -415,8 +420,32 @@ TASK_1_COLUMN: dict[str, tuple[str, ...]] = {
     **dict.fromkeys(DIAGNOSING_AGENTS, DIAGNOSING_TOOLS),
     "alert-prioritization": (MONITORING_QUERY, INCIDENT_MERGE, INCIDENT_UPDATE, ADJUST_SEVERITY),
 }
+TASK_2_COLUMN: dict[str, tuple[str, ...]] = {
+    "data-quality": (REQUEST_FIX, ProposeTool.name),
+    "model-performance": (REQUEST_FIX, ProposeTool.name),
+    "retraining": (RECORD_FIX_CHOICE, SAVE_REPORT, ProposeTool.name),
+    "deployment": (REQUEST_FIX, ProposeTool.name),
+    "orchestrator": (REQUEST_FIX,),
+}
+# Every holder of `OpenPullRequest` gains `MergePullRequest`; the four agents that write
+# checks (S4 §4) gain `RegisterCheck`.
+CHECK_WRITERS: tuple[str, ...] = ("data-quality", "model-performance", "retraining", "deployment")
+TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
+    row["name"]: (MERGE_PULL_REQUEST,) + ((REGISTER_CHECK,) if row["name"] in CHECK_WRITERS else ())
+    for row in STAGE_3_TABLE
+    if OpenPullRequestTool.name in row["tools"]
+}
+TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (
+    TASK_1_COLUMN,
+    TASK_2_COLUMN,
+    TASK_3_COLUMN,
+)
 AGENT_TABLE: list[dict[str, Any]] = [
-    {**row, "tools": row["tools"] + TASK_1_COLUMN.get(row["name"], ())} for row in STAGE_3_TABLE
+    {
+        **row,
+        "tools": row["tools"] + tuple(t for col in TASK_COLUMNS for t in col.get(row["name"], ())),
+    }
+    for row in STAGE_3_TABLE
 ]
 
 # The operational subtypes `diagnoser()` maps to an agent of their own.
@@ -497,12 +526,17 @@ def test_all_seven_definitions_load_with_real_registries() -> None:
         proposal_kinds=ProposalKinds(),
         tracking=cast(Any, dummy),
         handoffs=cast(Any, dummy),
+        reports=cast(Any, dummy),
+        fixes=cast(Any, dummy),
         hooks=cast(Any, dummy),
         incidents=cast(Any, dummy),
         severity=cast(Any, dummy),
         query_providers=cast(Any, dummy),
         data_summaries=cast(Any, dummy),
         connections=cast(Any, dummy),
+        surfaces=cast(Any, dummy),
+        pr_sync=cast(Any, dummy),
+        checks=cast(Any, dummy),
     )
     hook_reg = HookRegistry()
     hook_reg.register(StatusBoardHook())
@@ -645,6 +679,32 @@ def test_alert_prioritization_loads_in_catalog() -> None:
     assert defn.tools == alert_spec["tools"] and defn.can_message == alert_spec["can_message"]
 
 
+REMOVED_FROM_ALERT_PRIORITIZATION: tuple[str, ...] = (
+    "ListAgents",
+    "SendMessage",
+    "SearchIssues",
+    "OpenIssue",
+    "CommentOnIssue",
+)
+
+
+def test_alert_prioritization_holds_only_the_seven_tools_it_uses() -> None:
+    defn = _load_definition("alert-prioritization")
+    assert set(defn.tools) == {
+        "Read",
+        "Glob",
+        "Grep",
+        MONITORING_QUERY,
+        INCIDENT_MERGE,
+        INCIDENT_UPDATE,
+        ADJUST_SEVERITY,
+    }
+    assert len(defn.tools) == 7
+    for tool_name in REMOVED_FROM_ALERT_PRIORITIZATION:
+        assert tool_name not in defn.tools, f"{tool_name} came back to alert-prioritization"
+    assert defn.can_message == ()
+
+
 def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     returned: set[str] = set()
@@ -659,12 +719,170 @@ def test_every_agent_diagnoser_returns_holds_the_diagnosing_tools() -> None:
     assert holders == ["alert-prioritization"]
 
 
-def test_task_1_tools_are_named_in_their_holders_prompts() -> None:
+def test_task_tools_are_named_in_their_holders_prompts() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    for name, column in TASK_1_COLUMN.items():
+    for column in TASK_COLUMNS:
+        for name, tools in column.items():
+            prompt = catalog.get(name).prompt
+            for tool_name in tools:
+                assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
+
+
+def test_merge_pull_request_holders_are_the_open_pull_request_holders() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    mergers = {d.name for d in catalog.all() if MERGE_PULL_REQUEST in d.tools}
+    openers = {d.name for d in catalog.all() if OpenPullRequestTool.name in d.tools}
+    assert mergers == openers and mergers
+
+
+# The matrix's last column: the prompts that name each kind as `` `<kind>` proposal ``.
+KIND_PROMPTS: dict[str, frozenset[str]] = {
+    CONNECTIONS_KIND: frozenset({"onboarding"}),
+    HANDOFF_KIND: frozenset({"onboarding"}),
+    PROMOTION_KIND: frozenset({"retraining"}),
+    MAINTENANCE_KIND: frozenset({"data-quality"}),
+    RULE_KIND: frozenset({"model-performance", "deployment"}),
+    HOOKS_KIND: frozenset({"deployment", "onboarding"}),
+    TRAINING_POLICY_KIND: frozenset({"retraining"}),
+    PARSER_KIND: frozenset({"data-quality", "onboarding"}),
+}
+
+
+@pytest.mark.parametrize("kind", list(KIND_PROMPTS))
+def test_each_proposal_kind_is_named_by_exactly_its_prompts(kind: str) -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    namers = {d.name for d in catalog.all() if f"`{kind}` proposal" in d.prompt}
+    assert namers == KIND_PROMPTS[kind]
+    for name in namers:
+        assert ProposeTool.name in catalog.get(name).tools, f"{name} names a kind without Propose"
+
+
+# Task 1's gate wording, false once rules and policies are cited: the gate may allow at once.
+STALE_GATE_WORDING = "the gate decides and may ask a person first"
+
+
+@pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
+def test_diagnosing_prompt_cites_rules_and_never_certifies_them(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    assert "`rule_id`" in prompt, f"{name} prompt does not cite a rule with `rule_id`"
+    assert "never certify" in prompt.lower(), f"{name} prompt lets the agent certify a rule"
+    assert STALE_GATE_WORDING not in prompt.lower(), f"{name} prompt keeps the stale gate line"
+
+
+# The record fields and values the check lines name, each pinned to the result record model
+# (monitoring/results/contract.py), so a rename there fails here.
+CHECK_RECORD_FIELDS: tuple[str, ...] = ("check_id", "version", "not_enough_data")
+AGENT_ORIGIN: ResultOrigin = "agent"
+# The category confirmation by labels reads as label evidence (monitoring/verdicts/store.py).
+LABEL_EVIDENCE_CATEGORY: ResultCategory = "model_performance"
+LABEL_EVIDENCE_WORDS = "label evidence"
+
+
+def test_check_record_names_are_the_record_model_s() -> None:
+    assert set(CHECK_RECORD_FIELDS) | {"origin", "category"} <= set(ResultRecord.model_fields)
+    assert AGENT_ORIGIN in get_args(ResultOrigin)
+    assert LABEL_EVIDENCE_CATEGORY in get_args(ResultCategory)
+
+
+@pytest.mark.parametrize("name", ["data-quality", "model-performance"])
+def test_check_prompts_name_not_enough_data(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    assert "not enough data" in prompt.lower(), f"{name} prompt lacks the minimum sample line"
+    assert f"`{CHECK_RECORD_FIELDS[-1]}`" in prompt
+
+
+def test_check_writers_describe_the_check_record() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    holders = {d.name for d in catalog.all() if REGISTER_CHECK in d.tools}
+    assert holders == set(CHECK_WRITERS)
+    for name in CHECK_WRITERS:
         prompt = catalog.get(name).prompt
-        for tool_name in column:
-            assert f"`{tool_name}`" in prompt, f"{name} prompt does not name `{tool_name}`"
+        for words in (
+            *(f"`{field}`" for field in CHECK_RECORD_FIELDS[:-1]),
+            f'`origin: "{AGENT_ORIGIN}"`',
+            "scheduler",
+            "minimum sample",
+        ):
+            assert words in prompt, f"{name} check line lacks {words}"
+
+
+@pytest.mark.parametrize("name", CHECK_WRITERS)
+def test_check_writers_category_rule(name: str) -> None:
+    prompt = _load_definition(name).prompt
+    named = [c for c in get_args(ResultCategory) if f"`{c}`" in prompt]
+    assert set(named) - {LABEL_EVIDENCE_CATEGORY}, f"{name} check line names no category"
+    assert LABEL_EVIDENCE_WORDS in prompt, f"{name} check line does not explain label evidence"
+    if name == "model-performance":
+        assert f"`{LABEL_EVIDENCE_CATEGORY}`, with the model it judges, only for a label-based" in (
+            prompt
+        )
+    else:
+        assert f"never `{LABEL_EVIDENCE_CATEGORY}`" in prompt, f"{name} may file label evidence"
+
+
+def test_model_performance_first_audit_adds_the_label_based_checks() -> None:
+    low = _load_definition("model-performance").prompt.lower()
+    assert "label-based checks" in low and "first audit" in low
+
+
+# Lines that said the stage 4 checks and evaluation runs were still to come.
+STALE_LATER_WORDING: tuple[str, ...] = ("arrive in stage 4", "arrive in a later stage")
+
+
+def test_no_prompt_says_checks_arrive_later() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        for words in STALE_LATER_WORDING:
+            assert words not in defn.prompt.lower(), f"{defn.name} prompt still says '{words}'"
+
+
+def _words(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+# CODE_PARSER_CONTRACT has one source (parser_kind.py). Every run of six words of each of its
+# sentences and list items, read from the constant, so a prompt that retypes part of one is
+# caught.
+CONTRACT_FRAGMENT_WORDS = 6
+
+
+def _contract_fragments() -> tuple[str, ...]:
+    fragments: list[str] = []
+    for line in CODE_PARSER_CONTRACT.splitlines():
+        for piece in line.removeprefix("- ").split(". "):
+            words = _words(piece).split()
+            fragments.extend(
+                " ".join(words[at : at + CONTRACT_FRAGMENT_WORDS])
+                for at in range(len(words) - CONTRACT_FRAGMENT_WORDS + 1)
+            )
+    return tuple(dict.fromkeys(fragments))
+
+
+CONTRACT_FRAGMENTS = _contract_fragments()
+
+
+def _retyped_contract_fragments(prompt: str) -> list[str]:
+    text = _words(prompt)
+    return [fragment for fragment in CONTRACT_FRAGMENTS if fragment in text]
+
+
+def test_no_prompt_retypes_the_code_parser_contract() -> None:
+    assert len(CONTRACT_FRAGMENTS) >= 100
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        found = _retyped_contract_fragments(defn.prompt)
+        assert not found, f"{defn.name} prompt retypes the code-parser contract: {found}"
+
+
+def test_retyped_contract_fragment_is_detected() -> None:
+    prompt = _load_definition("data-quality").prompt
+    tampered = f"{prompt}\n- {CONTRACT_FRAGMENTS[-1]}"
+    assert _retyped_contract_fragments(tampered) == [CONTRACT_FRAGMENTS[-1]]
+
+
+def test_retraining_cites_an_approved_training_policy() -> None:
+    prompt = _load_definition("retraining").prompt
+    assert "`policy_id`" in prompt
 
 
 @pytest.mark.parametrize("name", DIAGNOSING_AGENTS)
@@ -676,7 +894,12 @@ def test_diagnosing_prompt_covers_wake_menu_and_knowledge_note(name: str) -> Non
         assert words in prompt, f"{name} prompt does not name the {label} wake label"
     position = low.find(RESPONSE_MENU_HEADING)
     assert position >= 0, f"{name} prompt has no '{RESPONSE_MENU_HEADING}'"
-    for item in RESPONSE_MENU:
+    menu = RESPONSE_MENU
+    if REQUEST_FIX in _load_definition(name).tools:
+        # S4 §6's item 6, requesting a fix, comes between the hooks and the revert.
+        at = menu.index("revert")
+        menu = (*menu[:at], f"`{REQUEST_FIX}`", *menu[at:])
+    for item in menu:
         found = low.find(item.lower(), position)
         assert found > position, f"{name} menu lacks '{item}' after the previous item"
         position = found
@@ -689,6 +912,50 @@ def test_data_quality_and_model_performance_role_lines() -> None:
     assert "bad data" in dq and "drift" in dq
     mp = _load_definition("model-performance").prompt.lower()
     assert "label delay" in mp and "skew" in mp
+
+
+# How Retraining's prompt words each required assessment of the report (I37). Indexed, never
+# looked up with a default, so a field contracts adds fails here until the prompt covers it.
+REPORT_FIELD_WORDS: dict[str, str] = {
+    "fix_chosen": "fix chosen",
+    "data_window": "data window",
+    "leakage": "leakage",
+    "label_maturity": "label maturity",
+    "imbalance": "imbalance",
+    "training_serving_skew": "training-serving skew",
+    "risks_and_watch": "what to watch",
+    "rollback_plan": "rollback plan",
+}
+
+
+def test_retraining_prompt_covers_the_fix_menu_and_the_report() -> None:
+    prompt = _load_definition("retraining").prompt
+    low = prompt.lower()
+    for choice in get_args(FixChoice):
+        assert f"`{choice}`" in prompt, f"retraining prompt does not name the `{choice}` fix"
+    for field in REQUIRED_REPORT_FIELDS:
+        words = REPORT_FIELD_WORDS[field]
+        assert words in low, f"retraining prompt does not cover the report's {field}"
+    assert "`fix_request`" in prompt
+    assert "circuit" in low and "escalate" in low
+    assert REQUEST_TAG in prompt and "links" in low and "request id" in low
+    assert f"`{PROMOTION_KIND}` proposal" in prompt
+
+
+def test_deployment_and_orchestrator_role_lines() -> None:
+    prompt = _load_definition("deployment").prompt
+    low = prompt.lower()
+    assert "`post_deploy`" in prompt
+    for words in ("parity", "holdout", "rollout", "heartbeat"):
+        assert words in low, f"deployment prompt does not name {words}"
+    assert "silence" in _load_definition("orchestrator").prompt.lower()
+
+
+def test_every_wake_label_is_named_by_a_prompt() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    prompts = [d.prompt for d in catalog.all()]
+    for label in get_args(WakeLabel):
+        assert any(f"`{label}`" in p for p in prompts), f"no prompt names the {label} wake label"
 
 
 def test_alert_prioritization_prompt_leaves_paging_and_routing_to_code() -> None:
@@ -730,7 +997,7 @@ def test_no_stage2_agent_may_message_alert_prioritization() -> None:
 
 def test_agent_catalog_fails_when_messaging_tools_missing() -> None:
     with pytest.raises(DefinitionError) as exc_info:
-        AgentCatalog.load(default_registry().names(), hook_names=STAGE_3_HOOKS)
+        AgentCatalog.load(STAGE_2_TOOLS - {"ListAgents", "SendMessage"}, hook_names=STAGE_3_HOOKS)
     error_msg = str(exc_info.value)
     assert "ListAgents" in error_msg and "SendMessage" in error_msg
 

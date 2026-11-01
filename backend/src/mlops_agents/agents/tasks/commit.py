@@ -18,6 +18,7 @@ from mlops_agents.agents.tasks.push import (
     push_task,
 )
 from mlops_agents.agents.tools.files import is_secret
+from mlops_agents.integrations.github.git import GitError
 from mlops_agents.storage.tables import file_claims
 
 if TYPE_CHECKING:
@@ -62,17 +63,23 @@ async def commit_task(
       no claims and nothing staged.
     """
     # 1. Determine author identity first
-    author_name, author_email = await resolve_commit_author(
-        databases, runner, git_dir, worktree, empty_hooks
-    )
+    try:
+        author_name, author_email = await resolve_commit_author(
+            databases, runner, git_dir, worktree, empty_hooks
+        )
+    except GitError as err:
+        raise CommitRefused(str(err)) from err
 
     # 2. Build candidate paths list without staging
-    candidate_paths = await get_candidate_paths(
-        runner,
-        git_dir=git_dir,
-        worktree=worktree,
-        empty_hooks=empty_hooks,
-    )
+    try:
+        candidate_paths = await get_candidate_paths(
+            runner,
+            git_dir=git_dir,
+            worktree=worktree,
+            empty_hooks=empty_hooks,
+        )
+    except GitError as err:
+        raise CommitRefused(str(err)) from err
     if not candidate_paths:
         raise CommitRefused("Nothing to commit: working tree clean.")
 
@@ -103,84 +110,87 @@ async def commit_task(
             raise CommitRefused(f"Cannot commit: {exc}") from None
 
         # 5. Stage, commit, and inspect commit inside guarded block
-        add_fut = asyncio.create_task(
-            task_git(
-                runner,
-                git_dir=git_dir,
-                worktree=worktree,
-                empty_hooks=empty_hooks,
-                args=["add", "--", *candidate_paths],
-                extra_env={"GIT_LITERAL_PATHSPECS": "1"},
-            )
-        )
         try:
-            await asyncio.shield(add_fut)
-        except asyncio.CancelledError:
-            try:
-                await add_fut
-            except Exception as exc:
-                logger.warning(
-                    "Error awaiting shielded add after cancellation: %s",
-                    exc,
-                    exc_info=True,
+            add_fut = asyncio.create_task(
+                task_git(
+                    runner,
+                    git_dir=git_dir,
+                    worktree=worktree,
+                    empty_hooks=empty_hooks,
+                    args=["add", "--", *candidate_paths],
+                    extra_env={"GIT_LITERAL_PATHSPECS": "1"},
                 )
-            raise
+            )
+            try:
+                await asyncio.shield(add_fut)
+            except asyncio.CancelledError:
+                try:
+                    await add_fut
+                except Exception as exc:
+                    logger.warning(
+                        "Error awaiting shielded add after cancellation: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                raise
 
-        head_before_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["rev-parse", "HEAD"],
-            check=False,
-        )
-        head_before = head_before_res.stdout.strip() if head_before_res.code == 0 else ""
-
-        commit_task_fut = asyncio.create_task(
-            task_git(
+            head_before_res = await task_git(
                 runner,
                 git_dir=git_dir,
                 worktree=worktree,
                 empty_hooks=empty_hooks,
-                args=[
-                    "-c",
-                    f"user.name={author_name}",
-                    "-c",
-                    f"user.email={author_email}",
-                    "commit",
-                    f"--author={author_name} <{author_email}>",
-                    "-m",
-                    message,
-                ],
+                args=["rev-parse", "HEAD"],
                 check=False,
             )
-        )
-        try:
-            commit_res = await asyncio.shield(commit_task_fut)
-        except asyncio.CancelledError:
-            try:
-                await commit_task_fut
-            except Exception as exc:
-                logger.warning(
-                    "Error awaiting shielded commit after cancellation: %s",
-                    exc,
-                    exc_info=True,
+            head_before = head_before_res.stdout.strip() if head_before_res.code == 0 else ""
+
+            commit_task_fut = asyncio.create_task(
+                task_git(
+                    runner,
+                    git_dir=git_dir,
+                    worktree=worktree,
+                    empty_hooks=empty_hooks,
+                    args=[
+                        "-c",
+                        f"user.name={author_name}",
+                        "-c",
+                        f"user.email={author_email}",
+                        "commit",
+                        f"--author={author_name} <{author_email}>",
+                        "-m",
+                        message,
+                    ],
+                    check=False,
                 )
-            raise
+            )
+            try:
+                commit_res = await asyncio.shield(commit_task_fut)
+            except asyncio.CancelledError:
+                try:
+                    await commit_task_fut
+                except Exception as exc:
+                    logger.warning(
+                        "Error awaiting shielded commit after cancellation: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                raise
 
-        if commit_res.code != 0:
-            raise CommitRefused(f"Git commit failed: {commit_res.stderr or commit_res.stdout}")
-        committed = True
+            if commit_res.code != 0:
+                raise CommitRefused(f"Git commit failed: {commit_res.stderr or commit_res.stdout}")
+            committed = True
 
-        sha_res = await task_git(
-            runner,
-            git_dir=git_dir,
-            worktree=worktree,
-            empty_hooks=empty_hooks,
-            args=["rev-parse", "HEAD"],
-        )
-        sha = sha_res.stdout.strip()
-        return CommitResult(sha=sha, changed=tuple(candidate_paths))
+            sha_res = await task_git(
+                runner,
+                git_dir=git_dir,
+                worktree=worktree,
+                empty_hooks=empty_hooks,
+                args=["rev-parse", "HEAD"],
+            )
+            sha = sha_res.stdout.strip()
+            return CommitResult(sha=sha, changed=tuple(candidate_paths))
+        except GitError as err:
+            raise CommitRefused(str(err)) from err
 
     finally:
 

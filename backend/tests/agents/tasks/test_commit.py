@@ -286,3 +286,25 @@ async def test_commit_failing_cleanup_reset_logs_warning_with_stderr(
         "Failed to reset working tree during commit cleanup (exit code 1): fatal: mock reset error"
         in caplog.text
     )
+
+
+async def test_commit_nested_repo_refused(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, _, _, project_id, _ = await setup_service(
+        tmp_path, paths, databases, keystore, git_env
+    )
+    await create_session(databases, project_id, "ses_1", agent="coder")
+    task = await service.start(project_id, "ses_1", "coder", "Nested repo test")
+
+    nested = task.worktree / "nested"
+    nested.mkdir()
+    cmd(["git", "init"], cwd=nested)
+    (nested / "nested_file.txt").write_text("nested\n", encoding="utf-8")
+
+    with pytest.raises(CommitRefused, match=r"fatal: adding files failed"):
+        await service.commit(project_id, task, "feat: try commit nested")

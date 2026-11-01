@@ -30,7 +30,7 @@ interface RuleTermItemProps {
   index: number;
 }
 
-function RuleTermItem({ term, index }: RuleTermItemProps) {
+export function RuleTermItem({ term, index }: RuleTermItemProps) {
   return (
     <div
       data-testid={`rule-term-${String(index)}`}
