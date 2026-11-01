@@ -504,6 +504,7 @@ async def build_services(
         http=http,
         events=events,
         clock=clock,
+        databases=databases,
     )
     incidents.add_observer(reactor)
     prioritization_wake = PrioritizationWake(waker=waker, events=events)

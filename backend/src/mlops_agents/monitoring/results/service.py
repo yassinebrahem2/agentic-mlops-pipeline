@@ -15,6 +15,7 @@ from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expectations.contract import Maintenance, NeverSuspended
 from mlops_agents.monitoring.incidents.contract import SignalDraft
 from mlops_agents.monitoring.results.ci_source import CiSourceReader
+from mlops_agents.monitoring.results.constants import RESULT_DELIVERY_MAX_ATTEMPTS
 from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     EvaluationCopies,
@@ -167,17 +168,41 @@ class ResultsService(Results):
         if not undelivered:
             return
 
+        any_failed = False
         for observer in self._observers:
             try:
                 await observer.stored(project_id, undelivered)
             except Exception:
+                any_failed = True
                 logger.exception(
                     "ResultsObserver %r raised during delivery for project %s",
                     observer,
                     project_id,
                 )
 
-        await self._store.mark_delivered(project_id, [r.id for r in undelivered], delivered_at=now)
+        if not any_failed:
+            await self._store.mark_delivered(
+                project_id, [r.id for r in undelivered], delivered_at=now
+            )
+            return
+
+        # An observer raised: increment attempts for the attempted rows
+        attempts = await self._store.increment_delivery_attempts(
+            project_id, [r.id for r in undelivered]
+        )
+        # Rows reaching RESULT_DELIVERY_MAX_ATTEMPTS are logged at ERROR and marked delivered
+        # so they don't wedge delivery.
+        exceeded = [
+            r_id for r_id, count in attempts.items() if count >= RESULT_DELIVERY_MAX_ATTEMPTS
+        ]
+        if exceeded:
+            for r_id in exceeded:
+                logger.error(
+                    "Result %s reached max delivery attempts (%d); marking delivered to unwedge delivery",
+                    r_id,
+                    attempts[r_id],
+                )
+            await self._store.mark_delivered(project_id, exceeded, delivered_at=now)
 
     async def _derive_sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
         """Derives sources from the current handoff.
@@ -606,21 +631,8 @@ class ResultsService(Results):
                         )
                         await self._incidents.raise_signal(project_id, draft, seen_at=now)
 
-        # 4. Deliver all newly stored records sorted by ran_at ASC, id ASC
-        if all_newly_stored and self._observers:
-            all_newly_stored.sort(key=lambda r: (r.ran_at, r.id))
-            for observer in self._observers:
-                try:
-                    await observer.stored(project_id, all_newly_stored)
-                except Exception:
-                    logger.exception(
-                        "ResultsObserver %r raised during collection delivery for project %s",
-                        observer,
-                        project_id,
-                    )
-            await self._store.mark_delivered(
-                project_id, [r.id for r in all_newly_stored], delivered_at=now
-            )
+        # 4. Deliver all newly stored records
+        await self._deliver_undelivered_locked(project_id, now)
 
         return CollectionReport(
             stored=stored_total,
