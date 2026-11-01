@@ -122,6 +122,16 @@ def _render_stats_section(
     return "\n".join(lines)
 
 
+def report_title(info: RunInfo) -> str:
+    """Every report names its mode in its title, and an agents run with a stall says so."""
+    if info.mode == "replay":
+        return "Benchmark Report: Replay Mode"
+    has_stall = any(p.reason == "model_stall" for p in info.pauses)
+    if has_stall:
+        return "Benchmark Report: Agents Mode (stalled)"
+    return "Benchmark Report: Agents Mode"
+
+
 def _render_markdown(
     info: RunInfo,
     score: Score,
@@ -133,8 +143,8 @@ def _render_markdown(
     lines: list[str] = []
 
     # Title
-    mode_name = "Replay Mode" if info.mode == "replay" else "Agents Mode"
-    lines.append(f"# Benchmark Report: {mode_name}\n")
+    title = report_title(info)
+    lines.append(f"# {title}\n")
 
     # Pauses (prominently listed for agents mode)
     if info.mode == "agents":
@@ -196,11 +206,11 @@ def _render_markdown(
         lines.append("## Usage\n")
         lines.append(f"- **Run Duration:** {duration:.1f}s")
 
-        total_reqs = 0
         total_p_tok = 0
         total_c_tok = 0
         total_cost = 0.0
         has_cost = True
+        total_reqs: int | None = None
         agent_rows: dict[str, dict[str, Any]] = {}
 
         if usage_data and "rows" in usage_data and isinstance(usage_data["rows"], list):
@@ -212,12 +222,17 @@ def _render_markdown(
                     model = str(row.get("model_address", ""))
                     p_tok = int(cast(int, row.get("prompt_tokens", 0)))
                     c_tok = int(cast(int, row.get("completion_tokens", 0)))
-                    reqs = int(cast(int, row.get("requests", 1)))
                     cost_val: object = row.get("cost_usd")
+
+                    raw_reqs: object = row.get("requests")
+                    reqs_int: int | None = (
+                        int(cast(int, raw_reqs)) if raw_reqs is not None else None
+                    )
+                    if reqs_int is not None:
+                        total_reqs = (total_reqs or 0) + reqs_int
 
                     total_p_tok += p_tok
                     total_c_tok += c_tok
-                    total_reqs += reqs
                     if cost_val is not None:
                         total_cost += float(cast(float, cost_val))
                     else:
@@ -227,13 +242,18 @@ def _render_markdown(
                         agent_rows[agent] = {
                             "agent": agent,
                             "model": model,
-                            "requests": 0,
+                            "requests": reqs_int,
                             "prompt_tokens": 0,
                             "completion_tokens": 0,
                             "total_tokens": 0,
                             "cost": 0.0 if cost_val is not None else None,
                         }
-                    agent_rows[agent]["requests"] += reqs
+                    else:
+                        if reqs_int is not None:
+                            curr_reqs = cast(int | None, agent_rows[agent]["requests"])
+                            agent_rows[agent]["requests"] = (
+                                curr_reqs + reqs_int if curr_reqs is not None else reqs_int
+                            )
                     agent_rows[agent]["prompt_tokens"] += p_tok
                     agent_rows[agent]["completion_tokens"] += c_tok
                     agent_rows[agent]["total_tokens"] += p_tok + c_tok
@@ -241,7 +261,10 @@ def _render_markdown(
                         agent_rows[agent]["cost"] += float(cast(float, cost_val))
 
         total_tokens = total_p_tok + total_c_tok
-        lines.append(f"- **Total Requests:** {total_reqs}")
+        if total_reqs is not None:
+            lines.append(f"- **Total Requests:** {total_reqs}")
+        else:
+            lines.append("- **Total Requests:** not available")
         lines.append(
             f"- **Total Tokens:** {total_tokens:,} (Prompt: {total_p_tok:,}, Completion: {total_c_tok:,})"
         )
@@ -254,19 +277,27 @@ def _render_markdown(
             lines.append("|---|---|---|---|---|")
             for ag in sorted(agent_rows.keys()):
                 d = agent_rows[ag]
+                reqs_cell = str(d["requests"]) if d["requests"] is not None else "N/A"
                 c_str = f"${d['cost']:.4f}" if d["cost"] is not None else "N/A"
                 lines.append(
-                    f"| {d['agent']} | {d['model']} | {d['requests']} | {d['total_tokens']:,} | {c_str} |"
+                    f"| {d['agent']} | {d['model']} | {reqs_cell} | {d['total_tokens']:,} | {c_str} |"
                 )
             lines.append("")
 
-        # Planted flaws checklist
+        # Planted flaws checklist (deduplicated)
         lines.append("## Planted Flaws\n")
-        matched_problems = list(score.matched.values())
-        for p in matched_problems:
+        unique_matched = sorted(
+            set(score.matched.values()),
+            key=lambda p: (p.start, str(p.category), p.kind),
+        )
+        unique_misses = sorted(
+            set(score.misses) - set(score.matched.values()),
+            key=lambda p: (p.start, str(p.category), p.kind),
+        )
+        for p in unique_matched:
             cols = list(p.columns)
             lines.append(f"- [x] {p.kind} ({p.category}, {p.start} to {p.end}, columns: {cols})")
-        for p in score.misses:
+        for p in unique_misses:
             cols = list(p.columns)
             lines.append(f"- [ ] {p.kind} ({p.category}, {p.start} to {p.end}, columns: {cols})")
         lines.append("")
@@ -304,10 +335,12 @@ async def write_report(
     else:
         raise RuntimeError(f"Unexpected response for overall stats: {raw_overall}")
 
-    # 2. Extract problems and counts per category
-    all_problems = list(score.matched.values()) + list(score.misses)
+    # 2. Extract unique problems and counts per category (deduplicated)
+    unique_matched = set(score.matched.values())
+    unique_misses = set(score.misses) - unique_matched
+    all_unique_problems = list(unique_matched | unique_misses)
     problem_counts: dict[str, int] = {}
-    for p in all_problems:
+    for p in all_unique_problems:
         cat_key = str(p.category)
         problem_counts[cat_key] = problem_counts.get(cat_key, 0) + 1
 
@@ -346,8 +379,11 @@ async def write_report(
     )
 
     # 6. Build report.json
+    rep_title = report_title(info)
     json_data: dict[str, Any] = {
+        "title": rep_title,
         "info": {
+            "title": rep_title,
             "mode": info.mode,
             "dataset": info.dataset,
             "scenario": info.scenario,
@@ -441,9 +477,47 @@ def format_comparison_table(report_json_paths: Sequence[Path]) -> str:
         dataset = str(info.get("dataset", ""))
         scenario = str(info.get("scenario", ""))
 
-        matched_cnt = len(cast(dict[str, Any], score_data.get("matched", {})))
-        misses_cnt = len(cast(list[Any], score_data.get("misses", [])))
-        total_problems = matched_cnt + misses_cnt
+        # Deduplicate matched and misses in score_data
+        matched_map = cast(dict[str, Any], score_data.get("matched", {}))
+        unique_matched_keys: set[tuple[str, str, str, str, tuple[str | None, ...]]] = set()
+        for p_val in matched_map.values():
+            if isinstance(p_val, dict):
+                p_dict = cast(dict[str, Any], p_val)
+                cols_raw = p_dict.get("columns", [])
+                cols: tuple[str | None, ...] = (
+                    tuple(cast(list[str | None], cols_raw)) if isinstance(cols_raw, list) else ()
+                )
+                unique_matched_keys.add(
+                    (
+                        str(p_dict.get("kind", "")),
+                        str(p_dict.get("category", "")),
+                        str(p_dict.get("start", "")),
+                        str(p_dict.get("end", "")),
+                        cols,
+                    )
+                )
+
+        misses_raw = score_data.get("misses", [])
+        misses_list = cast(list[Any], misses_raw) if isinstance(misses_raw, list) else []
+        unique_missed_keys: set[tuple[str, str, str, str, tuple[str | None, ...]]] = set()
+        for p_val in misses_list:
+            if isinstance(p_val, dict):
+                p_dict = cast(dict[str, Any], p_val)
+                cols_raw = p_dict.get("columns", [])
+                cols = tuple(cast(list[str | None], cols_raw)) if isinstance(cols_raw, list) else ()
+                unique_missed_keys.add(
+                    (
+                        str(p_dict.get("kind", "")),
+                        str(p_dict.get("category", "")),
+                        str(p_dict.get("start", "")),
+                        str(p_dict.get("end", "")),
+                        cols,
+                    )
+                )
+
+        unique_missed_only = unique_missed_keys - unique_matched_keys
+        matched_cnt = len(unique_matched_keys)
+        total_problems = matched_cnt + len(unique_missed_only)
         caught_str = f"{matched_cnt}/{total_problems}"
 
         det: dict[str, Any] = cast(dict[str, Any], groups.get("detection", {}))
@@ -558,6 +632,7 @@ __all__ = [
     "RunInfo",
     "format_comparison_table",
     "register_report_cli",
+    "report_title",
     "run_report_cli",
     "write_report",
 ]

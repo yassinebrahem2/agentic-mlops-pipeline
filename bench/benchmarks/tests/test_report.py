@@ -16,6 +16,7 @@ from benchmarks.report import (
     Pause,
     RunInfo,
     format_comparison_table,
+    report_title,
     write_report,
 )
 from benchmarks.scorer import Problem, Score
@@ -500,3 +501,178 @@ async def test_bench_report_cli_two_reports_one_table(
     assert "agents" in captured.out
     assert "ulb" in captured.out
     assert "demo-world" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_title_with_stall(tmp_path: Path) -> None:
+    """An agents run with a stall says so in its title."""
+    client = FakeBenchClient()
+    score = _make_sample_score()
+
+    # 1. Agents run with model_stall
+    stall_pause = Pause(
+        reason="model_stall",
+        start=datetime(2026, 11, 1, 10, 5, tzinfo=UTC),
+        end=datetime(2026, 11, 1, 10, 7, tzinfo=UTC),
+    )
+    info_stalled = RunInfo(
+        mode="agents",
+        dataset="demo-world",
+        scenario="short.toml",
+        seed=None,
+        app_commit="commit1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 30, tzinfo=UTC),
+        provider="google",
+        model="gemini-2.0-flash",
+        seconds_per_day=None,
+        pauses=[stall_pause],
+        day_gaps=[],
+    )
+    assert report_title(info_stalled) == "Benchmark Report: Agents Mode (stalled)"
+
+    stalled_dir = tmp_path / "stalled"
+    md_path, json_path = await write_report(client, "prj_1", stalled_dir, info_stalled, score)
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "# Benchmark Report: Agents Mode (stalled)" in md_text
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["title"] == "Benchmark Report: Agents Mode (stalled)"
+    assert data["info"]["title"] == "Benchmark Report: Agents Mode (stalled)"
+
+    # 2. Agents run with only ready_wait (no stall)
+    ready_pause = Pause(
+        reason="ready_wait",
+        start=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 11, 1, 10, 2, tzinfo=UTC),
+    )
+    info_no_stall = RunInfo(
+        mode="agents",
+        dataset="demo-world",
+        scenario="short.toml",
+        seed=None,
+        app_commit="commit1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 30, tzinfo=UTC),
+        provider="google",
+        model="gemini-2.0-flash",
+        seconds_per_day=None,
+        pauses=[ready_pause],
+        day_gaps=[],
+    )
+    assert report_title(info_no_stall) == "Benchmark Report: Agents Mode"
+
+    no_stall_dir = tmp_path / "no_stall"
+    md_path, json_path = await write_report(client, "prj_1", no_stall_dir, info_no_stall, score)
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "# Benchmark Report: Agents Mode\n" in md_text
+    assert "(stalled)" not in md_text
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["title"] == "Benchmark Report: Agents Mode"
+
+
+@pytest.mark.asyncio
+async def test_problem_deduplication(tmp_path: Path) -> None:
+    """Distinct problems are deduplicated across multiple matching incidents."""
+    p1 = Problem(
+        kind="null_spike",
+        category="data_quality",
+        start=date(2026, 7, 1),
+        end=date(2026, 7, 3),
+        columns=("amount",),
+    )
+    p2 = Problem(
+        kind="covariate_shift",
+        category="drift",
+        start=date(2026, 7, 10),
+        end=date(2026, 7, 12),
+        columns=("v1",),
+    )
+    # Two incidents matched to the SAME problem p1
+    score = Score(
+        matched={"inc_1": p1, "inc_2": p1},
+        verdicts={
+            "inc_1": VerdictDraft(value="real_issue"),
+            "inc_2": VerdictDraft(value="real_issue"),
+        },
+        misses=[p2],
+        silent={},
+        excluded=[],
+    )
+    client = FakeBenchClient()
+    run_info = RunInfo(
+        mode="agents",
+        dataset="demo-world",
+        scenario="short.toml",
+        seed=None,
+        app_commit="commit1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 10, tzinfo=UTC),
+        provider="google",
+        model="gemini-2.0-flash",
+        seconds_per_day=None,
+        pauses=[],
+        day_gaps=[],
+    )
+
+    md_path, json_path = await write_report(client, "prj_1", tmp_path, run_info, score)
+    md_text = md_path.read_text(encoding="utf-8")
+
+    # In problem counts: data_quality must be 1, not 2
+    assert "- **data_quality:** 1" in md_text
+    assert "- **drift:** 1" in md_text
+
+    # In planted flaws checklist: null_spike must appear exactly once under - [x]
+    assert md_text.count("- [x] null_spike") == 1
+    assert md_text.count("- [ ] covariate_shift") == 1
+
+    # In comparison table: caught is 1/2, not 2/3
+    table = format_comparison_table([json_path])
+    assert "1/2" in table
+    assert "2/3" not in table
+
+
+@pytest.mark.asyncio
+async def test_usage_without_requests_field(tmp_path: Path) -> None:
+    """When /usage lacks a requests field (the real contract), it reports 'not available' rather than fabricating 1."""
+    client = FakeBenchClient(
+        usage_response={
+            "rows": [
+                {
+                    "project_id": "prj_1",
+                    "agent": "data-quality",
+                    "model_address": "gemini-2.0-flash",
+                    "week_start": "2026-10-26",
+                    "prompt_tokens": 10000,
+                    "completion_tokens": 2000,
+                    "cost_usd": 0.30,
+                    # Note: No 'requests' field!
+                }
+            ],
+            "unpriced_models": [],
+        }
+    )
+    score = _make_sample_score()
+    run_info = RunInfo(
+        mode="agents",
+        dataset="demo-world",
+        scenario="short.toml",
+        seed=None,
+        app_commit="commit1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 10, tzinfo=UTC),
+        provider="google",
+        model="gemini-2.0-flash",
+        seconds_per_day=None,
+        pauses=[],
+        day_gaps=[],
+    )
+
+    md_path, _ = await write_report(client, "prj_1", tmp_path, run_info, score)
+    md_text = md_path.read_text(encoding="utf-8")
+
+    # Total requests must be not available, never 1
+    assert "- **Total Requests:** not available" in md_text
+    # In table, requests shows N/A
+    assert "| data-quality | gemini-2.0-flash | N/A | 12,000 | $0.3000 |" in md_text
