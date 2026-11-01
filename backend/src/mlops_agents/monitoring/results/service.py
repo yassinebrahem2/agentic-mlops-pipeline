@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
@@ -17,6 +18,8 @@ from mlops_agents.monitoring.results.ci_source import CiSourceReader
 from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     EvaluationCopies,
+    ParseOutcome,
+    Parsers,
     ResultQuery,
     ResultRecord,
     Results,
@@ -29,12 +32,18 @@ from mlops_agents.monitoring.results.contract import (
 )
 from mlops_agents.monitoring.results.evaluation_copy import SqliteEvaluationCopies
 from mlops_agents.monitoring.results.file_source import FileSourceReader, SourceReadOutcome
+from mlops_agents.monitoring.results.mapping import incomplete_record_error
 from mlops_agents.monitoring.results.mlflow_source import MlflowSourceReader
+from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.store import ResultsStore
+from mlops_agents.monitoring.settings import get_monitoring_settings
 from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.payloads import CiResults, FileResults, JobFeedRef
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.contract import Page, Tracking
+
+if TYPE_CHECKING:
+    from mlops_agents.monitoring.expectations.checks import ChecksStore
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +85,8 @@ class ResultsService(Results):
         evaluation_copies: EvaluationCopies | None = None,
         incidents: SignalSink | None = None,
         maintenance: Maintenance | None = None,
+        parsers: Parsers | None = None,
+        checks: ChecksStore | None = None,
     ) -> None:
         self._databases = databases
         self._handoffs = handoffs
@@ -86,13 +97,25 @@ class ResultsService(Results):
         self._file_reader = file_reader or FileSourceReader(connections)
         self._ci_reader = ci_reader or (CiSourceReader(tracking, handoffs) if tracking else None)
         self._mlflow_reader = mlflow_reader or (
-            MlflowSourceReader(tracking, handoffs) if tracking else None
+            MlflowSourceReader(tracking, handoffs, checks) if tracking else None
         )
         self._evaluation_copies = evaluation_copies or SqliteEvaluationCopies(databases)
         self._incidents = incidents
         self._maintenance = maintenance or NeverSuspended()
+        self._parsers = parsers or SqliteParsers(databases)
+        self._checks = checks
         self._observers: list[ResultsObserver] = []
         self._delivery_locks: dict[str, asyncio.Lock] = {}
+
+    @property
+    def parsers(self) -> Parsers:
+        return self._parsers
+
+    def bind_checks(self, checks: ChecksStore) -> None:
+        """Binds checks store to results service."""
+        self._checks = checks
+        if self._mlflow_reader is not None:
+            self._mlflow_reader.bind_checks(checks)
 
     def bind_incidents(self, incidents: SignalSink) -> None:
         """Binds incidents service to results service."""
@@ -104,7 +127,7 @@ class ResultsService(Results):
         if self._ci_reader is None:
             self._ci_reader = CiSourceReader(tracking, self._handoffs)
         if self._mlflow_reader is None:
-            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs)
+            self._mlflow_reader = MlflowSourceReader(tracking, self._handoffs, self._checks)
 
     def bind_maintenance(self, maintenance: Maintenance) -> None:
         """Binds maintenance service to results service."""
@@ -162,6 +185,14 @@ class ResultsService(Results):
         Returns tuples of (source_id, kind, needs_parser).
         """
         derived: dict[str, tuple[SourceKind, bool]] = {}
+
+        def _add_source(s_id: str, kind: SourceKind, needs_parser: bool) -> None:
+            if s_id in derived:
+                cur_kind, cur_parser = derived[s_id]
+                derived[s_id] = (cur_kind, cur_parser or needs_parser)
+            else:
+                derived[s_id] = (kind, needs_parser)
+
         handoff = await self._handoffs.current(project_id)
         if handoff is not None:
             ops = handoff.payload.operations
@@ -172,10 +203,10 @@ class ResultsService(Results):
                     ops.results_location.path_pattern,
                     ops.results_location.connection,
                 )
-                derived[s_id] = ("file", False)
+                _add_source(s_id, "file", False)
             else:
                 s_id = source_id("mlflow", ops.results_location.metric)
-                derived[s_id] = ("mlflow", False)
+                _add_source(s_id, "mlflow", False)
 
             # Standard check specs
             for check in ops.checks:
@@ -185,13 +216,13 @@ class ResultsService(Results):
                         check.results.path_pattern,
                         check.results.connection,
                     )
-                    derived[s_id] = ("file", False)
+                    _add_source(s_id, "file", False)
                 elif isinstance(check.results, CiResults):
                     s_id = source_id("ci", check.results.workflow)
-                    derived[s_id] = ("ci", False)
+                    _add_source(s_id, "ci", False)
                 else:
                     s_id = source_id("mlflow", check.results.metric)
-                    derived[s_id] = ("mlflow", False)
+                    _add_source(s_id, "mlflow", False)
 
             # Team job feeds (file needs a parser; ci_workflow does not)
             for feed in ops.feeds:
@@ -202,10 +233,24 @@ class ResultsService(Results):
                             feed.ref.file.path_pattern,
                             feed.ref.file.connection,
                         )
-                        derived[s_id] = ("file", True)
+                        _add_source(s_id, "file", True)
                     elif feed.ref.ci_workflow is not None:
                         s_id = source_id("ci", feed.ref.ci_workflow)
-                        derived[s_id] = ("ci", False)
+                        _add_source(s_id, "ci", False)
+
+        if self._checks is not None:
+            active_checks = await self._checks.list_active(project_id)
+            for chk in active_checks:
+                if isinstance(chk.results_location, FileResults):
+                    s_id = source_id(
+                        "file",
+                        chk.results_location.path_pattern,
+                        chk.results_location.connection,
+                    )
+                    _add_source(s_id, "file", False)
+                else:
+                    s_id = source_id("mlflow", chk.results_location.metric)
+                    _add_source(s_id, "mlflow", False)
 
         return [(s_id, kind, needs_parser) for s_id, (kind, needs_parser) in derived.items()]
 
@@ -213,7 +258,7 @@ class ResultsService(Results):
         """Runs a collection cycle for all derived sources."""
         # The rows a cycle stores stay undelivered until its own delivery marks them, so the
         # whole cycle holds the project's delivery lock.
-        async with self._delivery_lock(project_id):
+        async with self._delivery_lock(project_id), self._parser_cycle(project_id):
             report = await self._collect_locked(project_id, now)
 
         # 5. Emit results.collected event
@@ -225,6 +270,13 @@ class ResultsService(Results):
         )
 
         return report
+
+    def _parser_cycle(self, project_id: str) -> contextlib.AbstractAsyncContextManager[None]:
+        """The parsers' scope for one collection cycle, so its code parser runs prepare the
+        sandbox once."""
+        if isinstance(self._parsers, SqliteParsers):
+            return self._parsers.cycle(project_id)
+        return contextlib.nullcontext()
 
     async def _collect_locked(self, project_id: str, now: datetime) -> CollectionReport:
         """Steps 1 to 4 of `collect`, for a caller holding the project's delivery lock."""
@@ -259,27 +311,214 @@ class ResultsService(Results):
             current_cursor = state.cursor if state is not None else {}
 
             if needs_parser:
-                # In Task 2, team sources that need a parser have none yet: do not read, cursor stays at 0
-                if state is None:
-                    await self._store.save_source_state(
+                cur_parser = await self._parsers.current(project_id, s_id)
+                if cur_parser is None or not cur_parser.enabled:
+                    if state is None:
+                        await self._store.save_source_state(
+                            project_id,
+                            SourceState(
+                                source_id=s_id,
+                                kind=kind,
+                                cursor={},
+                                last_read=now,
+                                last_error=None,
+                                consecutive_failures=0,
+                            ),
+                        )
+                    by_source[s_id] = 0
+                    continue
+
+                source_stored = 0
+                if kind == "file":
+                    raw_read = await self._file_reader.read_raw(
                         project_id,
-                        SourceState(
-                            source_id=s_id,
-                            kind=kind,
-                            cursor={},
-                            last_read=now,
-                            last_error=None,
-                            consecutive_failures=0,
-                        ),
+                        s_id,
+                        cursor=current_cursor,
+                        now=now,
+                        mapping=cur_parser.spec.mapping,
                     )
-                by_source[s_id] = 0
+                    if raw_read.last_error:
+                        failures[s_id] = raw_read.last_error
+                        prev_err = state.last_error if state else None
+                        if not prev_err and self._incidents is not None:
+                            try:
+                                _k, _ref, conn_name = parse_source_id(s_id)
+                                scope = conn_name if conn_name is not None else s_id
+                            except ValueError:
+                                scope = s_id
+                            is_suspended = await self._maintenance.suspended(project_id, scope, now)
+                            if not is_suspended:
+                                draft = SignalDraft(
+                                    kind="source_failure",
+                                    category="operational",
+                                    subject=s_id,
+                                    ran_at=now,
+                                    detail={"error": raw_read.last_error, "source_id": s_id},
+                                    source_ref=s_id,
+                                )
+                                await self._incidents.raise_signal(project_id, draft, seen_at=now)
+
+                    # A file the reader held (no chunk this cycle) takes the reader's entry, with
+                    # its size and mtime as last seen. A file with a chunk advances only once
+                    # its chunk parses.
+                    chunk_files = {c.rel_posix for c in raw_read.chunks}
+                    held_files_cur = dict(current_cursor.get("files", {}))
+                    for rel_posix, entry in raw_read.cursor.get("files", {}).items():
+                        if rel_posix not in chunk_files:
+                            held_files_cur[rel_posix] = entry
+                    current_cursor = {"files": held_files_cur}
+
+                    cycle_has_errors = False
+                    # A file whose chunk raised keeps its cursor at that chunk's start, so its
+                    # later chunks wait for the next cycle
+                    failed_files: set[str] = set()
+
+                    for chunk in raw_read.chunks:
+                        if chunk.rel_posix in failed_files:
+                            continue
+                        try:
+                            # A chunk can be only an incomplete last record, with nothing to parse
+                            outcome = (
+                                await self._parsers.parse(
+                                    project_id,
+                                    s_id,
+                                    chunk.content,
+                                    origin_ref=chunk.rel_posix,
+                                    start_offset=chunk.start_offset,
+                                    csv_header=chunk.csv_header,
+                                )
+                                if chunk.content
+                                else ParseOutcome(records=[], errors=[])
+                            )
+                        except Exception as exc:
+                            cycle_has_errors = True
+                            failed_files.add(chunk.rel_posix)
+                            last_err = scrub_url_secrets(str(exc))
+                            failures[s_id] = last_err
+                            if self._incidents is not None:
+                                try:
+                                    _k, _ref, conn_name = parse_source_id(s_id)
+                                    scope = conn_name if conn_name is not None else s_id
+                                except ValueError:
+                                    scope = s_id
+                                is_suspended = await self._maintenance.suspended(
+                                    project_id, scope, now
+                                )
+                                if not is_suspended:
+                                    draft = SignalDraft(
+                                        kind="parser_failure",
+                                        category="operational",
+                                        subject=s_id,
+                                        ran_at=now,
+                                        detail={"error": last_err, "source_id": s_id},
+                                        source_ref=s_id,
+                                    )
+                                    await self._incidents.raise_signal(
+                                        project_id, draft, seen_at=now
+                                    )
+                            continue
+
+                        errors = list(outcome.errors)
+                        if chunk.incomplete_tail_offset is not None:
+                            errors.append(incomplete_record_error(chunk.incomplete_tail_offset))
+                        if errors:
+                            cycle_has_errors = True
+                            for err in errors:
+                                last_err = scrub_url_secrets(err)
+                                failures[s_id] = last_err
+                                if self._incidents is not None:
+                                    try:
+                                        _k, _ref, conn_name = parse_source_id(s_id)
+                                        scope = conn_name if conn_name is not None else s_id
+                                    except ValueError:
+                                        scope = s_id
+                                    is_suspended = await self._maintenance.suspended(
+                                        project_id, scope, now
+                                    )
+                                    if not is_suspended:
+                                        draft = SignalDraft(
+                                            kind="parser_failure",
+                                            category="operational",
+                                            subject=s_id,
+                                            ran_at=now,
+                                            detail={"error": last_err, "source_id": s_id},
+                                            source_ref=s_id,
+                                        )
+                                        await self._incidents.raise_signal(
+                                            project_id, draft, seen_at=now
+                                        )
+
+                        if outcome.records:
+                            stored = await self.ingest(
+                                project_id, s_id, outcome.records, seen_at=now
+                            )
+                            all_newly_stored.extend(stored)
+                            source_stored += len(stored)
+
+                        # Advance cursor for successfully parsed chunk
+                        files_cur = dict(current_cursor.get("files", {}))
+                        files_cur[chunk.rel_posix] = {
+                            "size": chunk.size,
+                            "mtime": chunk.mtime,
+                            "offset": chunk.new_offset,
+                            "csv_header": chunk.csv_header,
+                        }
+                        current_cursor = {"files": files_cur}
+
+                    if cycle_has_errors:
+                        settings = await get_monitoring_settings(self._databases, project_id)
+                        # One count per failed cycle, however many files failed in it:
+                        # parser_disable_after counts cycles
+                        if isinstance(self._parsers, SqliteParsers):
+                            _new_f, newly_disabled = await self._parsers.record_failure(
+                                project_id,
+                                s_id,
+                                cur_parser.version,
+                                disable_after=settings.parser_disable_after,
+                            )
+                            if newly_disabled:
+                                await self._events.record(
+                                    project_id,
+                                    source="results",
+                                    type="parser.disabled",
+                                    payload={
+                                        "source_id": s_id,
+                                        "version": cur_parser.version,
+                                    },
+                                )
+                    elif raw_read.chunks and not failures.get(s_id):
+                        if isinstance(self._parsers, SqliteParsers):
+                            await self._parsers.reset_failures(project_id, s_id, cur_parser.version)
+
+                consec_fail = (
+                    0
+                    if not failures.get(s_id)
+                    else (state.consecutive_failures + 1 if state else 1)
+                )
+                await self._store.save_source_state(
+                    project_id,
+                    SourceState(
+                        source_id=s_id,
+                        kind=kind,
+                        cursor=current_cursor,
+                        last_read=now,
+                        last_error=failures.get(s_id),
+                        consecutive_failures=consec_fail,
+                    ),
+                )
+                stored_total += source_stored
+                by_source[s_id] = source_stored
                 continue
 
             prev_failures = state.consecutive_failures if state else 0
             try:
                 if kind == "file":
                     outcome = await self._file_reader.read(
-                        project_id, s_id, cursor=current_cursor, consecutive_failures=prev_failures
+                        project_id,
+                        s_id,
+                        cursor=current_cursor,
+                        now=now,
+                        consecutive_failures=prev_failures,
                     )
                 elif kind == "ci":
                     if self._ci_reader is None:

@@ -127,7 +127,9 @@ async def test_file_source_detects_evaluation_copy_in_results_location(
     reader = FileSourceReader(connections)
 
     s_id = source_id("file", "*.jsonl", "conn_loc")
-    outcome = await reader.read(project_id, s_id, cursor={})
+    outcome = await reader.read(
+        project_id, s_id, cursor={}, now=datetime(2026, 10, 30, 12, 0, 0, tzinfo=UTC)
+    )
 
     # Exactly 1 standard result record
     assert len(outcome.records) == 1

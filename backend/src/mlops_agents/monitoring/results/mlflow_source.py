@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from mlops_agents.credentials.scrub import scrub_url_secrets
+from mlops_agents.monitoring.expectations.contract import CheckView
 from mlops_agents.monitoring.results.contract import (
     ResultCategory,
+    ResultOrigin,
     ResultRecord,
     parse_source_id,
 )
 from mlops_agents.monitoring.results.file_source import SourceReadOutcome
-from mlops_agents.proposals.contract import Handoffs
-from mlops_agents.proposals.payloads import MlflowResults
+from mlops_agents.proposals.contract import Handoffs, HandoffView
+from mlops_agents.proposals.payloads import CheckSpec, MlflowResults
 from mlops_agents.tracking.contract import (
     MetricPoint,
     ModelVersionRow,
@@ -26,12 +32,142 @@ from mlops_agents.tracking.contract import (
 logger = logging.getLogger(__name__)
 
 
+class RegisteredChecks(Protocol):
+    """The read-only view of the checks store this source needs; the store owns the checks."""
+
+    async def list_active(self, project_id: str) -> list[CheckView]: ...
+
+
+def mlflow_check_version(location: MlflowResults, pr_number: int) -> str:
+    """The version of an MLflow-located registered check: a short hash of what defines it.
+
+    The check's threshold lives in its registration, not in the code a run executes, so its
+    version comes from there: the same registration gives the same version on every run and
+    after a restart, and a changed threshold or direction is a new version (S4 4). The run's
+    git commit would name the training code, and is often absent.
+    """
+    canonical = json.dumps(
+        {
+            "metric": location.metric,
+            "threshold": location.threshold,
+            "fires_when": location.fires_when,
+            "pr_number": pr_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class MetricOwner:
+    """Whose records an MLflow metric gives, and what makes them fire."""
+
+    check_id: str
+    origin: ResultOrigin
+    category: ResultCategory
+    version: str | None
+    threshold: float | None
+    fires_when: Literal["above", "below"] | None
+
+
+@dataclass(frozen=True)
+class HandoffMetricUser:
+    """What in the handoff reads an MLflow metric: one of its checks (`check`), or else its
+    results location (`check` is None); `results` is that user's MLflow location."""
+
+    check: CheckSpec | None
+    results: MlflowResults
+
+
+def handoff_metric_user(handoff: HandoffView | None, metric: str) -> HandoffMetricUser | None:
+    """The handoff's user of an MLflow metric: its check naming it, else its results location
+    when that names it."""
+    if handoff is None:
+        return None
+    ops = handoff.payload.operations
+    for check in ops.checks:
+        if isinstance(check.results, MlflowResults) and check.results.metric == metric:
+            return HandoffMetricUser(check=check, results=check.results)
+    location = ops.results_location
+    if isinstance(location, MlflowResults) and location.metric == metric:
+        return HandoffMetricUser(check=None, results=location)
+    return None
+
+
+def _handoff_owner(source_id: str, metric: str, handoff: HandoffView | None) -> MetricOwner | None:
+    user = handoff_metric_user(handoff, metric)
+    if user is None:
+        return None
+    return MetricOwner(
+        check_id=user.check.check_id if user.check is not None else source_id,
+        origin="tracker",
+        category=user.check.category if user.check is not None else "model_performance",
+        version=None,
+        threshold=user.results.threshold,
+        fires_when=user.results.fires_when,
+    )
+
+
+def metric_owner(
+    source_id: str,
+    metric: str,
+    active_checks: Sequence[CheckView],
+    handoff: HandoffView | None,
+) -> MetricOwner:
+    """The one place that decides whose records an MLflow metric gives.
+
+    An active registered check naming the metric wins, even over a later handoff naming it
+    too (RegisterCheck refuses the other order); else the handoff decides, as before #628.
+    """
+    claimed = _handoff_owner(source_id, metric, handoff)
+    for chk in active_checks:
+        location = chk.results_location
+        if isinstance(location, MlflowResults) and location.metric == metric:
+            if claimed is not None:
+                logger.warning(
+                    "MLflow metric %s is named by the handoff (as %s) and by registered "
+                    "check %s; the registered check's records win",
+                    metric,
+                    claimed.check_id,
+                    chk.check_id,
+                )
+            return MetricOwner(
+                check_id=chk.check_id,
+                origin="agent",
+                category=chk.category,
+                version=mlflow_check_version(location, chk.pr_number),
+                threshold=location.threshold,
+                fires_when=location.fires_when,
+            )
+    if claimed is not None:
+        return claimed
+    return MetricOwner(
+        check_id=source_id,
+        origin="tracker",
+        category="model_performance",
+        version=None,
+        threshold=None,
+        fires_when=None,
+    )
+
+
 class MlflowSourceReader:
     """Reads metric points from MLflow runs via TrackingService."""
 
-    def __init__(self, tracking: Tracking, handoffs: Handoffs) -> None:
+    def __init__(
+        self,
+        tracking: Tracking,
+        handoffs: Handoffs,
+        checks: RegisteredChecks | None = None,
+    ) -> None:
         self._tracking = tracking
         self._handoffs = handoffs
+        self._checks = checks
+
+    def bind_checks(self, checks: RegisteredChecks) -> None:
+        """Binds the registered checks, which are built after the results service."""
+        self._checks = checks
 
     async def read(
         self,
@@ -60,33 +196,28 @@ class MlflowSourceReader:
                 last_error=f"Expected mlflow source_id, got: {source_id!r}",
             )
 
-        threshold: float | None = None
-        fires_when: Literal["above", "below"] | None = None
-        category: ResultCategory = "model_performance"
-        check_id: str = source_id
+        try:
+            active_checks = (
+                await self._checks.list_active(project_id) if self._checks is not None else []
+            )
+        except Exception as exc:
+            # Records dedupe on their source key, so ones stored under the wrong check could
+            # never be corrected: fail the read and retry from the same cursor instead.
+            err = scrub_url_secrets(str(exc))
+            logger.warning("Error listing registered checks for %s: %s", source_id, err)
+            return SourceReadOutcome(
+                records=[],
+                cursor=cursor,
+                consecutive_failures=consecutive_failures + 1,
+                last_error=err,
+            )
 
+        handoff: HandoffView | None = None
         try:
             handoff = await self._handoffs.current(project_id)
-            if handoff is not None:
-                ops = handoff.payload.operations
-                if (
-                    isinstance(ops.results_location, MlflowResults)
-                    and ops.results_location.metric == metric_name
-                ):
-                    threshold = ops.results_location.threshold
-                    fires_when = ops.results_location.fires_when
-                for check in ops.checks:
-                    if (
-                        isinstance(check.results, MlflowResults)
-                        and check.results.metric == metric_name
-                    ):
-                        threshold = check.results.threshold
-                        fires_when = check.results.fires_when
-                        category = check.category
-                        check_id = check.check_id
-                        break
         except Exception:
             logger.exception("Failed to inspect handoff for MLflow metric %s", metric_name)
+        owner = metric_owner(source_id, metric_name, active_checks, handoff)
 
         since_str = cursor.get("since")
         since_dt = datetime.fromisoformat(since_str) if since_str else None
@@ -148,20 +279,20 @@ class MlflowSourceReader:
                         continue
 
                     fired = False
-                    if threshold is not None and fires_when is not None:
-                        if fires_when == "above":
-                            fired = point.value > threshold
-                        elif fires_when == "below":
-                            fired = point.value < threshold
+                    if owner.threshold is not None and owner.fires_when is not None:
+                        if owner.fires_when == "above":
+                            fired = point.value > owner.threshold
+                        elif owner.fires_when == "below":
+                            fired = point.value < owner.threshold
 
                     rec = ResultRecord(
-                        check_id=check_id,
-                        origin="tracker",
+                        check_id=owner.check_id,
+                        origin=owner.origin,
                         ran_at=point.time,
                         fired=fired,
                         value=point.value,
-                        threshold=threshold,
-                        category=category,
+                        threshold=owner.threshold,
+                        category=owner.category,
                         subject=metric_name,
                         model=run_to_model.get(run.key),
                         detail={
@@ -171,6 +302,7 @@ class MlflowSourceReader:
                             "value": point.value,
                         },
                         source_ref=f"run:{run.key}",
+                        version=owner.version,
                     )
                     source_key = f"{run.key}:{point.metric}:{point.step}:{point.time.isoformat()}"
                     records.append((source_key, rec))

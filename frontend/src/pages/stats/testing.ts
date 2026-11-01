@@ -29,7 +29,7 @@ export const sampleStats: StatsView = {
     },
     speed: {
       detection_delay_s: { value: 90, n: 6, collecting: false },
-      time_to_resolution_s: { value: null, n: 1, collecting: true },
+      time_to_resolution_s: { value: null, n: 0, collecting: true },
     },
     noise: {
       // Two incidents and not collecting: the value shows.

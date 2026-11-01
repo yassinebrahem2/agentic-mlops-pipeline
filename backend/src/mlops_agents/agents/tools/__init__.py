@@ -20,6 +20,7 @@ from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.read_handoff import ReadHandoffTool
+from mlops_agents.agents.tools.register_check import RegisterCheck
 from mlops_agents.agents.tools.run_hook import RunHookTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.tools.save_report import SaveReport
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog, StatusBoard
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.knowledge.contract import Knowledge
+    from mlops_agents.monitoring.expectations.checks import ChecksStore
     from mlops_agents.monitoring.hooks.contract import Hooks
     from mlops_agents.monitoring.incidents.contract import Incidents, SeverityPolicy
     from mlops_agents.monitoring.query import QueryProviders
@@ -88,6 +90,7 @@ __all__ = [
     "ReadHandoffTool",
     "ReadTool",
     "RecordFixChoice",
+    "RegisterCheck",
     "RequestFix",
     "ResumeTaskTool",
     "RunHookTool",
@@ -138,6 +141,7 @@ def default_registry(
     fixes: SqliteFixes | None = None,
     surfaces: ProtectionSurfaces | None = None,
     pr_sync: PrSyncObserver | None = None,
+    checks: ChecksStore | None = None,
 ) -> ToolRegistry:
     """The tools agents can be given. Tools that need services take them here as keyword-only
     parameters, and `api/services.py` passes them in."""
@@ -246,4 +250,6 @@ def default_registry(
     if fixes is not None:
         registry.register(RequestFix(fixes))
         registry.register(RecordFixChoice(fixes))
+    if checks is not None and handoffs is not None:
+        registry.register(RegisterCheck(checks, handoffs))
     return registry

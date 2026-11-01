@@ -56,3 +56,48 @@ async def test_expectations_list_route(
     assert exp["status"] in {"ok", "due", "late", "silent"}
     assert "next_deadline" in exp
     assert exp["last_seen"] is None
+
+
+@pytest.mark.asyncio
+async def test_anonymous_cannot_access_checks(anonymous: httpx2.AsyncClient) -> None:
+    res = await anonymous.get("/api/projects/prj_dummy/checks")
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_checks_unknown_project_returns_404(client: httpx2.AsyncClient) -> None:
+    res = await client.get("/api/projects/prj_unknown/checks")
+    assert res.status_code == 404
+    assert res.json()["code"] == "project_not_found"
+
+
+@pytest.mark.asyncio
+async def test_checks_list_route(
+    app: FastAPI, client: httpx2.AsyncClient, tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    from mlops_agents.proposals.payloads import FileResults
+
+    project_id = await add_local_project(app, tmp_path, git_env)
+
+    # Register a check via the checks store
+    await app.state.services.checks.register(
+        project_id,
+        check_id="route_test_check",
+        category="model_performance",
+        cadence=Cadence(cron=None, every_minutes=45),
+        timezone="UTC",
+        results_location=FileResults(connection="local", path_pattern="out/route.jsonl"),
+        pr_number=55,
+        agent="data-quality",
+    )
+
+    res = await client.get(f"/api/projects/{project_id}/checks")
+    assert res.status_code == 200
+    data = cast(list[dict[str, Any]], res.json())
+    assert isinstance(data, list)
+    assert len(data) == 1
+    chk = data[0]
+    assert chk["check_id"] == "route_test_check"
+    assert chk["category"] == "model_performance"
+    assert chk["status"] == "pending_pr"
+    assert chk["pr_number"] == 55

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from mlops_agents.notifications.constants import ON_CALL_SEEDED_KEY
+from mlops_agents.notifications.constants import ON_CALL_SEEDED_KEY, contact_problem
 from mlops_agents.notifications.contract import OnCallPeople, OnCallPerson
 from mlops_agents.proposals.contract import HandoffObserver, Handoffs, HandoffView
 from mlops_agents.proposals.payloads import Contact, OnCall, OnCallHours
@@ -18,6 +18,32 @@ from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import on_call_people, project_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _valid_people(project_id: str, people: Sequence[OnCall]) -> list[OnCall]:
+    """Drops mistyped contacts (and anyone left with none) with a warning, so one typo in a
+    handoff cannot leave the project with no one on call. Addresses are never logged."""
+    kept: list[OnCall] = []
+    for person in people:
+        contacts: list[Contact] = []
+        for contact in person.contacts:
+            if (problem := contact_problem(contact)) is None:
+                contacts.append(contact)
+            else:
+                logger.warning(
+                    "Skipping %s contact of %s for project %s: it %s",
+                    contact.channel,
+                    person.name,
+                    project_id,
+                    problem,
+                )
+        if contacts:
+            kept.append(person.model_copy(update={"contacts": contacts}))
+        else:
+            logger.warning(
+                "Skipping %s for project %s: no valid contact left", person.name, project_id
+            )
+    return kept
 
 
 class SqliteOnCallPeople(OnCallPeople):
@@ -121,7 +147,9 @@ class OnCallSeeder(HandoffObserver):
     async def stored(self, project_id: str, handoff: HandoffView) -> None:
         """Called when a new handoff is stored. Replaces the list and records the version."""
         try:
-            await self._people.replace(project_id, handoff.payload.operations.on_call)
+            await self._people.replace(
+                project_id, _valid_people(project_id, handoff.payload.operations.on_call)
+            )
             await self._set_seeded_version(project_id, handoff.version)
         except Exception:
             logger.exception("Failed to seed on-call for project %s", project_id)
@@ -134,7 +162,9 @@ class OnCallSeeder(HandoffObserver):
 
         recorded = await self._get_seeded_version(project_id)
         if recorded is None or recorded < current.version:
-            await self._people.replace(project_id, current.payload.operations.on_call)
+            await self._people.replace(
+                project_id, _valid_people(project_id, current.payload.operations.on_call)
+            )
             await self._set_seeded_version(project_id, current.version)
 
     async def _get_seeded_version(self, project_id: str) -> int | None:

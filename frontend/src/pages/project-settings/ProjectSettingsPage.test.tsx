@@ -119,7 +119,19 @@ function setup(
           environment: { state: "ready", tag: "env:1", detail: null },
           network: false,
         });
-      if (path.endsWith("/connections") || path.endsWith("/on-call")) return json([]);
+      if (
+        [
+          "/connections",
+          "/on-call",
+          "/hooks",
+          "/expectations",
+          "/checks",
+          "/training/policies",
+          "/rules",
+          "/maintenance-windows",
+        ].some((suffix) => path.endsWith(suffix))
+      )
+        return json([]);
       if (path.endsWith("/monitoring-settings"))
         return json({
           collection_interval_s: 60,

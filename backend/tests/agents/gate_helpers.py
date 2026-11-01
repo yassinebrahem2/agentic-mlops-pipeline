@@ -13,6 +13,7 @@ from mlops_agents.agents.tools.base import (
     Preview,
     RiskClass,
     ToolContext,
+    ToolFailure,
     ToolOutput,
 )
 from mlops_agents.clock import now_iso
@@ -126,6 +127,19 @@ class ProposeTool(AgentTool[ProposeArgs]):
 
     async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
         return ToolOutput("ok")
+
+
+class FailingPreviewTool(AgentTool[DummyArgs]):
+    name: ClassVar[str] = "failing_preview_tool"
+    description: ClassVar[str] = "Dummy tool whose preview raises ToolFailure"
+    risk: ClassVar[RiskClass] = RiskClass.WRITE_CODE
+    args_model: ClassVar[type[BaseModel]] = DummyArgs
+
+    async def run(self, ctx: ToolContext, args: DummyArgs) -> ToolOutput:
+        return ToolOutput("ok")
+
+    async def preview(self, ctx: ToolContext, args: DummyArgs) -> Preview:
+        raise ToolFailure("Docker is unavailable")
 
 
 async def setup_session_and_turn(

@@ -142,7 +142,9 @@ def create_turn_graph(
         summary, compacted_through = await store.summary(project_id, session_id)
         active = await store.messages(project_id, session_id, after=compacted_through)
         messages: list[BaseMessage] = [system_message(agent, summary)]
-        messages.extend(history_messages([m for m in active if m.id != message_id]))
+        messages.extend(
+            history_messages([m for m in active if m.id != message_id], model=agent.model.address)
+        )
         # A resolved stall ends here. The model node, which always runs next, clears it too on
         # success; this keeps the stall's lifetime within the node that set it.
         return {"messages": messages, "stall": None}
@@ -271,12 +273,19 @@ def create_turn_graph(
             items.sort(key=lambda x: x[0])
             converted_calls = [item[1] for item in items]
 
+            extra_content_by_call = reply.message.additional_kwargs.get(
+                "tool_calls_extra_content", {}
+            )
             for tc_dict in converted_calls:
+                call_id = str(tc_dict["id"])
+                call_extra = extra_content_by_call.get(call_id)
                 tc_part = ToolCallPart(
                     type="tool_call",
-                    id=str(tc_dict["id"]),
+                    id=call_id,
                     name=str(tc_dict["name"]),
                     input=dict(tc_dict["args"]),
+                    extra_content=call_extra,
+                    model=agent.model.address,
                 )
                 current_parts.append(tc_part)
                 async with lock:
