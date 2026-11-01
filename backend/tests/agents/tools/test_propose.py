@@ -30,6 +30,7 @@ from mlops_agents.agents.tools.propose import (
 from mlops_agents.api.services import Services
 from mlops_agents.credentials.project_secrets import ProjectSecrets
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.contract import (
     CONNECTIONS_KIND,
@@ -774,3 +775,9 @@ async def test_secret_scrubbing_after_propose_post_credential_approve_cycle(
                                 assert SECRET_STRING not in str_val, (
                                     f"Secret found in {tname} table"
                                 )
+
+
+def test_propose_serves_the_code_parser_contract() -> None:
+    # The agent writes a code parser's script against the contract its card shows (#634).
+    tool = ProposeTool(MagicMock(), MagicMock())
+    assert CODE_PARSER_CONTRACT in tool.schema()["function"]["description"]

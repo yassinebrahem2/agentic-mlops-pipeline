@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+import json
+from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -15,7 +16,7 @@ from mlops_agents.agents.tools.base import (
     ToolOutput,
 )
 from mlops_agents.agents.tools.names import REGISTER_CHECK
-from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.contract import ResultCategory, ResultOrigin, ResultRecord
 from mlops_agents.monitoring.results.mlflow_source import handoff_metric_user
 from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 
@@ -24,12 +25,99 @@ if TYPE_CHECKING:
     from mlops_agents.proposals.contract import Handoffs
 
 
+# The file reader keeps only an agent's records from a results file (file_source.py).
+_AGENT_ORIGIN: Final[ResultOrigin] = "agent"
+RECORD_EXAMPLE_LABEL: Final = "Example line:"
+
+# What the schema cannot say about a field: the value an agent's check gives it. Keyed by
+# ResultRecord's field names; check_record_shape refuses a key out of step with the model.
+_RECORD_FIELD_NOTES: Final[dict[str, str]] = {
+    "check_id": "the `check_id` registered here",
+    "origin": "a line with any other origin is dropped",
+    "ran_at": "the time the result describes, ISO 8601 with its timezone (e.g. ...Z)",
+    "fired": "true when the check found a problem",
+    "value": "the measured value",
+    "threshold": "the value it fires against",
+    "category": "the category registered here",
+    "subject": "what it is about: a table, column, model version or job",
+    "model": (
+        "for a `model_performance` record, the model's identifier as the incident names it:"
+        " confirmation by labels matches records to an incident on it"
+    ),
+    "detail": "an object with what else the run found ({} when nothing)",
+    "source_ref": "where it came from: the check's code in the repository",
+    "version": "the git commit that produced the record",
+    "not_enough_data": (
+        "true when the run's sample is below the check's minimum sample, with `fired` false"
+    ),
+}
+
+# A field an agent's check always writes with one value, served as that value, not its type.
+_WRITTEN_AS: Final[dict[str, str]] = {"origin": _AGENT_ORIGIN}
+
+# One value per ResultRecord field for the served example line, which must validate as one.
+_EXAMPLE_VALUES: Final[dict[str, Any]] = {
+    "check_id": "label_recall",
+    "origin": _AGENT_ORIGIN,
+    "ran_at": "2026-11-01T06:00:00Z",
+    "fired": False,
+    "value": 0.81,
+    "threshold": 0.75,
+    "category": "model_performance",
+    "subject": "churn-model v12",
+    "model": "churn-model",
+    "detail": {"labels": 1840},
+    "source_ref": "checks/label_recall.py",
+    "version": "3f9c2e1",
+    "not_enough_data": False,
+}
+
+
+def _json_type(prop: dict[str, Any]) -> str:
+    if "enum" in prop:
+        return "one of " + ", ".join(json.dumps(v) for v in prop["enum"])
+    if "anyOf" in prop:
+        return " or ".join(_json_type(p) for p in prop["anyOf"])
+    kind = prop.get("type")
+    if kind not in ("string", "boolean", "number", "integer", "object", "null"):
+        raise ValueError(f"No served type for JSON schema {prop!r}")
+    fmt = prop.get("format")
+    return f"{kind} ({fmt})" if fmt else str(kind)
+
+
+def check_record_shape() -> str:
+    """The record an agent's check writes, generated from ResultRecord so it never drifts."""
+    schema = ResultRecord.model_json_schema()
+    required = set(schema["required"])
+    props: dict[str, dict[str, Any]] = schema["properties"]
+    unknown = (set(_RECORD_FIELD_NOTES) | set(_EXAMPLE_VALUES)) ^ set(props)
+    if unknown:
+        raise ValueError(f"Record notes and example out of step with ResultRecord: {unknown}")
+    lines = [
+        "A check with a file results location writes each run's records there, one JSON object"
+        " per line (JSON Lines), with these fields and no others; a line that does not match is"
+        " dropped. A check with an MLflow results location only logs its metric on its run;"
+        " the app writes its records.",
+    ]
+    for name, prop in props.items():
+        presence = (
+            "required" if name in required else f"optional, default {json.dumps(prop['default'])}"
+        )
+        kind = json.dumps(_WRITTEN_AS[name]) if name in _WRITTEN_AS else _json_type(prop)
+        lines.append(f"- `{name}` ({kind}, {presence}): {_RECORD_FIELD_NOTES[name]}")
+    lines += [RECORD_EXAMPLE_LABEL, json.dumps(_EXAMPLE_VALUES)]
+    return "\n".join(lines)
+
+
+CHECK_RECORD_SHAPE: Final = check_record_shape()
+
+
 class RegisterCheckInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     check_id: str = Field(description="Check identifier (e.g. model_drift)")
     category: ResultCategory = Field(
-        description="Result category: data_quality, model_performance, or operational"
+        description=f"Result category: {', '.join(get_args(ResultCategory))}"
     )
     cadence: Cadence = Field(description="Cadence specification (cron or every_minutes)")
     timezone: str = Field(description="IANA timezone (e.g. UTC, Europe/Paris)")
@@ -41,7 +129,9 @@ class RegisterCheckInput(BaseModel):
 
 class RegisterCheck(AgentTool[RegisterCheckInput]):
     name: ClassVar[str] = REGISTER_CHECK
-    description: ClassVar[str] = "Register a monitoring check pending a pull request merge."
+    description: ClassVar[str] = (
+        f"Register a monitoring check pending a pull request merge.\n\n{CHECK_RECORD_SHAPE}"
+    )
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = RegisterCheckInput
 
@@ -136,5 +226,8 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
             return ToolOutput(content=f"Failed to register check: {exc}", is_error=True)
 
         return ToolOutput(
-            content=f"Registered check {view.check_id} (ID: {view.id}) with status {view.status} pending PR #{view.pr_number}."
+            content=(
+                f"Registered check {view.check_id} (ID: {view.id}) with status {view.status}"
+                f" pending PR #{view.pr_number}.\n\n{CHECK_RECORD_SHAPE}"
+            )
         )

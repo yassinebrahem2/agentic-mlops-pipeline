@@ -1,16 +1,22 @@
-"""RegisterCheck refuses an MLflow metric another check already reads (bug #628)."""
+"""RegisterCheck refuses an MLflow metric another check already reads (bug #628), and serves
+the record shape an agent's check writes (#634)."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Any, Literal, cast, get_args
 
 import pytest
 
 from mlops_agents.agents.tools.base import FileAccess
-from mlops_agents.agents.tools.register_check import RegisterCheck, RegisterCheckInput
+from mlops_agents.agents.tools.register_check import (
+    RECORD_EXAMPLE_LABEL,
+    RegisterCheck,
+    RegisterCheckInput,
+)
 from mlops_agents.monitoring.expectations.contract import CheckView
-from mlops_agents.monitoring.results.contract import ResultCategory
+from mlops_agents.monitoring.results.contract import ResultCategory, ResultRecord
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import Cadence, CheckSpec, FileResults, MlflowResults
 from tests.agents.ctx import tool_context
@@ -206,3 +212,66 @@ async def test_failing_handoff_read_is_a_tool_error() -> None:
     assert out.is_error is True
     assert "handoff store unavailable" in out.content
     assert checks.registered == []
+
+
+# What an agent's check writes is served from ResultRecord (monitoring/results/contract.py),
+# never typed into a prompt: the shape is read from the model here too, so a field added there
+# fails these tests until it is served.
+REQUIRED_RECORD_FIELDS: tuple[str, ...] = tuple(ResultRecord.model_json_schema()["required"])
+FILE_LOCATION = FileResults(connection="local", path_pattern="checks/*.jsonl")
+
+
+def _served_example(text: str) -> dict[str, Any]:
+    lines = text.splitlines()
+    at = lines.index(RECORD_EXAMPLE_LABEL)
+    return json.loads(lines[at + 1])
+
+
+async def _file_registration_output() -> str:
+    tool = RegisterCheck(FakeChecks(), FakeHandoffs(None))
+    args = RegisterCheckInput(
+        check_id="dq_nulls",
+        category="data_quality",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=9,
+    )
+    out = await tool.run(CTX, args)
+    assert out.is_error is False, out.content
+    return out.content
+
+
+def test_description_serves_every_required_record_field() -> None:
+    assert REQUIRED_RECORD_FIELDS
+    for field in REQUIRED_RECORD_FIELDS:
+        assert f"`{field}`" in RegisterCheck.description, f"description omits {field}"
+
+
+async def test_successful_output_serves_every_required_record_field() -> None:
+    content = await _file_registration_output()
+    for field in REQUIRED_RECORD_FIELDS:
+        assert f"`{field}`" in content, f"output omits {field}"
+
+
+@pytest.mark.parametrize("source", ["description", "output"])
+async def test_served_example_record_is_a_record_the_file_reader_accepts(source: str) -> None:
+    text = (
+        RegisterCheck.description if source == "description" else await _file_registration_output()
+    )
+    example = _served_example(text)
+    record = ResultRecord.model_validate(example)
+    assert set(example) == set(ResultRecord.model_fields)
+    assert record.origin == "agent"
+    assert record.ran_at.tzinfo is not None
+
+
+def test_served_shape_says_what_model_is_for_label_evidence() -> None:
+    assert "`model`" in RegisterCheck.description
+    assert "as the incident names it" in RegisterCheck.description
+
+
+def test_category_description_lists_every_result_category() -> None:
+    described = RegisterCheckInput.model_fields["category"].description or ""
+    for category in get_args(ResultCategory):
+        assert category in described, f"category description omits {category}"

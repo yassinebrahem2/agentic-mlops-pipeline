@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast, get_args
@@ -53,7 +54,7 @@ from mlops_agents.integrations.github.auth import GitHubAuth
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.monitoring.hooks.constants import HOOK_CREDENTIAL_ENV
 from mlops_agents.monitoring.incidents.contract import WakeLabel, diagnoser
-from mlops_agents.monitoring.results.contract import ResultCategory, ResultOrigin, ResultRecord
+from mlops_agents.monitoring.results.contract import ResultCategory, ResultRecord
 from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
 from mlops_agents.monitoring.untrusted import untrusted
 from mlops_agents.paths import DataPaths
@@ -769,41 +770,39 @@ def test_diagnosing_prompt_cites_rules_and_never_certifies_them(name: str) -> No
     assert STALE_GATE_WORDING not in prompt.lower(), f"{name} prompt keeps the stale gate line"
 
 
-# The record fields and values the check lines name, each pinned to the result record model
-# (monitoring/results/contract.py), so a rename there fails here.
-CHECK_RECORD_FIELDS: tuple[str, ...] = ("check_id", "version", "not_enough_data")
-AGENT_ORIGIN: ResultOrigin = "agent"
+# The record shape a check writes is served by RegisterCheck from the result record model
+# (monitoring/results/contract.py); a check line only points at it, never lists its fields.
+RECORD_SHAPE_POINTER = f"in the record shape `{REGISTER_CHECK}`'s description gives"
 # The category confirmation by labels reads as label evidence (monitoring/verdicts/store.py).
 LABEL_EVIDENCE_CATEGORY: ResultCategory = "model_performance"
 LABEL_EVIDENCE_WORDS = "label evidence"
 
 
-def test_check_record_names_are_the_record_model_s() -> None:
-    assert set(CHECK_RECORD_FIELDS) | {"origin", "category"} <= set(ResultRecord.model_fields)
-    assert AGENT_ORIGIN in get_args(ResultOrigin)
+def test_label_evidence_category_is_a_result_category() -> None:
     assert LABEL_EVIDENCE_CATEGORY in get_args(ResultCategory)
 
 
-@pytest.mark.parametrize("name", ["data-quality", "model-performance"])
+@pytest.mark.parametrize("name", CHECK_WRITERS)
 def test_check_prompts_name_not_enough_data(name: str) -> None:
     prompt = _load_definition(name).prompt
     assert "not enough data" in prompt.lower(), f"{name} prompt lacks the minimum sample line"
-    assert f"`{CHECK_RECORD_FIELDS[-1]}`" in prompt
 
 
-def test_check_writers_describe_the_check_record() -> None:
+def test_check_writers_point_at_the_served_record_shape() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     holders = {d.name for d in catalog.all() if REGISTER_CHECK in d.tools}
     assert holders == set(CHECK_WRITERS)
     for name in CHECK_WRITERS:
         prompt = catalog.get(name).prompt
-        for words in (
-            *(f"`{field}`" for field in CHECK_RECORD_FIELDS[:-1]),
-            f'`origin: "{AGENT_ORIGIN}"`',
-            "scheduler",
-            "minimum sample",
-        ):
+        for words in (RECORD_SHAPE_POINTER, "scheduler", "minimum sample"):
             assert words in prompt, f"{name} check line lacks {words}"
+
+
+def test_no_prompt_lists_the_record_fields() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        listed = [f for f in ResultRecord.model_fields if re.search(rf"`{f}[`:]", defn.prompt)]
+        assert not listed, f"{defn.name} prompt lists record fields {listed}"
 
 
 @pytest.mark.parametrize("name", CHECK_WRITERS)
