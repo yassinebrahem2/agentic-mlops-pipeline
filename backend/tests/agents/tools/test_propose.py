@@ -781,3 +781,51 @@ def test_propose_serves_the_code_parser_contract() -> None:
     # The agent writes a code parser's script against the contract its card shows (#634).
     tool = ProposeTool(MagicMock(), MagicMock())
     assert CODE_PARSER_CONTRACT in tool.schema()["function"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_propose_parser_mapping_refuses_ran_at_in_defaults_or_missing_from_fields() -> None:
+    from unittest.mock import AsyncMock
+
+    from mlops_agents.monitoring.results.parser_kind import ParserKind
+    from mlops_agents.proposals.contract import PARSER_KIND
+
+    parsers_mock = MagicMock()
+    proposals_service = MagicMock(spec=ProposalsService)
+    proposals_service.create = AsyncMock()
+    kinds = ProposalKinds()
+    kinds.register(ParserKind(parsers_mock))
+    tool = ProposeTool(proposals_service, kinds)
+    ctx = _dummy_ctx()
+
+    bad_defaults_payload: dict[str, Any] = {
+        "spec": {
+            "source_id": "file:conn:out.jsonl",
+            "mapping": {
+                "format": "jsonl",
+                "fields": {"check_id": "id", "ran_at": "ts"},
+                "fired_when": {"field": "v", "op": "gt", "value": 1.0},
+                "defaults": {"ran_at": "2026-11-01T00:00:00Z"},
+            },
+        },
+        "sample_input": "",
+        "sample_records": [],
+    }
+    with pytest.raises(ToolFailure, match="time the check ran"):
+        await tool.preview(ctx, ProposeArgs(kind=PARSER_KIND, payload=bad_defaults_payload))
+
+    bad_fields_payload: dict[str, Any] = {
+        "spec": {
+            "source_id": "file:conn:out.jsonl",
+            "mapping": {
+                "format": "jsonl",
+                "fields": {"check_id": "id"},
+                "fired_when": {"field": "v", "op": "gt", "value": 1.0},
+                "defaults": {},
+            },
+        },
+        "sample_input": "",
+        "sample_records": [],
+    }
+    with pytest.raises(ToolFailure, match="time the check ran"):
+        await tool.preview(ctx, ProposeArgs(kind=PARSER_KIND, payload=bad_fields_payload))

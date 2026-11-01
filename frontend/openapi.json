@@ -7003,6 +7003,7 @@
             "type": "string"
           },
           "ran_at": {
+            "description": "when the check ran (ISO 8601 with its timezone); the date of the data it covers goes in `detail`, never here: the app judges silence by this time",
             "format": "date-time",
             "title": "Ran At",
             "type": "string"

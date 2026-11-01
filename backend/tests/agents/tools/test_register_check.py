@@ -275,3 +275,30 @@ def test_category_description_lists_every_result_category() -> None:
     described = RegisterCheckInput.model_fields["category"].description or ""
     for category in get_args(ResultCategory):
         assert category in described, f"category description omits {category}"
+
+
+def test_register_check_description_and_propose_description_carry_ran_at_description() -> None:
+    from unittest.mock import MagicMock
+
+    from mlops_agents.agents.tools.propose import ProposeTool
+
+    ran_at_desc = ResultRecord.model_fields["ran_at"].description
+    assert ran_at_desc is not None, "ResultRecord.ran_at must define a field description"
+    assert "when the check ran" in ran_at_desc
+
+    assert "the time the result describes" not in RegisterCheck.description
+    assert ran_at_desc in RegisterCheck.description
+
+    tool = ProposeTool(MagicMock(), MagicMock())
+    schema_desc = tool.schema()["function"]["description"]
+    assert "the time the result describes" not in schema_desc
+    assert ran_at_desc in schema_desc
+
+
+async def test_register_check_output_carries_ran_at_description_and_old_wording_gone() -> None:
+    ran_at_desc = ResultRecord.model_fields["ran_at"].description
+    assert ran_at_desc is not None, "ResultRecord.ran_at must define a field description"
+
+    content = await _file_registration_output()
+    assert "the time the result describes" not in content
+    assert ran_at_desc in content
