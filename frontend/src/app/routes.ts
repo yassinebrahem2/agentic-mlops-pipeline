@@ -8,7 +8,7 @@ export type PageRoute = {
     area: "app" | "project";
     label: string;
     order: number;
-    icon?: LucideIcon;
+    icon: LucideIcon;
     badge?: (projectId?: string) => number | undefined | null;
   };
 };

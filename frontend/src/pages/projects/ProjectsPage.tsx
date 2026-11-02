@@ -2,6 +2,7 @@ import { Loader2, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +42,7 @@ export function ProjectsPage() {
   }, [projects]);
 
   return (
-    <div className="container mx-auto max-w-5xl space-y-6 p-6">
+    <PageFrame width="5xl" className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
@@ -143,6 +144,6 @@ export function ProjectsPage() {
           </Table>
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }

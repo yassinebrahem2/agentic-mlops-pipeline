@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useId, useState, type SubmitEvent } from "react";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -38,7 +39,7 @@ export function IntegrationsPage() {
   });
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8 p-6">
+    <PageFrame width="3xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">Integrations</h1>
       <section aria-labelledby="github-heading">
         <Card>
@@ -64,7 +65,7 @@ export function IntegrationsPage() {
       <DiscordSection />
       <EmailSection />
       <PublicUrlSection />
-    </div>
+    </PageFrame>
   );
 }
 
