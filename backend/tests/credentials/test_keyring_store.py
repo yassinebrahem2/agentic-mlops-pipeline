@@ -1,14 +1,11 @@
 import pytest
 
 from mlops_agents.credentials.keyring_store import (
-    KEY_MAX_CHARS,
     KEYRING_MAX_CHARS,
-    MAX_KEY_CHARS,
-    MAX_KEY_LENGTH,
     SERVICE,
     KeyringStore,
 )
-from mlops_agents.credentials.keystore import KeyStoreError
+from mlops_agents.credentials.keystore import KeyStoreError, KeyTooLongError
 
 
 class MemoryBackend:
@@ -98,11 +95,12 @@ def test_key_longer_than_max_chars_is_refused_before_write() -> None:
     backend = MemoryBackend()
     store = KeyringStore(backend)
     too_long = "x" * (KEYRING_MAX_CHARS + 1)
-    with pytest.raises(KeyStoreError) as err:
+    with pytest.raises(KeyTooLongError) as err:
         store.set("provider/x", too_long)
+    assert isinstance(err.value, KeyStoreError)
     msg = str(err.value)
     assert "too long to be a key" in msg
-    assert str(KEYRING_MAX_CHARS) in msg
+    assert "Windows Credential Manager holds at most 1280 characters" in msg
     assert too_long not in msg
     assert backend.data == {}
 
@@ -113,10 +111,3 @@ def test_key_at_max_chars_is_stored() -> None:
     exact = "k" * KEYRING_MAX_CHARS
     store.set("provider/x", exact)
     assert store.get("provider/x") == exact
-
-
-def test_keyring_max_chars_constants() -> None:
-    assert KEYRING_MAX_CHARS == 1280
-    assert KEY_MAX_CHARS == 1280
-    assert MAX_KEY_CHARS == 1280
-    assert MAX_KEY_LENGTH == 1280

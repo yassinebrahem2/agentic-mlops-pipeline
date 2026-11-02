@@ -41,7 +41,7 @@ _ERROR_MAX_CHARS: Final[int] = 500
 def _extract_detail(response: httpx2.Response) -> str | None:
     try:
         data: object = response.json()
-    except Exception:
+    except ValueError:
         text = response.text.strip()
         return text or None
 
