@@ -269,6 +269,63 @@ async def test_alias_moved_to_production_alias_wakes_once_with_versions(
 
 
 @pytest.mark.anyio
+async def test_baseline_deployment_is_skipped_and_advances_cursor(
+    databases: Databases,
+) -> None:
+    await databases.project(PROJECT_ID)
+    t0 = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=5)
+    t2 = t0 + timedelta(minutes=10)
+
+    # Pre-set cursor to t0
+    observer_init = PostDeployObserver(
+        databases=databases,
+        tracking=FakeTracking(),
+        handoffs=FakeHandoffs(make_handoff()),
+        promotions=FakePromotions(),
+        waker=RecordingWaker(),
+    )
+    await observer_init.synced(PROJECT_ID, now=t0)
+
+    tracking = FakeTracking()
+    tracking.deployments.append(
+        DeploymentRow(
+            source_id="src_1",
+            model="fraud_detection",
+            alias="production",
+            from_version=None,
+            to_version="v1",
+            seen_at=t1,
+            baseline=True,
+        )
+    )
+
+    waker = RecordingWaker()
+    observer = PostDeployObserver(
+        databases=databases,
+        tracking=tracking,
+        handoffs=FakeHandoffs(make_handoff()),
+        promotions=FakePromotions(),
+        waker=waker,
+    )
+
+    await observer.synced(PROJECT_ID, now=t2)
+
+    # Baseline deployment must NOT wake anyone!
+    assert len(waker.wakes) == 0
+
+    # But cursor must still advance past t1!
+    engine = await databases.project(PROJECT_ID)
+    async with engine.connect() as conn:
+        cursor_val = (
+            await conn.execute(
+                select(project_settings.c.value).where(project_settings.c.key == CURSOR_KEY)
+            )
+        ).scalar_one_or_none()
+    assert cursor_val == to_iso(t1)
+
+
+@pytest.mark.anyio
 async def test_subject_id_is_model_when_no_promotion_exists(databases: Databases) -> None:
     await databases.project(PROJECT_ID)
     t0 = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)

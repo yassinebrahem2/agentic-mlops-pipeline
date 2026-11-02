@@ -116,7 +116,12 @@ class HookAliasVerifier(HookVerifier):
             TrackingQuery(what="deployments", model=req.model, since=req.started),
         )
         for d in dep_page.rows:
-            if isinstance(d, DeploymentRow) and d.alias in prod_aliases and d.to_version:
+            if (
+                isinstance(d, DeploymentRow)
+                and not d.baseline
+                and d.alias in prod_aliases
+                and d.to_version
+            ):
                 if d.to_version in run_version_numbers:
                     return AliasCheck(
                         moved=True,

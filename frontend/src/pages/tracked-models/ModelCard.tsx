@@ -153,7 +153,9 @@ export function ModelCard({ projectId, model, handoff }: ModelCardProps) {
                               {d.alias}
                             </Badge>
                             <span className="font-mono text-muted-foreground">
-                              {d.from_version ?? "–"} → {d.to_version ?? "removed"}
+                              {d.baseline
+                                ? `v${d.to_version ?? ""}, already in production when the source was added`
+                                : `${d.from_version ?? "–"} → ${d.to_version ?? "removed"}`}
                             </span>
                           </div>
                           <span className="text-muted-foreground">{formatTime(d.seen_at)}</span>
