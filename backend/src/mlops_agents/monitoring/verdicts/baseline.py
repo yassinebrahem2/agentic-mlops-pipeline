@@ -146,6 +146,7 @@ def _alert(result: StoredResult, verdict: SilentVerdict | None) -> SilentTeamAle
         check_id=result.check_id,
         subject=result.subject,
         ran_at=result.ran_at,
+        category=result.category,
         verdict=verdict,
     )
 
