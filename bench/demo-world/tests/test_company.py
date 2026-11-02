@@ -1,4 +1,5 @@
 import logging
+import sys
 from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
@@ -40,6 +41,34 @@ def test_the_cli_runs_in_the_checkout_with_the_worlds_folders(
     assert call["HOTEL_DEMO_MLFLOW"] == str(paths.mlflow_dir())
     assert call["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5123"
     assert call["VIRTUAL_ENV"] is None
+
+
+def test_the_company_environment_sets_pythonutf8_and_overrides_shell(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    the_company = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir())
+
+    without_uri = the_company.environment()
+    assert without_uri["PYTHONUTF8"] == "1"
+
+    with_uri = the_company.environment(tracking_uri="http://127.0.0.1:5123")
+    assert with_uri["PYTHONUTF8"] == "1"
+    assert with_uri[paths.TRACKING_URI_VARIABLE] == "http://127.0.0.1:5123"
+
+
+def test_the_company_command_non_ascii_output_to_pipe_succeeds(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    the_company = company.Company.at(checkout, paths.data_dir(), paths.mlflow_dir())
+    result = company.run_process(
+        [sys.executable, "-c", "print('café \\U0001f3c3')"],
+        checkout,
+        the_company.environment(),
+    )
+    assert result.ok
+    assert "café \U0001f3c3" in result.stdout
 
 
 def test_the_company_is_run_with_uv_from_its_checkout(checkout: Path) -> None:
