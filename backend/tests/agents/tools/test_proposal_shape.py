@@ -123,7 +123,7 @@ def test_propose_description_and_validation_error_pointer(kinds_registry: Propos
 
 
 def test_definitions_with_propose_list_proposal_shape() -> None:
-    catalog = AgentCatalog.load(STAGE_2_TOOLS | {PROPOSAL_SHAPE}, hook_names=STAGE_3_HOOKS)
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     expected_agents = {
         "onboarding",
         "data-quality",

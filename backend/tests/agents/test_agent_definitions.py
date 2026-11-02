@@ -83,9 +83,7 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.conftest import (
-    STAGE_2_TOOLS as _BASE_STAGE_2_TOOLS,
-)
-from tests.conftest import (
+    STAGE_2_TOOLS,
     STAGE_3_HOOKS,
     MemoryKeyStore,
     make_repo,
@@ -93,8 +91,6 @@ from tests.conftest import (
 )
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
-
-STAGE_2_TOOLS: frozenset[str] = _BASE_STAGE_2_TOOLS | {PROPOSAL_SHAPE}
 
 NAME_MAP: dict[str, str] = {
     "Orchestrator": "orchestrator",
