@@ -386,7 +386,7 @@ class VerdictView(BaseModel): incident_id: str; value: VerdictValue; right_categ
 class MissReport(BaseModel): description: str; category: ResultCategory | None; occurred_at: datetime; reported_at: datetime
 class BaselineLink(BaseModel): incident_id: str; team_check_id: str; first_fired_at: datetime; seen_at: datetime; lead_seconds: float   # negative: the team's check fired first
 SilentVerdict = Literal["real_issue", "not_an_issue"]
-class SilentTeamAlert(BaseModel): result_id: str; check_id: str; subject: str; ran_at: datetime; verdict: SilentVerdict | None   # a team check fired and no agent incident covers its cause key; listed for verdicts
+class SilentTeamAlert(BaseModel): result_id: str; check_id: str; subject: str; ran_at: datetime; category: ResultCategory; verdict: SilentVerdict | None   # category: the team result's, for the Stats category filter (2026-11-02)   # a team check fired and no agent incident covers its cause key; listed for verdicts
 class Verdicts(Protocol):               # verdicts (stats task 1)
     async def record(self, project_id: str, incident_id: str, draft: VerdictDraft, by: str) -> VerdictView: ...   # a person; a verdict on a `resolved` incident closes it (the person's act); a `labels` verdict never closes
     async def get(self, project_id: str, incident_id: str) -> VerdictView | None: ...   # what `IncidentView.verdict` shows
