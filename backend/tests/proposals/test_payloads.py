@@ -229,3 +229,22 @@ def test_placeholder_names_are_the_overviews() -> None:
         "mode",
         "threshold",
     )
+
+
+def test_handoff_with_check_without_cadence_validates() -> None:
+    data = handoff()
+    check_no_cadence = {
+        "check_id": "chk-on-demand",
+        "name": "Manual evaluation",
+        "category": "model_performance",
+        "timezone": "UTC",
+        "results": {"metric": "accuracy", "threshold": 0.9, "fires_when": "below"},
+    }
+    data["operations"]["checks"].append(check_no_cadence)
+    payload = HandoffPayload.model_validate(data)
+    assert payload.operations.checks[-1].cadence is None
+
+    # Stored handoff with cadence loads as before
+    stored_payload = HandoffPayload.model_validate(handoff())
+    for check in stored_payload.operations.checks:
+        assert check.cadence is not None

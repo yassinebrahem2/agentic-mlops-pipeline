@@ -54,6 +54,7 @@ export const sampleAlerts: SilentTeamAlert[] = [
     check_id: "team_null_rate",
     subject: "orders.amount",
     ran_at: "2026-10-30T09:00:00Z",
+    category: "data_quality",
     verdict: null,
   },
   {
@@ -61,6 +62,7 @@ export const sampleAlerts: SilentTeamAlert[] = [
     check_id: "team_latency",
     subject: "scoring-api",
     ran_at: "2026-10-29T08:00:00Z",
+    category: "operational",
     verdict: "real_issue",
   },
 ];

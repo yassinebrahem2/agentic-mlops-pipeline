@@ -75,6 +75,7 @@ class SilentTeamAlert(BaseModel):
     check_id: str
     subject: str
     ran_at: datetime
+    category: ResultCategory
     verdict: SilentVerdict | None = None
 
 

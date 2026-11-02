@@ -67,14 +67,17 @@ class ProposeTool(AgentTool[ProposeArgs]):
         # time, not when this module loads.
         from mlops_agents.monitoring.results.contract import ResultRecord
         from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT
+        from mlops_agents.proposals.payloads import CheckSpec
 
         ran_at_desc = ResultRecord.model_fields["ran_at"].description
+        cadence_desc = CheckSpec.model_fields["cadence"].description
         out = super().schema()
         out["function"]["description"] = (
             f"{self.description}\n\n"
             f"A `parser` proposal with `code` runs its script under this contract:\n"
             f"{CODE_PARSER_CONTRACT}\n\n"
-            f"Records need `ran_at`: {ran_at_desc}"
+            f"Records need `ran_at`: {ran_at_desc}\n\n"
+            f"Team checks' `cadence`: {cadence_desc}"
         )
         return out
 

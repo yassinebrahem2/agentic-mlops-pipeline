@@ -115,6 +115,8 @@ class PostDeployObserver(SyncObserver):
         agent = diagnoser("operational", "bad_deploy")
 
         for row in new_rows:
+            if row.baseline:
+                continue
             if row.to_version is None:
                 continue
 

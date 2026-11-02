@@ -238,6 +238,7 @@ def _move(
     at: datetime,
     *,
     model: str = MODEL,
+    baseline: bool = False,
 ) -> DeploymentRow:
     return DeploymentRow(
         source_id="src_1",
@@ -246,6 +247,7 @@ def _move(
         from_version=from_version,
         to_version=to_version,
         seen_at=at,
+        baseline=baseline,
     )
 
 
@@ -399,6 +401,29 @@ async def test_hook_runs_get_no_versions_when_the_moves_since_them_overflow_a_pa
     versions = {d.decided_by_ref: (d.from_version, d.to_version) for d in view.decisions}
     assert versions == {"rul_old": (None, None), "rul_new": (None, None)}
     assert any(MODEL in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_production_moves_skips_baseline_rows() -> None:
+    first = T0 + timedelta(minutes=1)
+    tracking = FakeTracking()
+    # Baseline row (e.g. initial champion) followed by an actual move
+    tracking.deployments = [
+        _move("production", None, "v1", first, baseline=True),
+        _move("production", "v1", "v2", first + timedelta(seconds=20), baseline=False),
+    ]
+    runs = [
+        _run("hrun_1", "rollback", first, rule_id="rul_1"),
+    ]
+
+    async with httpx2.AsyncClient() as http:
+        view = await _service(http, tracking=tracking, runs=runs).get_deployments(PROJECT_ID)
+
+    versions = {d.decided_by_ref: (d.from_version, d.to_version) for d in view.decisions}
+    # The rollback claims the actual move v1 -> v2, NOT the baseline None -> v1!
+    assert versions == {
+        "rul_1": ("v1", "v2"),
+    }
 
 
 @pytest.mark.anyio

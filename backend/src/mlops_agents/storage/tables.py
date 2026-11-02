@@ -343,6 +343,7 @@ deployments = Table(
     Column("seen_at", Text, primary_key=True),
     Column("from_version", Text),
     Column("to_version", Text),
+    Column("baseline", Integer, nullable=False),
 )
 
 ci_runs = Table(

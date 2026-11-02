@@ -113,4 +113,5 @@ def test_packaged_migrations_apply(tmp_path: Path) -> None:
         8,
         9,
         10,
+        11,
     ]

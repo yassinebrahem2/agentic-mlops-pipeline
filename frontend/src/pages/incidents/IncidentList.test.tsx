@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPage } from "@/test/render";
 import {
   ACKNOWLEDGE,
+  bodyOf,
   emitEvent,
   eventRecord,
   failure,
+  futureSnoozeTime,
   incident,
   INCIDENTS,
   ok,
@@ -16,7 +18,6 @@ import {
   stubPost,
   stubStream,
   VERDICT,
-  bodyOf,
 } from "./testing";
 
 describe("Inbox incidents section", () => {
@@ -122,6 +123,7 @@ describe("Inbox incidents section", () => {
   it("snoozes an incident until the chosen time and shows the snooze on the row", async () => {
     const user = userEvent.setup();
     stubStream();
+    const { local, iso } = futureSnoozeTime();
     let snoozedUntil: string | null = null;
     stubGet({
       [INCIDENTS]: () => ok(pageOf([incident("inc_1", { snoozed_until: snoozedUntil })])),
@@ -139,13 +141,12 @@ describe("Inbox incidents section", () => {
     const send = within(row).getByRole("button", { name: "Snooze until chosen time" });
     expect(send).toBeDisabled();
     fireEvent.change(within(row).getByLabelText("Snooze until"), {
-      target: { value: "2026-11-02T10:00" },
+      target: { value: local },
     });
     await user.click(send);
 
-    const until = new Date("2026-11-02T10:00").toISOString();
     await waitFor(() => {
-      expect(bodyOf(post, SNOOZE)).toEqual({ until });
+      expect(bodyOf(post, SNOOZE)).toEqual({ until: iso });
     });
     expect(
       await within(screen.getByTestId("incident-row-inc_1")).findByText(/Snoozed until/),

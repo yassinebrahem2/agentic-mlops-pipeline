@@ -96,11 +96,14 @@ async def test_baseline_routes_list_links_and_silent_alerts_and_take_a_verdict(
     assert res.json()["code"] == "incident_not_found"
 
     listed = (await client.get(f"{base}/baseline/silent-alerts")).json()
-    assert [(a["result_id"], a["verdict"]) for a in listed] == [(silent.id, None)]
+    assert [(a["result_id"], a["category"], a["verdict"]) for a in listed] == [
+        (silent.id, "model_performance", None)
+    ]
 
     verdict_url = f"{base}/baseline/silent-alerts/{silent.id}/verdict"
     res = await client.post(verdict_url, json={"value": "real_issue"})
     assert res.status_code == 200
+    assert res.json()["category"] == "model_performance"
     assert res.json()["verdict"] == "real_issue"
     res = await client.post(verdict_url, json={"value": "not_an_issue"})
     assert res.status_code == 200

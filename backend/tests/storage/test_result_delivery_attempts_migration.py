@@ -50,7 +50,7 @@ def test_a_version_8_database_migrates_to_v9_and_defaults_delivery_attempts(
     conn.close()
 
     # Now apply migration 0009 using the packaged migrations
-    assert migrate(db, "project", tmp_path / "bk") == [9, 10]
+    assert migrate(db, "project", tmp_path / "bk") == [9, 10, 11]
 
     conn = connect_sync(db)
     # Check column exists and existing row has delivery_attempts = 0

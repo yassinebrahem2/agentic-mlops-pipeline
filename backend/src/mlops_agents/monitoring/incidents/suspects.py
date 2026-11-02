@@ -70,6 +70,8 @@ class SuspectLinker(SyncObserver, PrObserver):
                 project_id, TrackingQuery(what="deployments", limit=100)
             )
             for dep in dep_page.rows:
+                if dep.baseline:
+                    continue
                 dep_ref = (
                     f"{dep.source_id}:{dep.model}:{dep.alias}:{dep.to_version}"
                     if dep.source_id

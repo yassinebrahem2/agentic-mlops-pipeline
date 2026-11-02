@@ -800,4 +800,52 @@ describe("HandoffProposalCard", () => {
       expect(screen.getByRole("heading", { name: "Models" })).toBeInTheDocument();
     });
   });
+
+  it("renders 'not judged for silence' for check without a cadence", async () => {
+    const noCadenceProposal: ProposalView = {
+      ...sampleProposal,
+      warnings: [],
+      slots: [],
+      payload: {
+        ...fullPayload,
+        operations: {
+          ...fullPayload.operations,
+          checks: [
+            {
+              check_id: "chk_on_demand",
+              name: "On Demand Evaluation",
+              category: "model_performance",
+              cadence: null,
+              timezone: "UTC",
+              results: {
+                metric: "accuracy",
+                threshold: 0.9,
+                fires_when: "below",
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    getSpy.mockImplementation((url) => {
+      if (url === "/api/projects/{project_id}/proposals/by-approval/{approval_id}") {
+        return Promise.resolve({
+          data: noCadenceProposal,
+          response: new Response(JSON.stringify(noCadenceProposal), { status: 200 }),
+        });
+      }
+      return Promise.resolve({ data: {}, response: new Response(null, { status: 200 }) });
+    });
+
+    renderWithClient(
+      <HandoffProposalCard approval={baseApproval} projectId="proj_1" toolName="Handoff" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("On Demand Evaluation")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/not judged for silence/)).toBeInTheDocument();
+  });
 });
