@@ -65,6 +65,14 @@ async def _save_deployments(
     result: SyncResult,
     now_iso: str,
 ) -> None:
+    source_row = (
+        await conn.execute(
+            select(tracking_sources.c.last_sync).where(tracking_sources.c.id == source_id)
+        )
+    ).one_or_none()
+    is_baseline = source_row is None or source_row.last_sync is None
+    baseline_val = 1 if is_baseline else 0
+
     dep_rows = (
         await conn.execute(
             select(
@@ -108,6 +116,7 @@ async def _save_deployments(
                     seen_at=seen_at_str,
                     from_version=current_ver,
                     to_version=target_version,
+                    baseline=baseline_val,
                 )
                 await conn.execute(stmt_dep)
                 current_state[(model, alias)] = target_version
@@ -125,6 +134,7 @@ async def _save_deployments(
                 seen_at=seen_at_str,
                 from_version=current_ver,
                 to_version=None,
+                baseline=baseline_val,
             )
             await conn.execute(stmt_dep)
             current_state[(model, alias)] = None

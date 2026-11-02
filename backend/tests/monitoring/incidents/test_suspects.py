@@ -309,3 +309,69 @@ async def test_suspects_linked_on_incident_open(
     assert len(suspect_events) == 2
     linked_kinds = {e.payload["kind"] for e in suspect_events}
     assert linked_kinds == {"agent_pr", "ci_run"}
+
+
+@pytest.mark.asyncio
+async def test_baseline_deployment_is_never_stored_as_recent_change_or_suspect(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    project_id: str,
+) -> None:
+    """A baseline deployment row is never stored as a recent change, so no incident gets it as a suspect."""
+    results = FakeResults()
+    severity = FakeSeverityPolicy("medium")
+    service = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=severity,
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+    )
+    tracking = FakeTracking()
+    linker = SuspectLinker(
+        databases=databases,
+        incidents=service,
+        tracking=tracking,
+        events=event_log,
+        clock=fake_clock,
+    )
+
+    t0 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+
+    # Open incident at t0
+    d = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="orders",
+        model="churn",
+        ran_at=t0,
+        detail={},
+    )
+    outcome = await service.raise_signal(project_id, d, seen_at=t0)
+    inc_id = outcome.incident_id
+
+    # Baseline deployment within 24h window
+    dep_baseline = DeploymentRow(
+        source_id="gh",
+        model="churn",
+        alias="prod",
+        from_version=None,
+        to_version="v1",
+        seen_at=t0 - timedelta(hours=1),
+        baseline=True,
+    )
+    tracking.deployments = [dep_baseline]
+
+    await linker.synced(project_id)
+
+    # Check store: recent_changes must NOT contain dep_baseline
+    store = IncidentStore(databases)
+    recent = await store.list_recent_changes(project_id)
+    assert len(recent) == 0
+
+    # No suspect linked
+    events = await event_log.page(project_id, subject_id=inc_id)
+    suspect_events = [e for e in events if e.type == "incident.suspect_linked"]
+    assert len(suspect_events) == 0
