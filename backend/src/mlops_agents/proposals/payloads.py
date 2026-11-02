@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from importlib.resources import files
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import (
     AfterValidator,
@@ -127,10 +127,21 @@ class Profile(_Strict):
 class CommandSpec(_Strict):
     kind: Literal["train", "evaluate", "deploy", "rollback", "rerun", "hold", "fall_back"]
     type: Literal["command", "ci_dispatch"]
-    template: str | None
+    template: str | None = Field(
+        description=(
+            "The command template string (for type 'command'). Placeholders must be drawn from: "
+            + ", ".join(f"{{{p}}}" for p in get_args(Placeholder))
+            + ". Use double braces {{ and }} for literal braces."
+        ),
+    )
     workflow: str | None
     inputs: dict[str, str]
-    placeholders: list[Placeholder]
+    placeholders: list[Placeholder] = Field(
+        description=(
+            "Declared placeholders used in the template or inputs. Must be drawn from: "
+            + ", ".join(get_args(Placeholder))
+        )
+    )
     deploys: bool
     entry_files: list[str]
 
@@ -313,7 +324,12 @@ class Scheduler(_Strict):
 class Operations(_Strict):
     scheduler: Scheduler | None
     feeds: list[Feed]
-    on_call: list[OnCall]
+    on_call: list[OnCall] = Field(
+        description=(
+            "On-call contacts for operational alerts and incidents. "
+            "May be an empty list [] when nobody is known."
+        )
+    )
     checks: list[CheckSpec]
     results_location: FileResults | MlflowResults
 

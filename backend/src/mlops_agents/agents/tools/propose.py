@@ -15,6 +15,9 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
+from mlops_agents.agents.tools.proposal_shape import (
+    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
+)
 from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.proposals.contract import ProposalCheck
 
@@ -51,7 +54,8 @@ class ProposeTool(AgentTool[ProposeArgs]):
     name: ClassVar[str] = PROPOSE_TOOL_NAME
     description: ClassVar[str] = (
         "Propose a configuration change (such as data connections or project handoff) "
-        "for user approval."
+        f"for user approval. Call {PROPOSAL_SHAPE}(kind) first to inspect that kind's "
+        "expected payload schema and rules."
     )
     risk: ClassVar[RiskClass] = RiskClass.PROPOSE
     args_model: ClassVar[type[BaseModel]] = ProposeArgs
@@ -95,7 +99,8 @@ class ProposeTool(AgentTool[ProposeArgs]):
             )
         except ValidationError as exc:
             raise ToolFailure(
-                f"Invalid payload for {args.kind}: {validation_error_message(exc).text}"
+                f"Invalid payload for {args.kind}: {validation_error_message(exc).text}. "
+                f"Call {PROPOSAL_SHAPE}(kind={args.kind!r}) to inspect the schema."
             ) from exc
 
         if isinstance(kind_obj, ProposalCheck):
