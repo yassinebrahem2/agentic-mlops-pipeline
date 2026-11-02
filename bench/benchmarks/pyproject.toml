@@ -9,6 +9,7 @@ dependencies = [
   "httpx2>=2.13.1",
   "lightgbm>=4.7.0",
   "mlops-agents",
+  "river>=0.26.1",
   "scikit-learn>=1.9.1",
 ]
 
