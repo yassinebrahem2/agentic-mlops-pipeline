@@ -37,6 +37,7 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_UPDATE,
     MERGE_PULL_REQUEST,
     MONITORING_QUERY,
+    PROPOSAL_SHAPE,
     RECORD_FIX_CHOICE,
     REGISTER_CHECK,
     REQUEST_FIX,
@@ -82,7 +83,9 @@ from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.runtime.builder_env import status_board_hooks
 from tests.agents.runtime.hook_fakes import NoInbound
 from tests.conftest import (
-    STAGE_2_TOOLS,
+    STAGE_2_TOOLS as _BASE_STAGE_2_TOOLS,
+)
+from tests.conftest import (
     STAGE_3_HOOKS,
     MemoryKeyStore,
     make_repo,
@@ -90,6 +93,8 @@ from tests.conftest import (
 )
 from tests.fakes.turn_end import NoTurnEndCheck
 from tests.integrations.test_github_auth import FakeGh
+
+STAGE_2_TOOLS: frozenset[str] = _BASE_STAGE_2_TOOLS | {PROPOSAL_SHAPE}
 
 NAME_MAP: dict[str, str] = {
     "Orchestrator": "orchestrator",
@@ -436,10 +441,15 @@ TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
     for row in STAGE_3_TABLE
     if OpenPullRequestTool.name in row["tools"]
 }
+TASK_4_COLUMN: dict[str, tuple[str, ...]] = {
+    agent: (PROPOSAL_SHAPE,)
+    for agent in ("onboarding", "data-quality", "model-performance", "retraining", "deployment")
+}
 TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (
     TASK_1_COLUMN,
     TASK_2_COLUMN,
     TASK_3_COLUMN,
+    TASK_4_COLUMN,
 )
 AGENT_TABLE: list[dict[str, Any]] = [
     {
