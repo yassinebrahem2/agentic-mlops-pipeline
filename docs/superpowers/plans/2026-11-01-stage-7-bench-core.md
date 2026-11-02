@@ -53,7 +53,7 @@
 
 **Notes:**
 - What each mode shows, and how each number is labelled, is the spec's "The report" section; the per-mode group lists live in one constant in `report.py`. Values come from `/stats?window=all` and `/stats?window=all&category=<c>` for every category with at least one problem, printed with their `n` and "collecting" / "not available" exactly as `StatValue` says; a group the mode cannot fill is listed as "not measured in this mode".
-- Usage (agents mode): `GET /usage?since=<run start date>`; the run's app has its own data folder, so app-wide usage is the run's. Requests and tokens per agent and in total, the run's real start, end and duration, and every `Pause` with its length.
+- Usage (agents mode): `GET /usage?since=<run start date>`; the run's app has its own data folder, so app-wide usage is the run's. Tokens and cost per agent and model and in total (`UsageRow` has no request count, so requests are not reported; an unpriced model's cost is "not available"), the run's real start, end and duration, and every `Pause` with its length.
 - `report.json` holds everything `report.md` shows (the `StatsView` objects as returned, the `Score`, the `RunInfo`); `bench report` builds its table from `report.json` files only.
 
 **PR:** open a PR into `main` for tasks 1 to 3 as soon as this task is done, from `plan/stage-7-bench-core-task3` (the agents plan consumes the client, `DayStarts`, the scorer and the report).
