@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from contextlib import suppress
+from typing import Final, cast
 
 import httpx2
 from sqlalchemy import delete, insert, select, update
@@ -33,6 +34,33 @@ from mlops_agents.providers.verification import probe_embedder, probe_model
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import models as models_table
 from mlops_agents.storage.tables import provider_keys, providers
+
+_ERROR_MAX_CHARS: Final[int] = 500
+
+
+def _extract_detail(response: httpx2.Response) -> str | None:
+    try:
+        data: object = response.json()
+    except Exception:
+        text = response.text.strip()
+        return text or None
+
+    if isinstance(data, dict):
+        d = cast(dict[str, object], data)
+        err = d.get("error")
+        if isinstance(err, dict):
+            err_dict = cast(dict[str, object], err)
+            msg = err_dict.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+        elif isinstance(err, str) and err.strip():
+            return err.strip()
+        msg = d.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+        return None
+    text = response.text.strip()
+    return text or None
 
 
 def _price_values(price: ModelPrice | None) -> dict[str, object]:
@@ -199,7 +227,13 @@ class ProvidersService:
                 "provider_unreachable", f"Could not reach {provider.name}: {reason}", status=502
             ) from None
         if response.status_code in (401, 403):
-            raise DomainError("key_rejected", f"{provider.name} rejected this key.", status=422)
+            detail = _extract_detail(response)
+            if detail:
+                scrubbed = scrub_values(detail, secrets_seen)[:_ERROR_MAX_CHARS]
+                msg = f"{provider.name} refused the key: {scrubbed}"
+            else:
+                msg = f"{provider.name} refused the key."
+            raise DomainError("key_rejected", msg, status=422)
         if response.status_code >= 400:
             raise DomainError(
                 "provider_error",

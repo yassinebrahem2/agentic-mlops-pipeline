@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Final, Protocol
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
@@ -13,6 +13,11 @@ _HELP = (
     "On Linux start a Secret Service (for example gnome-keyring), or run in server mode"
     " with MLOPS_AGENTS_MASTER_KEY."
 )
+
+KEYRING_MAX_CHARS: Final[int] = 1280
+KEY_MAX_CHARS: Final[int] = KEYRING_MAX_CHARS
+MAX_KEY_CHARS: Final[int] = KEYRING_MAX_CHARS
+MAX_KEY_LENGTH: Final[int] = KEYRING_MAX_CHARS
 
 
 class KeyringBackendLike(Protocol):
@@ -40,10 +45,14 @@ class KeyringStore:
             ) from None
 
     def set(self, ref: str, value: str) -> None:
+        if len(value) > KEYRING_MAX_CHARS:
+            raise KeyStoreError(
+                f"The key is too long to be a key (the system keyring holds at most {KEYRING_MAX_CHARS} characters)."
+            )
         try:
             self._backend.set_password(SERVICE, ref, value)
             stored = self._backend.get_password(SERVICE, ref)
-        except KeyringError as exc:
+        except Exception as exc:
             raise KeyStoreError(
                 f"The system keyring refused to store the key ({type(exc).__name__}). {_HELP}"
             ) from None

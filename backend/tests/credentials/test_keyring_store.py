@@ -1,6 +1,13 @@
 import pytest
 
-from mlops_agents.credentials.keyring_store import SERVICE, KeyringStore
+from mlops_agents.credentials.keyring_store import (
+    KEY_MAX_CHARS,
+    KEYRING_MAX_CHARS,
+    MAX_KEY_CHARS,
+    MAX_KEY_LENGTH,
+    SERVICE,
+    KeyringStore,
+)
 from mlops_agents.credentials.keystore import KeyStoreError
 
 
@@ -71,3 +78,45 @@ def test_no_keyring_error_explains_how_to_fix() -> None:
         assert "NoKeyringError" in msg
         assert "On Linux start a Secret Service" in msg
         assert "MLOPS_AGENTS_MASTER_KEY" in msg
+
+
+class FailingWriteBackend(MemoryBackend):
+    def set_password(self, service: str, username: str, password: str) -> None:
+        raise RuntimeError("OS stub bad data")
+
+
+def test_non_keyring_error_on_write_raises_keystore_error() -> None:
+    store = KeyringStore(FailingWriteBackend())
+    with pytest.raises(KeyStoreError) as err:
+        store.set("provider/x", "val")
+    msg = str(err.value)
+    assert "The system keyring refused to store the key (RuntimeError)." in msg
+    assert "On Linux start a Secret Service" in msg
+
+
+def test_key_longer_than_max_chars_is_refused_before_write() -> None:
+    backend = MemoryBackend()
+    store = KeyringStore(backend)
+    too_long = "x" * (KEYRING_MAX_CHARS + 1)
+    with pytest.raises(KeyStoreError) as err:
+        store.set("provider/x", too_long)
+    msg = str(err.value)
+    assert "too long to be a key" in msg
+    assert str(KEYRING_MAX_CHARS) in msg
+    assert too_long not in msg
+    assert backend.data == {}
+
+
+def test_key_at_max_chars_is_stored() -> None:
+    backend = MemoryBackend()
+    store = KeyringStore(backend)
+    exact = "k" * KEYRING_MAX_CHARS
+    store.set("provider/x", exact)
+    assert store.get("provider/x") == exact
+
+
+def test_keyring_max_chars_constants() -> None:
+    assert KEYRING_MAX_CHARS == 1280
+    assert KEY_MAX_CHARS == 1280
+    assert MAX_KEY_CHARS == 1280
+    assert MAX_KEY_LENGTH == 1280
