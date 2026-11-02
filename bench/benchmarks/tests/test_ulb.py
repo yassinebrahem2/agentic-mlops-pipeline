@@ -286,3 +286,61 @@ def test_ulb_write_day_writes_data_and_check_results(tmp_path: Path) -> None:
     assert any(r.category == "data_quality" for r in key_records)
     assert any(r.category == "drift" for r in key_records)
     assert any(r.category == "model_performance" for r in key_records)
+
+
+def test_injections_handle_empty_dataframe() -> None:
+    cols = ["Time", "Amount", "Class", "V1", "V2", "V3", "V4"]
+    empty_df = pd.DataFrame(columns=cols)
+    d = date(2026, 2, 2)
+
+    ns = NullSpikeInjection(column="V1", share=0.2, start=d, end=d)
+    oor = OutOfRangeInjection(column="Amount", value=-50.0, share=0.2, start=d, end=d)
+    cs = CovariateShiftInjection(column="Amount", shift=100.0, start=d, end=d)
+    uf = UnseenFraudInjection(share=0.2, start=d, end=d)
+
+    assert len(ns.apply(empty_df, d)) == 0
+    assert len(oor.apply(empty_df, d)) == 0
+    assert len(cs.apply(empty_df, d)) == 0
+    assert len(uf.apply(empty_df, d)) == 0
+
+
+def test_load_ulb_scenario_raises_on_unknown_kind(tmp_path: Path) -> None:
+    toml_path = tmp_path / "bad_scenario.toml"
+    toml_path.write_text(
+        """
+[[injection]]
+kind = "unknown_problem"
+start = "2026-02-02"
+end = "2026-02-04"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Unknown or unsupported injection kind"):
+        load_ulb_scenario(toml_path)
+
+
+def test_ulb_dataset_retains_cache_dir(tmp_path: Path) -> None:
+    custom_cache = tmp_path / "custom_cache"
+    custom_cache.mkdir()
+
+    # Create dummy parquet in custom cache
+    synthetic = _make_synthetic_ulb_df(180)
+    pq_path = custom_cache / "dataset_1597.pq"
+    cast(Any, synthetic).to_parquet(pq_path)
+
+    ds = ULBDataset()
+    with patch("benchmarks.datasets.ulb.fetch_ulb_parquet") as mock_fetch:
+        ds.prepare(custom_cache)
+        mock_fetch.assert_called_once_with(custom_cache)
+
+    assert ds.cache_dir == custom_cache
+
+    # write_day should read from custom_cache without re-downloading
+    data_dir = tmp_path / "data"
+    results_dir = data_dir / "results"
+    with patch("benchmarks.datasets.ulb.fetch_ulb_parquet") as mock_fetch2:
+        ds.write_day(ds.days()[0], data_dir, results_dir)
+        mock_fetch2.assert_not_called()
+
+    assert (data_dir / "transactions.csv").exists()
+    assert (results_dir / "checks.jsonl").exists()

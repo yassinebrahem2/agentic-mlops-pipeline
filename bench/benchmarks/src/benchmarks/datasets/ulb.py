@@ -184,6 +184,8 @@ class NullSpikeInjection(ULBInjection):
     def apply(self, df: pd.DataFrame, day: date) -> pd.DataFrame:
         if not self.active(day) or self.column is None:
             return df
+        if len(df) == 0:
+            return df
         result = df.copy()
         n = len(result)
         hit_count = max(1, round(self.share * n))
@@ -222,6 +224,8 @@ class OutOfRangeInjection(ULBInjection):
     def apply(self, df: pd.DataFrame, day: date) -> pd.DataFrame:
         if not self.active(day) or self.column is None:
             return df
+        if len(df) == 0:
+            return df
         result = df.copy()
         n = len(result)
         hit_count = max(1, round(self.share * n))
@@ -257,6 +261,8 @@ class CovariateShiftInjection(ULBInjection):
     def apply(self, df: pd.DataFrame, day: date) -> pd.DataFrame:
         if not self.active(day) or self.column is None:
             return df
+        if len(df) == 0:
+            return df
         result = df.copy()
         vals = [float(v) + self.shift for v in cast(Sequence[Any], result[self.column])]
         result[self.column] = vals
@@ -285,6 +291,8 @@ class UnseenFraudInjection(ULBInjection):
 
     def apply(self, df: pd.DataFrame, day: date) -> pd.DataFrame:
         if not self.active(day):
+            return df
+        if len(df) == 0:
             return df
         result = df.copy()
         classes = [int(v) for v in cast(Sequence[Any], result[TARGET_COLUMN])]
@@ -332,6 +340,8 @@ def load_ulb_scenario(path: Path) -> list[ULBInjection]:
         elif kind == "unseen_fraud":
             share = float(item.get("share", 0.3))
             injections.append(UnseenFraudInjection(share=share, start=start_d, end=end_d))
+        else:
+            raise ValueError(f"Unknown or unsupported injection kind: {kind!r}")
     return injections
 
 
@@ -371,6 +381,7 @@ class ULBDataset:
             self._injections = []
 
         self._business_days = ulb_business_days(date(2026, 1, 5), count=90)
+        self._cache_dir: Path | None = None
         self._splits: dict[date, pd.DataFrame] | None = None
         self._model: lgb.LGBMClassifier | None = None
         self._reference_df: pd.DataFrame | None = None
@@ -381,6 +392,10 @@ class ULBDataset:
     def injections(self) -> list[ULBInjection]:
         return list(self._injections)
 
+    @property
+    def cache_dir(self) -> Path | None:
+        return self._cache_dir
+
     def days(self) -> Sequence[date]:
         return self._business_days
 
@@ -388,6 +403,7 @@ class ULBDataset:
         return [inj.record() for inj in self._injections]
 
     def prepare(self, cache: Path) -> None:
+        self._cache_dir = cache
         if self._frame is None:
             fetch_ulb_parquet(cache)
 
@@ -398,7 +414,7 @@ class ULBDataset:
         if self._frame is not None:
             raw_df = self._frame.copy()
         else:
-            cache_dir = cache or Path.home() / "bench-home" / "cache"
+            cache_dir = cache or self._cache_dir or Path.home() / "bench-home" / "cache"
             pq_path = cache_dir / OPENML_1597_FILE
             if not pq_path.exists():
                 pq_path = fetch_ulb_parquet(cache_dir)
