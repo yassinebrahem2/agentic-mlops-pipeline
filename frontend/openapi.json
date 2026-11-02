@@ -7955,6 +7955,16 @@
       "SilentTeamAlert": {
         "additionalProperties": false,
         "properties": {
+          "category": {
+            "enum": [
+              "data_quality",
+              "drift",
+              "model_performance",
+              "operational"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
           "check_id": {
             "title": "Check Id",
             "type": "string"
@@ -7992,7 +8002,8 @@
           "result_id",
           "check_id",
           "subject",
-          "ran_at"
+          "ran_at",
+          "category"
         ],
         "title": "SilentTeamAlert",
         "type": "object"
