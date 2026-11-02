@@ -15,7 +15,7 @@ end = 2026-01-28
 [[injection]]
 kind = "parser_failure"
 start = 2026-02-11
-end = 2026-02-13
+end = 2026-02-12
 
 [[injection]]
 kind = "missing_feed"

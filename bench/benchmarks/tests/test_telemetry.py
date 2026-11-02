@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from mlops_agents.api.app import create_app
 from mlops_agents.config import RunMode, load_settings
+from mlops_agents.monitoring.settings import MonitoringSettings
 
 from benchmarks.datasets.contract import Dataset
 from benchmarks.datasets.telemetry import (
@@ -42,8 +43,8 @@ def test_telemetry_dataset_implements_protocol() -> None:
 
     key = ds.key()
     assert len(key) >= 5, f"Expected at least 5 answer key records, got {len(key)}"
-    assert all(r.category == "operational" for r in key), (
-        "All telemetry records must have operational category"
+    assert all(r.category in ("data_quality", "operational") for r in key), (
+        "All telemetry records must have data_quality or operational category"
     )
 
 
@@ -84,15 +85,23 @@ def test_telemetry_scenario_spacing_and_counts() -> None:
     all_days = telemetry_business_days(start_date=date(2026, 1, 5), count=60)
     first_day = all_days[0]
     last_day = all_days[-1]
+    parser_disable_limit = MonitoringSettings().parser_disable_after
 
     for inj in injections:
         assert inj.start >= first_day, f"{inj} starts before day 1 ({first_day})"
         assert inj.end <= last_day, f"{inj} ends after day 60 ({last_day})"
-        assert inj.category == "operational"
+        assert inj.category in ("data_quality", "operational")
 
-        # Verify each problem is exactly 3 business days
         b_days = [d for d in all_days if inj.start <= d <= inj.end]
-        assert len(b_days) == 3, f"{inj} must span exactly 3 business days, got {len(b_days)}"
+        if isinstance(inj, ParserFailureInjection):
+            assert len(b_days) < parser_disable_limit, (
+                f"Parser failure window length {len(b_days)} must be strictly less than "
+                f"parser_disable_after ({parser_disable_limit})"
+            )
+            assert inj.category == "operational"
+        else:
+            assert len(b_days) == 3, f"{inj} must span exactly 3 business days, got {len(b_days)}"
+            assert inj.category == "data_quality"
 
     # Verify each problem starts at least 9 days after previous ends (both calendar and business days >= 9)
     for i in range(len(injections) - 1):
@@ -143,7 +152,7 @@ async def test_missing_feed_window_raises_silence_scored_real_issue(tmp_path: Pa
 
     assert len(score_res.matched) >= 1
     assert all(prob.kind == "missing_feed" for prob in score_res.matched.values())
-    assert all(prob.category == "operational" for prob in score_res.matched.values())
+    assert all(prob.category == "data_quality" for prob in score_res.matched.values())
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
     assert len(score_res.misses) == 0
 
@@ -170,7 +179,7 @@ async def test_late_file_window_raises_silence_and_recovers_when_file_arrives(
 
     assert len(score_res.matched) >= 1
     assert all(prob.kind == "late_arrival" for prob in score_res.matched.values())
-    assert all(prob.category == "operational" for prob in score_res.matched.values())
+    assert all(prob.category == "data_quality" for prob in score_res.matched.values())
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
     assert len(score_res.misses) == 0
 
@@ -190,7 +199,7 @@ async def test_late_file_window_raises_silence_and_recovers_when_file_arrives(
         projects = await services.workspace.list_projects()
         proj_id = projects[0].id
         states = await services.expectations.states(proj_id)
-        feed_state = next((s for s in states if s.key.kind == "job"), None)
+        feed_state = next((s for s in states if s.key.kind == "feed"), None)
         assert feed_state is not None
         assert feed_state.status != "silent", (
             f"Feed should not be silent after late arrival, got {feed_state.status}"
@@ -204,12 +213,12 @@ async def test_malformed_results_file_raises_parser_failure(tmp_path: Path) -> N
         date(2026, 1, 5),  # normal
         date(2026, 1, 6),  # normal
         date(2026, 1, 7),  # malformed start
-        date(2026, 1, 8),  # malformed
-        date(2026, 1, 9),  # malformed end
-        date(2026, 1, 12),  # normal resumes
+        date(2026, 1, 8),  # malformed end (2 days < parser_disable_after)
+        date(2026, 1, 9),  # normal resumes
+        date(2026, 1, 12),  # normal
         date(2026, 1, 13),  # normal
     ]
-    inj = ParserFailureInjection(start=date(2026, 1, 7), end=date(2026, 1, 9))
+    inj = ParserFailureInjection(start=date(2026, 1, 7), end=date(2026, 1, 8))
     ds = TelemetryDataset(seed=42, days_override=days, injections_override=[inj])
 
     run_dir = tmp_path / "malformed_run"
@@ -229,11 +238,11 @@ async def test_short_replay_through_replay(tmp_path: Path) -> None:
     # Day 0, 1 normal
     # Day 2..4: missing feed
     # Day 5..7 normal
-    # Day 8..10: malformed results
-    # Day 11..14 normal
+    # Day 8..9: malformed results (2 days < parser_disable_after)
+    # Day 10..14 normal
     injs = [
         MissingFeedInjection(start=days[2], end=days[4]),
-        ParserFailureInjection(start=days[8], end=days[10]),
+        ParserFailureInjection(start=days[8], end=days[9]),
     ]
     ds = TelemetryDataset(seed=42, days_override=days, injections_override=injs)
     run_dir = tmp_path / "short_replay"
@@ -243,8 +252,35 @@ async def test_short_replay_through_replay(tmp_path: Path) -> None:
     matched_kinds = {prob.kind for prob in score_res.matched.values()}
     assert "missing_feed" in matched_kinds
     assert "parser_failure" in matched_kinds
-    assert all(prob.category == "operational" for prob in score_res.matched.values())
+    assert {prob.category for prob in score_res.matched.values()} == {"data_quality", "operational"}
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
     assert len(score_res.misses) == 0
     assert (run_dir / "report.md").is_file()
     assert (run_dir / "report.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_full_scenario_replay(tmp_path: Path) -> None:
+    """Full 60-day scenario run asserts 0 not_an_issue incidents and all 5 problems matched."""
+    ds = TelemetryDataset(seed=42)
+    run_dir = tmp_path / "full_scenario_run"
+    score_res = await replay(ds, run_dir)
+
+    assert len(score_res.misses) == 0, f"Expected 0 misses, got {score_res.misses}"
+    assert len(score_res.matched) >= 5, (
+        f"Expected at least 5 matched incidents, got {len(score_res.matched)}"
+    )
+
+    # All 5 problems in the scenario must be matched
+    matched_problems = set(score_res.matched.values())
+    assert len(matched_problems) == 5, (
+        f"Expected all 5 scenario problems to match, matched {len(matched_problems)}"
+    )
+
+    # No not_an_issue anywhere across the 60-day run
+    assert all(v.value != "not_an_issue" for v in score_res.verdicts.values()), (
+        f"Found not_an_issue incidents: {score_res.verdicts}"
+    )
+    assert all(v.value == "real_issue" for v in score_res.verdicts.values()), (
+        f"Expected all verdicts to be real_issue, got {score_res.verdicts}"
+    )

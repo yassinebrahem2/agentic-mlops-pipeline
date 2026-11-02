@@ -6,7 +6,7 @@ import json
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -17,6 +17,7 @@ from mlops_agents.proposals.payloads import (
     Cadence,
     CheckSpec,
     Contact,
+    DataFeedRef,
     DataRole,
     Feed,
     FileResults,
@@ -56,7 +57,7 @@ class MissingFeedInjection:
     start: date
     end: date
     kind: str = "missing_feed"
-    category: Category = "operational"
+    category: Category = "data_quality"
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ class LateArrivalInjection:
     end: date
     delay_days: int = 2
     kind: str = "late_arrival"
-    category: Category = "operational"
+    category: Category = "data_quality"
 
 
 @dataclass(frozen=True)
@@ -229,14 +230,22 @@ class TelemetryDataset:
             scheduler=Scheduler(name="cron", config_location="deploy/crontab"),
             feeds=[
                 Feed(
+                    name="pipeline_events_feed",
+                    kind="data",
+                    ref=DataFeedRef(connection="data", table="pipeline_events"),
+                    cadence=Cadence(cron="0 0 * * 1-5", every_minutes=None),
+                    grace_minutes=30,
+                    timezone="UTC",
+                ),
+                Feed(
                     name="chk_pipeline_job",
                     kind="job",
                     ref=JobFeedRef(
                         ci_workflow=None,
                         file=FileResults(connection="data", path_pattern="results/checks*.jsonl"),
                     ),
-                    cadence=Cadence(cron="0 0 * * *", every_minutes=None),
-                    grace_minutes=120,
+                    cadence=Cadence(cron="0 0 * * 1-5", every_minutes=None),
+                    grace_minutes=30,
                     timezone="UTC",
                 ),
             ],
@@ -258,7 +267,7 @@ class TelemetryDataset:
                     check_id="chk_pipeline_job",
                     name="Pipeline job check",
                     category="operational",
-                    cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+                    cadence=Cadence(cron="0 0 * * 1-5", every_minutes=None),
                     timezone="UTC",
                     results=FileResults(connection="data", path_pattern="results/checks*.jsonl"),
                 )
@@ -292,15 +301,6 @@ class TelemetryDataset:
         events_dir.mkdir(parents=True, exist_ok=True)
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=UTC)
-
-        # 1. Daily batch events data file (always written for pipeline telemetry)
-        events_file = events_dir / f"events_{day.isoformat()}.csv"
-        seed_val = (self.seed + day.toordinal()) if self.seed is not None else None
-        df = _generate_events_frame(day, seed=seed_val)
-        cast(Any, df).to_csv(events_file, index=False)
-
-        # 2. Results location check records / operational injections
         is_missing_today = any(
             isinstance(inj, MissingFeedInjection) and inj.start <= day <= inj.end
             for inj in self._injections
@@ -314,18 +314,14 @@ class TelemetryDataset:
             for inj in self._injections
         )
 
-        if is_parser_failure_today:
-            # Write a malformed unparseable file for this day
-            err_file = results_dir / f"checks_err_{day.isoformat()}.jsonl"
-            with err_file.open("w", encoding="utf-8") as f:
-                f.write("bad unparseable json line\n")
-            return
-
-        dates_to_write_results: list[date] = []
+        # 1. Daily batch events data file (data feed)
         if not is_missing_today and not is_late_today:
-            dates_to_write_results.append(day)
+            events_file = events_dir / f"events_{day.isoformat()}.csv"
+            seed_val = (self.seed + day.toordinal()) if self.seed is not None else None
+            df = _generate_events_frame(day, seed=seed_val)
+            cast(Any, df).to_csv(events_file, index=False)
 
-        # Check if any earlier delayed files arrive on `day`
+        # Delayed data feed files that arrive on `day`
         for inj in self._injections:
             if isinstance(inj, LateArrivalInjection):
                 for candidate_day in self._days:
@@ -333,21 +329,26 @@ class TelemetryDataset:
                         c_idx = self._days.index(candidate_day)
                         target_idx = c_idx + inj.delay_days
                         if target_idx < len(self._days) and self._days[target_idx] == day:
-                            dates_to_write_results.append(candidate_day)
+                            delayed_file = events_dir / f"events_{candidate_day.isoformat()}.csv"
+                            seed_val = (
+                                (self.seed + candidate_day.toordinal())
+                                if self.seed is not None
+                                else None
+                            )
+                            df = _generate_events_frame(candidate_day, seed=seed_val)
+                            cast(Any, df).to_csv(delayed_file, index=False)
 
-        for target_date in dates_to_write_results:
-            results_file = results_dir / f"checks_{target_date.isoformat()}.jsonl"
-            # Late arrivals arrive stamped with the current day's time
-            run_dt = (
-                day_start
-                if target_date != day
-                else datetime(
-                    target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=UTC
-                )
-            )
+        # 2. Results check records (job results)
+        if is_parser_failure_today:
+            # Write a malformed unparseable file for this day
+            err_file = results_dir / f"checks_err_{day.isoformat()}.jsonl"
+            with err_file.open("w", encoding="utf-8") as f:
+                f.write("bad unparseable json line\n")
+        else:
+            results_file = results_dir / f"checks_{day.isoformat()}.jsonl"
             rec = {
                 "check_id": "chk_pipeline_job",
-                "ran_at": run_dt.isoformat(),
+                "ran_at": f"{day.isoformat()}T00:00:00Z",
                 "fired": False,
                 "value": 0.0,
                 "category": "operational",
