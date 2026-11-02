@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +25,105 @@ export interface MessageViewProps {
   className?: string;
 }
 
+const PreContext = createContext(false);
+
+function MarkdownPre({
+  node: _node,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"pre"> & { node?: unknown }) {
+  return (
+    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props}>
+      <PreContext.Provider value={true}>{children}</PreContext.Provider>
+    </pre>
+  );
+}
+
+function MarkdownCode({
+  node: _node,
+  className,
+  ...props
+}: React.ComponentProps<"code"> & { node?: unknown }) {
+  const isInsidePre = useContext(PreContext);
+  if (isInsidePre) {
+    return <code className={className} {...props} />;
+  }
+  return (
+    <code
+      className={cn("rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground", className)}
+      {...props}
+    />
+  );
+}
+
 const markdownComponents: Components = {
+  h1: ({ node: _node, className, ...props }) => (
+    <h1
+      className={cn("mt-3 mb-1.5 text-lg font-bold text-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  h2: ({ node: _node, className, ...props }) => (
+    <h2
+      className={cn("mt-2.5 mb-1.5 text-base font-semibold text-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  h3: ({ node: _node, className, ...props }) => (
+    <h3
+      className={cn("mt-2 mb-1 text-sm font-semibold text-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  h4: ({ node: _node, className, ...props }) => (
+    <h4
+      className={cn("mt-1.5 mb-1 text-sm font-semibold text-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  h5: ({ node: _node, className, ...props }) => (
+    <h5
+      className={cn("mt-1 mb-0.5 text-xs font-semibold text-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  h6: ({ node: _node, className, ...props }) => (
+    <h6
+      className={cn("mt-1 mb-0.5 text-xs font-medium text-muted-foreground first:mt-0", className)}
+      {...props}
+    />
+  ),
+  p: ({ node: _node, className, ...props }) => (
+    <p className={cn("my-1.5 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
+  ),
+  ul: ({ node: _node, className, ...props }) => (
+    <ul
+      className={cn("my-1.5 list-disc pl-5 space-y-0.5 first:mt-0 last:mb-0", className)}
+      {...props}
+    />
+  ),
+  ol: ({ node: _node, className, ...props }) => (
+    <ol
+      className={cn("my-1.5 list-decimal pl-5 space-y-0.5 first:mt-0 last:mb-0", className)}
+      {...props}
+    />
+  ),
+  li: ({ node: _node, className, ...props }) => (
+    <li className={cn("leading-relaxed", className)} {...props} />
+  ),
+  blockquote: ({ node: _node, className, ...props }) => (
+    <blockquote
+      className={cn(
+        "my-2 border-l-2 border-border pl-3 italic text-muted-foreground first:mt-0 last:mb-0",
+        className,
+      )}
+      {...props}
+    />
+  ),
+  hr: ({ node: _node, className, ...props }) => (
+    <hr className={cn("my-3 border-t border-border", className)} {...props} />
+  ),
   table: ({ node: _node, className, ...props }) => (
     <Table className={cn("my-2 border border-border", className)} {...props} />
   ),
@@ -42,9 +141,8 @@ const markdownComponents: Components = {
   a: ({ node: _node, className, ...props }) => (
     <a className={cn("text-primary underline", className)} {...props} />
   ),
-  pre: ({ node: _node, className, ...props }) => (
-    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props} />
-  ),
+  pre: MarkdownPre,
+  code: MarkdownCode,
 };
 
 export function MessageView({ message, sessionAgent, className }: MessageViewProps) {
