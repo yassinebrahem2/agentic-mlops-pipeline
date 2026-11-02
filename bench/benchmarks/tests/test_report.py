@@ -12,7 +12,7 @@ from mlops_agents.stats.contract import StatsView, StatValue
 
 from benchmarks.cli import main
 from benchmarks.report import (
-    MODE_GROUPS,
+    REPORT_GROUPS,
     Pause,
     RunInfo,
     format_comparison_table,
@@ -155,7 +155,7 @@ async def test_replay_mode_groups_not_measured(tmp_path: Path) -> None:
 
     # In replay mode: effort, cost, model_impact, reliability must be listed as "not measured in this mode"
     for group_name in ["effort", "cost", "model_impact", "reliability"]:
-        assert group_name not in MODE_GROUPS["replay"]
+        assert group_name not in REPORT_GROUPS["replay"]
         assert "not measured in this mode" in md_text
 
     # Values for those groups (e.g. autonomous_share, tokens_per_agent, metric_before, failed_runs)
@@ -672,7 +672,43 @@ async def test_usage_without_requests_field(tmp_path: Path) -> None:
     md_path, _ = await write_report(client, "prj_1", tmp_path, run_info, score)
     md_text = md_path.read_text(encoding="utf-8")
 
-    # Total requests must be not available, never 1
-    assert "- **Total Requests:** not available" in md_text
-    # In table, requests shows N/A
-    assert "| data-quality | gemini-2.0-flash | N/A | 12,000 | $0.3000 |" in md_text
+    # Total requests must not be reported
+    assert "Total Requests" not in md_text
+    # In table, requests column is dropped
+    assert "| data-quality | gemini-2.0-flash | 12,000 | $0.3000 |" in md_text
+
+
+@pytest.mark.asyncio
+async def test_missing_stat_prints_not_available_without_n(tmp_path: Path) -> None:
+    """A stat completely absent from StatsView prints 'not available', not 'not available (n=0)'."""
+    view = StatsView(
+        window="all",
+        category=None,
+        baseline_available=True,
+        groups={
+            "detection": {},
+            "speed": {},
+            "noise": {},
+            "diagnosis": {},
+        },
+    )
+    client = FakeBenchClient(stats_responses={"overall": view})
+    score = _make_sample_score()
+    run_info = RunInfo(
+        mode="replay",
+        dataset="test",
+        scenario="replay",
+        seed=None,
+        app_commit="c1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 5, tzinfo=UTC),
+        provider=None,
+        model=None,
+        seconds_per_day=None,
+        pauses=[],
+        day_gaps=[],
+    )
+    md_path, _ = await write_report(client, "prj_1", tmp_path, run_info, score)
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "- **precision:** not available" in md_text
+    assert "not available (n=0)" not in md_text

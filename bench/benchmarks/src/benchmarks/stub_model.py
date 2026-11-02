@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from benchmarks.client import BenchClient
@@ -36,8 +36,13 @@ def create_stub_app(model_name: str = "stub-model") -> FastAPI:
         )
 
     async def chat_completions(request: Request) -> Any:
-        raw_body: object = await request.json()
-        body: dict[str, Any] = cast(dict[str, Any], raw_body) if isinstance(raw_body, dict) else {}
+        try:
+            raw_body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+        if not isinstance(raw_body, dict):
+            raise HTTPException(status_code=400, detail="Expected JSON object body")
+        body: dict[str, Any] = cast(dict[str, Any], raw_body)
         req_model = str(body.get("model", model_name))
         is_stream = bool(body.get("stream", False))
 
@@ -272,9 +277,13 @@ async def register_stub_model(
             "context_window": 128000,
         },
     )
-    model_res = cast(dict[str, Any], raw_model_res) if isinstance(raw_model_res, dict) else {}
-    raw_addr = model_res.get("address")
-    address = str(raw_addr) if raw_addr is not None else f"{provider_name}:{stub.model_name}"
+    if not isinstance(raw_model_res, dict):
+        raise ValueError(f"Expected dict response from /models, got {type(raw_model_res).__name__}")
+    model_dict: dict[str, Any] = cast(dict[str, Any], raw_model_res)
+    raw_addr: object = model_dict.get("address")
+    if not raw_addr or not isinstance(raw_addr, str):
+        raise ValueError(f"Missing or invalid 'address' in /models response: {raw_model_res}")
+    address = raw_addr
     # 3. POST /models/verify
     await client.post("/models/verify", body={"address": address})
-    return str(address)
+    return address

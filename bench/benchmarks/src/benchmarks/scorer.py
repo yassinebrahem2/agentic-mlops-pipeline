@@ -82,25 +82,33 @@ def _rank_candidate(
     )
 
 
+DEFAULT_PAGE_LIMIT: Final[int] = 100
+
+
 async def _fetch_incidents(
     client: BenchClient,
     project_id: str,
-    limit: int = 100,
+    limit: int = DEFAULT_PAGE_LIMIT,
 ) -> list[dict[str, Any]]:
     incidents: list[dict[str, Any]] = []
     offset = 0
+    route = f"/projects/{project_id}/incidents"
     while True:
         raw_page = await client.get(
-            f"/projects/{project_id}/incidents",
+            route,
             params={"limit": str(limit), "offset": str(offset)},
         )
-        page_data: dict[str, Any] = (
-            cast(dict[str, Any], raw_page) if isinstance(raw_page, dict) else {}
-        )
-        raw_rows = page_data.get("rows")
-        rows: list[dict[str, Any]] = (
-            cast(list[dict[str, Any]], raw_rows) if isinstance(raw_rows, list) else []
-        )
+        if not isinstance(raw_page, dict):
+            raise ValueError(
+                f"Unexpected response from {route}: expected dict, got {type(raw_page).__name__}"
+            )
+        page_dict: dict[str, Any] = cast(dict[str, Any], raw_page)
+        raw_rows: object = page_dict.get("rows")
+        if not isinstance(raw_rows, list):
+            raise ValueError(
+                f"Unexpected response from {route}: expected 'rows' to be list, got {type(raw_rows).__name__}"
+            )
+        rows: list[dict[str, Any]] = [cast(dict[str, Any], r) for r in cast(list[object], raw_rows)]
         incidents.extend(rows)
         if len(rows) < limit:
             break
@@ -117,20 +125,28 @@ async def score(
     project_id: str,
     key: Sequence[Record],
     starts: DayStarts,
-    *,
-    page_limit: int = 100,
 ) -> Score:
     """Scores a project's incidents and silent alerts against an answer key."""
     # 1. Before writing anything: check for existing user verdicts or misses
-    raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
-    verdicts_data: list[dict[str, Any]] = (
-        cast(list[dict[str, Any]], raw_verdicts) if isinstance(raw_verdicts, list) else []
-    )
+    verdicts_route = f"/projects/{project_id}/verdicts"
+    raw_verdicts = await client.get(verdicts_route)
+    if not isinstance(raw_verdicts, list):
+        raise ValueError(
+            f"Unexpected response from {verdicts_route}: expected list, got {type(raw_verdicts).__name__}"
+        )
+    verdicts_data: list[dict[str, Any]] = [
+        cast(dict[str, Any], v) for v in cast(list[object], raw_verdicts)
+    ]
 
-    raw_misses = await client.get(f"/projects/{project_id}/misses")
-    misses_data: list[dict[str, Any]] = (
-        cast(list[dict[str, Any]], raw_misses) if isinstance(raw_misses, list) else []
-    )
+    misses_route = f"/projects/{project_id}/misses"
+    raw_misses = await client.get(misses_route)
+    if not isinstance(raw_misses, list):
+        raise ValueError(
+            f"Unexpected response from {misses_route}: expected list, got {type(raw_misses).__name__}"
+        )
+    misses_data: list[dict[str, Any]] = [
+        cast(dict[str, Any], m) for m in cast(list[object], raw_misses)
+    ]
 
     if any(v.get("source") == "user" for v in verdicts_data):
         raise AlreadyScored("Project already has user verdicts recorded")
@@ -141,13 +157,24 @@ async def score(
     all_problems = problems(key)
 
     # 3. Paging incidents
-    incidents = await _fetch_incidents(client, project_id, limit=page_limit)
+    incidents = await _fetch_incidents(client, project_id, limit=DEFAULT_PAGE_LIMIT)
+
+    # 4. Silent team alerts read (all reads happen before any writes)
+    alerts_route = f"/projects/{project_id}/baseline/silent-alerts"
+    raw_alerts = await client.get(alerts_route)
+    if not isinstance(raw_alerts, list):
+        raise ValueError(
+            f"Unexpected response from {alerts_route}: expected list, got {type(raw_alerts).__name__}"
+        )
+    silent_alerts: list[dict[str, Any]] = [
+        cast(dict[str, Any], a) for a in cast(list[object], raw_alerts)
+    ]
 
     matched: dict[str, Problem] = {}
     verdicts: dict[str, VerdictDraft] = {}
     excluded: list[str] = []
 
-    # 4. Process incidents
+    # 5. Process incidents and post verdicts
     for inc in incidents:
         inc_id = str(inc["id"])
         if inc.get("status") == "merged" or inc.get("merged_into") is not None:
@@ -191,15 +218,18 @@ async def score(
                 body=draft.model_dump(mode="json", exclude_none=True),
             )
 
-    # 5. Misses
+    # 6. Misses
     caught_problems = set(matched.values())
     misses = [p for p in all_problems if p not in caught_problems]
+
+    if misses and not starts:
+        raise ValueError("starts must not be empty when scoring misses")
 
     starts_map = dict(starts)
     for p in misses:
         if p.start in starts_map:
             occurred_at = starts_map[p.start]
-        elif starts and p.start < starts[0][0]:
+        elif p.start < starts[0][0]:
             occurred_at = starts[0][1]
         else:
             for d, dt in reversed(starts):
@@ -207,7 +237,7 @@ async def score(
                     occurred_at = dt
                     break
             else:
-                occurred_at = starts[0][1] if starts else datetime.now(UTC)
+                occurred_at = starts[0][1]
 
         if occurred_at.tzinfo is None:
             occurred_at = occurred_at.replace(tzinfo=UTC)
@@ -221,11 +251,7 @@ async def score(
             },
         )
 
-    # 6. Silent team alerts
-    raw_alerts = await client.get(f"/projects/{project_id}/baseline/silent-alerts")
-    silent_alerts: list[dict[str, Any]] = (
-        cast(list[dict[str, Any]], raw_alerts) if isinstance(raw_alerts, list) else []
-    )
+    # 7. Post silent team alert verdicts
     silent: dict[str, SilentVerdict] = {}
     for alert in silent_alerts:
         result_id = str(alert["result_id"])

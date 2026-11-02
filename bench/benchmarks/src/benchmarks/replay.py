@@ -12,7 +12,7 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Final
 
 from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
@@ -98,37 +98,61 @@ def _init_repo(path: Path) -> Path:
 
 
 def _get_app_commit() -> str:
+    repo_root = Path(__file__).resolve().parents[4]
     git_bin = shutil.which("git") or "git"
-    try:
-        res = subprocess.run(  # noqa: S603
-            [git_bin, "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return res.stdout.strip()[:8]
-    except Exception:
-        return "unknown"
+    res = subprocess.run(  # noqa: S603
+        [git_bin, "rev-parse", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    commit = res.stdout.strip()[:8]
+    if not commit:
+        raise RuntimeError("git rev-parse HEAD returned empty commit")
+    return commit
 
 
-def _stamp_day_files_sync(data_dir: Path, day_start: datetime) -> None:
+def _stamp_day_files_sync(files: Sequence[Path], day_start: datetime) -> None:
     day_ts = day_start.timestamp()
-    for file_path in data_dir.rglob("*"):
+    for file_path in files:
         if file_path.is_file():
             os.utime(file_path, (day_ts, day_ts))
+
+
+COMMON_RESULTS_MAPPING_FIELDS: Final[dict[str, str]] = {
+    "check_id": "check_id",
+    "ran_at": "ran_at",
+    "value": "value",
+    "fired": "fired",
+    "subject": "subject",
+    "category": "category",
+    "detail": "detail",
+}
+
+
+def _make_parser_spec(source_id: str, default_category: str, default_check_id: str) -> ParserSpec:
+    return ParserSpec(
+        source_id=source_id,
+        mapping=ParserMapping(
+            format="jsonl",
+            fields=COMMON_RESULTS_MAPPING_FIELDS,
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": default_category, "check_id": default_check_id},
+        ),
+    )
 
 
 async def replay(
     dataset: Dataset,
     run_dir: Path,
-    *,
-    seed: int | None = None,
 ) -> Score:
     """Builds the app in-process, plays every day, scores, and writes report."""
     resolved_run_dir = await asyncio.to_thread(run_dir.resolve)
     report_json_path = resolved_run_dir / "report.json"
-    if await asyncio.to_thread(report_json_path.exists):
-        raise AlreadyScored(f"Run directory {resolved_run_dir} has already been scored")
+    home_dir = resolved_run_dir / "home"
+    if await asyncio.to_thread(report_json_path.exists) or await asyncio.to_thread(home_dir.exists):
+        raise AlreadyScored(f"Run directory {resolved_run_dir} has already been used/scored")
 
     run_started = datetime.now(UTC)
 
@@ -142,7 +166,6 @@ async def replay(
     repo_dir = await asyncio.to_thread(_init_repo, resolved_run_dir / "repo")
 
     # 3. App environment & clock
-    home_dir = resolved_run_dir / "home"
     await asyncio.to_thread(home_dir.mkdir, parents=True, exist_ok=True)
 
     days_seq: Sequence[date] = list(dataset.days())
@@ -168,23 +191,6 @@ async def replay(
             client = in_process(app, token)
             services: Services = app.state.services
 
-            # Check if project already exists and has been scored
-            existing_projects = await services.workspace.list_projects()
-            if existing_projects:
-                proj_id = existing_projects[0].id
-                raw_verdicts = await client.get(f"/projects/{proj_id}/verdicts")
-                raw_misses = await client.get(f"/projects/{proj_id}/misses")
-                verdicts_list = (
-                    cast(list[dict[str, Any]], raw_verdicts)
-                    if isinstance(raw_verdicts, list)
-                    else []
-                )
-                misses_list = (
-                    cast(list[dict[str, Any]], raw_misses) if isinstance(raw_misses, list) else []
-                )
-                if any(v.get("source") == "user" for v in verdicts_list) or len(misses_list) > 0:
-                    raise AlreadyScored(f"Project {proj_id} has already been scored")
-
             # Stop background scheduler loop
             await services.scheduler.stop()
 
@@ -194,11 +200,8 @@ async def replay(
             for av in agent_views:
                 await services.agent_settings.set_default_model(av.agent, model_addr)
 
-            # Set up project
-            if existing_projects:
-                project = existing_projects[0]
-            else:
-                project = await services.workspace.add_local(str(repo_dir))
+            # Always fresh project setup
+            project = await services.workspace.add_local(str(repo_dir))
             project_id = project.id
 
             # Set up local folder connection on data folder
@@ -237,59 +240,34 @@ async def replay(
             # Approve handoff
             await services.handoffs.store(project_id, "prp_replay_handoff", handoff)
 
-            # Approve parser for results files / team check feed
+            # Approve parsers declared by checks and feeds
+            for chk in handoff.operations.checks:
+                if isinstance(chk.results, FileResults):
+                    s_id = source_id("file", chk.results.path_pattern, chk.results.connection)
+                    if await services.parsers.current(project_id, s_id) is None:
+                        spec = _make_parser_spec(s_id, chk.category, chk.check_id)
+                        await services.parsers.store(
+                            project_id, spec, proposal_id=f"prp_parser_{chk.check_id}"
+                        )
+
             for feed in handoff.operations.feeds:
                 if isinstance(feed.ref, JobFeedRef) and feed.ref.file is not None:
                     s_id = source_id("file", feed.ref.file.path_pattern, feed.ref.file.connection)
-                    spec = ParserSpec(
-                        source_id=s_id,
-                        mapping=ParserMapping(
-                            format="jsonl",
-                            fields={
-                                "check_id": "check_id",
-                                "ran_at": "ran_at",
-                                "value": "value",
-                                "fired": "fired",
-                                "subject": "subject",
-                                "category": "category",
-                                "detail": "detail",
-                            },
-                            fired_when=Compare(op="eq", field="fired", value=True),
-                            defaults={"category": "model_performance", "check_id": "accuracy"},
-                        ),
-                    )
-                    await services.parsers.store(
-                        project_id, spec, proposal_id=f"prp_parser_{feed.name}"
-                    )
-
-            # Also store parser for any check whose results point to a file that requires parsing
-            for chk in handoff.operations.checks:
-                if isinstance(chk.results, FileResults) and chk.category == "model_performance":
-                    s_id = source_id("file", chk.results.path_pattern, chk.results.connection)
-                    existing_parser = await services.parsers.current(project_id, s_id)
-                    if existing_parser is None:
-                        spec = ParserSpec(
-                            source_id=s_id,
-                            mapping=ParserMapping(
-                                format="jsonl",
-                                fields={
-                                    "check_id": "check_id",
-                                    "ran_at": "ran_at",
-                                    "value": "value",
-                                    "fired": "fired",
-                                    "subject": "subject",
-                                    "category": "category",
-                                    "detail": "detail",
-                                },
-                                fired_when=Compare(op="eq", field="fired", value=True),
-                                defaults={
-                                    "category": "model_performance",
-                                    "check_id": chk.check_id,
-                                },
+                    if await services.parsers.current(project_id, s_id) is None:
+                        matched_chk = next(
+                            (
+                                c
+                                for c in handoff.operations.checks
+                                if isinstance(c.results, FileResults)
+                                and c.results.path_pattern == feed.ref.file.path_pattern
                             ),
+                            None,
                         )
+                        cat = matched_chk.category if matched_chk else "model_performance"
+                        cid = matched_chk.check_id if matched_chk else feed.name
+                        spec = _make_parser_spec(s_id, cat, cid)
                         await services.parsers.store(
-                            project_id, spec, proposal_id=f"prp_parser_{chk.check_id}"
+                            project_id, spec, proposal_id=f"prp_parser_{feed.name}"
                         )
 
             # Day loop
@@ -298,10 +276,18 @@ async def replay(
                 day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=UTC)
                 day_starts.append((day, day_start))
 
+                files_before = {p: p.stat().st_mtime_ns for p in data_dir.rglob("*") if p.is_file()}
+
                 await asyncio.to_thread(dataset.write_day, day, data_dir, results_dir)
 
-                # Set every file's mtime to day_start
-                await asyncio.to_thread(_stamp_day_files_sync, data_dir, day_start)
+                # Stamp only what was written on this day
+                written_files = [
+                    p
+                    for p in data_dir.rglob("*")
+                    if p.is_file()
+                    and (p not in files_before or p.stat().st_mtime_ns != files_before[p])
+                ]
+                await asyncio.to_thread(_stamp_day_files_sync, written_files, day_start)
 
                 # Advance clock to day_start + 1 hour
                 clock.set(day_start + timedelta(hours=1))
@@ -315,11 +301,15 @@ async def replay(
             score_res = await score(client, project_id, dataset.key(), day_starts)
 
             # Write reports
+            scenario_name = getattr(
+                dataset, "scenario", getattr(dataset, "scenario_name", dataset.name)
+            )
+            dataset_seed = getattr(dataset, "seed", None)
             info = RunInfo(
                 mode="replay",
                 dataset=dataset.name,
-                scenario="replay",
-                seed=seed,
+                scenario=str(scenario_name),
+                seed=dataset_seed,
                 app_commit=_get_app_commit(),
                 started=run_started,
                 ended=run_ended,
@@ -361,14 +351,18 @@ def run_replay_cli(args: argparse.Namespace) -> int:
         )
         return 1
 
-    dataset = DATASETS[dataset_name]()
+    factory = DATASETS[dataset_name]
+    dataset: Dataset = factory()
+    if args.seed is not None and hasattr(dataset, "seed"):
+        object.__setattr__(dataset, "seed", args.seed)
+
     run_dir: Path | None = args.run_dir
     if run_dir is None:
         bench_home = Path(os.environ.get("BENCH_HOME", Path.home() / "bench-home"))
         run_dir = bench_home / "runs" / f"replay-{dataset_name}"
 
     try:
-        score_res = asyncio.run(replay(dataset, run_dir, seed=args.seed))
+        score_res = asyncio.run(replay(dataset, run_dir))
         sys.stdout.write(
             f"Replay complete: {len(score_res.matched)} matched, {len(score_res.misses)} misses\n"
         )

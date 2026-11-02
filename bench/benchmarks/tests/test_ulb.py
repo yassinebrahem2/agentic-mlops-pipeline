@@ -268,14 +268,15 @@ def test_ulb_write_day_writes_data_and_check_results(tmp_path: Path) -> None:
     results_dir = data_dir / "results"
 
     days = ds.days()
-    # Write day 1 (training day)
+    # Write day 1 (training day: writes transactions.csv and checks.jsonl, but no accuracy checks)
     ds.write_day(days[0], data_dir, results_dir)
     assert (data_dir / "transactions.csv").exists()
     assert (results_dir / "checks.jsonl").exists()
-    assert (results_dir / "team.jsonl").exists()
+    assert not (results_dir / "team.jsonl").exists()
 
-    # Write day 21 (first scored day)
+    # Write day 21 (first scored day: accuracy checks are now written)
     ds.write_day(days[20], data_dir, results_dir)
+    assert (results_dir / "team.jsonl").exists()
 
     # Write day 22 (matured labels day)
     ds.write_day(days[21], data_dir, results_dir)
@@ -316,6 +317,55 @@ end = "2026-02-04"
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="Unknown or unsupported injection kind"):
+        load_ulb_scenario(toml_path)
+
+
+def test_load_ulb_scenario_missing_file_raises_filenotfound(tmp_path: Path) -> None:
+    missing_file = tmp_path / "does_not_exist.toml"
+    with pytest.raises(FileNotFoundError, match="ULB scenario file not found"):
+        load_ulb_scenario(missing_file)
+
+
+@pytest.mark.parametrize(
+    ("toml_content", "err_pattern"),
+    [
+        ("", "no injections defined"),
+        (
+            '[[injection]]\nstart = "2026-02-02"\nend = "2026-02-04"\n',
+            "missing required 'kind'",
+        ),
+        (
+            '[[injection]]\nkind = "null_spike"\nend = "2026-02-04"\n',
+            "missing required 'start' or 'end'",
+        ),
+        (
+            '[[injection]]\nkind = "null_spike"\nstart = "2026-02-02"\nend = "2026-02-04"\nshare = 0.5\n',
+            "requires 'column' string",
+        ),
+        (
+            '[[injection]]\nkind = "null_spike"\nstart = "2026-02-02"\nend = "2026-02-04"\ncolumn = "V1"\n',
+            "requires numeric 'share'",
+        ),
+        (
+            '[[injection]]\nkind = "out_of_range"\nstart = "2026-02-02"\nend = "2026-02-04"\ncolumn = "V1"\nshare = 0.5\n',
+            "requires numeric 'value'",
+        ),
+        (
+            '[[injection]]\nkind = "covariate_shift"\nstart = "2026-02-02"\nend = "2026-02-04"\ncolumn = "V1"\n',
+            "requires numeric 'shift'",
+        ),
+        (
+            '[[injection]]\nkind = "unseen_fraud"\nstart = "2026-02-02"\nend = "2026-02-04"\n',
+            "requires numeric 'share'",
+        ),
+    ],
+)
+def test_load_ulb_scenario_missing_or_invalid_fields_raises_valueerror(
+    tmp_path: Path, toml_content: str, err_pattern: str
+) -> None:
+    toml_path = tmp_path / "test_scenario.toml"
+    toml_path.write_text(toml_content, encoding="utf-8")
+    with pytest.raises(ValueError, match=err_pattern):
         load_ulb_scenario(toml_path)
 
 

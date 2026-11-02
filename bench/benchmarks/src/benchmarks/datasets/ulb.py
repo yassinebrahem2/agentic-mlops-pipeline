@@ -307,39 +307,75 @@ class UnseenFraudInjection(ULBInjection):
 
 
 def load_ulb_scenario(path: Path) -> list[ULBInjection]:
-    """Loads injection definitions from a scenario TOML file."""
+    """Loads injection definitions from a scenario TOML file.
+
+    Refuses missing scenario files or incomplete injection definitions instead of silently falling back.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"ULB scenario file not found: {path}")
+
     with path.open("rb") as f:
-        data = tomllib.load(f)
+        data: dict[str, Any] = tomllib.load(f)
 
     injections: list[ULBInjection] = []
-    raw_injections = data.get("injection", [])
-    for item in raw_injections:
-        kind = str(item.get("kind", ""))
-        start_raw = str(item.get("start", ""))
-        end_raw = str(item.get("end", ""))
-        start_d = date.fromisoformat(start_raw)
-        end_d = date.fromisoformat(end_raw)
+    raw_injections: object = data.get("injection")
+    if not isinstance(raw_injections, list) or not raw_injections:
+        raise ValueError(f"Scenario file {path} has no injections defined under [[injection]]")
+
+    for raw_item in cast(list[object], raw_injections):
+        if not isinstance(raw_item, dict):
+            raise ValueError(f"Invalid injection item in {path}: {raw_item}")
+        item: dict[str, Any] = cast(dict[str, Any], raw_item)
+        kind: object = item.get("kind")
+        if not kind or not isinstance(kind, str):
+            raise ValueError(f"Injection missing required 'kind' in {path}")
+        start_raw: object = item.get("start")
+        end_raw: object = item.get("end")
+        if not start_raw or not end_raw:
+            raise ValueError(f"Injection {kind} missing required 'start' or 'end' date in {path}")
+        start_d = date.fromisoformat(str(start_raw))
+        end_d = date.fromisoformat(str(end_raw))
 
         if kind == "null_spike":
-            col = str(item.get("column", "V1"))
-            share = float(item.get("share", 0.2))
-            injections.append(NullSpikeInjection(column=col, share=share, start=start_d, end=end_d))
-        elif kind == "out_of_range":
-            col = str(item.get("column", "Amount"))
-            val = float(item.get("value", -100.0))
-            share = float(item.get("share", 0.2))
+            col = item.get("column")
+            if not col or not isinstance(col, str):
+                raise ValueError(f"NullSpikeInjection requires 'column' string, got {col!r}")
+            share = item.get("share")
+            if share is None or not isinstance(share, (int, float)):
+                raise ValueError(f"NullSpikeInjection requires numeric 'share', got {share!r}")
             injections.append(
-                OutOfRangeInjection(column=col, value=val, share=share, start=start_d, end=end_d)
+                NullSpikeInjection(column=col, share=float(share), start=start_d, end=end_d)
+            )
+        elif kind == "out_of_range":
+            col = item.get("column")
+            if not col or not isinstance(col, str):
+                raise ValueError(f"OutOfRangeInjection requires 'column' string, got {col!r}")
+            val = item.get("value")
+            if val is None or not isinstance(val, (int, float)):
+                raise ValueError(f"OutOfRangeInjection requires numeric 'value', got {val!r}")
+            share = item.get("share")
+            if share is None or not isinstance(share, (int, float)):
+                raise ValueError(f"OutOfRangeInjection requires numeric 'share', got {share!r}")
+            injections.append(
+                OutOfRangeInjection(
+                    column=col, value=float(val), share=float(share), start=start_d, end=end_d
+                )
             )
         elif kind == "covariate_shift":
-            col = str(item.get("column", "Amount"))
-            shift = float(item.get("shift", 500.0))
+            col = item.get("column")
+            if not col or not isinstance(col, str):
+                raise ValueError(f"CovariateShiftInjection requires 'column' string, got {col!r}")
+            shift = item.get("shift")
+            if shift is None or not isinstance(shift, (int, float)):
+                raise ValueError(f"CovariateShiftInjection requires numeric 'shift', got {shift!r}")
             injections.append(
-                CovariateShiftInjection(column=col, shift=shift, start=start_d, end=end_d)
+                CovariateShiftInjection(column=col, shift=float(shift), start=start_d, end=end_d)
             )
         elif kind == "unseen_fraud":
-            share = float(item.get("share", 0.3))
-            injections.append(UnseenFraudInjection(share=share, start=start_d, end=end_d))
+            share = item.get("share")
+            if share is None or not isinstance(share, (int, float)):
+                raise ValueError(f"UnseenFraudInjection requires numeric 'share', got {share!r}")
+            injections.append(UnseenFraudInjection(share=float(share), start=start_d, end=end_d))
         else:
             raise ValueError(f"Unknown or unsupported injection kind: {kind!r}")
     return injections
@@ -360,9 +396,13 @@ def train_ulb_model(train_df: pd.DataFrame) -> lgb.LGBMClassifier:
 
 
 class ULBDataset:
-    """ULB credit card fraud benchmark dataset implementation."""
+    """ULB credit card fraud benchmark dataset implementation.
+
+    Cache directory defaults to ~/bench-home/cache (BENCH_HOME's default).
+    """
 
     name: str = "ulb"
+    scenario: str = "ulb"
 
     def __init__(
         self,
@@ -370,15 +410,15 @@ class ULBDataset:
         frame: pd.DataFrame | None = None,
         scenario_path: Path | None = None,
         injections: Sequence[ULBInjection] | None = None,
+        operating_threshold: float = 0.5,
     ) -> None:
         self._frame = frame
         self._scenario_path = scenario_path or DEFAULT_SCENARIO_PATH
+        self._operating_threshold = operating_threshold
         if injections is not None:
             self._injections = list(injections)
-        elif self._scenario_path.exists():
-            self._injections = load_ulb_scenario(self._scenario_path)
         else:
-            self._injections = []
+            self._injections = load_ulb_scenario(self._scenario_path)
 
         self._business_days = ulb_business_days(date(2026, 1, 5), count=90)
         self._cache_dir: Path | None = None
@@ -444,7 +484,7 @@ class ULBDataset:
                 positive_class="1",
                 primary_metric="pr_auc_matured",
                 metric_rationale="Extreme class imbalance (<0.2% fraud)",
-                operating_threshold=0.5,
+                operating_threshold=self._operating_threshold,
                 label_delay_days=1,
                 label_maturity_days=1,
                 serving_mode="batch",
@@ -713,16 +753,18 @@ class ULBDataset:
                 scores = [0.0] * len(day_df)
 
         # 3. Team baseline check (accuracy)
-        y_day = [int(y) for y in cast(Sequence[Any], day_df[TARGET_COLUMN])]
-        preds = [1 if s >= 0.5 else 0 for s in scores]
-        rec_acc = accuracy(
-            y_day,
-            preds,
-            ran_at=day_start,
-            check_id="chk_accuracy",
-            model="ulb-creditcard-model",
-            source_ref="results/team.jsonl",
-        )
-        team_file = results_dir / "team.jsonl"
-        with team_file.open("a", encoding="utf-8") as f:
-            f.write(rec_acc.model_dump_json() + "\n")
+        # Note: Do not write accuracy records for the 20 training days (write none)
+        if day_idx >= 20:
+            y_day = [int(y) for y in cast(Sequence[Any], day_df[TARGET_COLUMN])]
+            preds = [1 if s >= self._operating_threshold else 0 for s in scores]
+            rec_acc = accuracy(
+                y_day,
+                preds,
+                ran_at=day_start,
+                check_id="chk_accuracy",
+                model="ulb-creditcard-model",
+                source_ref="results/team.jsonl",
+            )
+            team_file = results_dir / "team.jsonl"
+            with team_file.open("a", encoding="utf-8") as f:
+                f.write(rec_acc.model_dump_json() + "\n")

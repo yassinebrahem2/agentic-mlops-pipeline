@@ -31,6 +31,17 @@ class BenchHttpError(Exception):
         self.status_code = status
 
 
+class BenchConnectionError(Exception):
+    """Raised when connecting to the app fails.
+
+    Holds only the route, never any request details or credentials.
+    """
+
+    def __init__(self, route: str) -> None:
+        super().__init__(f"Connection error for {route}")
+        self.route = route
+
+
 def _normalize_path(path: str) -> str:
     cleaned = path.strip()
     if not cleaned.startswith("/"):
@@ -76,7 +87,9 @@ class _HttpBenchClient:
         try:
             response = await client.post(url, json={"token": self._token})
         except Exception as exc:
-            raise BenchHttpError(url, 500) from exc
+            if isinstance(exc, (BenchHttpError, BenchConnectionError)):
+                raise
+            raise BenchConnectionError(url) from exc
 
         if response.status_code >= 400:
             raise BenchHttpError(url, response.status_code)
@@ -94,9 +107,9 @@ class _HttpBenchClient:
             query = dict(params) if params is not None else None
             response = await client.get(route, params=query)
         except Exception as exc:
-            if isinstance(exc, BenchHttpError):
+            if isinstance(exc, (BenchHttpError, BenchConnectionError)):
                 raise
-            raise BenchHttpError(route, 500) from exc
+            raise BenchConnectionError(route) from exc
 
         if response.status_code >= 400:
             raise BenchHttpError(route, response.status_code)
@@ -115,9 +128,9 @@ class _HttpBenchClient:
         try:
             response = await client.post(route, json=dict(body), headers=headers)
         except Exception as exc:
-            if isinstance(exc, BenchHttpError):
+            if isinstance(exc, (BenchHttpError, BenchConnectionError)):
                 raise
-            raise BenchHttpError(route, 500) from exc
+            raise BenchConnectionError(route) from exc
 
         if response.status_code >= 400:
             raise BenchHttpError(route, response.status_code)

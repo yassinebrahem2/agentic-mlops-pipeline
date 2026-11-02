@@ -906,7 +906,9 @@ async def test_silent_team_alert_scoring(app_factory: AppMaker, tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_incidents_paging(app_factory: AppMaker, tmp_path: Path) -> None:
+async def test_incidents_paging(
+    app_factory: AppMaker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Verifies that scoring pages through incidents (more than one page)."""
     async with app_factory("test-token") as (app, token, _):
         client = in_process(app, token)
@@ -942,11 +944,111 @@ async def test_incidents_paging(app_factory: AppMaker, tmp_path: Path) -> None:
             outcome = await services.incidents.raise_signal(project_id, draft, seen_at=dt)
             inc_ids.append(outcome.incident_id)
 
-        # Exercise multi-page pagination by setting page_limit=20 for 55 incidents (3 pages: 20, 20, 15)
-        res = await score(client, project_id, key, starts, page_limit=20)
+        # Exercise multi-page pagination by setting DEFAULT_PAGE_LIMIT=20 for 55 incidents (3 pages: 20, 20, 15)
+        monkeypatch.setattr("benchmarks.scorer.DEFAULT_PAGE_LIMIT", 20)
+        res = await score(client, project_id, key, starts)
         assert isinstance(res, Score)
 
         assert len(res.verdicts) == 55
         for inc_id in inc_ids:
             assert inc_id in res.matched
             assert res.verdicts[inc_id] == VerdictDraft(value="real_issue")
+
+
+class _MockClient:
+    def __init__(self, get_responses: dict[str, Any]) -> None:
+        self.get_responses = get_responses
+        self.posted: list[tuple[str, Any]] = []
+
+    async def get(self, path: str, params: Any = None) -> Any:
+        for k, v in self.get_responses.items():
+            if path.startswith(k):
+                return v
+        return []
+
+    async def post(self, path: str, body: Any) -> Any:
+        self.posted.append((path, body))
+        return {}
+
+
+@pytest.mark.asyncio
+async def test_scorer_unexpected_shapes_raise_and_post_nothing() -> None:
+    key = [
+        Record(
+            kind="null_spike",
+            category="data_quality",
+            column="col_a",
+            start="2026-03-01",
+            end="2026-03-03",
+        )
+    ]
+    starts = [(date(2026, 3, 1), datetime(2026, 3, 1, 0, 0, tzinfo=UTC))]
+
+    # 1. Bad verdicts response
+    client1 = _MockClient({"/projects/p1/verdicts": {"invalid": "shape"}})
+    with pytest.raises(ValueError, match="Unexpected response from /projects/p1/verdicts"):
+        await score(client1, "p1", key, starts)
+    assert client1.posted == []
+
+    # 2. Bad misses response
+    client2 = _MockClient(
+        {
+            "/projects/p1/verdicts": [],
+            "/projects/p1/misses": "not-a-list",
+        }
+    )
+    with pytest.raises(ValueError, match="Unexpected response from /projects/p1/misses"):
+        await score(client2, "p1", key, starts)
+    assert client2.posted == []
+
+    # 3. Bad incidents response (not dict)
+    client3 = _MockClient(
+        {
+            "/projects/p1/verdicts": [],
+            "/projects/p1/misses": [],
+            "/projects/p1/incidents": ["not-a-dict"],
+        }
+    )
+    with pytest.raises(ValueError, match="Unexpected response from /projects/p1/incidents"):
+        await score(client3, "p1", key, starts)
+    assert client3.posted == []
+
+    # 4. Bad incidents response (rows not list)
+    client4 = _MockClient(
+        {
+            "/projects/p1/verdicts": [],
+            "/projects/p1/misses": [],
+            "/projects/p1/incidents": {"rows": "not-a-list"},
+        }
+    )
+    with pytest.raises(ValueError, match="expected 'rows' to be list"):
+        await score(client4, "p1", key, starts)
+    assert client4.posted == []
+
+    # 5. Bad silent alerts response
+    client5 = _MockClient(
+        {
+            "/projects/p1/verdicts": [],
+            "/projects/p1/misses": [],
+            "/projects/p1/incidents": {"rows": []},
+            "/projects/p1/baseline/silent-alerts": {"bad": "shape"},
+        }
+    )
+    with pytest.raises(
+        ValueError, match="Unexpected response from /projects/p1/baseline/silent-alerts"
+    ):
+        await score(client5, "p1", key, starts)
+    assert client5.posted == []
+
+    # 6. Empty starts with missed problem raises ValueError
+    client6 = _MockClient(
+        {
+            "/projects/p1/verdicts": [],
+            "/projects/p1/misses": [],
+            "/projects/p1/incidents": {"rows": []},
+            "/projects/p1/baseline/silent-alerts": [],
+        }
+    )
+    with pytest.raises(ValueError, match="starts must not be empty when scoring misses"):
+        await score(client6, "p1", key, [])
+    assert client6.posted == []

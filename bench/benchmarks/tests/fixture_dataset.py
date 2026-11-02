@@ -31,10 +31,10 @@ from mlops_agents.proposals.payloads import (
 from benchmarks.checks import accuracy, null_share
 
 FIXTURE_DAYS = (
-    date(2026, 1, 5),
-    date(2026, 1, 6),
-    date(2026, 1, 7),
-    date(2026, 1, 8),
+    date(2030, 1, 7),
+    date(2030, 1, 8),
+    date(2030, 1, 9),
+    date(2030, 1, 10),
 )
 
 
@@ -55,8 +55,8 @@ class FixtureDataset:
                 kind="null_spike",
                 category="data_quality",
                 column="feature_a",
-                start="2026-01-06",
-                end="2026-01-06",
+                start="2030-01-08",
+                end="2030-01-08",
             )
         ]
 
@@ -170,8 +170,8 @@ class FixtureDataset:
         day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=UTC)
 
         # 1. Write daily_data.csv
-        # On 2026-01-06 (day 2), introduce null spike in feature_a (50% nulls)
-        if day == date(2026, 1, 6):
+        # On 2030-01-08 (day 2), introduce null spike in feature_a (50% nulls)
+        if day == date(2030, 1, 8):
             features = [1.0, None, 2.0, None, 3.0, None, 4.0, None, 5.0, None]
         else:
             features = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]

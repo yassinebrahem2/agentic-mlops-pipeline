@@ -8,7 +8,12 @@ import httpx2
 import pytest
 from fastapi import FastAPI
 
-from benchmarks.client import BenchHttpError, in_process, sign_in
+from benchmarks.client import (
+    BenchConnectionError,
+    BenchHttpError,
+    in_process,
+    sign_in,
+)
 
 type AppMaker = Callable[[str], AbstractAsyncContextManager[tuple[FastAPI, str, Path]]]
 
@@ -98,3 +103,14 @@ async def test_in_process_with_bad_token_fails(app_factory: AppMaker) -> None:
         with pytest.raises(BenchHttpError) as exc_info:
             await client.get("/projects")
         assert exc_info.value.status == 401
+
+
+@pytest.mark.asyncio
+async def test_connection_error_raises_bench_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MLOPS_AGENTS_ACCESS_TOKEN", "fake-token")
+    with pytest.raises(BenchConnectionError) as exc_info:
+        await sign_in("http://127.0.0.1:59999")
+    assert exc_info.value.route == "/api/auth/token"
+    assert "Connection error for /api/auth/token" in str(exc_info.value)

@@ -17,12 +17,10 @@ from benchmarks.client import BenchClient
 from benchmarks.scorer import Score
 
 # What each mode shows: the per-mode group lists live in one constant.
-MODE_GROUPS: Final[Mapping[Literal["replay", "agents"], tuple[StatGroup, ...]]] = {
+REPORT_GROUPS: Final[Mapping[Literal["replay", "agents"], tuple[StatGroup, ...]]] = {
     "replay": ("detection", "speed", "noise", "diagnosis"),
     "agents": ("detection", "speed", "noise", "diagnosis", "effort", "cost"),
 }
-
-REPORT_GROUPS: Final[Mapping[Literal["replay", "agents"], tuple[StatGroup, ...]]] = MODE_GROUPS
 
 # Metrics omitted in agents mode because simulated time differs from real time.
 _AGENTS_OMITTED_METRICS: Final[frozenset[str]] = frozenset(
@@ -67,11 +65,11 @@ def _format_stat_value(stat: StatValue) -> str:
 
 def _format_stat_value_short(stat: StatValue | None) -> str:
     if stat is None:
-        return "N/A"
+        return "not available"
     if stat.collecting:
         return "collecting"
     if stat.value is None:
-        return "N/A"
+        return "not available"
     if isinstance(stat.value, float) and stat.value.is_integer():
         return f"{stat.value:.1f}"
     return f"{stat.value:.3f}"
@@ -92,7 +90,7 @@ def _render_stats_section(
 ) -> str:
     lines: list[str] = []
     prefix = "#" * header_level
-    measured_groups = set(MODE_GROUPS.get(mode, ()))
+    measured_groups = set(REPORT_GROUPS.get(mode, ()))
 
     for group_name in STAT_METRICS:
         title = group_name.replace("_", " ").title()
@@ -109,7 +107,7 @@ def _render_stats_section(
             label = _metric_label(metric, mode)
             stat = group_stats.get(metric)
             if stat is None:
-                metric_lines.append(f"- **{label}:** not available (n=0)")
+                metric_lines.append(f"- **{label}:** not available")
             else:
                 metric_lines.append(f"- **{label}:** {_format_stat_value(stat)}")
 
@@ -210,7 +208,6 @@ def _render_markdown(
         total_c_tok = 0
         total_cost = 0.0
         has_cost = True
-        total_reqs: int | None = None
         agent_rows: dict[str, dict[str, Any]] = {}
 
         if usage_data and "rows" in usage_data and isinstance(usage_data["rows"], list):
@@ -224,13 +221,6 @@ def _render_markdown(
                     c_tok = int(cast(int, row.get("completion_tokens", 0)))
                     cost_val: object = row.get("cost_usd")
 
-                    raw_reqs: object = row.get("requests")
-                    reqs_int: int | None = (
-                        int(cast(int, raw_reqs)) if raw_reqs is not None else None
-                    )
-                    if reqs_int is not None:
-                        total_reqs = (total_reqs or 0) + reqs_int
-
                     total_p_tok += p_tok
                     total_c_tok += c_tok
                     if cost_val is not None:
@@ -242,18 +232,11 @@ def _render_markdown(
                         agent_rows[agent] = {
                             "agent": agent,
                             "model": model,
-                            "requests": reqs_int,
                             "prompt_tokens": 0,
                             "completion_tokens": 0,
                             "total_tokens": 0,
                             "cost": 0.0 if cost_val is not None else None,
                         }
-                    else:
-                        if reqs_int is not None:
-                            curr_reqs = cast(int | None, agent_rows[agent]["requests"])
-                            agent_rows[agent]["requests"] = (
-                                curr_reqs + reqs_int if curr_reqs is not None else reqs_int
-                            )
                     agent_rows[agent]["prompt_tokens"] += p_tok
                     agent_rows[agent]["completion_tokens"] += c_tok
                     agent_rows[agent]["total_tokens"] += p_tok + c_tok
@@ -261,10 +244,6 @@ def _render_markdown(
                         agent_rows[agent]["cost"] += float(cast(float, cost_val))
 
         total_tokens = total_p_tok + total_c_tok
-        if total_reqs is not None:
-            lines.append(f"- **Total Requests:** {total_reqs}")
-        else:
-            lines.append("- **Total Requests:** not available")
         lines.append(
             f"- **Total Tokens:** {total_tokens:,} (Prompt: {total_p_tok:,}, Completion: {total_c_tok:,})"
         )
@@ -273,15 +252,12 @@ def _render_markdown(
 
         if agent_rows:
             lines.append("### Usage by Agent\n")
-            lines.append("| Agent | Model | Requests | Tokens | Cost |")
-            lines.append("|---|---|---|---|---|")
+            lines.append("| Agent | Model | Tokens | Cost |")
+            lines.append("|---|---|---|---|")
             for ag in sorted(agent_rows.keys()):
                 d = agent_rows[ag]
-                reqs_cell = str(d["requests"]) if d["requests"] is not None else "N/A"
-                c_str = f"${d['cost']:.4f}" if d["cost"] is not None else "N/A"
-                lines.append(
-                    f"| {d['agent']} | {d['model']} | {reqs_cell} | {d['total_tokens']:,} | {c_str} |"
-                )
+                c_str = f"${d['cost']:.4f}" if d["cost"] is not None else "not available"
+                lines.append(f"| {d['agent']} | {d['model']} | {d['total_tokens']:,} | {c_str} |")
             lines.append("")
 
         # Planted flaws checklist (deduplicated)
@@ -556,7 +532,7 @@ def format_comparison_table(report_json_paths: Sequence[Path]) -> str:
                     tok_sum += p + c
             tokens_str = f"{tok_sum:,}"
         else:
-            tokens_str = "N/A"
+            tokens_str = "not available"
 
         # Duration
         try:
@@ -565,7 +541,7 @@ def format_comparison_table(report_json_paths: Sequence[Path]) -> str:
             dur_s = (ended - started).total_seconds()
             dur_str = f"{dur_s:.1f}s"
         except Exception:
-            dur_str = "N/A"
+            dur_str = "not available"
 
         rows.append(
             [
@@ -626,7 +602,6 @@ def run_report_cli(args: argparse.Namespace) -> int:
 
 
 __all__ = [
-    "MODE_GROUPS",
     "REPORT_GROUPS",
     "Pause",
     "RunInfo",

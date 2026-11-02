@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 from pathlib import Path
+from typing import Any
 
 import pytest
+from mlops_agents.api.app import create_app
+from mlops_agents.config import RunMode, load_settings
+from mlops_agents.monitoring.scheduler.loop import AppScheduler
 
 from benchmarks.cli import main
+from benchmarks.client import in_process
 from benchmarks.datasets import DATASETS
 from benchmarks.replay import replay
 from benchmarks.scorer import AlreadyScored
@@ -54,7 +60,29 @@ async def test_replay_fixture_dataset(tmp_path: Path, monkeypatch: pytest.Monkey
     assert rep_data["info"]["mode"] == "replay"
     assert rep_data["info"]["dataset"] == "fixture"
 
-    # 3. Scored real_issue on data_quality, no silence raised
+    # 3. Read incidents directly from the API: exactly 1 incident, no silence incident raised
+    settings = load_settings(
+        RunMode.LOCAL,
+        port=8765,
+        env={
+            "MLOPS_AGENTS_HOME": str(run_dir / "home"),
+            "MLOPS_AGENTS_ACCESS_TOKEN": "test-token",
+        },
+    )
+    app = create_app(settings)
+    app.state.access_token = "test-token"
+    async with app.router.lifespan_context(app):
+        services = app.state.services
+        projects = await services.workspace.list_projects()
+        assert len(projects) == 1
+        proj_id = projects[0].id
+        client = in_process(app, "test-token")
+        inc_page = await client.get(f"/projects/{proj_id}/incidents")
+        inc_rows = inc_page["rows"]
+        assert len(inc_rows) == 1
+        assert inc_rows[0]["category"] == "data_quality"
+        assert inc_rows[0]["category"] != "operational"
+
     assert len(score_res.matched) == 1
     (inc_id, problem) = next(iter(score_res.matched.items()))
     assert problem.category == "data_quality"
@@ -63,13 +91,85 @@ async def test_replay_fixture_dataset(tmp_path: Path, monkeypatch: pytest.Monkey
     assert len(score_res.misses) == 0
     assert len(score_res.excluded) == 0
 
-    # Verify no feed silence incidents exist in report
-    for p in score_res.matched.values():
-        assert p.category == "data_quality"
-
     # 4. A second replay into the same folder refuses
     with pytest.raises(AlreadyScored):
         await replay(dataset, run_dir)
+
+
+@pytest.mark.asyncio
+async def test_replay_without_utime_stamping_raises_silence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies that removing os.utime stamping causes false silence incidents."""
+
+    def dummy_utime(
+        _path: os.PathLike[str] | str | bytes | int,
+        _times: tuple[int, int] | tuple[float, float] | None = None,
+        *,
+        ns: tuple[int, int] | None = None,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        pass
+
+    monkeypatch.setattr(os, "utime", dummy_utime)
+    run_dir = tmp_path / "run_no_utime"
+    dataset = FixtureDataset()
+    await replay(dataset, run_dir)
+
+    settings = load_settings(
+        RunMode.LOCAL,
+        port=8765,
+        env={
+            "MLOPS_AGENTS_HOME": str(run_dir / "home"),
+            "MLOPS_AGENTS_ACCESS_TOKEN": "test-token",
+        },
+    )
+    app = create_app(settings)
+    app.state.access_token = "test-token"
+    async with app.router.lifespan_context(app):
+        services = app.state.services
+        projects = await services.workspace.list_projects()
+        assert len(projects) == 1
+        proj_id = projects[0].id
+        client = in_process(app, "test-token")
+        inc_page = await client.get(f"/projects/{proj_id}/incidents")
+        inc_rows = inc_page["rows"]
+        assert len(inc_rows) > 1, f"Expected more than 1 incident, got {inc_rows}"
+        assert any("daily_feed" in r.get("cause_key", "") for r in inc_rows)
+
+
+@pytest.mark.asyncio
+async def test_replay_stops_scheduler_loop_and_steps_once_per_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies that background scheduler loop is stopped and run_due is driven once per day."""
+    run_due_calls = 0
+    orig_run_due = AppScheduler.run_due
+
+    async def counted_run_due(self: AppScheduler, project_id: str, at: Any) -> None:
+        nonlocal run_due_calls
+        run_due_calls += 1
+        await orig_run_due(self, project_id, at)
+
+    stop_called = False
+    orig_stop = AppScheduler.stop
+
+    async def tracked_stop(self: AppScheduler) -> None:
+        nonlocal stop_called
+        stop_called = True
+        await orig_stop(self)
+
+    monkeypatch.setattr(AppScheduler, "run_due", counted_run_due)
+    monkeypatch.setattr(AppScheduler, "stop", tracked_stop)
+
+    run_dir = tmp_path / "run_sched"
+    dataset = FixtureDataset()
+    await replay(dataset, run_dir)
+
+    assert stop_called is True
+    # Exactly one run_due per day (FixtureDataset has 4 days)
+    assert run_due_calls == len(dataset.days())
 
 
 def test_cli_replay_fixture_and_second_run_refusal(tmp_path: Path) -> None:

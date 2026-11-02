@@ -16,6 +16,7 @@ OUT_OF_RANGE_THRESHOLD: Final[float] = 0.0
 PSI_DRIFT_THRESHOLD: Final[float] = 0.2
 PR_AUC_THRESHOLD: Final[float] = 0.6
 ACCURACY_THRESHOLD: Final[float] = 0.9
+DEFAULT_CLASSIFICATION_THRESHOLD: Final[float] = 0.5
 
 
 def _extract_values(
@@ -327,7 +328,10 @@ def accuracy(
     model: str | None = None,
     source_ref: str = "checks/checks.jsonl",
 ) -> ResultRecord:
-    """Accuracy check for team baseline. Origin is 'team'. Fired when accuracy drops below threshold."""
+    """Accuracy check for team baseline. Origin is 'team'. Fired when accuracy drops below threshold.
+
+    Float probability predictions are binarized against DEFAULT_CLASSIFICATION_THRESHOLD (0.5).
+    """
     y_t = [int(v) for v in y_true]
     total = len(y_t)
     if total == 0:
@@ -349,7 +353,7 @@ def accuracy(
     y_p: list[int] = []
     for v in y_pred:
         if isinstance(v, float) and 0.0 < v < 1.0:
-            y_p.append(1 if v >= 0.5 else 0)
+            y_p.append(1 if v >= DEFAULT_CLASSIFICATION_THRESHOLD else 0)
         else:
             y_p.append(int(v))
 
@@ -375,6 +379,7 @@ def accuracy(
 
 __all__ = [
     "ACCURACY_THRESHOLD",
+    "DEFAULT_CLASSIFICATION_THRESHOLD",
     "NULL_SHARE_THRESHOLD",
     "OUT_OF_RANGE_THRESHOLD",
     "PR_AUC_THRESHOLD",
