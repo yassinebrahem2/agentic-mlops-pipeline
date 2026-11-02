@@ -67,7 +67,7 @@ export function UsagePage() {
   const names = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
 
   return (
-    <PageFrame width="5xl" className="space-y-6">
+    <PageFrame width="5xl" className="flex flex-col gap-6">
       <h1 className="text-2xl font-semibold">Usage</h1>
       {usage.isPending && <p className="text-muted-foreground">Loading usage…</p>}
       {usage.isError && <p className="text-destructive">{errorText(usage.error)}</p>}

@@ -36,7 +36,7 @@ function StatsContent({ projectId }: { projectId: string }) {
   const stats = useStats(projectId, statsWindow, category);
 
   return (
-    <PageFrame width="6xl" className="space-y-6">
+    <PageFrame width="5xl" className="flex flex-col gap-6">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <BarChart3 className="size-6 text-primary" />

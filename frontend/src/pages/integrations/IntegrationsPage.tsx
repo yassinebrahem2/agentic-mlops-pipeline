@@ -39,7 +39,7 @@ export function IntegrationsPage() {
   });
 
   return (
-    <PageFrame width="4xl" className="space-y-6">
+    <PageFrame width="3xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">Integrations</h1>
       <section aria-labelledby="github-heading">
         <Card>

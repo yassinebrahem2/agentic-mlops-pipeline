@@ -12,7 +12,7 @@ export function ProvidersPage() {
   const providers = useProviders();
 
   return (
-    <PageFrame width="4xl" className="space-y-6">
+    <PageFrame width="5xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">AI providers</h1>
 
       <section aria-labelledby="providers-heading" className="flex flex-col gap-4">

@@ -18,7 +18,7 @@ export function AppSettingsPage() {
   const app = useAppInfo();
 
   return (
-    <PageFrame width="4xl" className="space-y-6">
+    <PageFrame width="3xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">App settings</h1>
       {app.isPending && <p className="text-muted-foreground">Loading…</p>}
       {app.isError && <p className="text-destructive">{errorText(app.error)}</p>}
