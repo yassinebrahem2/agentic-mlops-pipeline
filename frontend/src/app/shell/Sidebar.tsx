@@ -7,19 +7,21 @@ import type { PageRoute } from "../routes";
 import { GearMenu } from "./GearMenu";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
+type NavRoute = PageRoute & { nav: NonNullable<PageRoute["nav"]> };
+
 function NavItem({
   route,
   to,
   projectId,
   onNavigate,
 }: {
-  route: PageRoute;
+  route: NavRoute;
   to: string;
   projectId?: string;
   onNavigate?: () => void;
 }) {
-  const Icon = route.nav?.icon;
-  const count = route.nav?.badge ? route.nav.badge(projectId) : undefined;
+  const Icon = route.nav.icon;
+  const count = route.nav.badge ? route.nav.badge(projectId) : undefined;
   const showBadge = typeof count === "number" && count > 0;
 
   return (
@@ -35,8 +37,8 @@ function NavItem({
         )
       }
     >
-      {Icon && <Icon className="size-4 shrink-0" />}
-      <span className="flex-1 truncate">{route.nav?.label}</span>
+      <Icon className="size-4 shrink-0" />
+      <span className="flex-1 truncate">{route.nav.label}</span>
       {showBadge && (
         <Badge
           variant="secondary"
@@ -59,8 +61,8 @@ export function Sidebar({
   className?: string;
 }) {
   const { projectId } = useCurrentProject();
-  const projectRoutes = routes.filter((r) => r.nav?.area === "project");
-  const appRoutes = routes.filter((r) => r.nav?.area === "app");
+  const projectRoutes = routes.filter((r): r is NavRoute => r.nav?.area === "project");
+  const appRoutes = routes.filter((r): r is NavRoute => r.nav?.area === "app");
 
   return (
     <aside

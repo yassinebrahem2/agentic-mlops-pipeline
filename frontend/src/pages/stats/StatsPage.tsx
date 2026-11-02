@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { useParams } from "react-router";
 import { AlertCircle, BarChart3, Info } from "lucide-react";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { errorText } from "@/lib/api";
@@ -35,7 +36,7 @@ function StatsContent({ projectId }: { projectId: string }) {
   const stats = useStats(projectId, statsWindow, category);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
+    <PageFrame width="6xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <BarChart3 className="size-6 text-primary" />
@@ -89,7 +90,7 @@ function StatsContent({ projectId }: { projectId: string }) {
       {stats.data && <Groups view={stats.data} />}
 
       <SilentAlerts projectId={projectId} />
-    </div>
+    </PageFrame>
   );
 }
 

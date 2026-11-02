@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { Rocket } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { QueryStatus } from "@/components/QueryStatus";
 import { useProject } from "@/lib/useProject";
 import { DecisionsTable } from "./DecisionsTable";
@@ -46,7 +47,7 @@ function Deployments({ projectId }: { projectId: string }) {
     view.open_prs.length === 0;
 
   return (
-    <div className="container max-w-4xl py-6 space-y-6">
+    <PageFrame width="4xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <Rocket className="size-6 text-primary" />
@@ -110,6 +111,6 @@ function Deployments({ projectId }: { projectId: string }) {
           }}
         />
       )}
-    </div>
+    </PageFrame>
   );
 }

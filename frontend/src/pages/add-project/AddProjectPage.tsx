@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { GitHubTab } from "./GitHubTab";
 import { LocalFolderTab } from "./LocalFolderTab";
+import { PageFrame } from "@/components/PageFrame";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { errorText } from "@/lib/api";
 import { useAppInfo } from "@/lib/useAppInfo";
@@ -11,7 +12,7 @@ export function AddProjectPage() {
   const isServerMode = appInfo?.mode === "server";
 
   return (
-    <div className="container mx-auto max-w-4xl space-y-6 p-6">
+    <PageFrame width="4xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">Add project</h1>
         <p className="text-sm text-muted-foreground">
@@ -54,6 +55,6 @@ export function AddProjectPage() {
           </TabsContent>
         </Tabs>
       )}
-    </div>
+    </PageFrame>
   );
 }

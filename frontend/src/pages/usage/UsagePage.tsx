@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import {
   Table,
   TableBody,
@@ -66,7 +67,7 @@ export function UsagePage() {
   const names = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
+    <PageFrame width="5xl" className="space-y-6">
       <h1 className="text-2xl font-semibold">Usage</h1>
       {usage.isPending && <p className="text-muted-foreground">Loading usage…</p>}
       {usage.isError && <p className="text-destructive">{errorText(usage.error)}</p>}
@@ -114,6 +115,6 @@ export function UsagePage() {
           </Table>
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }

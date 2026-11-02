@@ -1,5 +1,6 @@
 import { useParams } from "react-router";
 import { AlertCircle, LayoutDashboard, Loader2 } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { errorText } from "@/lib/api";
@@ -22,7 +23,7 @@ function Dashboard({ projectId }: { projectId: string }) {
   const view = query.data;
 
   return (
-    <div className="container max-w-6xl py-6 space-y-6">
+    <PageFrame width="6xl" className="space-y-6">
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
         <LayoutDashboard className="size-6 text-primary" />
         Dashboard
@@ -69,6 +70,6 @@ function Dashboard({ projectId }: { projectId: string }) {
           </div>
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }

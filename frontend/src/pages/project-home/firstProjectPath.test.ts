@@ -1,3 +1,4 @@
+import { Box } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import type { PageRoute } from "@/app/routes";
 import { firstProjectPath } from "./firstProjectPath";
@@ -8,17 +9,17 @@ describe("firstProjectPath", () => {
       {
         path: "/projects/:projectId/settings",
         element: null,
-        nav: { area: "project", label: "Settings", order: 100 },
+        nav: { area: "project", label: "Settings", order: 100, icon: Box },
       },
       {
         path: "/projects/:projectId/agents",
         element: null,
-        nav: { area: "project", label: "Agents", order: 0 },
+        nav: { area: "project", label: "Agents", order: 0, icon: Box },
       },
       {
         path: "/settings",
         element: null,
-        nav: { area: "app", label: "App Settings", order: 10 },
+        nav: { area: "app", label: "App Settings", order: 10, icon: Box },
       },
     ];
 
@@ -31,7 +32,7 @@ describe("firstProjectPath", () => {
       {
         path: "/",
         element: null,
-        nav: { area: "app", label: "Projects", order: 0 },
+        nav: { area: "app", label: "Projects", order: 0, icon: Box },
       },
       {
         path: "/projects/new",

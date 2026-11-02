@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ApiError, errorText } from "@/lib/api";
@@ -76,30 +77,30 @@ function Incident({ projectId, incidentId }: { projectId: string; incidentId: st
 
   if (query.isLoading) {
     return (
-      <div className="container max-w-4xl py-6">
+      <PageFrame width="4xl">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
           Loading incident...
         </div>
-      </div>
+      </PageFrame>
     );
   }
 
   if (query.error instanceof ApiError && query.error.status === 404) {
     return (
-      <div className="container max-w-4xl space-y-3 py-6">
+      <PageFrame width="4xl" className="space-y-3">
         <h1 className="text-2xl font-bold tracking-tight">Incident not found</h1>
         <p className="text-sm text-muted-foreground">
           This project has no incident with the id {incidentId}.
         </p>
         <BackLink projectId={projectId} />
-      </div>
+      </PageFrame>
     );
   }
 
   if (query.error || !query.data) {
     return (
-      <div className="container max-w-4xl space-y-3 py-6">
+      <PageFrame width="4xl" className="space-y-3">
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
           <AlertTitle>Error loading the incident</AlertTitle>
@@ -117,13 +118,13 @@ function Incident({ projectId, incidentId }: { projectId: string; incidentId: st
           </AlertDescription>
         </Alert>
         <BackLink projectId={projectId} />
-      </div>
+      </PageFrame>
     );
   }
 
   const incident = query.data;
   return (
-    <div className="container max-w-4xl space-y-8 py-6">
+    <PageFrame width="4xl" className="space-y-8">
       <div className="space-y-3">
         <BackLink projectId={projectId} />
         <div data-testid="incident-header" className="flex flex-wrap items-center gap-2">
@@ -157,6 +158,6 @@ function Incident({ projectId, incidentId }: { projectId: string; incidentId: st
 
       <Signals projectId={projectId} incidentId={incident.id} />
       <Timeline projectId={projectId} incidentId={incident.id} />
-    </div>
+    </PageFrame>
   );
 }
