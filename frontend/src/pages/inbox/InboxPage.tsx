@@ -7,6 +7,7 @@ import {
   Inbox as InboxIcon,
   Loader2,
 } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { errorText } from "@/lib/api";
@@ -41,7 +42,7 @@ function Inbox({ projectId }: { projectId: string }) {
   } = useGithubActivity(projectId);
 
   return (
-    <div className="container max-w-4xl py-6 space-y-8">
+    <PageFrame width="4xl" className="space-y-8">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <InboxIcon className="size-6 text-primary" />
@@ -243,6 +244,6 @@ function Inbox({ projectId }: { projectId: string }) {
           </div>
         )}
       </section>
-    </div>
+    </PageFrame>
   );
 }

@@ -356,7 +356,9 @@ describe("IncidentPage", () => {
 
     renderPage("/projects/prj_1/incidents/inc_x");
 
-    expect(await screen.findByRole("heading", { name: "Incident not found" })).toBeInTheDocument();
+    const heading = await screen.findByRole("heading", { name: "Incident not found" });
+    expect(heading).toBeInTheDocument();
+    expect(heading.parentElement).toHaveClass("mx-auto", "w-full", "p-6", "max-w-4xl");
     expect(screen.getByRole("link", { name: "Back to the Inbox" })).toHaveAttribute(
       "href",
       "/projects/prj_1/inbox",
@@ -374,7 +376,8 @@ describe("IncidentPage", () => {
     });
 
     renderPage("/projects/prj_1/incidents/inc_1");
-    expect(await screen.findByText("The server failed.")).toBeInTheDocument();
+    const errorAlert = await screen.findByText("The server failed.");
+    expect(errorAlert.closest(".mx-auto")).toHaveClass("mx-auto", "w-full", "p-6", "max-w-4xl");
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
 

@@ -1,6 +1,7 @@
 import { useMemo, useState, type SubmitEvent } from "react";
 import { useParams } from "react-router";
 import { AlertCircle, Loader2, ScrollText } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +46,7 @@ function Activity({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="container max-w-4xl py-6 space-y-6">
+    <PageFrame width="4xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <ScrollText className="size-6 text-primary" />
@@ -153,6 +154,6 @@ function Activity({ projectId }: { projectId: string }) {
           </Button>
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }

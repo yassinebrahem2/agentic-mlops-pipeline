@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { api, errorText, unwrap } from "@/lib/api";
@@ -75,7 +76,7 @@ function OnboardingStep({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="container mx-auto max-w-3xl space-y-6 p-6">
+    <PageFrame width="3xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">Onboarding</h1>
         <p className="text-sm text-muted-foreground">
@@ -165,7 +166,7 @@ function OnboardingStep({ projectId }: { projectId: string }) {
           )}
         </Step>
       </ol>
-    </div>
+    </PageFrame>
   );
 }
 
