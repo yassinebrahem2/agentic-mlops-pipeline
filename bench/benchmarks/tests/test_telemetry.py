@@ -134,7 +134,7 @@ async def test_quiet_days_raise_nothing(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_feed_window_raises_silence_scored_real_issue(tmp_path: Path) -> None:
-    """A missing-feed window raises silence incidents scored real_issue."""
+    """A missing-feed window raises one silence incident scored real_issue."""
     days = [
         date(2026, 1, 5),  # normal
         date(2026, 1, 6),  # normal
@@ -150,8 +150,7 @@ async def test_missing_feed_window_raises_silence_scored_real_issue(tmp_path: Pa
     run_dir = tmp_path / "missing_feed_run"
     score_res = await replay(ds, run_dir)
 
-    # Note: asserting len >= 1 waits on plan #695 (bug #694: daily check re-opening incident) to tighten to == 1
-    assert len(score_res.matched) >= 1
+    assert len(score_res.matched) == 1
     assert all(prob.kind == "missing_feed" for prob in score_res.matched.values())
     assert all(prob.category == "data_quality" for prob in score_res.matched.values())
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
@@ -162,7 +161,7 @@ async def test_missing_feed_window_raises_silence_scored_real_issue(tmp_path: Pa
 async def test_late_file_window_raises_silence_and_recovers_when_file_arrives(
     tmp_path: Path,
 ) -> None:
-    """A late-file window raises silence incidents scored real_issue, and feed is no longer silent once late file arrives."""
+    """A late-file window raises one silence incident scored real_issue, and feed is no longer silent once late file arrives."""
     days = [
         date(2026, 1, 5),  # normal
         date(2026, 1, 6),  # normal
@@ -178,8 +177,7 @@ async def test_late_file_window_raises_silence_and_recovers_when_file_arrives(
     run_dir = tmp_path / "late_feed_run"
     score_res = await replay(ds, run_dir)
 
-    # Note: asserting len >= 1 waits on plan #695 (bug #694: daily check re-opening incident) to tighten to == 1
-    assert len(score_res.matched) >= 1
+    assert len(score_res.matched) == 1
     assert all(prob.kind == "late_arrival" for prob in score_res.matched.values())
     assert all(prob.category == "data_quality" for prob in score_res.matched.values())
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
@@ -226,8 +224,8 @@ async def test_malformed_results_file_raises_parser_failure(tmp_path: Path) -> N
     run_dir = tmp_path / "malformed_run"
     score_res = await replay(ds, run_dir)
 
-    # Note: asserting len >= 1 waits on plan #695 (bug #694) to tighten to one per cause (parser + check)
-    assert len(score_res.matched) >= 1
+    # Gives one incident per cause: the parser, and the check its results feed
+    assert len(score_res.matched) == 2
     assert any(prob.kind == "parser_failure" for prob in score_res.matched.values())
     assert all(prob.category == "operational" for prob in score_res.matched.values())
     assert all(v.value == "real_issue" for v in score_res.verdicts.values())
@@ -251,7 +249,7 @@ async def test_short_replay_through_replay(tmp_path: Path) -> None:
     run_dir = tmp_path / "short_replay"
     score_res = await replay(ds, run_dir)
 
-    assert len(score_res.matched) >= 2
+    assert len(score_res.matched) == 3
     matched_kinds = {prob.kind for prob in score_res.matched.values()}
     assert "missing_feed" in matched_kinds
     assert "parser_failure" in matched_kinds
@@ -270,8 +268,8 @@ async def test_full_scenario_replay(tmp_path: Path) -> None:
     score_res = await replay(ds, run_dir)
 
     assert len(score_res.misses) == 0, f"Expected 0 misses, got {score_res.misses}"
-    assert len(score_res.matched) >= 5, (
-        f"Expected at least 5 matched incidents, got {len(score_res.matched)}"
+    assert len(score_res.matched) == 6, (
+        f"Expected exactly 6 matched incidents (1 per feed problem, 2 for parser failure), got {len(score_res.matched)}"
     )
 
     # All 5 problems in the scenario must be matched
