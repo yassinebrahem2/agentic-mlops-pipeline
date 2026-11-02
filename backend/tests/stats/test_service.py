@@ -8,9 +8,10 @@ import pytest
 
 from mlops_agents.monitoring.incidents.contract import IncidentPatch
 from mlops_agents.monitoring.incidents.service import IncidentsService
+from mlops_agents.monitoring.results.contract import ResultRecord
 from mlops_agents.monitoring.results.service import ResultsService
 from mlops_agents.monitoring.verdicts.baseline import SILENT_ALERTS_MAX, SqliteBaseline
-from mlops_agents.monitoring.verdicts.contract import VerdictDraft
+from mlops_agents.monitoring.verdicts.contract import MissReport, VerdictDraft
 from mlops_agents.monitoring.verdicts.store import SqliteVerdicts
 from mlops_agents.stats.contract import STATS_MIN_VERDICTS, StatsView, StatValue
 from mlops_agents.stats.service import StatsService
@@ -266,3 +267,84 @@ async def test_every_hook_run_in_the_window_counts_past_the_first_read(
     view = await stats.compute(project_id, "30d", None, NOW)
 
     assert _stat(view, "autonomous_share") == StatValue(value=0.5, n=500, collecting=False)
+
+
+async def test_a_category_filter_counts_only_that_categorys_misses_and_silent_alerts(
+    stats: StatsService,
+    baseline: SqliteBaseline,
+    verdicts: SqliteVerdicts,
+    results: ResultsService,
+    project_id: str,
+) -> None:
+    drift_alert = await store(
+        results,
+        project_id,
+        ResultRecord(
+            check_id="team_drift",
+            origin="team",
+            ran_at=ago(days=2),
+            fired=True,
+            category="drift",
+            subject="feature_drift",
+            detail={},
+            source_ref="test:drift",
+        ),
+    )
+    dq_alert = await store(
+        results,
+        project_id,
+        ResultRecord(
+            check_id="team_nulls",
+            origin="team",
+            ran_at=ago(days=3),
+            fired=True,
+            category="data_quality",
+            subject="orders_amount",
+            detail={},
+            source_ref="test:dq",
+        ),
+    )
+    await baseline.judge_silent(project_id, drift_alert.id, "not_an_issue", by="user")
+    await baseline.judge_silent(project_id, dq_alert.id, "not_an_issue", by="user")
+
+    await verdicts.report_miss(
+        project_id,
+        MissReport(
+            description="drift miss",
+            category="drift",
+            occurred_at=ago(days=4),
+            reported_at=ago(days=3),
+        ),
+    )
+    await verdicts.report_miss(
+        project_id,
+        MissReport(
+            description="data quality miss",
+            category="data_quality",
+            occurred_at=ago(days=5),
+            reported_at=ago(days=4),
+        ),
+    )
+    await verdicts.report_miss(
+        project_id,
+        MissReport(
+            description="unplaced miss",
+            category=None,
+            occurred_at=ago(days=6),
+            reported_at=ago(days=5),
+        ),
+    )
+
+    drift_view = await stats.compute(project_id, "30d", "drift", NOW)
+    assert _stat(drift_view, "misses") == StatValue(value=1, n=1, collecting=False)
+    assert _stat(drift_view, "false_alarms_avoided") == StatValue(value=1, n=1, collecting=True)
+
+    dq_view = await stats.compute(project_id, "30d", "data_quality", NOW)
+    assert _stat(dq_view, "misses") == StatValue(value=1, n=1, collecting=False)
+    assert _stat(dq_view, "false_alarms_avoided") == StatValue(value=1, n=1, collecting=True)
+
+    unfiltered_view = await stats.compute(project_id, "30d", None, NOW)
+    assert _stat(unfiltered_view, "misses") == StatValue(value=3, n=3, collecting=False)
+    assert _stat(unfiltered_view, "false_alarms_avoided") == StatValue(
+        value=2, n=2, collecting=True
+    )
