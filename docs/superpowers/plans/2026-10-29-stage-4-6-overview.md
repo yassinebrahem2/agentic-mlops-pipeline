@@ -105,6 +105,7 @@ class Results(Protocol):                # results
     async def collect(self, project_id: str, now: datetime) -> CollectionReport: ...   # every source from its cursor, oldest first
     async def query(self, project_id: str, q: ResultQuery) -> Page[StoredResult]: ...
     async def latest_per_check(self, project_id: str, subject: str, model: str | None) -> list[StoredResult]: ...   # what "the latest results no longer fire" reads
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None: ...   # what a source or parser failure's resolve guard reads (#721)
 
 class ParserMapping(BaseModel): format: Literal["jsonl", "json", "csv", "log"]; fields: dict[str, str]; pattern: str | None; fired_when: Condition; defaults: dict[str, Any] = {}   # fields: standard field -> JSON path, column or pattern group
 class ParserCode(BaseModel): script: str; timeout_s: int = 30          # python, run in the sandbox over the read-only mount, no network
