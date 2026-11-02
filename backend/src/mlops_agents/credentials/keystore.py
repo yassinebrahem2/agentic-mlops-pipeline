@@ -9,9 +9,6 @@ class KeyTooLongError(KeyStoreError):
     """The key exceeds the key store's character limit."""
 
 
-KeyLengthError = KeyTooLongError
-
-
 class KeyStore(Protocol):
     def get(self, ref: str) -> str | None: ...
 

@@ -2,7 +2,6 @@ from mlops_agents.config import ConfigError, RunMode, Settings
 from mlops_agents.credentials.file_store import EncryptedFileStore
 from mlops_agents.credentials.keyring_store import KeyringStore
 from mlops_agents.credentials.keystore import (
-    KeyLengthError,
     KeyStore,
     KeyStoreError,
     KeyTooLongError,
@@ -10,7 +9,6 @@ from mlops_agents.credentials.keystore import (
 from mlops_agents.paths import DataPaths
 
 __all__ = [
-    "KeyLengthError",
     "KeyStore",
     "KeyStoreError",
     "KeyTooLongError",
