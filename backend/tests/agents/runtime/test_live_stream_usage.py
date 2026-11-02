@@ -62,11 +62,21 @@ async def test_live_gemini_stream_usage(
             HumanMessage(content="Call lookup_status for service 'auth' now.")
         ]
 
+        print(f"\nModel: {wire_model}")
+        print("Chunk | Input Tokens | Output Tokens | Total Tokens")
+        print("------|--------------|---------------|-------------")
+        chunk_idx = 0
         chunk_usages: list[dict[str, Any]] = []
         async for chunk in runnable.astream(messages):
             aim = cast(AIMessageChunk, chunk)
             if hasattr(aim, "usage_metadata") and aim.usage_metadata:
-                chunk_usages.append(cast(dict[str, Any], aim.usage_metadata))
+                usage = cast(dict[str, Any], aim.usage_metadata)
+                chunk_usages.append(usage)
+                pt = usage.get("input_tokens")
+                ct = usage.get("output_tokens")
+                tt = usage.get("total_tokens")
+                print(f"{chunk_idx:5d} | {pt!s:12s} | {ct!s:13s} | {tt!s:11s}")
+            chunk_idx += 1
 
         assert len(chunk_usages) > 0
 
