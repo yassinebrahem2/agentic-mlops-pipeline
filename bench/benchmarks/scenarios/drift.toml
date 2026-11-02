@@ -1,0 +1,132 @@
+# Scenario for synthetic stream drift replay.
+# Evaluates 70 scored days (days 21 to 90, 2026-02-02 to 2026-05-08).
+# Problems are 3 business days each, spaced >= 9 days after the previous problem of its category ends.
+# At least 5 problems in each category: data_quality, drift, model_performance.
+
+# --- Category: data_quality (5 problems) ---
+
+[[injection]]
+kind = "null_spike"
+column = "salary"
+share = 0.25
+start = 2026-02-02
+end = 2026-02-04
+
+[[injection]]
+kind = "out_of_range"
+column = "age"
+value = -10.0
+share = 0.2
+start = 2026-02-16
+end = 2026-02-18
+
+[[injection]]
+kind = "null_spike"
+column = "loan"
+share = 0.25
+start = 2026-03-02
+end = 2026-03-04
+
+[[injection]]
+kind = "null_spike"
+column = "hvalue"
+share = 0.25
+start = 2026-03-16
+end = 2026-03-18
+
+[[injection]]
+kind = "out_of_range"
+column = "loan"
+value = -50000.0
+share = 0.2
+start = 2026-03-30
+end = 2026-04-01
+
+# --- Category: drift (5 problems) ---
+
+[[injection]]
+kind = "covariate_shift"
+column = "salary"
+shift = 60000.0
+position = 12500
+width = 1500
+start = 2026-02-09
+end = 2026-02-11
+
+[[injection]]
+kind = "covariate_shift"
+column = "loan"
+shift = 200000.0
+position = 17500
+width = 1500
+start = 2026-02-23
+end = 2026-02-25
+
+[[injection]]
+kind = "covariate_shift"
+column = "hvalue"
+shift = 300000.0
+position = 22500
+width = 1500
+start = 2026-03-09
+end = 2026-03-11
+
+[[injection]]
+kind = "covariate_shift"
+column = "commission"
+shift = 50000.0
+position = 27500
+width = 1500
+start = 2026-03-23
+end = 2026-03-25
+
+[[injection]]
+kind = "covariate_shift"
+column = "age"
+shift = 25.0
+position = 32500
+width = 1500
+start = 2026-04-06
+end = 2026-04-08
+
+# --- Category: model_performance (5 problems) ---
+
+[[injection]]
+kind = "concept_drift"
+function = 1
+position = 15000
+width = 1500
+start = 2026-02-16
+end = 2026-02-18
+
+[[injection]]
+kind = "concept_drift"
+function = 2
+position = 20000
+width = 1500
+start = 2026-03-02
+end = 2026-03-04
+
+[[injection]]
+kind = "concept_drift"
+function = 3
+position = 25000
+width = 1500
+start = 2026-03-16
+end = 2026-03-18
+
+[[injection]]
+kind = "concept_drift"
+function = 4
+position = 30000
+width = 1500
+start = 2026-03-30
+end = 2026-04-01
+
+[[injection]]
+kind = "concept_drift"
+function = 5
+position = 35000
+width = 1500
+start = 2026-04-13
+end = 2026-04-15
