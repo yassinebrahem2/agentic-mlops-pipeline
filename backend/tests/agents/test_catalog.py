@@ -6,7 +6,6 @@ from mlops_agents.agents.catalog import AgentCatalog, DefinitionError, parse_def
 from mlops_agents.agents.hooks.names import STATUS_BOARD_HOOK
 from mlops_agents.agents.tools.names import (
     ADJUST_SEVERITY,
-    PROPOSAL_SHAPE,
     RECORD_FIX_CHOICE,
     REGISTER_CHECK,
     SAVE_REPORT,
@@ -132,7 +131,7 @@ def test_packaged_orchestrator() -> None:
     orchestrator = catalog.get("orchestrator")
     assert set(orchestrator.tools) == STAGE_2_TOOLS - {
         "Propose",
-        PROPOSAL_SHAPE,
+        "ProposalShape",
         ADJUST_SEVERITY,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,

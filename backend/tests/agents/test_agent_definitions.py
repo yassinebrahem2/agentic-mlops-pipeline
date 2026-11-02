@@ -37,12 +37,14 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_UPDATE,
     MERGE_PULL_REQUEST,
     MONITORING_QUERY,
-    PROPOSAL_SHAPE,
     RECORD_FIX_CHOICE,
     REGISTER_CHECK,
     REQUEST_FIX,
     RUN_HOOK,
     SAVE_REPORT,
+)
+from mlops_agents.agents.tools.proposal_shape import (
+    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
 )
 from mlops_agents.agents.tools.propose import ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool

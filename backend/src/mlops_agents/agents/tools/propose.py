@@ -15,7 +15,9 @@ from mlops_agents.agents.tools.base import (
     ToolFailure,
     ToolOutput,
 )
-from mlops_agents.agents.tools.names import PROPOSAL_SHAPE
+from mlops_agents.agents.tools.proposal_shape import (
+    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
+)
 from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.proposals.contract import ProposalCheck
 

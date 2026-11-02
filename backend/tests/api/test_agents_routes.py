@@ -7,7 +7,6 @@ import httpx2
 
 from mlops_agents.agents.tools.names import (
     ADJUST_SEVERITY,
-    PROPOSAL_SHAPE,
     RECORD_FIX_CHOICE,
     REGISTER_CHECK,
     SAVE_REPORT,
@@ -54,7 +53,7 @@ async def test_agents_listing_and_default_model(
     assert orchestrator["chat"] is True
     assert set(orchestrator["tools"]) == STAGE_2_TOOLS - {
         "Propose",
-        PROPOSAL_SHAPE,
+        "ProposalShape",
         ADJUST_SEVERITY,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,

@@ -10,7 +10,9 @@ import pytest
 from mlops_agents.agents.catalog import AgentCatalog
 from mlops_agents.agents.tools import default_registry
 from mlops_agents.agents.tools.base import FileAccess, RiskClass, ToolContext, ToolFailure
-from mlops_agents.agents.tools.names import PROPOSAL_SHAPE
+from mlops_agents.agents.tools.proposal_shape import (
+    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
+)
 from mlops_agents.agents.tools.proposal_shape import (
     ProposalShape,
     ProposalShapeArgs,

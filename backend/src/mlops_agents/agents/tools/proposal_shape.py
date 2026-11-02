@@ -13,13 +13,13 @@ from mlops_agents.agents.tools.base import (
     ToolContext,
     ToolOutput,
 )
-from mlops_agents.agents.tools.names import PROPOSAL_SHAPE
 from mlops_agents.errors import DomainError
 
 if TYPE_CHECKING:
     from mlops_agents.proposals.kinds import ProposalKinds
 
-PROPOSAL_SHAPE_TOOL_NAME: Final = PROPOSAL_SHAPE
+PROPOSAL_SHAPE_TOOL_NAME: Final = "ProposalShape"
+PROPOSAL_SHAPE: Final = PROPOSAL_SHAPE_TOOL_NAME
 
 
 class ProposalShapeArgs(BaseModel):

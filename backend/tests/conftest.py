@@ -16,7 +16,6 @@ from mlops_agents.agents.tools.names import (
     INCIDENT_UPDATE,
     MERGE_PULL_REQUEST,
     MONITORING_QUERY,
-    PROPOSAL_SHAPE,
     RECORD_FIX_CHOICE,
     REGISTER_CHECK,
     REQUEST_FIX,
@@ -51,6 +50,7 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         "TrackingHistory",
         "Propose",
         "ReadHandoff",
+        "ProposalShape",
         INCIDENT_UPDATE,
         INCIDENT_MERGE,
         INCIDENT_SPLIT,
@@ -64,7 +64,6 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         SAVE_REPORT,
         MERGE_PULL_REQUEST,
         REGISTER_CHECK,
-        PROPOSAL_SHAPE,
     }
 )
 
