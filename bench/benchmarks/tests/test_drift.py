@@ -223,16 +223,16 @@ async def test_short_replay_opens_drift_incident_scored_real_issue(tmp_path: Pat
         client = in_process(app, "test-token")
         inc_page = await client.get(f"/projects/{proj_id}/incidents")
         inc_rows = inc_page["rows"]
-        assert len(inc_rows) >= 1
+        assert len(inc_rows) == 1
         drift_incs = [r for r in inc_rows if r["category"] == "drift"]
-        assert len(drift_incs) >= 1
+        assert len(drift_incs) == 1
 
     # Verify score results
-    assert len(score_res.matched) >= 1
+    assert len(score_res.matched) == 1
     drift_matched = [
         (inc_id, prob) for inc_id, prob in score_res.matched.items() if prob.category == "drift"
     ]
-    assert len(drift_matched) >= 1
+    assert len(drift_matched) == 1
     drift_inc_id, drift_problem = drift_matched[0]
     assert drift_problem.kind == "covariate_shift"
     assert score_res.verdicts[drift_inc_id].value == "real_issue"
