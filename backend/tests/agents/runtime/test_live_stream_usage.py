@@ -32,9 +32,12 @@ async def test_live_gemini_stream_usage(
     if not api_key:
         pytest.skip("set GEMINI_API_KEY to run this live test")
 
+    wire_model = os.environ.get("GEMINI_MODEL")
+    if not wire_model:
+        pytest.skip("set GEMINI_MODEL to run this live test")
+
     async with httpx2.AsyncClient() as http:
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-        wire_model = "gemini-2.5-flash"
         client = build_chat_model(
             base_url=base_url,
             api_key=api_key,
