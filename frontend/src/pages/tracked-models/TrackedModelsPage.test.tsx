@@ -337,7 +337,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    renderPage("/projects/prj_1/models");
+    renderPage("/projects/prj_1/models", { routes: [route] });
 
     // Header rendered
     expect(await screen.findByRole("heading", { name: "Models" })).toBeInTheDocument();
@@ -461,7 +461,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    renderPage("/projects/prj_1/models");
+    renderPage("/projects/prj_1/models", { routes: [route] });
 
     expect(await screen.findByText("fraud-detector")).toBeInTheDocument();
 
@@ -522,6 +522,12 @@ describe("TrackedModelsPage", () => {
     };
 
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
           data: projectStub,
@@ -558,7 +564,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    renderPage("/projects/prj_1/models");
+    renderPage("/projects/prj_1/models", { routes: [route] });
 
     expect(await screen.findByText("Showing the latest 1 of 150 versions")).toBeInTheDocument();
 
@@ -571,6 +577,12 @@ describe("TrackedModelsPage", () => {
   it("handles empty states (no sources, sources but no models) and error states", async () => {
     // 1. No sources
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
           data: projectStub,
@@ -586,7 +598,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    const { unmount } = renderPage("/projects/prj_1/models");
+    const { unmount } = renderPage("/projects/prj_1/models", { routes: [route] });
 
     expect(
       await screen.findByText(
@@ -599,6 +611,12 @@ describe("TrackedModelsPage", () => {
 
     // 2. Sources but no models
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
           data: projectStub,
@@ -623,7 +641,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    const view2 = renderPage("/projects/prj_1/models");
+    const view2 = renderPage("/projects/prj_1/models", { routes: [route] });
     expect(await screen.findByText("No models tracked yet")).toBeInTheDocument();
 
     view2.unmount();
@@ -631,6 +649,12 @@ describe("TrackedModelsPage", () => {
 
     // 3. Source last_error in a warning alert at the top
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
           data: projectStub,
@@ -655,7 +679,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    const view3 = renderPage("/projects/prj_1/models");
+    const view3 = renderPage("/projects/prj_1/models", { routes: [route] });
     expect(await screen.findByText(/MLflow connection timeout/)).toBeInTheDocument();
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("MLflow connection timeout");
@@ -668,6 +692,12 @@ describe("TrackedModelsPage", () => {
     let modelsCalls = 0;
 
     getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
       if (path === "/api/projects/{project_id}") {
         return Promise.resolve({
           data: projectStub,
@@ -694,7 +724,7 @@ describe("TrackedModelsPage", () => {
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
 
-    renderPage("/projects/prj_1/models");
+    renderPage("/projects/prj_1/models", { routes: [route] });
 
     expect(await screen.findByText("No models tracked yet")).toBeInTheDocument();
     expect(sourcesCalls).toBeGreaterThanOrEqual(1);
@@ -719,5 +749,93 @@ describe("TrackedModelsPage", () => {
       expect(sourcesCalls).toBeGreaterThanOrEqual(2);
       expect(modelsCalls).toBeGreaterThanOrEqual(2);
     });
+  });
+
+  it("shows a baseline row as the starting champion, not as a deploy", async () => {
+    const user = userEvent.setup();
+    const sources = [makeSource({ id: "trk_1" })];
+    const modelsPage: Page_ModelSummary_ = {
+      rows: [makeModel({ name: "fraud-detector", versions: 1 })],
+      total: 1,
+      truncated: false,
+    };
+    const versionsPage: Page_ModelVersionRow_ = {
+      rows: [makeVersion({ model: "fraud-detector", version: "1" })],
+      total: 1,
+      truncated: false,
+    };
+    const deploymentsPage: Page_DeploymentRow_ = {
+      rows: [
+        makeDeployment({
+          model: "fraud-detector",
+          alias: "production",
+          from_version: null,
+          to_version: "1",
+          baseline: true,
+        }),
+      ],
+      total: 1,
+      truncated: false,
+    };
+
+    getSpy = vi.spyOn(api, "GET").mockImplementation((path: string) => {
+      if (path === "/api/projects") {
+        return Promise.resolve({
+          data: [project("prj_1", "Test Project", "2026-10-20T10:00:00Z")],
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}") {
+        return Promise.resolve({
+          data: projectStub,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/tracking/sources") {
+        return Promise.resolve({
+          data: sources,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/tracking/models") {
+        return Promise.resolve({
+          data: modelsPage,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/tracking/versions") {
+        return Promise.resolve({
+          data: versionsPage,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/tracking/deployments") {
+        return Promise.resolve({
+          data: deploymentsPage,
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/tracking/metrics") {
+        return Promise.resolve({
+          data: { rows: [], total: 0, truncated: false },
+          response: new Response(null, { status: 200 }),
+        });
+      }
+      if (path === "/api/projects/{project_id}/handoff") {
+        return Promise.resolve({ data: null, response: new Response(null, { status: 404 }) });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+
+    renderPage("/projects/prj_1/models", { routes: [route] });
+
+    expect(await screen.findByText("fraud-detector")).toBeInTheDocument();
+    const aliasHistoryTrigger = await screen.findByRole("button", { name: /Alias history/i });
+    await user.click(aliasHistoryTrigger);
+
+    expect(
+      await screen.findByText("v1, already in production when the source was added"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/– → 1/)).not.toBeInTheDocument();
   });
 });
