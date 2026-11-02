@@ -1,3 +1,4 @@
+import { Settings } from "lucide-react";
 import { act, screen } from "@testing-library/react";
 import { useParams } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ function SettingsPage() {
 const fakeSettingsRoute: PageRoute = {
   path: "/projects/:projectId/settings",
   element: <SettingsPage />,
-  nav: { area: "project", label: "Project settings", order: 100 },
+  nav: { area: "project", label: "Project settings", order: 100, icon: Settings },
 };
 
 describe("ProjectHome", () => {

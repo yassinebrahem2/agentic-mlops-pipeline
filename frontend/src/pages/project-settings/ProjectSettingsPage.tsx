@@ -1,4 +1,5 @@
 import { useParams } from "react-router";
+import { PageFrame } from "@/components/PageFrame";
 import { errorText } from "@/lib/api";
 import { useProject } from "@/lib/useProject";
 import { RepositorySection } from "./RepositorySection";
@@ -29,7 +30,7 @@ export function ProjectSettingsPage() {
 function ProjectSettings({ projectId }: { projectId: string }) {
   const project = useProject(projectId);
   return (
-    <div className="container mx-auto max-w-4xl space-y-6 p-6">
+    <PageFrame width="4xl" className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">Project settings</h1>
       {project.isPending && <p role="status">Loading project...</p>}
       {project.error && (
@@ -58,6 +59,6 @@ function ProjectSettings({ projectId }: { projectId: string }) {
           <RemoveProjectDialog project={project.data} />
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }

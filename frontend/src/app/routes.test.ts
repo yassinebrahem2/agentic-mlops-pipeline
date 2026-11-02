@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { Box } from "lucide-react";
 import { createElement } from "react";
+import { describe, expect, it } from "vitest";
 import { collectRoutes, type PageRoute } from "./routes";
 
 describe("collectRoutes", () => {
@@ -9,14 +10,14 @@ describe("collectRoutes", () => {
         route: {
           path: "/projects",
           element: createElement("div", null, "Projects"),
-          nav: { area: "app", label: "Projects", order: 10 },
+          nav: { area: "app", label: "Projects", order: 10, icon: Box },
         },
       },
       "../pages/providers/route.tsx": {
         route: {
           path: "/providers",
           element: createElement("div", null, "Providers"),
-          nav: { area: "app", label: "Providers", order: 20 },
+          nav: { area: "app", label: "Providers", order: 20, icon: Box },
         },
       },
     };
@@ -53,35 +54,35 @@ describe("collectRoutes", () => {
         route: {
           path: "/projects/:projectId/b",
           element: createElement("div", null, "B"),
-          nav: { area: "project", label: "B Label", order: 20 },
+          nav: { area: "project", label: "B Label", order: 20, icon: Box },
         },
       },
       "../pages/app-c/route.tsx": {
         route: {
           path: "/app/c",
           element: createElement("div", null, "C"),
-          nav: { area: "app", label: "C Label", order: 20 },
+          nav: { area: "app", label: "C Label", order: 20, icon: Box },
         },
       },
       "../pages/app-b/route.tsx": {
         route: {
           path: "/app/b",
           element: createElement("div", null, "B"),
-          nav: { area: "app", label: "B Label", order: 10 },
+          nav: { area: "app", label: "B Label", order: 10, icon: Box },
         },
       },
       "../pages/app-a/route.tsx": {
         route: {
           path: "/app/a",
           element: createElement("div", null, "A"),
-          nav: { area: "app", label: "A Label", order: 10 },
+          nav: { area: "app", label: "A Label", order: 10, icon: Box },
         },
       },
       "../pages/proj-a/route.tsx": {
         route: {
           path: "/projects/:projectId/a",
           element: createElement("div", null, "A"),
-          nav: { area: "project", label: "A Label", order: 10 },
+          nav: { area: "project", label: "A Label", order: 10, icon: Box },
         },
       },
       "../pages/no-nav/route.tsx": {
