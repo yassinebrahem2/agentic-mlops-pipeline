@@ -162,6 +162,8 @@ class Company:
         env = dict(os.environ)
         # The world's own uv environment; uv would only warn that it ignores it.
         env.pop("VIRTUAL_ENV", None)
+        # Every company program writes UTF-8 (on Windows, Python otherwise uses the locale code page).
+        env["PYTHONUTF8"] = "1"
         env[paths.DATA_VARIABLE] = str(self.data)
         env[paths.MLFLOW_VARIABLE] = str(self.mlflow)
         if tracking_uri is not None:
