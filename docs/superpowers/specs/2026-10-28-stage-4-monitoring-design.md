@@ -106,7 +106,7 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
 
 **Signals** (`sig`): a fired result, a silence, a failed job or run, a parser failure. Each keeps its source record.
 
-**Grouping.** A new signal joins an open incident when it shares a cause key (the same table, feed, job or model version) within a window (a setting), **or when its subject is downstream of the incident's subject in the pipeline graph** from the handoff (one upstream schema change that breaks scoring, shifts three columns and drops a metric is one incident). Otherwise it opens a new incident. The diagnosing agent can merge or split incidents (tools below).
+**Grouping.** A new signal joins an open incident when it shares a cause key (the same table, feed, job or model version), however long that incident has been open (a check that fires on three days is one incident, #694), **or when its subject is downstream of the incident's subject in the pipeline graph** from the handoff (one upstream schema change that breaks scoring, shifts three columns and drops a metric is one incident). Otherwise it opens a new incident. The diagnosing agent can merge or split incidents (tools below).
 
 **The incident** (`inc`): category (data quality, drift, model performance, operational), subtype (schema change, late feed, null spike, input drift, label shift, concept drift, failed training, bad deploy, failed scoring, silence, ...), severity (§7), status, cause (the agent's diagnosis), the signals, the related PRs and issues, `started_at` (the earliest signal's `ran_at`), `detected_at`, `acknowledged_at`, `mitigated_at`, `resolved_at`.
 
