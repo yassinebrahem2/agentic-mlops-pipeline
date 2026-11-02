@@ -20,3 +20,11 @@ uv run pyright
 - `src/benchmarks/client.py`: `BenchClient`, `sign_in`, `in_process`
 - `src/benchmarks/dates.py`: `DayStarts`, `business_date`
 - `src/benchmarks/cli.py`: CLI dispatcher for `bench`
+
+## Datasets
+
+### ULB Credit Card Fraud
+- Source: OpenML dataset 1597 (`creditcard` v1, `https://data.openml.org/datasets/0000/1597/dataset_1597.pq`).
+- Licence: OpenML lists "Public"; original dataset page lists Database Contents License (DbCL) 1.0.
+- Citation: Andrea Dal Pozzolo, Olivier Caelen, Reid A. Johnson and Gianluca Bontempi. *Calibrating Probability with Undersampling for Unbalanced Classification*. IEEE Symposium on Computational Intelligence and Data Mining (CIDM), 2015.
+

@@ -7,7 +7,9 @@ dependencies = [
   "demo-world",
   "fastapi>=0.143.2",
   "httpx2>=2.13.1",
+  "lightgbm>=4.7.0",
   "mlops-agents",
+  "scikit-learn>=1.9.1",
 ]
 
 [project.scripts]

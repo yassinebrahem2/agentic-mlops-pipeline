@@ -1,0 +1,81 @@
+# Scenario for ULB credit card fraud replay.
+# Evaluates 70 scored days (days 21 to 90, 2026-02-02 to 2026-05-08).
+# Problems are 3 business days each, spaced >= 9 days after the previous problem of its category ends.
+
+[[injection]]
+kind = "null_spike"
+column = "V1"
+share = 0.2
+start = 2026-02-02
+end = 2026-02-04
+
+[[injection]]
+kind = "covariate_shift"
+column = "Amount"
+shift = 500.0
+start = 2026-02-09
+end = 2026-02-11
+
+[[injection]]
+kind = "out_of_range"
+column = "Amount"
+value = -100.0
+share = 0.2
+start = 2026-02-16
+end = 2026-02-18
+
+[[injection]]
+kind = "covariate_shift"
+column = "V1"
+shift = 5.0
+start = 2026-02-23
+end = 2026-02-25
+
+[[injection]]
+kind = "null_spike"
+column = "Amount"
+share = 0.2
+start = 2026-03-02
+end = 2026-03-04
+
+[[injection]]
+kind = "covariate_shift"
+column = "V2"
+shift = 5.0
+start = 2026-03-09
+end = 2026-03-11
+
+[[injection]]
+kind = "out_of_range"
+column = "Amount"
+value = -50.0
+share = 0.2
+start = 2026-03-16
+end = 2026-03-18
+
+[[injection]]
+kind = "covariate_shift"
+column = "V4"
+shift = 5.0
+start = 2026-03-23
+end = 2026-03-25
+
+[[injection]]
+kind = "null_spike"
+column = "V3"
+share = 0.2
+start = 2026-03-30
+end = 2026-04-01
+
+[[injection]]
+kind = "covariate_shift"
+column = "V5"
+shift = 5.0
+start = 2026-04-06
+end = 2026-04-08
+
+[[injection]]
+kind = "unseen_fraud"
+share = 0.3
+start = 2026-04-13
+end = 2026-04-15
