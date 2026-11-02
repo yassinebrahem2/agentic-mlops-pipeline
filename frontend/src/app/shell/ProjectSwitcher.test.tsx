@@ -1,3 +1,4 @@
+import { FolderKanban, Settings } from "lucide-react";
 import { useParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
@@ -47,7 +48,7 @@ function ProjectSettingsDisplay() {
 const fakeProjectSettingsRoute: PageRoute = {
   path: "/projects/:projectId/settings",
   element: <ProjectSettingsDisplay />,
-  nav: { area: "project", label: "Settings", order: 100 },
+  nav: { area: "project", label: "Settings", order: 100, icon: Settings },
 };
 
 const fakeProjectsNewRoute: PageRoute = {
@@ -58,7 +59,7 @@ const fakeProjectsNewRoute: PageRoute = {
 const fakeRootRoute: PageRoute = {
   path: "/",
   element: <div>All Projects Home Page</div>,
-  nav: { area: "app", label: "Projects", order: 0 },
+  nav: { area: "app", label: "Projects", order: 0, icon: FolderKanban },
 };
 
 const testRoutes: PageRoute[] = [
