@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import type { components } from "@/api/schema";
+import { PageFrame } from "@/components/PageFrame";
 import { Button } from "@/components/ui/button";
 import { api, errorText, unwrap } from "@/lib/api";
 import { useAppInfo } from "@/lib/useAppInfo";
@@ -17,7 +18,7 @@ export function AppSettingsPage() {
   const app = useAppInfo();
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8 p-6">
+    <PageFrame width="3xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">App settings</h1>
       {app.isPending && <p className="text-muted-foreground">Loading…</p>}
       {app.isError && <p className="text-destructive">{errorText(app.error)}</p>}
@@ -28,7 +29,7 @@ export function AppSettingsPage() {
           <Backup />
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }
 

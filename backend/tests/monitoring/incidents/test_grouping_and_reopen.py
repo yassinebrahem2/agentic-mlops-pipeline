@@ -73,7 +73,7 @@ async def test_grouping_same_key_inside_and_outside_window(
     fake_clock: FakeClock,
     project_id: str,
 ) -> None:
-    """Same cause key inside grouping_window_minutes attaches, outside opens new incident."""
+    """Same cause key attaches to open incident regardless of elapsed time."""
     results = FakeResults()
     severity = FakeSeverityPolicy("medium")
     handoffs = FakeHandoffs()
@@ -114,7 +114,7 @@ async def test_grouping_same_key_inside_and_outside_window(
     assert out2.incident_id == out1.incident_id
     assert out2.change in ("attached", "quiet")
 
-    # Signal 3 at t0 + 95m (65m after latest signal at t0 + 30m, outside 60m window) -> opens incident 2
+    # Signal 3 at t0 + 95m (outside old 60m window) -> still attaches to open incident 1
     d3 = SignalDraft(
         kind="fired_result",
         category="data_quality",
@@ -124,8 +124,8 @@ async def test_grouping_same_key_inside_and_outside_window(
         detail={},
     )
     out3 = await service.raise_signal(project_id, d3, seen_at=t0 + timedelta(minutes=95))
-    assert out3.change == "opened"
-    assert out3.incident_id != out1.incident_id
+    assert out3.incident_id == out1.incident_id
+    assert out3.change in ("attached", "quiet")
 
 
 @pytest.mark.asyncio
@@ -552,3 +552,179 @@ async def test_reopen_outside_window_and_closed_never_reopened(
     assert out_after_close.change == "opened"
     assert out_after_close.incident_id != out_late.incident_id
     assert out_after_close.incident_id != out1.incident_id
+
+
+@pytest.mark.asyncio
+async def test_signal_joins_open_incident_with_same_cause_key_regardless_of_time(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    fake_clock: FakeClock,
+    project_id: str,
+) -> None:
+    """Three signals on one cause key a day apart join the same open incident without notifying again;
+    another cause key opens its own incident; downstream grouping unchanged; reopen within/outside window."""
+    data = sample_handoff_dict()
+    data["pipeline"] = [
+        {
+            "name": "stage_orders",
+            "entry": "orders.py",
+            "inputs": ["raw_orders"],
+            "outputs": ["orders"],
+        },
+        {
+            "name": "stage_metrics",
+            "entry": "metrics.py",
+            "inputs": ["orders_raw"],
+            "outputs": ["orders_metrics"],
+        },
+    ]
+    data["edges"] = [
+        {"from_stage": "stage_orders", "to_stage": "stage_metrics"},
+    ]
+    payload = HandoffPayload.model_validate(data)
+    handoffs = FakeHandoffs(payload)
+    results = FakeResults()
+    severity = FakeSeverityPolicy("medium")
+    service = IncidentsService(
+        databases=databases,
+        events=event_log,
+        results=results,
+        severity=severity,
+        maintenance=FakeMaintenance(),
+        clock=fake_clock,
+        handoffs=handoffs,
+    )
+    obs = RecordingObserver()
+    service.add_observer(obs)
+
+    t0 = datetime(2026, 10, 30, 8, 0, 0, tzinfo=UTC)
+    fake_clock.current = t0
+
+    # 1. Day 1: signal 1 opens incident 1
+    d1 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="orders",
+        model="churn",
+        ran_at=t0,
+        detail={},
+    )
+    out1 = await service.raise_signal(project_id, d1, seen_at=t0)
+    assert out1.change == "opened"
+    inc1_id = out1.incident_id
+    assert len(obs.changes) == 1
+    assert obs.changes[0].kind == "opened"
+    assert obs.changes[0].incident_id == inc1_id
+
+    # 2. Day 2: signal 2 on same cause key joins incident 1 quietly (no second notification)
+    t1 = t0 + timedelta(days=1)
+    fake_clock.current = t1
+    d2 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="orders",
+        model="churn",
+        ran_at=t1,
+        detail={},
+    )
+    out2 = await service.raise_signal(project_id, d2, seen_at=t1)
+    assert out2.incident_id == inc1_id
+    assert out2.change == "quiet"
+    assert len(obs.changes) == 1
+
+    # 3. Day 3: signal 3 on same cause key joins incident 1 quietly
+    t2 = t0 + timedelta(days=2)
+    fake_clock.current = t2
+    d3 = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="orders",
+        model="churn",
+        ran_at=t2,
+        detail={},
+    )
+    out3 = await service.raise_signal(project_id, d3, seen_at=t2)
+    assert out3.incident_id == inc1_id
+    assert out3.change == "quiet"
+    assert len(obs.changes) == 1
+
+    # Incident has all three signals
+    inc1 = await service.get(project_id, inc1_id)
+    assert inc1 is not None
+    assert len(inc1.signal_ids) == 3
+
+    # 4. Signal on another cause key opens its own incident
+    d_other = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="users",
+        model="churn",
+        ran_at=t2,
+        detail={},
+    )
+    out_other = await service.raise_signal(project_id, d_other, seen_at=t2)
+    assert out_other.incident_id != inc1_id
+    assert out_other.change == "opened"
+    assert len(obs.changes) == 2
+    assert obs.changes[1].kind == "opened"
+    assert obs.changes[1].incident_id == out_other.incident_id
+
+    # 5. Downstream signal joins incident 1 (downstream grouping unchanged)
+    d_downstream = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="orders_metrics",
+        model="churn",
+        ran_at=t2 + timedelta(minutes=5),
+        detail={},
+    )
+    out_downstream = await service.raise_signal(
+        project_id, d_downstream, seen_at=t2 + timedelta(minutes=5)
+    )
+    assert out_downstream.incident_id == inc1_id
+
+    # 6. Reopen within window and new incident after it
+    # Resolve incident 2
+    await service.update(
+        project_id,
+        out_other.incident_id,
+        agent="user",
+        patch=IncidentPatch(status="resolved"),
+    )
+    # Signal within reopen window (2h later) reopens incident 2
+    t_reopen = t2 + timedelta(hours=2)
+    fake_clock.current = t_reopen
+    d_reopen = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="users",
+        model="churn",
+        ran_at=t_reopen,
+        detail={},
+    )
+    out_reopen = await service.raise_signal(project_id, d_reopen, seen_at=t_reopen)
+    assert out_reopen.change == "reopened"
+    assert out_reopen.incident_id == out_other.incident_id
+
+    # Resolve again
+    await service.update(
+        project_id,
+        out_other.incident_id,
+        agent="user",
+        patch=IncidentPatch(status="resolved"),
+    )
+    # Signal outside reopen window (28h later) opens a new incident
+    t_after = t_reopen + timedelta(hours=28)
+    fake_clock.current = t_after
+    d_after = SignalDraft(
+        kind="fired_result",
+        category="data_quality",
+        subject="users",
+        model="churn",
+        ran_at=t_after,
+        detail={},
+    )
+    out_after = await service.raise_signal(project_id, d_after, seen_at=t_after)
+    assert out_after.change == "opened"
+    assert out_after.incident_id != out_other.incident_id
+    assert out_after.incident_id != inc1_id

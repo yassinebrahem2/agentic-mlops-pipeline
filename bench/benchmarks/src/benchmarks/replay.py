@@ -18,7 +18,9 @@ from mlops_agents.api.app import create_app
 from mlops_agents.api.services import Services
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
+from mlops_agents.errors import DomainError
 from mlops_agents.monitoring.expr import Compare
+from mlops_agents.monitoring.incidents.contract import ACTIVE_STATUSES, IncidentPatch
 from mlops_agents.monitoring.results.contract import ParserMapping, ParserSpec, source_id
 from mlops_agents.proposals.payloads import DataFeedRef, FileResults, JobFeedRef
 
@@ -285,6 +287,25 @@ async def replay(
                 # Drive due jobs
                 await services.scheduler.run_due(project_id, clock.now())
                 await asyncio.sleep(0)
+
+                # Attempt to resolve active incidents whose results stopped firing
+                active_page = await services.incidents.list(
+                    project_id,
+                    status=list(ACTIVE_STATUSES),
+                    limit=1000,
+                )
+                for inc in active_page.rows:
+                    try:
+                        await services.incidents.update(
+                            project_id,
+                            inc.id,
+                            agent="replay",
+                            patch=IncidentPatch(status="resolved"),
+                        )
+                    except DomainError as exc:
+                        if exc.code == "incident_still_firing":
+                            continue
+                        raise
 
             # Scoring
             run_ended = datetime.now(UTC)

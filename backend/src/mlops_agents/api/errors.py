@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from mlops_agents.credentials import KeyStoreError
+from mlops_agents.credentials import KeyStoreError, KeyTooLongError
 from mlops_agents.errors import DomainError, validation_error_message
 from mlops_agents.sandbox.contract import SandboxUnavailable
 
@@ -45,6 +45,10 @@ def register_error_handlers(app: FastAPI) -> None:
             "Some fields are missing or invalid.",
             {"errors": validation_error_message(exc).errors},
         )
+
+    @app.exception_handler(KeyTooLongError)
+    async def key_too_long(request: Request, exc: KeyTooLongError) -> JSONResponse:
+        return error_response(422, "key_too_long", str(exc))
 
     @app.exception_handler(KeyStoreError)
     async def keystore_unavailable(request: Request, exc: KeyStoreError) -> JSONResponse:
