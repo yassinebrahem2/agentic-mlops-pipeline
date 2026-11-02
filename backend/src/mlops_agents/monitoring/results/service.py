@@ -7,7 +7,7 @@ import contextlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
@@ -21,6 +21,7 @@ from mlops_agents.monitoring.results.contract import (
     EvaluationCopies,
     ParseOutcome,
     Parsers,
+    ParserVersion,
     ResultQuery,
     ResultRecord,
     Results,
@@ -332,11 +333,28 @@ class ResultsService(Results):
         failures: dict[str, str] = {}
         all_newly_stored: list[StoredResult] = []
 
-        for s_id, kind, needs_parser, state in source_states:
-            current_cursor: dict[str, Any] = dict(state.cursor) if state is not None else {}
+        handoff = await self._handoffs.current(project_id)
+        results_loc_id: str | None = None
+        if handoff is not None and isinstance(
+            handoff.payload.operations.results_location, FileResults
+        ):
+            results_loc_id = source_id(
+                "file",
+                handoff.payload.operations.results_location.path_pattern,
+                handoff.payload.operations.results_location.connection,
+            )
 
-            cur_parser = await self._parsers.current(project_id, s_id) if kind == "file" else None
-            use_parser = needs_parser or cur_parser is not None
+        for s_id, kind, needs_parser, state in source_states:
+            current_cursor = state.cursor if state is not None else {}
+
+            cur_parser: ParserVersion | None = None
+            if kind == "file":
+                cur_parser = await self._parsers.current(project_id, s_id)
+
+            is_results_loc = results_loc_id is not None and s_id == results_loc_id
+            use_parser = needs_parser or (
+                cur_parser is not None and cur_parser.enabled and not is_results_loc
+            )
 
             if use_parser:
                 if cur_parser is None or not cur_parser.enabled:
@@ -389,10 +407,7 @@ class ResultsService(Results):
                     # its size and mtime as last seen. A file with a chunk advances only once
                     # its chunk parses.
                     chunk_files = {c.rel_posix for c in raw_read.chunks}
-                    raw_held = current_cursor.get("files")
-                    held_files_cur: dict[str, Any] = (
-                        cast(dict[str, Any], raw_held).copy() if isinstance(raw_held, dict) else {}
-                    )
+                    held_files_cur = dict(current_cursor.get("files", {}))
                     for rel_posix, entry in raw_read.cursor.get("files", {}).items():
                         if rel_posix not in chunk_files:
                             held_files_cur[rel_posix] = entry
@@ -486,12 +501,7 @@ class ResultsService(Results):
                             source_stored += len(stored)
 
                         # Advance cursor for successfully parsed chunk
-                        raw_files = current_cursor.get("files")
-                        files_cur: dict[str, Any] = (
-                            cast(dict[str, Any], raw_files).copy()
-                            if isinstance(raw_files, dict)
-                            else {}
-                        )
+                        files_cur = dict(current_cursor.get("files", {}))
                         files_cur[chunk.rel_posix] = {
                             "size": chunk.size,
                             "mtime": chunk.mtime,

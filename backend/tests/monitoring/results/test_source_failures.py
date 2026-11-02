@@ -355,9 +355,35 @@ async def test_team_lines_without_parser_leave_cursor_and_reread_when_parser_app
     full_content = team_line_1 + team_line_2
     target.write_bytes(full_content)
 
+    from mlops_agents.proposals.payloads import Cadence, CheckSpec
+
     connections = FakeConnections()
     connections.add_local_folder("conn_team", data_dir)
-    handoffs = FakeHandoffs(_build_handoff("conn_team", "*.jsonl"))
+    ops = Operations(
+        scheduler=None,
+        feeds=[],
+        on_call=[],
+        checks=[
+            CheckSpec(
+                check_id="c1",
+                name="Team check",
+                category="data_quality",
+                cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+                timezone="UTC",
+                results=FileResults(connection="conn_team", path_pattern="*.jsonl"),
+            )
+        ],
+        results_location=FileResults(connection="conn_team", path_pattern="agent_results/*.jsonl"),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    handoffs = FakeHandoffs(
+        HandoffView(
+            proposal_id="prop_team",
+            version=1,
+            approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+            payload=payload,
+        )
+    )
     incidents = FakeIncidents()
     maintenance = FakeMaintenance()
 
