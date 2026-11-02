@@ -58,10 +58,10 @@ def test_same_seed_gives_same_rows_and_key() -> None:
 
 def test_drift_point_changes_distribution_only_from_position_on() -> None:
     """Verifies that a drift point changes the distribution only from its position on."""
-    # Base stream without drift before row 2000
-    base_df = generate_drift_frame(2000, seed=42, position=3000, width=100)
-    # Stream with drift point at row 1000
-    drift_df = generate_drift_frame(2000, seed=42, position=1000, width=100)
+    # Base stream without drift
+    base_df = generate_drift_frame(2000, seed=42)
+    # Stream with drift point at row 1000 to function 2
+    drift_df = generate_drift_frame(2000, seed=42, position=1000, width=100, drift_function=2)
 
     # Before position (rows 0 to 800, well before transition width): exact same rows
     base_iloc = cast(Any, base_df.iloc)

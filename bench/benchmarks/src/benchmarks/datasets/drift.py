@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -76,20 +76,24 @@ def generate_drift_frame(
     n_samples: int = 10000,
     *,
     seed: int | None = None,
-    position: int = 5000,
+    position: int | None = None,
     width: int = 500,
     base_function: int = 0,
-    drift_function: int = 2,
+    drift_function: int | None = None,
 ) -> pd.DataFrame:
-    """Generates a synthetic dataset using river ConceptDriftStream over Agrawal."""
+    """Generates a synthetic dataset using river Agrawal (and optionally ConceptDriftStream)."""
     synth_module = cast(Any, synth)
-    stream = synth_module.ConceptDriftStream(
-        stream=synth_module.Agrawal(classification_function=base_function, seed=seed),
-        drift_stream=synth_module.Agrawal(classification_function=drift_function, seed=seed),
-        position=position,
-        width=width,
-        seed=seed,
-    )
+    if drift_function is not None and position is not None and drift_function != base_function:
+        stream = synth_module.ConceptDriftStream(
+            stream=synth_module.Agrawal(classification_function=base_function, seed=seed),
+            drift_stream=synth_module.Agrawal(classification_function=drift_function, seed=seed),
+            position=position,
+            width=width,
+            seed=seed,
+        )
+    else:
+        stream = synth_module.Agrawal(classification_function=base_function, seed=seed)
+
     samples: list[tuple[dict[str, Any], Any]] = list(stream.take(n_samples))
     rows: list[dict[str, Any]] = []
     for x, y in samples:
@@ -100,46 +104,26 @@ def generate_drift_frame(
 
 
 def _eval_agrawal_function(func_id: int, row: Mapping[str, Any]) -> int:
-    """Evaluates an Agrawal classification function on row features."""
-    salary = float(row["salary"])
-    age = float(row["age"])
-    elevel = int(row["elevel"])
-    car = int(row["car"])
-    loan = float(row["loan"])
-
-    if func_id == 0:
-        return int((age < 40) or (age >= 60))
-    if func_id == 1:
-        if age < 40:
-            return int(50000 <= salary <= 100000)
-        if age < 60:
-            return int(75000 <= salary <= 125000)
-        return int(25000 <= salary <= 75000)
-    if func_id == 2:
-        if age < 40:
-            return int((elevel == 0) or (elevel == 1))
-        if age < 60:
-            return int(elevel in (1, 2, 3))
-        return int(elevel in (2, 3, 4))
-    if func_id == 3:
-        if age < 40:
-            return int(elevel in (0, 1) and (25000 <= loan <= 75000))
-        if age < 60:
-            return int(elevel in (1, 2, 3) and (50000 <= loan <= 100000))
-        return int(elevel in (2, 3, 4) and (75000 <= loan <= 125000))
-    if func_id == 4:
-        if age < 40:
-            return int((50000 <= salary <= 100000) and (100000 <= loan <= 300000))
-        if age < 60:
-            return int((75000 <= salary <= 125000) and (200000 <= loan <= 400000))
-        return int((25000 <= salary <= 75000) and (300000 <= loan <= 500000))
-    if func_id == 5:
-        if age < 40:
-            return int((50000 <= salary <= 100000) and (1 <= car <= 10))
-        if age < 60:
-            return int((75000 <= salary <= 125000) and (11 <= car <= 15))
-        return int((25000 <= salary <= 75000) and (16 <= car <= 20))
-    return int((age < 40) or (age >= 60))
+    """Evaluates a river Agrawal classification function on row features."""
+    agrawal_cls = cast(Any, synth).Agrawal
+    func = cast(
+        Callable[..., Any] | None,
+        getattr(agrawal_cls, f"_classification_function_{func_id}", None),
+    )
+    if func is None:
+        func = cast(Callable[..., Any], agrawal_cls._classification_function_0)
+    val = func(
+        salary=float(row["salary"]),
+        commission=float(row["commission"]),
+        age=float(row["age"]),
+        elevel=int(row["elevel"]),
+        car=int(row["car"]),
+        zipcode=int(row["zipcode"]),
+        hvalue=float(row["hvalue"]),
+        hyears=float(row["hyears"]),
+        loan=float(row["loan"]),
+    )
+    return int(val)
 
 
 @dataclass(frozen=True, kw_only=True)
