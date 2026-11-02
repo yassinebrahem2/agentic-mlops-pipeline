@@ -251,7 +251,7 @@ class Incidents(Protocol):              # incidents
     async def set_severity(self, project_id: str, incident_id: str, severity: Severity, reason: str, by: str) -> IncidentView: ...   # `by`: severity (code) or Alert Prioritization; the reactor re-routes
 ```
 
-- Grouping is S4 §5: the same cause key within `grouping_window_minutes`, or a subject downstream of the incident's subject in the pipeline graph (`edges` and `stages_of`; a subject that matches no stage groups by cause key only, decided point 6).
+- Grouping is S4 §5: the same cause key as an active incident, whatever the time since its last signal (#694; `grouping_window_minutes` only bounds a team check's firing matching an incident, in the baseline), or a subject downstream of the incident's subject in the pipeline graph (`edges` and `stages_of`; a subject that matches no stage groups by cause key only, decided point 6).
 - Signals from `team`-origin records are never raised (S4 §10: the baseline never opens incidents); `tracker`-origin and `agent`-origin fired records, silences and failures of the app's own machinery are.
 - A `reopened` incident is the same ID. `merge` keeps the oldest incident; the others become `merged` with `merged_into` set (only a person closes, S4 §5).
 - The timeline is the shared event list above, read with `EventLog.page(subject_id=...)`; nothing is stored twice.
