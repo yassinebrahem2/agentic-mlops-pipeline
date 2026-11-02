@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from benchmarks.replay import register_replay_cli, run_replay_cli
 from benchmarks.report import register_report_cli, run_report_cli
 
 
@@ -23,6 +24,12 @@ COMMANDS: list[Command] = [
         help="Compare one or more benchmark runs in a single table",
         register=register_report_cli,
         run=run_report_cli,
+    ),
+    Command(
+        name="replay",
+        help="Replay a benchmark dataset",
+        register=register_replay_cli,
+        run=run_replay_cli,
     ),
 ]
 
