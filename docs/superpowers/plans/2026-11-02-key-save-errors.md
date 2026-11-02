@@ -18,10 +18,10 @@
 
 ### Task 1: A refused key says why
 
-**Files:** `backend/src/mlops_agents/credentials/keyring_store.py`; `backend/src/mlops_agents/providers/service.py` (`_get`'s 401/403 branch); tests under `backend/tests/credentials/` and `backend/tests/providers/`.
+**Files:** `backend/src/mlops_agents/credentials/keyring_store.py` (and the credentials module's error types); `backend/src/mlops_agents/api/errors.py` (one mapping); `backend/src/mlops_agents/providers/service.py` (`_get`'s 401/403 branch); tests under `backend/tests/credentials/` and `backend/tests/providers/`.
 
 **Notes:**
-- `KeyringStore.set` turns any refusal of the OS keyring's write into `KeyStoreError` (the same message shape as today's); a value over the Windows limit is refused before the write with a plain message (too long to be a key; the limit in characters), its one source a constant beside `KeyringStore`. The value itself never appears in a message or a log.
+- `KeyringStore.set` turns any refusal of the OS keyring's write into `KeyStoreError` (the same message shape as today's); a value over the limit is refused before the write with its own error type, a subclass of `KeyStoreError`, which the API maps to 422 with its message (every route that stores a secret, not only provider keys; a refused write of the OS keyring stays 503 `keystore_unavailable`, a server-side problem). The message says the value is too long to be a key and gives the limit, one constant beside `KeyringStore` under one name, and does not claim every keyring has that limit (it is Windows Credential Manager's). The value itself never appears in a message or a log.
 - On 401 or 403 the message keeps "<provider> refused the key" and adds the provider's own error text (`error.message` or `message` of a JSON body, else the start of the text), passed through `scrub_values` with the key and capped like other provider errors.
 
 **Tests (stop condition):** first, one that fails on `main`: a keyring backend whose write raises a non-`KeyringError` exception gives `KeyStoreError` (and the route a 4xx with the message, never a 500); a 1281-character value is refused before the write; a 401 with `{"error":{"message":"unauthorized client detected"}}` gives a message containing that text and not the key; a key echoed in the body is scrubbed; backend suite, ruff, pyright; CI green.
