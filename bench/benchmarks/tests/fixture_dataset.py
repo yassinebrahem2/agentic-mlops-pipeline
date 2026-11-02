@@ -39,31 +39,46 @@ FIXTURE_DAYS = (
 
 
 class FixtureDataset:
-    """A tiny dataset with 4 days and one data_quality null spike on day 2."""
+    """A tiny dataset with configurable days and data_quality null spikes."""
 
     name = "fixture"
     scenario = "fixture"
     seed: int | None = None
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        seed: int | None = None,
+        *,
+        days: Sequence[date] | None = None,
+        spike_days: Sequence[date] | None = None,
+        key: Sequence[Record] | None = None,
+    ) -> None:
         self.seed = seed
+        self._days: Sequence[date] = tuple(days) if days is not None else FIXTURE_DAYS
+        self._spike_days: set[date] = (
+            set(spike_days) if spike_days is not None else {date(2030, 1, 8)}
+        )
+        if key is not None:
+            self._key: Sequence[Record] = tuple(key)
+        else:
+            self._key = (
+                Record(
+                    kind="null_spike",
+                    category="data_quality",
+                    column="feature_a",
+                    start="2030-01-08",
+                    end="2030-01-08",
+                ),
+            )
 
     def days(self) -> Sequence[date]:
-        return FIXTURE_DAYS
+        return self._days
 
     def prepare(self, cache: Path) -> None:
         pass
 
     def key(self) -> Sequence[Record]:
-        return [
-            Record(
-                kind="null_spike",
-                category="data_quality",
-                column="feature_a",
-                start="2030-01-08",
-                end="2030-01-08",
-            )
-        ]
+        return self._key
 
     def handoff(self) -> HandoffPayload:
         model = ModelSpec(
@@ -175,8 +190,8 @@ class FixtureDataset:
         day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=UTC)
 
         # 1. Write daily_data.csv
-        # On 2030-01-08 (day 2), introduce null spike in feature_a (50% nulls)
-        if day == date(2030, 1, 8):
+        # On spike days, introduce null spike in feature_a (50% nulls)
+        if day in self._spike_days:
             features = [1.0, None, 2.0, None, 3.0, None, 4.0, None, 5.0, None]
         else:
             features = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
