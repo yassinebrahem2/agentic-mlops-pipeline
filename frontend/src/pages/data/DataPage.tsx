@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router";
 import { AlertCircle, Database, Loader2 } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { errorText } from "@/lib/api";
 import { useConnections } from "@/lib/useConnections";
@@ -22,7 +23,7 @@ function DataPageView({ projectId }: { projectId: string }) {
   const { data: handoff } = useHandoff(projectId);
 
   return (
-    <div className="container max-w-5xl py-6 space-y-6">
+    <PageFrame width="5xl" className="space-y-6">
       <div className="space-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <Database className="size-6 text-primary" />
@@ -81,6 +82,6 @@ function DataPageView({ projectId }: { projectId: string }) {
           Quality and drift history arrives with monitoring.
         </p>
       </footer>
-    </div>
+    </PageFrame>
   );
 }

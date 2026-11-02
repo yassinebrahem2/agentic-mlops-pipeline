@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { Activity, AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { PageFrame } from "@/components/PageFrame";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -48,7 +49,7 @@ function RunsView({ projectId }: { projectId: string }) {
   const isLoading = sourcesLoading || runsLoading || ciLoading;
 
   return (
-    <div className="container max-w-5xl py-6 space-y-6">
+    <PageFrame width="5xl" className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
@@ -167,6 +168,6 @@ function RunsView({ projectId }: { projectId: string }) {
           )}
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { PageFrame } from "@/components/PageFrame";
 import { ProjectStatus } from "@/components/ProjectStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -136,15 +137,17 @@ function Agents({ projectId }: { projectId: string }) {
 
   if (agentsQuery.isLoading) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-muted-foreground">
-        Loading agents...
-      </div>
+      <PageFrame>
+        <div className="flex h-64 items-center justify-center text-muted-foreground">
+          Loading agents...
+        </div>
+      </PageFrame>
     );
   }
 
   if (agentsQuery.isError) {
     return (
-      <div className="p-8">
+      <PageFrame>
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
           <AlertTitle>Failed to load agents</AlertTitle>
@@ -155,15 +158,17 @@ function Agents({ projectId }: { projectId: string }) {
             </Button>
           </AlertDescription>
         </Alert>
-      </div>
+      </PageFrame>
     );
   }
 
   if (chatAgents.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
-        No chat agents found.
-      </div>
+      <PageFrame>
+        <div className="flex h-64 items-center justify-center text-center text-muted-foreground">
+          No chat agents found.
+        </div>
+      </PageFrame>
     );
   }
 

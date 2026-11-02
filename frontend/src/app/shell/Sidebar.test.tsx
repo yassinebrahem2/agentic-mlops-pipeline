@@ -1,22 +1,28 @@
+import { Bot, Cpu, FolderKanban } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PageRoute } from "@/app/routes";
 import { resetCurrentProjectStore } from "@/lib/useCurrentProject";
+import { stubEventStream } from "@/pages/project-settings/testing";
 import { project, stubProjects } from "@/test/projects";
 import { renderPage } from "@/test/render";
 
 const routes: PageRoute[] = [
-  { path: "/", element: <div>Home</div>, nav: { area: "app", label: "Projects", order: 0 } },
+  {
+    path: "/",
+    element: <div>Home</div>,
+    nav: { area: "app", label: "Projects", order: 0, icon: FolderKanban },
+  },
   {
     path: "/providers",
     element: <div>Providers Page</div>,
-    nav: { area: "app", label: "AI providers", order: 10 },
+    nav: { area: "app", label: "AI providers", order: 10, icon: Cpu },
   },
   {
     path: "/projects/:projectId/agents",
     element: <div>Agents Page</div>,
-    nav: { area: "project", label: "Agents", order: 1 },
+    nav: { area: "project", label: "Agents", order: 1, icon: Bot },
   },
 ];
 
@@ -28,6 +34,7 @@ function sidebar() {
 describe("Sidebar current project", () => {
   beforeEach(() => {
     resetCurrentProjectStore();
+    stubEventStream();
   });
 
   afterEach(() => {
@@ -104,5 +111,29 @@ describe("Sidebar current project", () => {
     await user.click(await sidebar().findByRole("button", { name: "Alpha" }));
 
     expect(await screen.findByRole("menu")).toHaveClass("w-(--radix-dropdown-menu-trigger-width)");
+  });
+
+  it("renders an icon for every sidebar nav entry including Agents and Project settings", async () => {
+    stubProjects([project("prj_a", "Alpha", "2026-10-10T10:00:00Z")]);
+    renderPage("/projects/prj_a/agents");
+
+    const agentsLink = await sidebar().findByRole("link", { name: "Agents" });
+    const agentsSvg = agentsLink.querySelector("svg");
+    expect(agentsSvg).toBeInTheDocument();
+    expect(agentsSvg).toHaveClass("size-4", "shrink-0");
+
+    const settingsLink = await sidebar().findByRole("link", { name: "Project settings" });
+    const settingsSvg = settingsLink.querySelector("svg");
+    expect(settingsSvg).toBeInTheDocument();
+    expect(settingsSvg).toHaveClass("size-4", "shrink-0");
+
+    const navLinks = sidebar().getAllByRole("link");
+    for (const link of navLinks) {
+      if (link.getAttribute("href") !== "/") {
+        const svg = link.querySelector("svg");
+        expect(svg).toBeInTheDocument();
+        expect(svg).toHaveClass("size-4", "shrink-0");
+      }
+    }
   });
 });
