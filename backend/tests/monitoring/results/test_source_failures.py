@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
-from mlops_agents.monitoring.results.contract import source_id
+from mlops_agents.monitoring.results.contract import ParserMapping, ParserSpec, source_id
 from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import FileResults, HandoffPayload, Operations
@@ -334,3 +335,85 @@ async def test_failing_source_scrubs_url_credentials_from_error_signal_and_logs(
     # Verify secrets are not present in logs
     assert secret_pass not in caplog.text
     assert secret_param not in caplog.text
+
+
+async def test_team_lines_without_parser_leave_cursor_and_reread_when_parser_approved(
+    databases: Databases, events: SqliteEventLog, project_id: str, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "results.jsonl"
+
+    team_line_1 = (
+        b'{"check_id": "c1", "ran_at": "2026-10-30T10:00:00Z", '
+        b'"fired": false, "category": "data_quality", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+    team_line_2 = (
+        b'{"check_id": "c2", "ran_at": "2026-10-30T10:05:00Z", '
+        b'"fired": true, "category": "operational", "subject": "s", "detail": {}, "source_ref": "r"}\n'
+    )
+    full_content = team_line_1 + team_line_2
+    target.write_bytes(full_content)
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_team", data_dir)
+    handoffs = FakeHandoffs(_build_handoff("conn_team", "*.jsonl"))
+    incidents = FakeIncidents()
+    maintenance = FakeMaintenance()
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        incidents=incidents,
+        maintenance=maintenance,
+    )
+
+    s_id = source_id("file", "*.jsonl", "conn_team")
+    now = datetime(2026, 10, 30, 10, 10, 0, tzinfo=UTC)
+
+    # 1. Team lines in a source with no parser fail and leave the cursor unchanged (at offset 0).
+    rep = await service.collect(project_id, now)
+    assert rep.stored == 0
+    assert s_id in rep.failures
+    assert (
+        "these look like the team's own records and a parser proposal reads them"
+        in rep.failures[s_id]
+    )
+
+    st = await service.store.get_source_state(project_id, s_id)
+    assert st is not None
+    assert st.cursor["files"]["results.jsonl"]["offset"] == 0
+
+    # 2. Approving a parser for that source resets cursor and stores every earlier record once.
+    spec = ParserSpec(
+        source_id=s_id,
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check_id", "ran_at": "ran_at"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "operational", "subject": "s"},
+        ),
+    )
+    await service.parsers.store(project_id, spec, "prop_team_1")
+
+    # The parser store reset cursor to "{}" in result_sources
+    st_after_store = await service.store.get_source_state(project_id, s_id)
+    assert st_after_store is not None
+    assert st_after_store.cursor == {}
+
+    rep2 = await service.collect(project_id, now + timedelta(minutes=5))
+    assert rep2.stored == 2
+    assert s_id not in rep2.failures
+
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.cursor["files"]["results.jsonl"]["offset"] == len(full_content)
+
+    # 3. A second read stores nothing new (stored: 0, cursor remains at EOF).
+    rep3 = await service.collect(project_id, now + timedelta(minutes=10))
+    assert rep3.stored == 0
+    st3 = await service.store.get_source_state(project_id, s_id)
+    assert st3 is not None
+    assert st3.cursor["files"]["results.jsonl"]["offset"] == len(full_content)

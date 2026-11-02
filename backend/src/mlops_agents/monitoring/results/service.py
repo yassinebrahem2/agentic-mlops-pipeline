@@ -7,7 +7,7 @@ import contextlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.scrub import scrub_url_secrets
@@ -333,10 +333,12 @@ class ResultsService(Results):
         all_newly_stored: list[StoredResult] = []
 
         for s_id, kind, needs_parser, state in source_states:
-            current_cursor = state.cursor if state is not None else {}
+            current_cursor: dict[str, Any] = dict(state.cursor) if state is not None else {}
 
-            if needs_parser:
-                cur_parser = await self._parsers.current(project_id, s_id)
+            cur_parser = await self._parsers.current(project_id, s_id) if kind == "file" else None
+            use_parser = needs_parser or cur_parser is not None
+
+            if use_parser:
                 if cur_parser is None or not cur_parser.enabled:
                     if state is None:
                         await self._store.save_source_state(
@@ -387,7 +389,10 @@ class ResultsService(Results):
                     # its size and mtime as last seen. A file with a chunk advances only once
                     # its chunk parses.
                     chunk_files = {c.rel_posix for c in raw_read.chunks}
-                    held_files_cur = dict(current_cursor.get("files", {}))
+                    raw_held = current_cursor.get("files")
+                    held_files_cur: dict[str, Any] = (
+                        cast(dict[str, Any], raw_held).copy() if isinstance(raw_held, dict) else {}
+                    )
                     for rel_posix, entry in raw_read.cursor.get("files", {}).items():
                         if rel_posix not in chunk_files:
                             held_files_cur[rel_posix] = entry
@@ -481,7 +486,12 @@ class ResultsService(Results):
                             source_stored += len(stored)
 
                         # Advance cursor for successfully parsed chunk
-                        files_cur = dict(current_cursor.get("files", {}))
+                        raw_files = current_cursor.get("files")
+                        files_cur: dict[str, Any] = (
+                            cast(dict[str, Any], raw_files).copy()
+                            if isinstance(raw_files, dict)
+                            else {}
+                        )
                         files_cur[chunk.rel_posix] = {
                             "size": chunk.size,
                             "mtime": chunk.mtime,

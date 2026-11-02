@@ -30,6 +30,10 @@ from mlops_agents.tracking.contract import EvaluationRecord
 logger = logging.getLogger(__name__)
 
 
+class SourceLevelError(ValueError):
+    """A line was rejected for a source-level cause; the file's cursor must not advance past it."""
+
+
 @dataclass
 class SourceReadOutcome:
     records: list[tuple[str, ResultRecord]]
@@ -200,6 +204,7 @@ def _read_files_sync(
             lines.append(chunk[cut.deliver : cut.consume])
 
         current_line_start = offset
+        stopped_at_offset: int | None = None
         for raw_line_bytes in lines:
             line_offset = current_line_start
             current_line_start += len(raw_line_bytes)
@@ -249,10 +254,24 @@ def _read_files_sync(
 
                 origin_val = raw_dict.get("origin")
                 if origin_val != "agent":
-                    raise ValueError(f"origin must be 'agent', found {origin_val!r}")
+                    raise SourceLevelError(
+                        f"origin must be 'agent', found {origin_val!r}: "
+                        "these look like the team's own records and a parser proposal reads them"
+                    )
 
                 rec = ResultRecord.model_validate(raw_dict)
                 records.append((source_key, rec))
+            except SourceLevelError as exc:
+                consecutive_failures += 1
+                last_error = scrub_url_secrets(str(exc))
+                logger.warning(
+                    "Invalid result line in %s at byte offset %d: %s",
+                    rel_posix,
+                    line_offset,
+                    last_error,
+                )
+                stopped_at_offset = line_offset
+                break
             except Exception as exc:
                 consecutive_failures += 1
                 last_error = scrub_url_secrets(str(exc))
@@ -266,7 +285,7 @@ def _read_files_sync(
         files_cursor[rel_posix] = {
             "size": cur_size,
             "mtime": cur_mtime,
-            "offset": new_offset,
+            "offset": stopped_at_offset if stopped_at_offset is not None else new_offset,
         }
 
     return SourceReadOutcome(

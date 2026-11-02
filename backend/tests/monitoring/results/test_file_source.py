@@ -172,7 +172,11 @@ async def test_invalid_line_recorded_on_source_and_does_not_stop_next_lines(
 ) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    content = (fixtures_dir / "with_invalid.jsonl").read_bytes()
+    content = (
+        b'{"check_id": "chk_valid_1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "value": 0.01, "threshold": 0.05, "category": "data_quality", "subject": "features.churn", "model": "churn_v1", "detail": {"note": "first"}, "source_ref": "checks/null_rate.py", "version": "1.0", "not_enough_data": false}\n'
+        b'{"check_id": "chk_bad", "origin": "agent", "ran_at": "not-a-date", "fired": false}\n'
+        b'{"check_id": "chk_valid_2", "origin": "agent", "ran_at": "2026-10-30T10:10:00Z", "fired": false, "value": 0.02, "threshold": 0.05, "category": "data_quality", "subject": "features.churn", "model": "churn_v1", "detail": {"note": "third"}, "source_ref": "checks/null_rate.py", "version": "1.0", "not_enough_data": false}\n'
+    )
     target = data_dir / "results.jsonl"
     target.write_bytes(content)
 
@@ -192,6 +196,38 @@ async def test_invalid_line_recorded_on_source_and_does_not_stop_next_lines(
     assert out.last_error is not None
     # Cursor moved past all lines
     assert out.cursor["files"]["results.jsonl"]["offset"] == len(content)
+
+
+async def test_team_line_without_parser_stops_reading_and_leaves_cursor_at_its_offset(
+    tmp_path: Path, project_id: str
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    line1 = b'{"check_id": "chk_valid_1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "value": 0.01, "threshold": 0.05, "category": "data_quality", "subject": "s", "model": "m", "detail": {}, "source_ref": "r", "version": "1.0", "not_enough_data": false}\n'
+    line2 = b'{"check_id": "chk_team", "origin": "team", "ran_at": "2026-10-30T10:05:00Z", "fired": false}\n'
+    line3 = b'{"check_id": "chk_valid_2", "origin": "agent", "ran_at": "2026-10-30T10:10:00Z", "fired": false, "value": 0.02, "threshold": 0.05, "category": "data_quality", "subject": "s", "model": "m", "detail": {}, "source_ref": "r", "version": "1.0", "not_enough_data": false}\n'
+    content = line1 + line2 + line3
+    target = data_dir / "results.jsonl"
+    target.write_bytes(content)
+
+    connections = FakeConnections()
+    connections.add_local_folder("data_conn", data_dir)
+    reader = FileSourceReader(connections)
+    s_id = source_id("file", "results.jsonl", "data_conn")
+
+    out = await reader.read(project_id, s_id, cursor={}, now=_NOW)
+    # Only line 1 is yielded before the team line stopped reading
+    assert len(out.records) == 1
+    assert out.records[0][1].check_id == "chk_valid_1"
+
+    # Source records error and failure count
+    assert out.consecutive_failures == 1
+    assert out.last_error is not None
+    assert (
+        "these look like the team's own records and a parser proposal reads them" in out.last_error
+    )
+    # Cursor remains at line 2's offset (len(line1)), line 3 is not skipped
+    assert out.cursor["files"]["results.jsonl"]["offset"] == len(line1)
 
 
 async def test_pattern_with_dotdot_symlink_out_of_root_and_env_store_nothing(

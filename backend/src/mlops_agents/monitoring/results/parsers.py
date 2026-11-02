@@ -21,6 +21,7 @@ from mlops_agents.monitoring.results.contract import (
 from mlops_agents.monitoring.results.mapping import evaluate_mapping
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import parsers as parsers_table
+from mlops_agents.storage.tables import result_sources
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,13 @@ class SqliteParsers(Parsers):
                 consecutive_failures=0,
             )
             await conn.execute(stmt_ins)
+
+            stmt_reset = (
+                update(result_sources)
+                .where(result_sources.c.source_id == spec.source_id)
+                .values(cursor="{}")
+            )
+            await conn.execute(stmt_reset)
 
             return ParserVersion(
                 source_id=spec.source_id,
