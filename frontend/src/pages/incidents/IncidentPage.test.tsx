@@ -8,6 +8,7 @@ import {
   emitEvent,
   eventRecord,
   failure,
+  futureSnoozeTime,
   incident,
   INCIDENT,
   ok,
@@ -272,6 +273,7 @@ describe("IncidentPage", () => {
   it("snoozes the incident from its page", async () => {
     const user = userEvent.setup();
     stubStream();
+    const { local, iso } = futureSnoozeTime();
     stubGet({
       [INCIDENT]: () => ok(incident("inc_1", { cause: "Open one" })),
       [SIGNALS]: () => ok([]),
@@ -282,12 +284,12 @@ describe("IncidentPage", () => {
     renderPage("/projects/prj_1/incidents/inc_1");
     await user.click(await screen.findByRole("button", { name: "Snooze" }));
     fireEvent.change(screen.getByLabelText("Snooze until"), {
-      target: { value: "2026-11-02T10:00" },
+      target: { value: local },
     });
     await user.click(screen.getByRole("button", { name: "Snooze until chosen time" }));
 
     await waitFor(() => {
-      expect(bodyOf(post, SNOOZE)).toEqual({ until: new Date("2026-11-02T10:00").toISOString() });
+      expect(bodyOf(post, SNOOZE)).toEqual({ until: iso });
     });
   });
 

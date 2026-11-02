@@ -140,3 +140,10 @@ export function bodyOf(spy: MockInstance, path: string): unknown {
 export function postCount(spy: MockInstance, path: string): number {
   return spy.mock.calls.filter((c) => c[0] === path).length;
 }
+
+export function futureSnoozeTime(): { local: string; iso: string } {
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const local = `${String(tomorrow.getFullYear())}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T10:00`;
+  return { local, iso: new Date(local).toISOString() };
+}
