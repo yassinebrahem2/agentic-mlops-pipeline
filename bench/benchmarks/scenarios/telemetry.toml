@@ -1,6 +1,6 @@
 # Scenario for batch pipeline telemetry replay.
 # Evaluates 60 business days (2026-01-05 to 2026-03-27).
-# 5 operational problems, each 3 business days, spaced >= 9 days apart.
+# 5 problems: 4 data_quality (each 3 business days) and 1 operational (2 business days), spaced >= 9 days apart.
 
 [[injection]]
 kind = "missing_feed"
