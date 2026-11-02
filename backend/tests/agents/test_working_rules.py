@@ -145,3 +145,91 @@ def test_definitions_do_not_contain_hard_limits_text() -> None:
         assert "nothing runs outside the sandbox" not in content, (
             f"{md_path.name} contains hard-limits text"
         )
+
+
+def test_working_rules_with_bash_includes_sandbox_limits_network_off() -> None:
+    defn_text = """---
+name: bash-agent
+display_name: Bash Agent
+description: Agent with Bash tool
+tools: [Read, Bash]
+chat: true
+schedules: false
+can_message: []
+context_hooks: []
+limits:
+  max_steps: 25
+---
+You run commands.
+"""
+    defn = parse_definition(defn_text, "bash-agent.md")
+    rules = working_rules(defn, sandbox_network=False)
+    assert "Sandbox limits" in rules
+    assert "2 CPUs" in rules
+    assert "4g memory" in rules
+    # Network setting named: network off / disabled / no network
+    low = rules.lower()
+    assert (
+        "network off" in low
+        or "network: off" in low
+        or "network disabled" in low
+        or "no network" in low
+    )
+    assert "no system package installs" in low
+    assert "changes do not persist" in low
+    assert "test suite may not run" in low
+    assert "gap" in low
+    assert "duckdb is the `duckdb` command" in rules or "duckdb is the duckdb command" in low
+    assert "environment failure is reported once and not retried in variants" in low
+    assert "137" not in rules
+
+
+def test_working_rules_with_bash_includes_sandbox_limits_network_on() -> None:
+    defn_text = """---
+name: bash-agent
+display_name: Bash Agent
+description: Agent with Bash tool
+tools: [Read, Bash]
+chat: true
+schedules: false
+can_message: []
+context_hooks: []
+limits:
+  max_steps: 25
+---
+You run commands.
+"""
+    defn = parse_definition(defn_text, "bash-agent.md")
+    rules = working_rules(defn, sandbox_network=True)
+    assert "Sandbox limits" in rules
+    low = rules.lower()
+    assert (
+        "network enabled" in low or "network: enabled" in low or "network access is granted" in low
+    )
+
+
+def test_working_rules_without_bash_omits_sandbox_limits() -> None:
+    defn_text = """---
+name: no-bash-agent
+display_name: No Bash Agent
+description: Agent without Bash tool
+tools: [Read, Write]
+chat: true
+schedules: false
+can_message: []
+context_hooks: []
+limits:
+  max_steps: 25
+---
+You do not run commands.
+"""
+    defn = parse_definition(defn_text, "no-bash-agent.md")
+    rules = working_rules(defn)
+    assert "Sandbox limits" not in rules
+    assert "duckdb" not in rules.lower()
+
+
+def test_working_rules_reexported_from_context() -> None:
+    from mlops_agents.agents.runtime.context import working_rules as context_working_rules
+
+    assert context_working_rules is working_rules

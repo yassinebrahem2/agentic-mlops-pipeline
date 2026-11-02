@@ -671,6 +671,23 @@ def test_onboarding_coverage_contract_fields() -> None:
         )
 
 
+def test_onboarding_prompt_working_rules_and_behavior() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    defn = catalog.get("onboarding")
+    prompt_low = defn.prompt.lower()
+    # no Bash before a connections proposal is approved
+    assert (
+        "no bash before" in prompt_low
+        or "do not run bash before a `connections` proposal is approved" in prompt_low
+    )
+    # act instead of announcing the next step
+    assert "act instead of announcing" in prompt_low
+    # look in every folder found before asking
+    assert "look in every folder" in prompt_low
+    # report every step that failed in the final answer
+    assert "report every step that failed" in prompt_low
+
+
 def test_alert_prioritization_loads_in_catalog() -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     defn = catalog.get("alert-prioritization")

@@ -42,6 +42,7 @@ def test_build_one_shot_run_args_defaults() -> None:
     assert "-e" in args
     assert "HOME=/tmp" in args
     assert "PYTHONPATH=/workspace/src:/workspace" in args
+    assert "DUCKDB_AGENT_MODE=1" in args
 
     # Image tag followed by command at the end
     assert args[-4:] == [image_tag, "bash", "-lc", "python train.py"]
