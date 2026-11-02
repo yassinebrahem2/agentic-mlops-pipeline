@@ -4,7 +4,9 @@ import httpx2
 import pytest
 from fastapi import FastAPI
 
+from mlops_agents.credentials.keyring_store import KEYRING_MAX_CHARS, KeyringStore
 from mlops_agents.providers.service import ProvidersService
+from tests.credentials.test_keyring_store import FailingWriteBackend, MemoryBackend
 from tests.fakes.fake_openai import RunningFake
 
 
@@ -199,3 +201,57 @@ async def test_provider_settings_round_trip_and_bounds(
 
     res = await client.put("/api/providers/missing/settings", json={"cooldown_minutes": 30})
     assert res.status_code == 404
+
+
+async def test_add_key_longer_than_max_chars_returns_422(
+    client: httpx2.AsyncClient,
+    app: FastAPI,
+    fake_openai: RunningFake,
+) -> None:
+    res = await client.post(
+        "/api/providers",
+        json={"name": "fake", "kind": "self_hosted", "base_url": fake_openai.base_url},
+    )
+    assert res.status_code == 201
+
+    backend = MemoryBackend()
+    services = app.state.services
+    services.providers = ProvidersService(
+        services.databases, KeyringStore(backend), services.providers._http, services.failover
+    )
+
+    too_long = "k" * (KEYRING_MAX_CHARS + 1)
+    res = await client.post("/api/providers/fake/keys", json={"key": too_long})
+    assert res.status_code == 422
+    data = res.json()
+    assert data["code"] == "key_too_long"
+    assert "Windows Credential Manager holds at most 1280 characters" in data["message"]
+    assert too_long not in res.text
+    assert backend.data == {}
+
+
+async def test_add_key_mock_keyring_runtime_error_returns_503(
+    client: httpx2.AsyncClient,
+    app: FastAPI,
+    fake_openai: RunningFake,
+) -> None:
+    res = await client.post(
+        "/api/providers",
+        json={"name": "fake", "kind": "self_hosted", "base_url": fake_openai.base_url},
+    )
+    assert res.status_code == 201
+
+    services = app.state.services
+    services.providers = ProvidersService(
+        services.databases,
+        KeyringStore(FailingWriteBackend()),
+        services.providers._http,
+        services.failover,
+    )
+
+    res = await client.post("/api/providers/fake/keys", json={"key": "sk-valid-key"})
+    assert res.status_code == 503
+    data = res.json()
+    assert data["code"] == "keystore_unavailable"
+    assert "The system keyring refused to store the key (RuntimeError)." in data["message"]
+    assert "sk-valid-key" not in res.text
