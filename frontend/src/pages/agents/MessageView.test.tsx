@@ -319,4 +319,138 @@ describe("MessageView", () => {
     expect(screen.queryByText("From user")).not.toBeInTheDocument();
     expect(screen.getByText("Hello from human user!")).toBeInTheDocument();
   });
+
+  it("renders headings, lists with nested bullet lists, blockquotes, inline code, hr, and paragraphs with styling and list markers", () => {
+    const markdownMsg: MessageViewType = {
+      id: "a-md",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "text",
+          text: [
+            "# Heading One",
+            "",
+            "First paragraph with `inline code` inside it.",
+            "",
+            "Second paragraph before a divider.",
+            "",
+            "---",
+            "",
+            "> Blockquote note",
+            "",
+            "1. First item",
+            "   - Nested bullet item",
+            "2. Second item",
+            "",
+            "```",
+            "block of code",
+            "```",
+          ].join("\n"),
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:10Z",
+    };
+
+    const { container } = render(<MessageView message={markdownMsg} />);
+
+    // Heading
+    const heading = screen.getByRole("heading", { level: 1, name: "Heading One" });
+    expect(heading).toBeInTheDocument();
+    expect(heading).toHaveClass("text-lg", "font-bold");
+    expect(heading).not.toHaveAttribute("node");
+
+    // Paragraphs
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs.length).toBeGreaterThanOrEqual(2);
+    expect(paragraphs[0]).toHaveClass("my-1.5", "leading-relaxed");
+    expect(paragraphs[0]).not.toHaveAttribute("node");
+
+    // Inline code
+    const inlineCode = screen.getByText("inline code");
+    expect(inlineCode).toBeInTheDocument();
+    expect(inlineCode.tagName.toLowerCase()).toBe("code");
+    expect(inlineCode).toHaveClass("bg-muted", "px-1", "py-0.5", "rounded", "font-mono", "text-xs");
+    expect(inlineCode).not.toHaveAttribute("node");
+
+    // Block code (inside pre) does not get inline code styling
+    const preCode = container.querySelector("pre code");
+    expect(preCode).toBeInTheDocument();
+    expect(preCode).not.toHaveClass("bg-muted", "px-1", "py-0.5");
+    expect(preCode).not.toHaveAttribute("node");
+
+    // Horizontal rule
+    const hr = container.querySelector("hr");
+    expect(hr).toBeInTheDocument();
+    expect(hr).toHaveClass("border-t", "border-border");
+    expect(hr).not.toHaveAttribute("node");
+
+    // Blockquote
+    const blockquote = container.querySelector("blockquote");
+    expect(blockquote).toBeInTheDocument();
+    expect(blockquote).toHaveClass("border-l-2", "border-border", "pl-3", "italic");
+    expect(blockquote).not.toHaveAttribute("node");
+
+    // Ordered list and nested bullet list
+    const ol = container.querySelector("ol");
+    expect(ol).toBeInTheDocument();
+    expect(ol).toHaveClass("list-decimal", "pl-5");
+    expect(ol).not.toHaveAttribute("node");
+
+    const ul = container.querySelector("ol ul");
+    expect(ul).toBeInTheDocument();
+    expect(ul).toHaveClass("list-disc", "pl-5");
+    expect(ul).not.toHaveAttribute("node");
+
+    const listItems = container.querySelectorAll("li");
+    expect(listItems.length).toBe(3);
+    for (const li of listItems) {
+      expect(li).toHaveClass("leading-relaxed");
+      expect(li).not.toHaveAttribute("node");
+    }
+  });
+
+  it("renders headings h2 through h6 with appropriate typography classes", () => {
+    const headingsMsg: MessageViewType = {
+      id: "a-headings",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "text",
+          text: [
+            "## Heading Two",
+            "### Heading Three",
+            "#### Heading Four",
+            "##### Heading Five",
+            "###### Heading Six",
+          ].join("\n\n"),
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:11Z",
+    };
+
+    render(<MessageView message={headingsMsg} />);
+    const h2 = screen.getByRole("heading", { level: 2, name: "Heading Two" });
+    const h3 = screen.getByRole("heading", { level: 3, name: "Heading Three" });
+    const h4 = screen.getByRole("heading", { level: 4, name: "Heading Four" });
+    const h5 = screen.getByRole("heading", { level: 5, name: "Heading Five" });
+    const h6 = screen.getByRole("heading", { level: 6, name: "Heading Six" });
+
+    expect(h2).toHaveClass("text-base", "font-semibold");
+    expect(h3).toHaveClass("text-sm", "font-semibold");
+    expect(h4).toHaveClass("text-sm", "font-semibold");
+    expect(h5).toHaveClass("text-xs", "font-semibold");
+    expect(h6).toHaveClass("text-xs", "font-medium");
+
+    for (const h of [h2, h3, h4, h5, h6]) {
+      expect(h).not.toHaveAttribute("node");
+    }
+  });
 });
