@@ -103,6 +103,7 @@ function makeDeployment(overrides: Partial<DeploymentRow> = {}): DeploymentRow {
     from_version: "1",
     to_version: "2",
     seen_at: "2026-10-29T11:00:00Z",
+    baseline: false,
     ...overrides,
   };
 }
