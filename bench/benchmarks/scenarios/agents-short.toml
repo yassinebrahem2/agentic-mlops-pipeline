@@ -1,0 +1,51 @@
+# The short scenario for developer agent benchmarks against the demo company.
+# Run range: 2016-07-01 to 2016-09-11 (73 business days).
+# Quiet baseline: 2016-07-01 to 2016-07-07 (first 7 days).
+# Six 3-day windows, each starting 9 days after the previous ends:
+#   Window 1: 2016-07-08 to 2016-07-10 (data_quality: null_spike on country)
+#   Window 2: 2016-07-19 to 2016-07-21 (data_quality: null_spike on lead_time)
+#   Window 3: 2016-07-30 to 2016-08-01 (data_quality: out_of_range on adr)
+#   Window 4: 2016-08-10 to 2016-08-12 (operational: score_failure)
+#   Window 5: 2016-08-21 to 2016-08-23 (data_quality: null_spike on adults)
+#   Window 6: 2016-09-01 to 2016-09-03 (data_quality: null_spike on stays_in_week_nights)
+# The run ends 8 days after the last window ends (2016-09-11).
+
+[[injection]]
+kind = "null_spike"
+columns = ["country"]
+share = 0.3
+start = 2016-07-08
+end = 2016-07-10
+
+[[injection]]
+kind = "null_spike"
+columns = ["lead_time"]
+share = 0.3
+start = 2016-07-19
+end = 2016-07-21
+
+[[injection]]
+kind = "out_of_range"
+column = "adr"
+factor = 100.0
+start = 2016-07-30
+end = 2016-08-01
+
+[[injection]]
+kind = "score_failure"
+start = 2016-08-10
+end = 2016-08-12
+
+[[injection]]
+kind = "null_spike"
+columns = ["adults"]
+share = 0.3
+start = 2016-08-21
+end = 2016-08-23
+
+[[injection]]
+kind = "null_spike"
+columns = ["stays_in_week_nights"]
+share = 0.3
+start = 2016-09-01
+end = 2016-09-03
