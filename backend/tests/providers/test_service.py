@@ -96,6 +96,111 @@ async def test_rejected_key_is_not_stored(
     assert keystore.data == {}
 
 
+async def test_rejected_key_explains_unauthorized_client(
+    make_service: MakeService,
+) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"error": {"message": "unauthorized client detected"}})
+
+    svc = make_service(handler)
+    await svc.create_provider(HOSTED)
+    with pytest.raises(DomainError) as err:
+        await svc.add_key("groq", "secret-key-12345")
+    assert err.value.code == "key_rejected"
+    assert err.value.status == 422
+    assert "groq refused the key: unauthorized client detected" in err.value.message
+    assert "secret-key-12345" not in err.value.message
+
+
+async def test_rejected_key_scrubs_echoed_key(
+    make_service: MakeService,
+) -> None:
+    raw_key = "secret-token-xyz"
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"error": {"message": f"key {raw_key} is inactive"}})
+
+    svc = make_service(handler)
+    await svc.create_provider(HOSTED)
+    with pytest.raises(DomainError) as err:
+        await svc.add_key("groq", raw_key)
+    assert err.value.code == "key_rejected"
+    assert "secret-token-xyz" not in err.value.message
+    assert "groq refused the key: key *** is inactive" in err.value.message
+
+
+async def test_rejected_key_includes_message_field_or_plain_text(
+    make_service: MakeService,
+) -> None:
+    def handler_json(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"message": "custom reason"})
+
+    svc1 = make_service(handler_json)
+    await svc1.create_provider(HOSTED)
+    with pytest.raises(DomainError) as err:
+        await svc1.add_key("groq", "test-key")
+    assert err.value.code == "key_rejected"
+    assert err.value.message == "groq refused the key: custom reason"
+
+    def handler_text(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, text="forbidden access to resource")
+
+    svc2 = make_service(handler_text)
+    await svc2.create_provider(
+        ProviderCreate(name="openai", kind="hosted", base_url="https://api.openai.com/v1")
+    )
+    with pytest.raises(DomainError) as err:
+        await svc2.add_key("openai", "test-key")
+    assert err.value.code == "key_rejected"
+    assert err.value.message == "openai refused the key: forbidden access to resource"
+
+
+async def test_rejected_key_without_message_falls_back(
+    make_service: MakeService,
+) -> None:
+    def handler_empty(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, text="")
+
+    svc1 = make_service(handler_empty)
+    await svc1.create_provider(HOSTED)
+    with pytest.raises(DomainError) as err:
+        await svc1.add_key("groq", "test-key")
+    assert err.value.code == "key_rejected"
+    assert err.value.message == "groq refused the key."
+
+    def handler_no_msg(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"error": {}})
+
+    svc2 = make_service(handler_no_msg)
+    await svc2.create_provider(
+        ProviderCreate(name="openai", kind="hosted", base_url="https://api.openai.com/v1")
+    )
+    with pytest.raises(DomainError) as err:
+        await svc2.add_key("openai", "test-key")
+    assert err.value.code == "key_rejected"
+    assert err.value.message == "openai refused the key."
+
+
+async def test_rejected_key_caps_long_message(
+    make_service: MakeService,
+) -> None:
+    long_reason = "A" * 600
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"error": {"message": long_reason}})
+
+    svc = make_service(handler)
+    await svc.create_provider(HOSTED)
+    with pytest.raises(DomainError) as err:
+        await svc.add_key("groq", "test-key")
+    assert err.value.code == "key_rejected"
+    prefix = "groq refused the key: "
+    assert err.value.message.startswith(prefix)
+    detail = err.value.message[len(prefix) :]
+    assert len(detail) == 500
+    assert detail == "A" * 500
+
+
 async def test_unreachable_provider_error_hides_the_key(make_service: MakeService) -> None:
     def boom(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError(f"cannot connect while sending {GOOD}")

@@ -148,7 +148,6 @@ class IncidentsService(Incidents):
                 project_id,
                 draft,
                 payload,
-                settings.grouping_window_minutes,
             )
 
         if active_row is not None:
