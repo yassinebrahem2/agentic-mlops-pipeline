@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,15 +40,6 @@ class ProposalShapeTool(AgentTool[ProposalShapeArgs]):
     def __init__(self, kinds: ProposalKinds) -> None:
         self._kinds = kinds
 
-    def shape_for(self, kind: str) -> dict[str, Any]:
-        """Return the JSON schema dict of the given proposal kind."""
-        kind_obj = self._kinds.get(kind)
-        return kind_obj.payload_model.model_json_schema()
-
-    def __call__(self, kind: str) -> dict[str, Any]:
-        """Convenience helper returning the raw schema dict."""
-        return self.shape_for(kind)
-
     async def run(self, ctx: ToolContext, args: ProposalShapeArgs) -> ToolOutput:
         try:
             kind_obj = self._kinds.get(args.kind)
@@ -60,7 +51,7 @@ class ProposalShapeTool(AgentTool[ProposalShapeArgs]):
             )
 
         schema = kind_obj.payload_model.model_json_schema()
-        return ToolOutput(content=json.dumps(schema, indent=2), is_error=False)
+        return ToolOutput(content=json.dumps(schema, separators=(",", ":")), is_error=False)
 
 
 ProposalShape = ProposalShapeTool

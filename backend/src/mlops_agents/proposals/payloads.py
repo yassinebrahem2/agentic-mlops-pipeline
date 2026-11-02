@@ -128,7 +128,6 @@ class CommandSpec(_Strict):
     kind: Literal["train", "evaluate", "deploy", "rollback", "rerun", "hold", "fall_back"]
     type: Literal["command", "ci_dispatch"]
     template: str | None = Field(
-        default=None,
         description=(
             "The command template string (for type 'command'). Placeholders must be drawn from: "
             + ", ".join(f"{{{p}}}" for p in get_args(Placeholder))
