@@ -4,7 +4,7 @@
 
 **Goal:** bug #684. Frontend CI is red on `main` and on every PR: `IncidentList.test.tsx` snoozes an incident until the fixed time `2026-11-02T10:00`, and `SnoozeControl.tsx` shows "Snoozed until" only while the snooze is still in the future, so the test fails since that time passed. `IncidentPage.test.tsx` snoozes to the same fixed time. No product code is wrong.
 
-**Branch:** `plan/snooze-test-time`. **Milestone:** Stage 4: Monitoring and incidents. **Consumes:** merged code. **Produces:** nothing other plans use. The plan PR says `Closes` the plan issue, its task issue and #684.
+**Branch:** `plan/snooze-test-time`. **Milestone:** Stage 4: Monitoring loop. **Consumes:** merged code. **Produces:** nothing other plans use. The plan PR says `Closes` the plan issue, its task issue and #684.
 
 **Read first:** bug #684; `frontend/src/pages/incidents/SnoozeControl.tsx` (the `snoozed` line); the two tests below.
 
