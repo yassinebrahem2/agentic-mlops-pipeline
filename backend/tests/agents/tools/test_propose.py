@@ -829,3 +829,15 @@ async def test_propose_parser_mapping_refuses_ran_at_in_defaults_or_missing_from
     }
     with pytest.raises(ToolFailure, match="time the check ran"):
         await tool.preview(ctx, ProposeArgs(kind=PARSER_KIND, payload=bad_fields_payload))
+
+
+def test_propose_serves_check_spec_cadence_description() -> None:
+    from mlops_agents.proposals.payloads import CheckSpec
+
+    cadence_desc = CheckSpec.model_fields["cadence"].description
+    assert cadence_desc is not None, "CheckSpec.cadence must define a field description"
+    assert "never judged silent" in cadence_desc
+
+    tool = ProposeTool(MagicMock(), MagicMock())
+    schema_desc = tool.schema()["function"]["description"]
+    assert cadence_desc in schema_desc

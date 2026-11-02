@@ -166,3 +166,22 @@ def test_an_empty_part_renders_none_never_nothing() -> None:
     assert "none" in parts["gaps"]
     assert "none" in parts["commands"]
     assert "edges: none" in parts["pipeline"]
+
+
+def test_check_without_cadence_shows_not_judged_for_silence() -> None:
+    data = _full_dict()
+    data["operations"]["checks"] = [
+        {
+            "check_id": "chk_manual",
+            "name": "Manual evaluation",
+            "category": "model_performance",
+            "cadence": None,
+            "timezone": "UTC",
+            "results": {"metric": "accuracy", "threshold": 0.9, "fires_when": "below"},
+        }
+    ]
+    parts = sections(HandoffPayload.model_validate(data))
+    assert (
+        "chk_manual Manual evaluation (model_performance): not judged for silence; time zone UTC"
+        in parts["operations"]
+    )
