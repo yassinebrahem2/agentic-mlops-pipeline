@@ -1,0 +1,76 @@
+# The default scenario: one injected problem of each kind, and the natural shift the evaluation
+# scores. Dates are business dates (a bookings file's date is the day the bookings were made),
+# except model_decay's, which are arrival dates (see it, last).
+# The simulation starts on 2016-07-01, and its first month, July, is the quiet baseline (each
+# legacy check fires on at most 2 of its days), so the windows start in August. The windows of the
+# problems that break files or jobs end before the natural shift of November and December, and lie
+# over 7 days apart, beyond the 7-day lookbacks of the cancellation-rate and drift checks;
+# neighbouring windows do fall within the accuracy check's 30-day label window.
+# `simulate --scenario scenarios/default.toml` plays it; without `--scenario` nothing is injected.
+
+# Missing values in a share of each day's rows, as from a broken upstream join.
+[[injection]]
+kind = "null_spike"
+columns = ["country", "adr"]
+share = 0.3
+start = 2016-08-01
+end = 2016-08-07
+
+# An upstream rename: the bookings files carry `lead_days` instead of `lead_time`.
+[[injection]]
+kind = "schema_break"
+column = "lead_time"
+rename_to = "lead_days"
+start = 2016-08-24
+end = 2016-08-26
+
+# Rates delivered in cents instead of euros.
+[[injection]]
+kind = "out_of_range"
+column = "adr"
+factor = 100.0
+start = 2016-09-12
+end = 2016-09-18
+
+# The bookings file arrives after the daily job has run (task 3 withholds it).
+[[injection]]
+kind = "score_failure"
+start = 2016-10-05
+end = 2016-10-07
+
+# CI's sample data source is unavailable (task 3 points it at a missing file).
+[[injection]]
+kind = "ci_failure"
+start = 2016-10-24
+end = 2016-10-30
+
+# Not injected: the source's own non-refundable group bookings, about 15% of the bookings made
+# in November and December 2016 against about 1% in October. Only shifts with a clear start are
+# scored; the gradual rise in online travel agent share is not.
+[[natural_shift]]
+columns = ["deposit_type", "market_segment"]
+start = 2016-11-01
+end = 2016-12-31
+
+# The model decays: a share of the outcomes turns against what the first model learned. For online
+# travel agent bookings with no deposit arriving in the window, cancellations start to follow a
+# rule: below a lead-time cut they cancel, at or above it they do not, whatever they did in the
+# source (where long lead times cancel more). The cut keeps the group's cancellation rate at its
+# rate before the window. The share of the group's bookings that follow the rule ramps from 0 at
+# the start to `max_share` at `ramp_end`, then holds to the end of the run.
+# `max_share` was chosen offline on the source, before the full run (the first model's PR-AUC on
+# February 2017 arrivals, 0.740 without the decay): 0.5 drops it by 0.121, 0.7 by 0.153 (at the
+# 0.15 the plan asks for), 0.85 by 0.175 and 1.0 by 0.206, while the lowest accuracy check
+# reading falls to 0.745, 0.707, 0.671 and 0.644 against its 0.60 threshold. 0.85 clears both
+# with a margin. At none of these shares does a model the company retrains on 2016-12-15 score
+# on February within 0.05 of the same retrain without the decay: it scores about as the first
+# model does.
+# Only labels change, never a bookings file. It overlaps the natural shift on purpose, in another
+# segment and another category.
+[[injection]]
+kind = "model_decay"
+group = { market_segment = "Online TA", deposit_type = "No Deposit" }
+max_share = 0.85
+start = 2016-10-01
+ramp_end = 2016-12-01
+end = 2017-03-31

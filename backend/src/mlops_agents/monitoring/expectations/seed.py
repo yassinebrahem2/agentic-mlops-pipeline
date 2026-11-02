@@ -51,6 +51,8 @@ class HandoffExpectationsSeeder:
 
         # 2. Checks
         for check in ops.checks:
+            if check.cadence is None:
+                continue
             key = ExpectationKey(kind="check", ref=check.check_id, model=None)
             spec = ExpectationSpec(
                 key=key,

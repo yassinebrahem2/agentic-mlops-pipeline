@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -284,3 +284,121 @@ async def test_reconcile_logs_failure_and_continues(
 
     await handoff_hooks.reconcile([p1, p_fail, p2])
     assert calls == [p1, p_fail, p2]
+
+
+@pytest.mark.asyncio
+async def test_one_failing_register_among_three_the_other_two_register_and_dropped_hook_disabled(
+    service: HooksService,
+    handoff_hooks: HandoffHooks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = new_id("prj")
+
+    # Initial handoff with an old command that will later be dropped
+    cmd_drop = command(kind="deploy", template="echo deploy")
+    payload1 = _make_payload(project_commands=[cmd_drop])
+    view1 = HandoffView(
+        proposal_id="prp_1",
+        version=1,
+        approved=datetime.now(UTC),
+        payload=payload1,
+    )
+    await handoff_hooks.stored(project_id, view1)
+
+    hooks1 = await service.list(project_id)
+    assert len(hooks1) == 1
+    assert hooks1[0].name == "deploy"
+    assert hooks1[0].status == "active"
+
+    # New handoff with 3 commands (cmd_drop is omitted): cmd1, cmd2 (will fail), cmd3
+    cmd1 = command(kind="rollback", template="echo rollback")
+    cmd2 = command(kind="train", template="echo train")
+    cmd3 = command(kind="rerun", template="echo rerun")
+    payload2 = _make_payload(project_commands=[cmd1, cmd2, cmd3])
+    view2 = HandoffView(
+        proposal_id="prp_2",
+        version=2,
+        approved=datetime.now(UTC),
+        payload=payload2,
+    )
+
+    orig_register = service.register
+
+    async def flaky_register(
+        project_id: str,
+        spec: Any,
+        name: str,
+        model: str | None = None,
+        source: Literal["handoff", "proposal"] = "handoff",
+    ) -> Any:
+        if name == "train":
+            raise RuntimeError("Database locked during hook registration")
+        return await orig_register(project_id, spec=spec, name=name, model=model, source=source)
+
+    monkeypatch.setattr(service, "register", flaky_register)
+
+    await handoff_hooks.stored(project_id, view2)
+
+    hooks2 = await service.list(project_id)
+    hook_by_name = {h.name: h for h in hooks2}
+
+    # cmd1 and cmd3 registered successfully and are active
+    assert "rollback" in hook_by_name
+    assert hook_by_name["rollback"].status == "active"
+    assert "rerun" in hook_by_name
+    assert hook_by_name["rerun"].status == "active"
+
+    # cmd2 failed to register
+    assert "train" not in hook_by_name
+
+    # Dropped hook (deploy) is disabled
+    assert "deploy" in hook_by_name
+    assert hook_by_name["deploy"].status == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_failed_reregistration_keeps_existing_hook_enabled(
+    service: HooksService,
+    handoff_hooks: HandoffHooks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When an existing hook's re-registration raises, it stays enabled because it is still wanted."""
+    project_id = new_id("prj")
+    cmd = command(kind="rollback", template="echo rollback 1")
+    payload1 = _make_payload(project_commands=[cmd])
+    view1 = HandoffView(
+        proposal_id="prp_1",
+        version=1,
+        approved=datetime.now(UTC),
+        payload=payload1,
+    )
+    await handoff_hooks.stored(project_id, view1)
+
+    hooks1 = await service.list(project_id)
+    assert len(hooks1) == 1
+    assert hooks1[0].name == "rollback"
+    assert hooks1[0].status == "active"
+
+    # Newer handoff still includes rollback (e.g. updated template)
+    cmd2 = command(kind="rollback", template="echo rollback 2")
+    payload2 = _make_payload(project_commands=[cmd2])
+    view2 = HandoffView(
+        proposal_id="prp_2",
+        version=2,
+        approved=datetime.now(UTC),
+        payload=payload2,
+    )
+
+    async def flaky_register(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Transient DB error during re-registration")
+
+    monkeypatch.setattr(service, "register", flaky_register)
+
+    await handoff_hooks.stored(project_id, view2)
+
+    hooks2 = await service.list(project_id)
+    assert len(hooks2) == 1
+    assert hooks2[0].name == "rollback"
+    # Even though re-registration raised, the hook was NOT dropped from the handoff,
+    # so it must stay active, NOT disabled!
+    assert hooks2[0].status == "active"

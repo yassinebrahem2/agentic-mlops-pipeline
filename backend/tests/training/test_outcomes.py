@@ -168,6 +168,9 @@ class FakeExpectations:
     async def retire(self, project_id: str, key: ExpectationKey) -> None:
         self.retired.append(key)
 
+    async def note_seen(self, project_id: str, key: ExpectationKey, ran_at: datetime) -> None:
+        pass
+
     async def states(self, project_id: str) -> list[ExpectationState]:
         return list(self._states)
 

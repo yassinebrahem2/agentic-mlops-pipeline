@@ -94,8 +94,16 @@ class StatsService(Stats):
             incidents=incidents,
             verdicts=verdicts,
             matched=await self._baseline.matched_incidents(project_id),
-            judged=[a for a in judged if span.contains(a.ran_at)],
-            miss_reports=sum(1 for m in misses if span.contains(m.occurred_at)),
+            judged=[
+                a
+                for a in judged
+                if span.contains(a.ran_at) and (category is None or a.category == category)
+            ],
+            miss_reports=sum(
+                1
+                for m in misses
+                if span.contains(m.occurred_at) and (category is None or m.category == category)
+            ),
             hook_runs=[r for r in hook_runs if span.contains(r.started)],
             impact={
                 i.id: await self._impact(project_id, i)

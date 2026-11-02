@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from mlops_agents.errors import DomainError
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expectations.contract import (
     ExpectationKey,
@@ -20,7 +21,15 @@ from mlops_agents.monitoring.hooks.contract import (
     PlaceholderResolver,
     RunContext,
 )
-from mlops_agents.monitoring.incidents.contract import IncidentStatus, IncidentView, WakeLabel
+from mlops_agents.monitoring.incidents.contract import (
+    IncidentPatch,
+    IncidentStatus,
+    IncidentView,
+    MediumSeverity,
+    SignalDraft,
+    WakeLabel,
+)
+from mlops_agents.monitoring.incidents.service import IncidentsService
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import CommandSpec, HandoffPayload
 from mlops_agents.storage.databases import Databases
@@ -88,6 +97,7 @@ class FakeExpectations:
         self.registered: list[tuple[str, ExpectationSpec]] = []
         self.retired: list[tuple[str, ExpectationKey]] = []
         self._states: list[ExpectationState] = []
+        self.seen: list[tuple[str, ExpectationKey, datetime]] = []
 
     def set_states(self, states: list[ExpectationState]) -> None:
         self._states = states
@@ -97,6 +107,18 @@ class FakeExpectations:
 
     async def retire(self, project_id: str, key: ExpectationKey) -> None:
         self.retired.append((project_id, key))
+
+    async def note_seen(self, project_id: str, key: ExpectationKey, ran_at: datetime) -> None:
+        self.seen.append((project_id, key, ran_at))
+        for i, s in enumerate(self._states):
+            if s.key == key:
+                self._states[i] = s.model_copy(update={"status": "ok", "last_seen": ran_at})
+
+    async def activate_for_pr(self, project_id: str, pr_number: int) -> list[ExpectationKey]:
+        return []
+
+    async def evaluate(self, project_id: str, now: datetime) -> list[str]:
+        return []
 
     async def states(self, project_id: str) -> list[ExpectationState]:
         return list(self._states)
@@ -710,3 +732,179 @@ async def test_request_without_fix_id_links_and_wakes_no_one(
 
     # No one woken
     assert len(waker.wakes) == 0
+
+
+async def test_late_run_tagged_with_silent_request_links_and_resolves_silence(
+    databases: Databases, project_id: str
+) -> None:
+    now = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+    clock = FakeClock(now)
+    events = SqliteEventLog(databases)
+    waker = FakeWaker()
+    handoffs = FakeHandoffs(make_handoff())
+    expectations = FakeExpectations()
+
+    class FakeResults:
+        async def latest_per_check(
+            self, project_id: str, subject: str, model: str | None = None
+        ) -> list[Any]:
+            return []
+
+    class FakeMaintenance:
+        async def suspended(self, project_id: str, scope: Any, at: datetime) -> bool:
+            return False
+
+    incidents = IncidentsService(
+        databases=databases,
+        events=events,
+        results=FakeResults(),  # type: ignore[arg-type]
+        severity=MediumSeverity(),
+        maintenance=FakeMaintenance(),  # type: ignore[arg-type]
+        clock=clock,
+        handoffs=handoffs,  # type: ignore[arg-type]
+    )
+    incidents.bind_expectations(expectations)
+
+    fixes = SqliteFixes(
+        databases,
+        incidents,
+        waker,
+        events,
+        clock,
+        handoffs,  # type: ignore[arg-type]
+    )
+    training = SqliteTraining(databases, events, clock)
+
+    # 1. Initial drift incident
+    init_draft = SignalDraft(
+        kind="fired_result",
+        category="model_performance",
+        subject="churn_model",
+        model="churn_model",
+        ran_at=now,
+        detail={"metric": "accuracy"},
+    )
+    outcome_init = await incidents.raise_signal(project_id, init_draft, seen_at=now)
+    drift_inc_id = outcome_init.incident_id
+
+    # 2. Request a fix for this incident, choose retrain, mark running
+    fix = await fixes.request(project_id, drift_inc_id, "diagnoser", "Drift detected")
+    await fixes.choose(
+        project_id,
+        fix.id,
+        "retraining",
+        "retrain",
+        "Need retrain",
+        {"re_threshold": "not sufficient", "recalibrate": "distribution shifted"},
+    )
+    await fixes.mark_running(project_id, fix.id)
+
+    # 3. Training request created for this fix
+    req = await training.create_request(
+        project_id=project_id,
+        request_id="trq_late_silence",
+        model="churn_model",
+        hook_id="h_train",
+        mode="train",
+        status="started",
+        fix_id=fix.id,
+    )
+
+    # 4. Expectation deadline passes -> status becomes silent
+    exp_key = ExpectationKey(kind="training_request", ref=req.id, model="churn_model")
+    expectations.set_states(
+        [
+            ExpectationState(
+                key=exp_key,
+                category="operational",
+                active=True,
+                status="silent",
+                next_deadline=now,
+            )
+        ]
+    )
+
+    # Sync with no runs marks request silent and fix outcome not_cleared
+    linker = RequestLinker(
+        training=training,
+        fixes=fixes,
+        tracking=FakeTracking(runs=[]),  # type: ignore[arg-type]
+        expectations=expectations,  # type: ignore[arg-type]
+        events=events,
+        waker=waker,
+        incidents=incidents,
+    )
+    await linker.synced(project_id)
+
+    req_view = await training.request(project_id, req.id)
+    assert req_view is not None
+    assert req_view.status == "silent"
+
+    fix_view = await fixes.get(project_id, fix.id)
+    assert fix_view is not None
+    assert fix_view.outcome == "not_cleared"
+
+    # 5. Silence incident opened for this silent expectation
+    silence_draft = SignalDraft(
+        kind="silence",
+        category="operational",
+        subject=req.id,
+        model="churn_model",
+        ran_at=now,
+        detail={"expectation": req.id},
+        expectation=exp_key,
+    )
+    outcome_silence = await incidents.raise_signal(project_id, silence_draft, seen_at=now)
+    silence_inc_id = outcome_silence.incident_id
+
+    # Attempting to resolve while expectation is silent fails with 409
+    with pytest.raises(DomainError) as exc_info:
+        await incidents.update(
+            project_id,
+            silence_inc_id,
+            agent="user",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.code == "incident_still_firing"
+
+    # 6. Late run tagged with the silent request arrives
+    late_run = RunRow(
+        source_id="src_mlflow",
+        key="run_late_42",
+        experiment="churn_exp",
+        status="succeeded",
+        start=now + timedelta(minutes=10),
+        end=now + timedelta(minutes=25),
+        params={},
+        tags={REQUEST_TAG: req.id},
+        git_commit="abcdef1234",
+        datasets=["churn_train"],
+    )
+    linker._tracking = FakeTracking(runs=[late_run])  # type: ignore[assignment]
+
+    await linker.synced(project_id)
+
+    # Assert request is linked
+    req_after = await training.request(project_id, req.id)
+    assert req_after is not None
+    assert req_after.status == "linked"
+    assert req_after.run_key == "run_late_42"
+
+    # Assert fix ends with status done
+    fix_after = await fixes.get(project_id, fix.id)
+    assert fix_after is not None
+    assert fix_after.status == "done"
+
+    # Assert expectation was retired and note_seen was called
+    assert any(key == exp_key for _, key in expectations.retired)
+    assert any(key == exp_key for _, key, _ in expectations.seen)
+
+    # Assert silence incident can now resolve
+    resolved = await incidents.update(
+        project_id,
+        silence_inc_id,
+        agent="user",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved.status == "resolved"
+    assert resolved.resolved_at is not None

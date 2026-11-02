@@ -61,12 +61,12 @@ class RequestLinker(SyncObserver):
         }
 
         for req in started_reqs:
-            if req.id in silent_refs:
+            if req.status == "started" and req.id in silent_refs:
                 await self._training.mark_silent(project_id, req.id)
                 if req.fix_id is not None:
                     await self._fixes.set_outcome(project_id, req.fix_id, "not_cleared")
 
-        active_reqs = [r for r in started_reqs if r.id not in silent_refs]
+        active_reqs = started_reqs
         if not active_reqs:
             return
 
@@ -90,12 +90,18 @@ class RequestLinker(SyncObserver):
                     await self._training.link(
                         project_id, req.id, run_key=item.key, ci_run_url=ci_run_url
                     )
+                    now_dt = now or datetime.now(UTC)
+                    run_start = getattr(item, "start", None) or now_dt
+                    await self._expectations.note_seen(
+                        project_id,
+                        ExpectationKey(kind="training_request", ref=req.id, model=req.model),
+                        run_start,
+                    )
                     await self._expectations.retire(
                         project_id,
                         ExpectationKey(kind="training_request", ref=req.id, model=req.model),
                     )
 
-                    now_dt = now or datetime.now(UTC)
                     if self._hooks is not None and req.hook_id:
                         hook = await self._hooks.get(project_id, req.hook_id)
                         if (

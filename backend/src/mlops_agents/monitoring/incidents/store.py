@@ -20,7 +20,14 @@ from mlops_agents.monitoring.incidents.contract import (
 )
 from mlops_agents.monitoring.verdicts.contract import VerdictView
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import events, incidents, recent_changes, signals, verdicts
+from mlops_agents.storage.tables import (
+    events,
+    incidents,
+    notification_log,
+    recent_changes,
+    signals,
+    verdicts,
+)
 
 
 def parse_dt(raw: str) -> datetime:
@@ -224,6 +231,19 @@ class IncidentStore:
                 update(signals)
                 .where(signals.c.incident_id.in_(from_incident_ids))
                 .values(incident_id=target_incident_id)
+            )
+
+    async def reassign_notifications(
+        self, project_id: str, from_incident_ids: list[str], target_incident_id: str
+    ) -> None:
+        if not from_incident_ids:
+            return
+        engine = await self._databases.project(project_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(notification_log)
+                .where(notification_log.c.incident.in_(from_incident_ids))
+                .values(incident=target_incident_id)
             )
 
     async def insert_incident(self, project_id: str, values: dict[str, Any]) -> None:

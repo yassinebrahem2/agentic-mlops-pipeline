@@ -343,6 +343,7 @@ deployments = Table(
     Column("seen_at", Text, primary_key=True),
     Column("from_version", Text),
     Column("to_version", Text),
+    Column("baseline", Integer, nullable=False),
 )
 
 ci_runs = Table(
@@ -450,6 +451,7 @@ results = Table(
     Column("source_key", Text, nullable=False),
     Column("seen_at", Text, nullable=False),
     Column("delivered_at", Text),
+    Column("delivery_attempts", Integer, nullable=False, server_default="0"),
 )
 
 result_sources = Table(

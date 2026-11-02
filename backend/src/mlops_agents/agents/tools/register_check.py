@@ -34,7 +34,6 @@ RECORD_EXAMPLE_LABEL: Final = "Example line:"
 _RECORD_FIELD_NOTES: Final[dict[str, str]] = {
     "check_id": "the `check_id` registered here",
     "origin": "a line with any other origin is dropped",
-    "ran_at": "the time the result describes, ISO 8601 with its timezone (e.g. ...Z)",
     "fired": "true when the check found a problem",
     "value": "the measured value",
     "threshold": "the value it fires against",
@@ -104,7 +103,8 @@ def check_record_shape() -> str:
             "required" if name in required else f"optional, default {json.dumps(prop['default'])}"
         )
         kind = json.dumps(_WRITTEN_AS[name]) if name in _WRITTEN_AS else _json_type(prop)
-        lines.append(f"- `{name}` ({kind}, {presence}): {_RECORD_FIELD_NOTES[name]}")
+        desc = prop.get("description") or _RECORD_FIELD_NOTES[name]
+        lines.append(f"- `{name}` ({kind}, {presence}): {desc}")
     lines += [RECORD_EXAMPLE_LABEL, json.dumps(_EXAMPLE_VALUES)]
     return "\n".join(lines)
 

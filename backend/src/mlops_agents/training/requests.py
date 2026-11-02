@@ -264,7 +264,7 @@ class SqliteTraining(Training):
                 (
                     await conn.execute(
                         select(training_requests)
-                        .where(training_requests.c.status == "started")
+                        .where(training_requests.c.status.in_(["started", "silent"]))
                         .order_by(training_requests.c.started.asc())
                     )
                 )

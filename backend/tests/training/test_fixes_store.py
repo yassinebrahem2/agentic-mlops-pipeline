@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -214,6 +215,38 @@ async def test_repeated_request_returns_same_fix_no_second_wake(
     assert len(fake_waker.calls) == 1
     evts2 = await events_log.page(project_id)
     assert len(evts2) == 1
+
+
+async def test_concurrent_requests_for_one_incident_create_single_fix(
+    fixes_service: SqliteFixes,
+    fake_incidents: FakeIncidents,
+    fake_waker: FakeAgentWaker,
+    databases: Databases,
+) -> None:
+    project_id = "prj_test"
+    incident_id = "inc_concurrent"
+    fake_incidents.add(make_incident(incident_id=incident_id, model="churn_predictor"))
+
+    fix1, fix2 = await asyncio.gather(
+        fixes_service.request(project_id, incident_id, "agent_1", "evidence 1"),
+        fixes_service.request(project_id, incident_id, "agent_2", "evidence 2"),
+    )
+
+    assert fix1.id == fix2.id
+    assert fix1.status in ("requested", "chosen", "running")
+
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    select(fix_requests).where(fix_requests.c.incident_id == incident_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert len(rows) == 1
 
 
 async def test_wake_fails_once_then_retried_request_wakes_retraining(

@@ -21,7 +21,12 @@ class ResultRecord(BaseModel):
 
     check_id: str
     origin: ResultOrigin
-    ran_at: datetime
+    ran_at: datetime = Field(
+        description=(
+            "when the check ran (ISO 8601 with its timezone); the date of the data it covers goes"
+            " in `detail`, never here: the app judges silence by this time"
+        )
+    )
     fired: bool
     value: float | None = None
     threshold: float | None = None

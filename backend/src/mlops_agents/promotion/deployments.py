@@ -175,6 +175,7 @@ class DeploymentsService:
                 for r in page.rows
                 # The model is checked here too, so a run never rests on the query filter alone.
                 if isinstance(r, DeploymentRow)
+                and not r.baseline
                 and r.model == model
                 and r.alias in aliases
                 and r.to_version is not None

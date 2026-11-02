@@ -157,3 +157,67 @@ async def test_startup_reconciles_handoff_stored_before(
 
     rec = await store.get(project_id, ExpectationKey(kind="feed", ref="stored_feed"))
     assert rec is not None and rec[1] is True
+
+
+async def test_check_without_cadence_registers_no_expectation_and_dropping_cadence_retires_it(
+    databases: Databases, project_id: str
+) -> None:
+    store = SqliteExpectationsStore(databases, FakeClock())
+    seeder = HandoffExpectationsSeeder(store)
+
+    check_with_cadence = {
+        "check_id": "chk_demand",
+        "name": "On-demand check",
+        "category": "model_performance",
+        "cadence": {"cron": "0 12 * * *", "every_minutes": None},
+        "timezone": "Europe/Paris",
+        "results": {
+            "connection": "hotel",
+            "path_pattern": "results/*.json",
+        },
+    }
+    raw1 = handoff()
+    raw1["operations"]["feeds"] = []
+    raw1["operations"]["checks"] = [check_with_cadence]
+    await seeder.seed_from_payload(project_id, HandoffPayload.model_validate(raw1))
+
+    key = ExpectationKey(kind="check", ref="chk_demand")
+    rec1 = await store.get(project_id, key)
+    assert rec1 is not None and rec1[1] is True
+
+    # Second handoff drops the check's cadence:
+    check_no_cadence = {
+        "check_id": "chk_demand",
+        "name": "On-demand check",
+        "category": "model_performance",
+        "cadence": None,
+        "timezone": "Europe/Paris",
+        "results": {
+            "connection": "hotel",
+            "path_pattern": "results/*.json",
+        },
+    }
+    raw2 = handoff()
+    raw2["operations"]["feeds"] = []
+    raw2["operations"]["checks"] = [check_no_cadence]
+    await seeder.seed_from_payload(project_id, HandoffPayload.model_validate(raw2))
+
+    # The previously registered expectation must be retired
+    rec2 = await store.get(project_id, key)
+    assert rec2 is not None and rec2[1] is False
+
+    # A brand new check without cadence registers no expectation
+    raw3 = handoff()
+    raw3["operations"]["feeds"] = []
+    raw3["operations"]["checks"] = [
+        {
+            "check_id": "chk_never_scheduled",
+            "name": "Never scheduled",
+            "category": "operational",
+            "timezone": "UTC",
+            "results": {"workflow": "check.yml"},
+        }
+    ]
+    await seeder.seed_from_payload(project_id, HandoffPayload.model_validate(raw3))
+    rec3 = await store.get(project_id, ExpectationKey(kind="check", ref="chk_never_scheduled"))
+    assert rec3 is None

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import ColumnElement, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from mlops_agents.clock import to_iso
 from mlops_agents.errors import DomainError
@@ -273,22 +274,58 @@ class SqliteFixes:
                 created=created_view_dt,
             )
 
-        async with engine.begin() as conn:
-            await conn.execute(
-                insert(fix_requests).values(
-                    id=fix_id,
-                    incident_id=incident_id,
-                    model=incident.model,
-                    requested_by=agent,
-                    evidence=capped_evidence,
-                    choice=None,
-                    why=None,
-                    why_not="{}",
-                    status="requested",
-                    outcome="pending",
-                    created=created_iso,
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    insert(fix_requests).values(
+                        id=fix_id,
+                        incident_id=incident_id,
+                        model=incident.model,
+                        requested_by=agent,
+                        evidence=capped_evidence,
+                        choice=None,
+                        why=None,
+                        why_not="{}",
+                        status="requested",
+                        outcome="pending",
+                        created=created_iso,
+                    )
                 )
-            )
+        except IntegrityError:
+            async with engine.connect() as conn:
+                existing_row = (
+                    (
+                        await conn.execute(
+                            select(fix_requests)
+                            .where(
+                                fix_requests.c.incident_id == incident_id,
+                                fix_requests.c.status.in_(["requested", "chosen", "running"]),
+                            )
+                            .order_by(fix_requests.c.created.desc())
+                            .limit(1)
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+
+            if existing_row is not None:
+                view = self._row_to_view(existing_row)
+                if view.status == "requested":
+                    wake_text = (
+                        f"Fix request {view.id} for incident {incident_id} (model: {incident.model}):\n"
+                        f"{untrusted(view.evidence, source='fix_request')}"
+                    )
+                    await self._waker.wake(
+                        project_id=project_id,
+                        agent=RETRAINING_AGENT,
+                        label="fix_request",
+                        subject_id=incident_id,
+                        text=wake_text,
+                        key=view.id,
+                    )
+                return view
+            raise
 
         await self._events.record(
             project_id,

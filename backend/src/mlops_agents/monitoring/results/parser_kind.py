@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -20,6 +21,7 @@ from mlops_agents.proposals.contract import (
     PARSER_KIND,
     ApplyResult,
     CredentialSlot,
+    ProposalCheck,
     parser_key,
 )
 from mlops_agents.sandbox.docker import HEAD_CAPTURE_CHARS, TAIL_CAPTURE_CHARS
@@ -55,13 +57,13 @@ CODE_PARSER_CONTRACT = (
 )
 
 
-def _payload(payload: BaseModel) -> ParserPayload:
+def _payload(payload: Any) -> ParserPayload:
     if isinstance(payload, ParserPayload):
         return payload
     return ParserPayload.model_validate(payload)
 
 
-class ParserKind:
+class ParserKind(ProposalCheck):
     """ProposalKind implementation for 'parser' proposals."""
 
     name = PARSER_KIND
@@ -69,6 +71,22 @@ class ParserKind:
 
     def __init__(self, parsers: Parsers) -> None:
         self._parsers = parsers
+
+    async def check(self, project_id: str, payload: Any) -> list[str]:
+        """Refusals returned at propose time before the gate."""
+        p = _payload(payload)
+        refusals: list[str] = []
+        if p.spec.mapping is not None:
+            m = p.spec.mapping
+            if "ran_at" in m.defaults:
+                refusals.append(
+                    "Mapping parser cannot set 'ran_at' in defaults; records need the time the check ran, mapped from a field."
+                )
+            if "ran_at" not in m.fields:
+                refusals.append(
+                    "Mapping parser must map 'ran_at' from a field; records need the time the check ran, mapped from a field."
+                )
+        return refusals
 
     def key(self, payload: BaseModel) -> str:
         return parser_key(_payload(payload))

@@ -98,6 +98,7 @@ class DeploymentRow(BaseModel):
     from_version: str | None
     to_version: str | None  # None: the alias was removed
     seen_at: datetime
+    baseline: bool = False
 
 
 class CiRunRow(BaseModel):

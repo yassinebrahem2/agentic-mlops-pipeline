@@ -286,18 +286,48 @@ class ResultsStore:
             consecutive_failures=int(row["consecutive_failures"]),
         )
 
-    async def fetch_undelivered(self, project_id: str) -> list[StoredResult]:
+    async def fetch_undelivered(
+        self, project_id: str, limit: int = QUERY_LIMIT_MAX
+    ) -> list[StoredResult]:
         """Fetch undelivered results (delivered_at IS NULL) sorted by ran_at ASC, id ASC."""
         engine = await self._databases.project(project_id)
         stmt = (
             select(results)
             .where(results.c.delivered_at.is_(None))
             .order_by(results.c.ran_at.asc(), results.c.id.asc())
+            .limit(limit)
         )
         async with engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
 
         return [_row_to_stored_result(r) for r in rows]
+
+    async def increment_delivery_attempts(
+        self, project_id: str, ids: Sequence[str]
+    ) -> dict[str, int]:
+        """Increment delivery_attempts by 1 for the specified results, returning id -> new count."""
+        if not ids:
+            return {}
+        engine = await self._databases.project(project_id)
+        stmt = (
+            update(results)
+            .where(results.c.id.in_(list(ids)))
+            .values(delivery_attempts=results.c.delivery_attempts + 1)
+            .returning(results.c.id, results.c.delivery_attempts)
+        )
+        async with engine.begin() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return {str(r[0]): int(r[1]) for r in rows}
+
+    async def get_delivery_attempts(self, project_id: str, ids: Sequence[str]) -> dict[str, int]:
+        """Fetch delivery_attempts for the specified results."""
+        if not ids:
+            return {}
+        engine = await self._databases.project(project_id)
+        stmt = select(results.c.id, results.c.delivery_attempts).where(results.c.id.in_(list(ids)))
+        async with engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return {str(r[0]): int(r[1]) for r in rows}
 
     async def mark_delivered(
         self, project_id: str, ids: Sequence[str], delivered_at: datetime

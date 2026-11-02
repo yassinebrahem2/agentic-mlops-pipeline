@@ -184,8 +184,9 @@ def _on_call(entry: OnCall) -> str:
 
 
 def _check(check: CheckSpec) -> str:
+    cadence = "not judged for silence" if check.cadence is None else _cadence(check.cadence)
     return (
-        f"{check.check_id} {check.name} ({check.category}): {_cadence(check.cadence)}; "
+        f"{check.check_id} {check.name} ({check.category}): {cadence}; "
         f"time zone {check.timezone}; results {_results(check.results)}"
     )
 
