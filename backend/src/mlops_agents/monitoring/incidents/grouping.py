@@ -70,12 +70,11 @@ async def find_matching_active_incident(
     project_id: str,
     draft: SignalDraft,
     payload: HandoffPayload | None,
-    grouping_window_minutes: int,
 ) -> RowMapping | None:
     """Finds an active incident that matches the draft signal.
 
     Candidates from ACTIVE_STATUSES:
-    - Cause key matches AND latest signal's ran_at is within grouping_window_minutes of draft.ran_at.
+    - Cause key matches (joins open incident regardless of time).
     - OR draft subject is downstream of active incident's subject.
 
     Oldest open incident wins (earliest started_at, then id).
@@ -84,16 +83,11 @@ async def find_matching_active_incident(
     draft_c_key = cause_key(draft.subject, draft.model)
 
     for row in candidates:
-        inc_id = str(row["id"])
         inc_c_key = str(row["cause_key"])
 
-        # 1. Cause key match and within window
+        # 1. Cause key match
         if inc_c_key == draft_c_key:
-            latest_ran_at = await store.get_latest_signal_ran_at(project_id, inc_id)
-            if latest_ran_at is not None:
-                diff_s = abs((draft.ran_at - latest_ran_at).total_seconds())
-                if diff_s <= grouping_window_minutes * 60:
-                    return row
+            return row
 
         # 2. Downstream reachability
         inc_subject = parse_subject_from_cause_key(inc_c_key)
