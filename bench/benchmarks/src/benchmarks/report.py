@@ -210,38 +210,61 @@ def _render_markdown(
         has_cost = True
         agent_rows: dict[str, dict[str, Any]] = {}
 
-        if usage_data and "rows" in usage_data and isinstance(usage_data["rows"], list):
+        if usage_data is not None:
+            if (
+                not isinstance(usage_data, dict)
+                or "rows" not in usage_data
+                or not isinstance(usage_data["rows"], list)
+            ):
+                raise ValueError(
+                    f"Unexpected response shape for usage: expected dict with list 'rows', got {usage_data!r}"
+                )
             raw_rows: list[object] = cast(list[object], usage_data["rows"])
             for row_obj in raw_rows:
-                if isinstance(row_obj, dict):
-                    row: dict[str, Any] = cast(dict[str, Any], row_obj)
-                    agent = str(row.get("agent", "unknown"))
-                    model = str(row.get("model_address", ""))
-                    p_tok = int(cast(int, row.get("prompt_tokens", 0)))
-                    c_tok = int(cast(int, row.get("completion_tokens", 0)))
-                    cost_val: object = row.get("cost_usd")
+                if not isinstance(row_obj, dict):
+                    raise ValueError(
+                        f"Unexpected item in usage rows: expected dict, got {row_obj!r}"
+                    )
+                row: dict[str, Any] = cast(dict[str, Any], row_obj)
+                agent = row.get("agent")
+                if not isinstance(agent, str):
+                    raise ValueError(f"Usage row missing required 'agent' string: {row!r}")
+                model = row.get("model_address")
+                if not isinstance(model, str):
+                    raise ValueError(f"Usage row missing required 'model_address' string: {row!r}")
+                p_tok_raw = row.get("prompt_tokens")
+                if not isinstance(p_tok_raw, (int, float)):
+                    raise ValueError(f"Usage row missing numeric 'prompt_tokens': {row!r}")
+                c_tok_raw = row.get("completion_tokens")
+                if not isinstance(c_tok_raw, (int, float)):
+                    raise ValueError(f"Usage row missing numeric 'completion_tokens': {row!r}")
+                p_tok = int(p_tok_raw)
+                c_tok = int(c_tok_raw)
+                cost_val: object = row.get("cost_usd")
 
-                    total_p_tok += p_tok
-                    total_c_tok += c_tok
-                    if cost_val is not None:
-                        total_cost += float(cast(float, cost_val))
-                    else:
-                        has_cost = False
+                total_p_tok += p_tok
+                total_c_tok += c_tok
+                if cost_val is not None:
+                    if not isinstance(cost_val, (int, float)):
+                        raise ValueError(f"Usage row 'cost_usd' is not numeric: {cost_val!r}")
+                    total_cost += float(cost_val)
+                else:
+                    has_cost = False
 
-                    if agent not in agent_rows:
-                        agent_rows[agent] = {
-                            "agent": agent,
-                            "model": model,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                            "total_tokens": 0,
-                            "cost": 0.0 if cost_val is not None else None,
-                        }
-                    agent_rows[agent]["prompt_tokens"] += p_tok
-                    agent_rows[agent]["completion_tokens"] += c_tok
-                    agent_rows[agent]["total_tokens"] += p_tok + c_tok
-                    if cost_val is not None and agent_rows[agent]["cost"] is not None:
-                        agent_rows[agent]["cost"] += float(cast(float, cost_val))
+                if agent not in agent_rows:
+                    agent_rows[agent] = {
+                        "agent": agent,
+                        "model": model,
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cost": 0.0 if cost_val is not None else None,
+                    }
+                agent_rows[agent]["prompt_tokens"] += p_tok
+                agent_rows[agent]["completion_tokens"] += c_tok
+                agent_rows[agent]["total_tokens"] += p_tok + c_tok
+                if cost_val is not None and agent_rows[agent]["cost"] is not None:
+                    agent_rows[agent]["cost"] += float(cast(float, cost_val))
 
         total_tokens = total_p_tok + total_c_tok
         lines.append(
@@ -309,7 +332,9 @@ async def write_report(
     elif isinstance(raw_overall, dict):
         overall_stats = StatsView.model_validate(raw_overall)
     else:
-        raise RuntimeError(f"Unexpected response for overall stats: {raw_overall}")
+        raise ValueError(
+            f"Unexpected response from /projects/{project_id}/stats: expected StatsView or dict, got {type(raw_overall).__name__}"
+        )
 
     # 2. Extract unique problems and counts per category (deduplicated)
     unique_matched = set(score.matched.values())
@@ -333,6 +358,11 @@ async def write_report(
             category_stats[cat] = raw_cat
         elif isinstance(raw_cat, dict):
             category_stats[cat] = StatsView.model_validate(raw_cat)
+        else:
+            raise ValueError(
+                f"Unexpected response from /projects/{project_id}/stats for category {cat!r}: "
+                f"expected StatsView or dict, got {type(raw_cat).__name__}"
+            )
 
     # 4. Fetch usage in agents mode
     usage_data: dict[str, Any] | None = None
@@ -343,6 +373,10 @@ async def write_report(
             usage_data = cast(dict[str, Any], raw_usage)
         elif hasattr(raw_usage, "model_dump") and callable(raw_usage.model_dump):
             usage_data = cast(dict[str, Any], raw_usage.model_dump(mode="json"))
+        else:
+            raise ValueError(
+                f"Unexpected response from /usage: expected dict, got {type(raw_usage).__name__}"
+            )
 
     # 5. Build report.md
     md_content = _render_markdown(

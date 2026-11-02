@@ -403,6 +403,7 @@ class ULBDataset:
 
     name: str = "ulb"
     scenario: str = "ulb"
+    seed: int | None = None
 
     def __init__(
         self,
@@ -411,7 +412,9 @@ class ULBDataset:
         scenario_path: Path | None = None,
         injections: Sequence[ULBInjection] | None = None,
         operating_threshold: float = 0.5,
+        seed: int | None = None,
     ) -> None:
+        self.seed = seed
         self._frame = frame
         self._scenario_path = scenario_path or DEFAULT_SCENARIO_PATH
         self._operating_threshold = operating_threshold

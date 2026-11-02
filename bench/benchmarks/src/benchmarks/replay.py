@@ -240,7 +240,7 @@ async def replay(
             # Approve handoff
             await services.handoffs.store(project_id, "prp_replay_handoff", handoff)
 
-            # Approve parsers declared by checks and feeds
+            # Approve parsers declared by checks in handoff
             for chk in handoff.operations.checks:
                 if isinstance(chk.results, FileResults):
                     s_id = source_id("file", chk.results.path_pattern, chk.results.connection)
@@ -250,24 +250,14 @@ async def replay(
                             project_id, spec, proposal_id=f"prp_parser_{chk.check_id}"
                         )
 
+            # Refuse job feeds referencing file results not declared by checks in handoff
             for feed in handoff.operations.feeds:
                 if isinstance(feed.ref, JobFeedRef) and feed.ref.file is not None:
                     s_id = source_id("file", feed.ref.file.path_pattern, feed.ref.file.connection)
                     if await services.parsers.current(project_id, s_id) is None:
-                        matched_chk = next(
-                            (
-                                c
-                                for c in handoff.operations.checks
-                                if isinstance(c.results, FileResults)
-                                and c.results.path_pattern == feed.ref.file.path_pattern
-                            ),
-                            None,
-                        )
-                        cat = matched_chk.category if matched_chk else "model_performance"
-                        cid = matched_chk.check_id if matched_chk else feed.name
-                        spec = _make_parser_spec(s_id, cat, cid)
-                        await services.parsers.store(
-                            project_id, spec, proposal_id=f"prp_parser_{feed.name}"
+                        raise ValueError(
+                            f"Job feed {feed.name!r} references file results {feed.ref.file.path_pattern!r} "
+                            "without matching check declared in handoff"
                         )
 
             # Day loop
@@ -301,15 +291,11 @@ async def replay(
             score_res = await score(client, project_id, dataset.key(), day_starts)
 
             # Write reports
-            scenario_name = getattr(
-                dataset, "scenario", getattr(dataset, "scenario_name", dataset.name)
-            )
-            dataset_seed = getattr(dataset, "seed", None)
             info = RunInfo(
                 mode="replay",
                 dataset=dataset.name,
-                scenario=str(scenario_name),
-                seed=dataset_seed,
+                scenario=dataset.scenario,
+                seed=dataset.seed,
                 app_commit=_get_app_commit(),
                 started=run_started,
                 ended=run_ended,
@@ -352,9 +338,7 @@ def run_replay_cli(args: argparse.Namespace) -> int:
         return 1
 
     factory = DATASETS[dataset_name]
-    dataset: Dataset = factory()
-    if args.seed is not None and hasattr(dataset, "seed"):
-        object.__setattr__(dataset, "seed", args.seed)
+    dataset: Dataset = factory(seed=args.seed) if args.seed is not None else factory()
 
     run_dir: Path | None = args.run_dir
     if run_dir is None:

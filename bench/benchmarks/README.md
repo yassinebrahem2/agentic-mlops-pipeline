@@ -4,6 +4,8 @@ Developer benchmarks for `mlops-agents`: a developer tool outside the product th
 
 ## Use
 
+The benchmark harness stores cache, runs, and artifacts under `$BENCH_HOME`, which defaults to `~/bench-home`.
+
 Its own uv project; run from `bench/benchmarks/`:
 
 ```bash

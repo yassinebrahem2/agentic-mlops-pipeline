@@ -15,6 +15,8 @@ class Dataset(Protocol):
     """Protocol for benchmark datasets."""
 
     name: str
+    scenario: str
+    seed: int | None
 
     def days(self) -> Sequence[date]:
         """Sequence of business dates for this dataset, in chronological order."""

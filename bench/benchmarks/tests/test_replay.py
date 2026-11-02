@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -182,3 +183,25 @@ def test_cli_replay_fixture_and_second_run_refusal(tmp_path: Path) -> None:
     # Second run refuses
     code2 = main(["replay", "fixture", "--run-dir", str(run_dir)])
     assert code2 == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_stamps_only_files_written_on_day_not_prior_days(tmp_path: Path) -> None:
+    """Verifies that an earlier day's file keeps its mtime and is not re-stamped on later days."""
+
+    class StampTrackingDataset(FixtureDataset):
+        def write_day(self, day: date, data_dir: Path, results_dir: Path) -> None:
+            super().write_day(day, data_dir, results_dir)
+            if day == date(2030, 1, 7):
+                (data_dir / "day1_only.txt").write_text("day 1 content", encoding="utf-8")
+
+    run_dir = tmp_path / "run_stamp_tracking"
+    dataset = StampTrackingDataset()
+    await replay(dataset, run_dir)
+
+    day1_file = run_dir / "data" / "day1_only.txt"
+    assert day1_file.exists()
+    day1_mtime = datetime.fromtimestamp(day1_file.stat().st_mtime, tz=UTC)
+    expected_mtime = datetime(2030, 1, 7, 0, 0, 0, tzinfo=UTC)
+    # The file must retain day 1's timestamp and NOT be re-stamped on day 2, 3, or 4
+    assert day1_mtime == expected_mtime

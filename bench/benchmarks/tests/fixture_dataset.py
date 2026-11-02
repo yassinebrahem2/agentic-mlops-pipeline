@@ -42,6 +42,11 @@ class FixtureDataset:
     """A tiny dataset with 4 days and one data_quality null spike on day 2."""
 
     name = "fixture"
+    scenario = "fixture"
+    seed: int | None = None
+
+    def __init__(self, seed: int | None = None) -> None:
+        self.seed = seed
 
     def days(self) -> Sequence[date]:
         return FIXTURE_DAYS

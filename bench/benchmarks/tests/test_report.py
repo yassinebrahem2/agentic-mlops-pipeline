@@ -38,7 +38,9 @@ class FakeBenchClient:
         query = dict(params) if params is not None else None
         self.calls.append((path, query))
         if path == "/usage":
-            return self.usage_response
+            if self.usage_response is not None:
+                return self.usage_response
+            return {"rows": []}
         if "stats" in path:
             cat = query.get("category") if query else None
             key = cat if cat else "overall"
@@ -712,3 +714,114 @@ async def test_missing_stat_prints_not_available_without_n(tmp_path: Path) -> No
     md_text = md_path.read_text(encoding="utf-8")
     assert "- **precision:** not available" in md_text
     assert "not available (n=0)" not in md_text
+
+
+@pytest.mark.asyncio
+async def test_per_category_stats_passes_category_filter_and_raises_on_unexpected_shape(
+    tmp_path: Path,
+) -> None:
+    dq_view = StatsView(
+        window="all",
+        category="data_quality",
+        baseline_available=True,
+        groups={
+            "detection": {"precision": StatValue(value=0.99, n=10, collecting=False)},
+            "speed": {},
+            "noise": {},
+            "diagnosis": {},
+        },
+    )
+    drift_view = StatsView(
+        window="all",
+        category="drift",
+        baseline_available=True,
+        groups={
+            "detection": {"precision": StatValue(value=0.33, n=5, collecting=False)},
+            "speed": {},
+            "noise": {},
+            "diagnosis": {},
+        },
+    )
+    client = FakeBenchClient(
+        stats_responses={
+            "overall": StatsView(
+                window="all",
+                category=None,
+                baseline_available=True,
+                groups={
+                    "detection": {"precision": StatValue(value=0.5, n=15, collecting=False)},
+                    "speed": {},
+                    "noise": {},
+                    "diagnosis": {},
+                },
+            ),
+            "data_quality": dq_view,
+            "drift": drift_view,
+        }
+    )
+    score = _make_sample_score()
+    run_info = RunInfo(
+        mode="replay",
+        dataset="test",
+        scenario="replay",
+        seed=None,
+        app_commit="c1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 5, tzinfo=UTC),
+        provider=None,
+        model=None,
+        seconds_per_day=None,
+        pauses=[],
+        day_gaps=[],
+    )
+    md_path, _ = await write_report(client, "prj_1", tmp_path, run_info, score)
+    md_text = md_path.read_text(encoding="utf-8")
+
+    # Assert that category filter was passed in client calls
+    stat_calls = [c for c in client.calls if "stats" in c[0]]
+    dq_calls = [c for c in stat_calls if c[1] and c[1].get("category") == "data_quality"]
+    drift_calls = [c for c in stat_calls if c[1] and c[1].get("category") == "drift"]
+    assert len(dq_calls) == 1
+    assert len(drift_calls) == 1
+
+    # Assert that category-specific precision was rendered
+    assert "### Category: data_quality" in md_text
+    assert "- **precision:** 0.990 (n=10)" in md_text
+    assert "### Category: drift" in md_text
+    assert "- **precision:** 0.330 (n=5)" in md_text
+
+    # Test that unexpected per-category shape raises ValueError
+    class BadCatClient(FakeBenchClient):
+        async def get(self, path: str, params: Mapping[str, str] | None = None) -> Any:
+            query = dict(params) if params is not None else None
+            if "stats" in path and query and query.get("category"):
+                return "unexpected-shape"
+            return await super().get(path, params)
+
+    bad_client = BadCatClient(stats_responses=client.stats_responses)
+    with pytest.raises(
+        ValueError, match="Unexpected response from /projects/prj_1/stats for category"
+    ):
+        await write_report(bad_client, "prj_1", tmp_path, run_info, score)
+
+    # Test that unexpected usage shape in agents mode raises ValueError
+    agents_info = RunInfo(
+        mode="agents",
+        dataset="test",
+        scenario="agents",
+        seed=None,
+        app_commit="c1",
+        started=datetime(2026, 11, 1, 10, 0, tzinfo=UTC),
+        ended=datetime(2026, 11, 1, 10, 5, tzinfo=UTC),
+        provider=None,
+        model=None,
+        seconds_per_day=None,
+        pauses=[],
+        day_gaps=[],
+    )
+    bad_usage_client = FakeBenchClient(
+        stats_responses=client.stats_responses,
+        usage_response={"rows": [{"missing_agent": True}]},
+    )
+    with pytest.raises(ValueError, match="missing required 'agent' string"):
+        await write_report(bad_usage_client, "prj_1", tmp_path, agents_info, score)
