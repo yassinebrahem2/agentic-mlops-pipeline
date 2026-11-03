@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -55,11 +55,16 @@ export function ToolStep({ call, result, className }: ToolStepProps) {
               <span className="truncate font-mono text-xs text-muted-foreground">{summary}</span>
             )}
           </div>
-          {!result && (
+          {!result ? (
             <Badge variant="secondary" className="shrink-0 text-[10px]">
               Running
             </Badge>
-          )}
+          ) : result.is_error ? (
+            <Badge variant="destructive" className="shrink-0 text-[10px]">
+              <AlertTriangle className="text-destructive" aria-hidden="true" />
+              Failed
+            </Badge>
+          ) : null}
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent className="space-y-2 pt-2">
