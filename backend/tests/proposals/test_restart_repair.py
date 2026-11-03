@@ -1,5 +1,5 @@
 """The restart repair (approvals-fixes task 2) composed with the real proposals observer, the
-real Propose tool and proposals' own `recover`, on the app `build_services` builds. The split of
+real ProposeConnections tool and proposals' own `recover`, on the app `build_services` builds. The split of
 recovery work: proposals' `recover` (at startup) applies a proposal `approved` with no result;
 the repair's re-tell applies a proposal still `pending` whose approval is decided."""
 
@@ -16,7 +16,7 @@ from sqlalchemy import Select, func, select, update
 
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import ToolResultPart
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.api import services as api_services
 from mlops_agents.api.services import Services
 from mlops_agents.clock import now_iso
@@ -29,6 +29,7 @@ from tests.proposals.samples import connections
 from tests.proposals.test_observer import ScriptedTestKind
 
 AGENT = "orchestrator"
+TOOL_NAME = propose_tool_name(CONNECTIONS_KIND)
 
 
 def registered_kind(monkeypatch: pytest.MonkeyPatch) -> ScriptedTestKind:
@@ -45,11 +46,12 @@ def registered_kind(monkeypatch: pytest.MonkeyPatch) -> ScriptedTestKind:
 
 
 def give_propose(services: Services) -> None:
-    """The agent may call the real Propose tool (no shipped definition lists it yet)."""
+    """The agent may call the real ProposeConnections tool (no shipped definition lists it yet)."""
     agent = services.catalog.get(AGENT)
-    services.catalog._by_name[AGENT] = agent.model_copy(  # pyright: ignore[reportPrivateUsage]
-        update={"tools": (*agent.tools, PROPOSE_TOOL_NAME)}
-    )
+    if TOOL_NAME not in agent.tools:
+        services.catalog._by_name[AGENT] = agent.model_copy(  # pyright: ignore[reportPrivateUsage]
+            update={"tools": (*agent.tools, TOOL_NAME)}
+        )
 
 
 async def ask(services: Services, project_id: str, fake: RunningFake) -> tuple[str, str]:
@@ -64,8 +66,8 @@ async def ask(services: Services, project_id: str, fake: RunningFake) -> tuple[s
     await services.agent_settings.set_default_model(AGENT, "fake:fake-tools")
     fake.state.scripted_tool_calls = [
         {
-            "name": PROPOSE_TOOL_NAME,
-            "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+            "name": TOOL_NAME,
+            "arguments": connections(),
         }
     ]
     await services.sessions.send(project_id, AGENT, "Propose a connection")
@@ -99,7 +101,7 @@ async def restarted_turn_ends(services: Services, project_id: str, turn_id: str)
 
 
 async def propose_output(services: Services, project_id: str, turn_id: str) -> list[str]:
-    """What the Propose tool returned to the turn, each time it ran."""
+    """What the ProposeConnections tool returned to the turn, each time it ran."""
     view = await services.sessions.get(project_id, AGENT)
     return [
         part.content

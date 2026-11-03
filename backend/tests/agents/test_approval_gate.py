@@ -19,7 +19,6 @@ from tests.agents.gate_helpers import (
     DummyArgs,
     FailingPreviewTool,
     GithubTool,
-    ProposeArgs,
     ProposeTool,
     ReadTool,
     RunTool,
@@ -275,7 +274,7 @@ async def test_a_propose_call_asks_at_every_level_and_carries_its_proposal_kind(
 
     decisions = await gate.decide(
         [
-            make_call(ProposeTool(), "c_prop", project_id, args=ProposeArgs(kind="handoff")),
+            make_call(ProposeTool(kind="handoff"), "c_prop", project_id),
             make_call(DeployTool(), "c_deploy", project_id),
         ]
     )
@@ -304,9 +303,7 @@ async def test_a_propose_call_whose_kind_is_not_a_string_has_no_proposal_kind(
     store = ApprovalStore(databases)
     gate = ApprovalGate(databases, store=store)
 
-    decisions = await gate.decide(
-        [make_call(ProposeTool(), "c_prop", project_id, args=ProposeArgs(kind=3))]
-    )
+    decisions = await gate.decide([make_call(ProposeTool(kind=3), "c_prop", project_id)])
 
     assert decisions["c_prop"].outcome == "ask"
     assert decisions["c_prop"].proposal_kind is None

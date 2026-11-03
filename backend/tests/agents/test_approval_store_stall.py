@@ -175,7 +175,7 @@ async def test_a_tool_approval_stores_its_kind_and_proposal_kind(databases: Data
         message_id=message_id,
         agent="orchestrator",
         tool_call_id="call_1",
-        tool="Propose",
+        tool="ProposeHandoff",
         risk_class=RiskClass.PROPOSE,
         preview=Preview(kind="text", title="t", body="b"),
         proposal_kind="handoff",

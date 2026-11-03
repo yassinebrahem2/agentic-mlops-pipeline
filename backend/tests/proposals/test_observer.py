@@ -19,12 +19,12 @@ from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.runtime.contract import ApprovalKind, ApprovalStatus
 from mlops_agents.agents.runtime.sessions import SessionManager
 from mlops_agents.agents.tools.base import (
-    AgentTool,
     Preview,
     RiskClass,
     ToolContext,
     ToolOutput,
 )
+from mlops_agents.agents.tools.propose import TypedProposeTool
 from mlops_agents.api import services as api_services
 from mlops_agents.api.services import Services
 from mlops_agents.credentials.project_secrets import proposal_slot_ref
@@ -92,44 +92,16 @@ class ScriptedTestKind:
         return ApplyResult(applied=["conn_applied"], failed={})
 
 
-class ProposeArgs(BaseModel):
-    kind: str
-    payload: dict[str, Any]
-
-
-class TestProposeTool(AgentTool[ProposeArgs]):
+class TestProposeConnectionsTool(TypedProposeTool):
     __test__ = False
-    name = "Propose"
-    description = "Propose a configuration change"
-    risk = RiskClass.PROPOSE
-    args_model = ProposeArgs
 
     def __init__(self, proposals: ProposalsService, kinds: ProposalKinds) -> None:
-        self._proposals = proposals
-        self._kinds = kinds
+        super().__init__(CONNECTIONS_KIND, proposals, kinds)
         self.apply_run_order: list[str] = []
 
-    async def preview(self, ctx: ToolContext, args: ProposeArgs) -> Preview:
-        kind_obj = self._kinds.get(args.kind)
-        validated = kind_obj.payload_model.model_validate(args.payload)
-        key = kind_obj.key(validated)
-        await self._proposals.create(
-            ctx.project_id,
-            ctx.agent,
-            args.kind,
-            key,
-            args.payload,
-            ctx.turn_id,
-            ctx.tool_call_id,
-        )
-        return Preview(kind="text", title=f"Proposal: {args.kind}", body="test preview")
-
-    async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
+    async def run(self, ctx: ToolContext, args: Any) -> ToolOutput:
         self.apply_run_order.append("tool_run")
-        p = await self._proposals.for_call(ctx.project_id, ctx.turn_id, ctx.tool_call_id)
-        if p and p.result:
-            return ToolOutput(content=f"Applied: {','.join(p.result.applied)}")
-        return ToolOutput(content="No result", is_error=True)
+        return await super().run(ctx, args)
 
 
 def _make_approval_view(
@@ -140,7 +112,7 @@ def _make_approval_view(
     turn_id: str = "trn_1",
     kind: ApprovalKind = "tool",
     tool_call_id: str | None = "call_1",
-    tool: str | None = "Propose",
+    tool: str | None = "ProposeConnections",
     risk_class: RiskClass | None = RiskClass.PROPOSE,
     step: int | None = 1,
     proposal_kind: str | None = "connections",
@@ -332,7 +304,7 @@ async def _wait_turn_done(services: Services, project_id: str, turn_id: str) -> 
 @contextmanager
 def _propose_env(
     services: Services,
-) -> Generator[tuple[ScriptedTestKind, TestProposeTool]]:
+) -> Generator[tuple[ScriptedTestKind, TestProposeConnectionsTool]]:
     test_kind = ScriptedTestKind(CONNECTIONS_KIND)
     with swapped_kind(services.proposal_kinds, test_kind):
         yield _register_propose_tool(services, test_kind)
@@ -340,18 +312,19 @@ def _propose_env(
 
 def _register_propose_tool(
     services: Services, test_kind: ScriptedTestKind
-) -> tuple[ScriptedTestKind, TestProposeTool]:
-    tool = TestProposeTool(services.proposals, services.proposal_kinds)
+) -> tuple[ScriptedTestKind, TestProposeConnectionsTool]:
+    tool = TestProposeConnectionsTool(services.proposals, services.proposal_kinds)
     services.tools.register(tool)
 
     orch = services.catalog.get("orchestrator")
     services.catalog._by_name["orchestrator"] = orch.model_copy(  # pyright: ignore[reportPrivateUsage]
-        update={"tools": (*orch.tools, "Propose")}
+        update={"tools": (*orch.tools, "ProposeConnections")}
     )
     onb = services.catalog.get("onboarding")
-    services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
-        update={"tools": (*onb.tools, "Propose")}
-    )
+    if "ProposeConnections" not in onb.tools:
+        services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
+            update={"tools": (*onb.tools, "ProposeConnections")}
+        )
     return test_kind, tool
 
 
@@ -366,8 +339,8 @@ async def test_gate_created_approval_fires_asked_and_attaches(
         with _propose_env(services) as (_test_kind, _tool):
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             await services.sessions.send(project_id, "orchestrator", "Propose connection")
@@ -393,8 +366,8 @@ async def test_stop_and_recovery_expiry_fire_decided_and_empty_slots(
             # 1. Test Stop cancels approval and rejects proposal + empties slot
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             await services.sessions.send(project_id, "orchestrator", "Propose connection 1")
@@ -450,7 +423,7 @@ async def test_stop_and_recovery_expiry_fire_decided_and_empty_slots(
                 message_id="msg_crashed",
                 agent="orchestrator",
                 tool_call_id="call_crashed",
-                tool="Propose",
+                tool="ProposeConnections",
                 risk_class=RiskClass.PROPOSE,
                 proposal_kind=CONNECTIONS_KIND,
                 preview=Preview(kind="text", title="Stale", body="stale"),
@@ -484,8 +457,8 @@ async def test_propose_asks_at_all_permission_levels(
                 await set_permission_level(services.databases, project_id, level)
                 fake_openai.state.scripted_tool_calls = [
                     {
-                        "name": "Propose",
-                        "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                        "name": "ProposeConnections",
+                        "arguments": connections(),
                     }
                 ]
                 await services.sessions.send(project_id, "orchestrator", f"Propose at {level}")
@@ -523,8 +496,8 @@ async def test_approve_applies_before_tool_result_returns(
 
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             await services.sessions.send(
@@ -563,8 +536,8 @@ async def test_reject_empties_slots(
         with _propose_env(services) as (_test_kind, _tool):
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             await services.sessions.send(project_id, "orchestrator", "Propose connection to reject")
@@ -599,8 +572,8 @@ async def test_newer_proposal_cancels_older_approval_and_resumes_its_turn(
             # Session 1 (orchestrator) proposes connections
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             await services.sessions.send(project_id, "orchestrator", "First proposal")
@@ -614,8 +587,8 @@ async def test_newer_proposal_cancels_older_approval_and_resumes_its_turn(
             # Session 2 (onboarding) proposes same kind (same key)
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": "Propose",
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": "ProposeConnections",
+                    "arguments": connections(),
                 }
             ]
             async with asyncio.timeout(10):

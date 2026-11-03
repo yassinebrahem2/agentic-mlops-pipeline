@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeArgs
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.connections.contract import LocalFolderSettings
 from mlops_agents.connections.kinds.local_folder import LocalFolderKind
 from mlops_agents.onboarding import handoff_check
@@ -49,7 +49,7 @@ DATA_PATH = r"C:\Users\Jane Doe\hotel exports"
 MLFLOW_URL = "http://127.0.0.1:5999"
 TOOLS: list[dict[str, Any]] = [
     {"type": "function", "function": {"name": name, "parameters": {}}}
-    for name in ("Read", PROPOSE_TOOL_NAME)
+    for name in ("Read", propose_tool_name(CONNECTIONS_KIND), propose_tool_name(HANDOFF_KIND))
 ]
 
 
@@ -58,7 +58,11 @@ def _user(text: str) -> dict[str, Any]:
 
 
 def _tool_round(call_id: str, result: str) -> list[dict[str, Any]]:
-    call = {"id": call_id, "type": "function", "function": {"name": PROPOSE_TOOL_NAME}}
+    call = {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": propose_tool_name(CONNECTIONS_KIND)},
+    }
     return [
         {"role": "assistant", "content": "", "tool_calls": [call]},
         {"role": "tool", "tool_call_id": call_id, "content": result},
@@ -74,14 +78,14 @@ def _start() -> list[dict[str, Any]]:
     ]
 
 
-def _propose(messages: list[dict[str, Any]]) -> ProposeArgs:
+def _propose(messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
     text, calls = onboarding_reply(messages, TOOLS)
     assert text == ""
     assert calls is not None
     [call] = calls
-    assert call["name"] == PROPOSE_TOOL_NAME
+    assert call["name"] in (propose_tool_name(CONNECTIONS_KIND), propose_tool_name(HANDOFF_KIND))
     # The fake streams the arguments as JSON: parse them back the way the tool does.
-    return ProposeArgs.model_validate(json.loads(json.dumps(call["arguments"])))
+    return call["name"], json.loads(json.dumps(call["arguments"]))
 
 
 def test_before_any_data_path_it_asks_where_the_data_lives() -> None:
@@ -92,11 +96,11 @@ def test_before_any_data_path_it_asks_where_the_data_lives() -> None:
 
 
 def test_a_data_path_proposes_one_local_folder_connection_at_that_path() -> None:
-    args = _propose(_start())
+    name, args = _propose(_start())
 
-    assert args.kind == CONNECTIONS_KIND
-    assert isinstance(args.payload, ConnectionsPayload)
-    [spec] = args.payload.connections
+    assert name == propose_tool_name(CONNECTIONS_KIND)
+    payload = ConnectionsPayload.model_validate(args)
+    [spec] = payload.connections
     assert spec.name == CONNECTION_NAME
     assert spec.kind == "local_folder"
     assert spec.settings.path == DATA_PATH
@@ -109,11 +113,10 @@ def test_after_one_tool_result_it_proposes_a_handoff_the_fixture_folder_resolves
     write_data_folder(folder)
     messages = [*_start(), *_tool_round("call_1", "Approved. Everything was applied.")]
 
-    args = _propose(messages)
+    name, args = _propose(messages)
 
-    assert args.kind == HANDOFF_KIND
-    payload = args.payload
-    assert isinstance(payload, HandoffPayload)
+    assert name == propose_tool_name(HANDOFF_KIND)
+    payload = HandoffPayload.model_validate(args)
     assert [m.name for m in payload.models] == [MODEL_NAME]
     [source] = payload.tracking
     assert (source.type, source.auth) == ("mlflow", "none")
@@ -126,8 +129,8 @@ def test_after_one_tool_result_it_proposes_a_handoff_the_fixture_folder_resolves
 
 def test_the_handoff_covers_every_part() -> None:
     messages = [*_start(), *_tool_round("call_1", "Approved.")]
-    payload = _propose(messages).payload
-    assert isinstance(payload, HandoffPayload)
+    _, args = _propose(messages)
+    payload = HandoffPayload.model_validate(args)
 
     [model] = payload.models
     assert model.profile.primary_metric == "f1"
@@ -177,22 +180,25 @@ def test_a_new_data_path_message_starts_a_new_round() -> None:
         _user(f"DATA_PATH={DATA_PATH}\nMLFLOW_URL={MLFLOW_URL}"),
     ]
 
-    assert _propose(messages).kind == CONNECTIONS_KIND
+    name, _ = _propose(messages)
+    assert name == propose_tool_name(CONNECTIONS_KIND)
     messages += _tool_round("call_3", "Approved.")
-    assert _propose(messages).kind == HANDOFF_KIND
+    name, _ = _propose(messages)
+    assert name == propose_tool_name(HANDOFF_KIND)
 
 
 def test_a_rejected_connections_proposal_still_counts_as_a_step() -> None:
     messages = [*_start(), *_tool_round("call_1", "Rejected by the user.")]
 
-    assert _propose(messages).kind == HANDOFF_KIND
+    name, _ = _propose(messages)
+    assert name == propose_tool_name(HANDOFF_KIND)
 
 
 def test_without_the_propose_tool_it_only_answers() -> None:
     text, calls = onboarding_reply(_start(), TOOLS[:1])
 
     assert calls is None
-    assert PROPOSE_TOOL_NAME in text
+    assert propose_tool_name(CONNECTIONS_KIND) in text
 
 
 def test_the_text_parts_of_a_list_content_are_read() -> None:
@@ -201,10 +207,9 @@ def test_the_text_parts_of_a_list_content_are_read() -> None:
         {"role": "user", "content": [{"type": "text", "text": "DATA_PATH=/d"}]},
     ]
 
-    args = _propose(messages)
-
-    assert isinstance(args.payload, ConnectionsPayload)
-    assert args.payload.connections[0].settings.path == "/d"
+    _, args = _propose(messages)
+    payload = ConnectionsPayload.model_validate(args)
+    assert payload.connections[0].settings.path == "/d"
 
 
 @pytest.mark.parametrize(

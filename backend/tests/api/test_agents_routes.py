@@ -51,14 +51,19 @@ async def test_agents_listing_and_default_model(
     assert orchestrator is not None
     assert orchestrator["display_name"] == "Orchestrator"
     assert orchestrator["chat"] is True
-    assert set(orchestrator["tools"]) == STAGE_2_TOOLS - {
-        "Propose",
-        "ProposalShape",
-        ADJUST_SEVERITY,
-        RECORD_FIX_CHOICE,
-        SAVE_REPORT,
-        REGISTER_CHECK,
-    }
+    from mlops_agents.agents.tools.propose import propose_tool_name
+    from mlops_agents.proposals.contract import PROPOSAL_KINDS
+
+    propose_tools = {propose_tool_name(k) for k in PROPOSAL_KINDS}
+    assert set(orchestrator["tools"]) == STAGE_2_TOOLS - (
+        propose_tools
+        | {
+            ADJUST_SEVERITY,
+            RECORD_FIX_CHOICE,
+            SAVE_REPORT,
+            REGISTER_CHECK,
+        }
+    )
     assert orchestrator["settings"]["default_model"] is None
     assert orchestrator["settings"]["effective_model"] is None
     assert orchestrator["settings"]["model_problem"] is not None

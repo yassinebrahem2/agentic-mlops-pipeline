@@ -167,7 +167,7 @@ async def _tool_env(databases: Databases, calls: int) -> tuple[Env, list[str]]:
     ids: list[str] = []
     parts: list[Part] = []
     for n in range(calls):
-        preview = Preview(kind="text", title="Propose", body="{}")
+        preview = Preview(kind="text", title="ProposeConnections", body="{}")
         record = await env.store.create(
             PROJECT,
             turn_id="trn_1",
@@ -175,7 +175,7 @@ async def _tool_env(databases: Databases, calls: int) -> tuple[Env, list[str]]:
             message_id=message_id,
             agent="orchestrator",
             tool_call_id=f"call_{n}",
-            tool="Propose",
+            tool="ProposeConnections",
             risk_class=RiskClass.PROPOSE,
             preview=preview,
             proposal_kind="connections",
@@ -213,7 +213,7 @@ async def test_cancelling_the_last_pending_approval_resumes_its_turn(
     assert (row["decision"], row["risk_class"], row["target"]) == (
         "cancelled",
         "propose",
-        "Propose",
+        "ProposeConnections",
     )
     assert await env.event_payloads("approval.decided") == [
         {"approval_id": approval_id, "status": "cancelled"}

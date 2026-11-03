@@ -1,6 +1,6 @@
 """The one readable rendering of a handoff payload, used by the kickoff and the handoff card.
 
-Pure and cheap: the Propose tool renders a preview twice per call. A payload never holds a
+Pure and cheap: the ProposeHandoff tool renders a preview twice per call. A payload never holds a
 secret, so nothing here is scrubbed. A missing optional value reads "not set" and an empty
 part "none", never nothing.
 """

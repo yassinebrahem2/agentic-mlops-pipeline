@@ -43,10 +43,7 @@ from mlops_agents.agents.tools.names import (
     RUN_HOOK,
     SAVE_REPORT,
 )
-from mlops_agents.agents.tools.proposal_shape import (
-    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
-)
-from mlops_agents.agents.tools.propose import ProposeTool
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.save_note import SaveNote
 from mlops_agents.agents.working_rules import working_rules
@@ -265,7 +262,6 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "SearchNotes",
             "TrackingHistory",
             "ReadHandoff",
-            "Propose",
         ),
         "context_hooks": ("data_summary", "knowledge"),
         "max_steps": 60,
@@ -425,10 +421,10 @@ TASK_1_COLUMN: dict[str, tuple[str, ...]] = {
     "alert-prioritization": (MONITORING_QUERY, INCIDENT_MERGE, INCIDENT_UPDATE, ADJUST_SEVERITY),
 }
 TASK_2_COLUMN: dict[str, tuple[str, ...]] = {
-    "data-quality": (REQUEST_FIX, ProposeTool.name),
-    "model-performance": (REQUEST_FIX, ProposeTool.name),
-    "retraining": (RECORD_FIX_CHOICE, SAVE_REPORT, ProposeTool.name),
-    "deployment": (REQUEST_FIX, ProposeTool.name),
+    "data-quality": (REQUEST_FIX,),
+    "model-performance": (REQUEST_FIX,),
+    "retraining": (RECORD_FIX_CHOICE, SAVE_REPORT),
+    "deployment": (REQUEST_FIX,),
     "orchestrator": (REQUEST_FIX,),
 }
 # Every holder of `OpenPullRequest` gains `MergePullRequest`; the four agents that write
@@ -440,9 +436,11 @@ TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
     if OpenPullRequestTool.name in row["tools"]
 }
 TASK_4_COLUMN: dict[str, tuple[str, ...]] = {
-    row["name"]: (PROPOSAL_SHAPE,)
-    for row in STAGE_3_TABLE
-    if ProposeTool.name in (row["tools"] + TASK_2_COLUMN.get(row["name"], ()))
+    "onboarding": ("ProposeConnections", "ProposeHandoff", "ProposeHooks", "ProposeParser"),
+    "data-quality": ("ProposeMaintenance", "ProposeParser"),
+    "deployment": ("ProposeHooks", "ProposeRule"),
+    "model-performance": ("ProposeRule",),
+    "retraining": ("ProposePromotion", "ProposeTrainingPolicy"),
 }
 TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (
     TASK_1_COLUMN,
@@ -762,15 +760,6 @@ def test_merge_pull_request_holders_are_the_open_pull_request_holders() -> None:
     assert mergers == openers and mergers
 
 
-def test_propose_holders_hold_proposal_shape() -> None:
-    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    for defn in catalog.all():
-        if ProposeTool.name in defn.tools:
-            assert PROPOSAL_SHAPE in defn.tools, (
-                f"{defn.name} holds Propose but missing {PROPOSAL_SHAPE}"
-            )
-
-
 # The matrix's last column: the prompts that name each kind as `` `<kind>` proposal ``.
 KIND_PROMPTS: dict[str, frozenset[str]] = {
     CONNECTIONS_KIND: frozenset({"onboarding"}),
@@ -787,10 +776,11 @@ KIND_PROMPTS: dict[str, frozenset[str]] = {
 @pytest.mark.parametrize("kind", list(KIND_PROMPTS))
 def test_each_proposal_kind_is_named_by_exactly_its_prompts(kind: str) -> None:
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
-    namers = {d.name for d in catalog.all() if f"`{kind}` proposal" in d.prompt}
+    tool_name = propose_tool_name(kind)
+    namers = {d.name for d in catalog.all() if f"`{tool_name}`" in d.prompt}
     assert namers == KIND_PROMPTS[kind]
     for name in namers:
-        assert ProposeTool.name in catalog.get(name).tools, f"{name} names a kind without Propose"
+        assert tool_name in catalog.get(name).tools, f"{name} names a kind without {tool_name}"
 
 
 # Task 1's gate wording, false once rules and policies are cited: the gate may allow at once.
@@ -973,7 +963,7 @@ def test_retraining_prompt_covers_the_fix_menu_and_the_report() -> None:
     assert "`fix_request`" in prompt
     assert "circuit" in low and "escalate" in low
     assert REQUEST_TAG in prompt and "links" in low and "request id" in low
-    assert f"`{PROMOTION_KIND}` proposal" in prompt
+    assert f"`{propose_tool_name(PROMOTION_KIND)}`" in prompt
 
 
 def test_deployment_and_orchestrator_role_lines() -> None:
@@ -1180,3 +1170,64 @@ async def test_live_agent_definitions(
         assert has_tool_call, "Orchestrator did not call any of its own tools"
 
         await manager.close()
+
+
+EXPECTED_AGENT_PROPOSE_TOOLS: dict[str, tuple[str, ...]] = {
+    "onboarding": ("ProposeConnections", "ProposeHandoff", "ProposeHooks", "ProposeParser"),
+    "data-quality": ("ProposeMaintenance", "ProposeParser"),
+    "deployment": ("ProposeHooks", "ProposeRule"),
+    "model-performance": ("ProposeRule",),
+    "retraining": ("ProposePromotion", "ProposeTrainingPolicy"),
+    "orchestrator": (),
+    "alert-prioritization": (),
+}
+
+
+@pytest.mark.parametrize("name,expected_tools", list(EXPECTED_AGENT_PROPOSE_TOOLS.items()))
+def test_each_definition_propose_tools_are_exactly_its_kinds(
+    name: str, expected_tools: tuple[str, ...]
+) -> None:
+    defn = _load_definition(name)
+    actual_propose_tools = tuple(
+        t for t in defn.tools if t.startswith("Propose") and t != "Propose"
+    )
+    assert actual_propose_tools == expected_tools, (
+        f"{name} propose tools {actual_propose_tools} != expected {expected_tools}"
+    )
+
+
+def test_no_definition_prompt_or_tool_names_propose_alone_or_proposal_shape() -> None:
+    from mlops_agents.agents.tools.propose import propose_tool_name
+
+    valid_propose_tools = {
+        propose_tool_name(k)
+        for k in (
+            CONNECTIONS_KIND,
+            HANDOFF_KIND,
+            HOOKS_KIND,
+            MAINTENANCE_KIND,
+            PARSER_KIND,
+            PROMOTION_KIND,
+            RULE_KIND,
+            TRAINING_POLICY_KIND,
+        )
+    }
+
+    for name in EXPECTED_AGENT_PROPOSE_TOOLS:
+        defn = _load_definition(name)
+        assert "Propose" not in defn.tools, f"{name} definition still lists 'Propose' tool"
+        assert "ProposalShape" not in defn.tools, (
+            f"{name} definition still lists 'ProposalShape' tool"
+        )
+
+        # Check prompt does not name Propose alone or ProposalShape
+        assert "ProposalShape" not in defn.prompt, f"{name} prompt still mentions ProposalShape"
+        assert "`ProposalShape`" not in defn.prompt, f"{name} prompt still mentions `ProposalShape`"
+        assert "`Propose`" not in defn.prompt, f"{name} prompt still mentions `Propose`"
+
+        # Check any "Propose..." word in prompt is one of the valid typed propose tools
+        found_propose_words = set(re.findall(r"\bPropose[A-Za-z0-9_]*\b", defn.prompt))
+        for word in found_propose_words:
+            assert word in valid_propose_tools, (
+                f"{name} prompt mentions unexpected propose word '{word}'"
+            )

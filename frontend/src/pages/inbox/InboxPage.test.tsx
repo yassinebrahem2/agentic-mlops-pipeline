@@ -294,7 +294,7 @@ describe("InboxPage and badge", () => {
         ...common,
         id: "appr_handoff",
         kind: "tool",
-        tool: "Propose",
+        tool: "ProposeHandoff",
         tool_call_id: "call_9",
         risk_class: "propose",
         step: null,
@@ -327,7 +327,7 @@ describe("InboxPage and badge", () => {
         "stall|3|null|null|undefined|prj_1",
       );
       expect(screen.getByTestId("dispatched-appr_handoff")).toHaveTextContent(
-        "tool|null|handoff|call_9|Propose|prj_1",
+        "tool|null|handoff|call_9|ProposeHandoff|prj_1",
       );
     } finally {
       CARD_FOR_KIND.stall = registeredStallCard;

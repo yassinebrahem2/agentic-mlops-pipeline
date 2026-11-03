@@ -191,7 +191,11 @@ describe("PromotionProposalCard", () => {
 
   it("renders report assessments, comparisons, computed mark, not-computed fields, and versions", async () => {
     renderWithClient(
-      <PromotionProposalCard approval={baseApproval} projectId="prj_test" toolName="Propose" />,
+      <PromotionProposalCard
+        approval={baseApproval}
+        projectId="prj_test"
+        toolName="ProposePromotion"
+      />,
     );
 
     // Wait for proposal and report to load
@@ -226,7 +230,11 @@ describe("PromotionProposalCard", () => {
   it("Approve button sends decision request with approve: true", async () => {
     const user = userEvent.setup();
     renderWithClient(
-      <PromotionProposalCard approval={baseApproval} projectId="prj_test" toolName="Propose" />,
+      <PromotionProposalCard
+        approval={baseApproval}
+        projectId="prj_test"
+        toolName="ProposePromotion"
+      />,
     );
 
     await waitFor(() => {
@@ -257,7 +265,11 @@ describe("PromotionProposalCard", () => {
   it("Reject button sends decision request with approve: false", async () => {
     const user = userEvent.setup();
     renderWithClient(
-      <PromotionProposalCard approval={baseApproval} projectId="prj_test" toolName="Propose" />,
+      <PromotionProposalCard
+        approval={baseApproval}
+        projectId="prj_test"
+        toolName="ProposePromotion"
+      />,
     );
 
     await waitFor(() => {
@@ -311,7 +323,11 @@ describe("PromotionProposalCard", () => {
     });
 
     renderWithClient(
-      <PromotionProposalCard approval={baseApproval} projectId="prj_test" toolName="Propose" />,
+      <PromotionProposalCard
+        approval={baseApproval}
+        projectId="prj_test"
+        toolName="ProposePromotion"
+      />,
     );
 
     await waitFor(() => {

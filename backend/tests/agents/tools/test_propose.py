@@ -23,9 +23,8 @@ from mlops_agents.agents.tools.base import (
     ToolOutput,
 )
 from mlops_agents.agents.tools.propose import (
-    PROPOSE_TOOL_NAME,
-    ProposeArgs,
-    ProposeTool,
+    TypedProposeTool,
+    propose_tool_name,
 )
 from mlops_agents.api.services import Services
 from mlops_agents.credentials.project_secrets import ProjectSecrets
@@ -133,29 +132,32 @@ async def _pending_approvals(services: Services, project_id: str, count: int = 1
 # ---------------------------------------------------------------------------
 
 
-def test_propose_args_payload_annotation_is_any() -> None:
-    assert ProposeArgs.model_fields["payload"].annotation is Any
-
-
 def test_valid_connections_and_handoff_payloads_parse() -> None:
-    conn_args = ProposeArgs.model_validate({"kind": CONNECTIONS_KIND, "payload": connections()})
-    assert conn_args.kind == CONNECTIONS_KIND
-    assert conn_args.payload.model_dump() == connections()
+    proposals_service = MagicMock(spec=ProposalsService)
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload))
+    kinds.register(ScriptedTestKind(name=HANDOFF_KIND, payload_model=HandoffPayload))
 
-    hnd_args = ProposeArgs.model_validate({"kind": HANDOFF_KIND, "payload": handoff()})
-    assert hnd_args.kind == HANDOFF_KIND
-    assert hnd_args.payload.model_dump() == handoff()
+    conn_tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=proposals_service, kinds=kinds)
+    parsed_conn = conn_tool.parse(connections())
+    assert isinstance(parsed_conn, ConnectionsPayload)
+    assert parsed_conn.model_dump() == connections()
+
+    hnd_tool = TypedProposeTool(kind=HANDOFF_KIND, proposals=proposals_service, kinds=kinds)
+    parsed_hnd = hnd_tool.parse(handoff())
+    assert isinstance(parsed_hnd, HandoffPayload)
+    assert parsed_hnd.model_dump() == handoff()
 
 
 def test_unknown_field_in_top_level_args_is_parse_error() -> None:
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
-    tool = ProposeTool(proposals_service, kinds)
+    kinds.register(ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload))
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=proposals_service, kinds=kinds)
 
     out = tool.parse(
         {
-            "kind": CONNECTIONS_KIND,
-            "payload": connections(),
+            **connections(),
             "extra_field": "disallowed",
         }
     )
@@ -168,12 +170,11 @@ def test_unknown_field_in_top_level_args_is_parse_error() -> None:
 async def test_propose_with_unregistered_kind_is_tool_error_before_gate() -> None:
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind="unregistered_kind", proposals=proposals_service, kinds=kinds)
     ctx = _dummy_ctx()
-    args = ProposeArgs(kind="unregistered_kind", payload={})
 
     with pytest.raises(ToolFailure, match="Unknown proposal kind: unregistered_kind"):
-        await tool.preview(ctx, args)
+        await tool.preview(ctx, {})
     proposals_service.create.assert_not_called()
 
 
@@ -181,24 +182,22 @@ async def test_propose_with_unregistered_kind_is_tool_error_before_gate() -> Non
 async def test_registered_kind_payload_validated_by_its_model() -> None:
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
-    kind = ScriptedTestKind(name=CONNECTIONS_KIND)
+    kind = ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload)
     kinds.register(kind)
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=proposals_service, kinds=kinds)
     ctx = _dummy_ctx()
 
     # Invalid payload for connections: missing connections list
     bad_payload = {"invalid_key": "bad"}
-    args = ProposeArgs(kind=CONNECTIONS_KIND, payload=bad_payload)
     with pytest.raises(ToolFailure, match="Invalid payload for connections"):
-        await tool.preview(ctx, args)
+        await tool.preview(ctx, bad_payload)
     proposals_service.create.assert_not_called()
 
     # Extra property in connections list (extra="forbid")
     bad_conn = dict(connections())
     bad_conn["connections"] = [dict(bad_conn["connections"][0], extra_prop="disallowed")]
-    args_extra = ProposeArgs(kind=CONNECTIONS_KIND, payload=bad_conn)
     with pytest.raises(ToolFailure, match="extra_prop"):
-        await tool.preview(ctx, args_extra)
+        await tool.preview(ctx, bad_conn)
     proposals_service.create.assert_not_called()
 
 
@@ -229,10 +228,10 @@ async def test_fake_kind_with_proposal_check_refused_before_gate_with_lines() ->
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
     kinds.register(CheckingKind())  # pyright: ignore[reportArgumentType]
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind="checking_kind", proposals=proposals_service, kinds=kinds)
     ctx = _dummy_ctx()
 
-    args = ProposeArgs(kind="checking_kind", payload=connections())
+    args = connections()
     with pytest.raises(ToolFailure) as exc_info:
         await tool.preview(ctx, args)
     assert "Refusal 1: table not found" in str(exc_info.value)
@@ -245,15 +244,14 @@ async def test_payload_with_bypass_grant_refused_before_any_record_or_approval()
     proposals_service = MagicMock(spec=ProposalsService)
     kinds = ProposalKinds()
     kinds.register(ScriptedTestKind(name=HANDOFF_KIND, payload_model=HandoffPayload))
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind=HANDOFF_KIND, proposals=proposals_service, kinds=kinds)
 
     bad_handoff = dict(handoff())
     bad_handoff["grants"] = {"network": False, "permission_level": "bypass"}
 
     ctx = _dummy_ctx()
-    args = ProposeArgs(kind=HANDOFF_KIND, payload=bad_handoff)
     with pytest.raises(ToolFailure, match="permission_level"):
-        await tool.preview(ctx, args)
+        await tool.preview(ctx, bad_handoff)
     proposals_service.create.assert_not_called()
 
 
@@ -274,7 +272,7 @@ async def test_fake_promotion_kind_at_bypass_applied_no_approval_and_run_returns
     promo_kind = ScriptedTestKind(name="promotion", payload_model=PromotionPayload)
     kinds.register(promo_kind)
     proposals_service = ProposalsService(databases, project_secrets, kinds, event_log)
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind="promotion", proposals=proposals_service, kinds=kinds)
 
     approval_store = ApprovalStore(databases)
     gate = ApprovalGate(databases, store=approval_store, event_log=event_log)
@@ -286,7 +284,8 @@ async def test_fake_promotion_kind_at_bypass_applied_no_approval_and_run_returns
         "champion_version": "v1",
         "deploy_hook_id": "hok_1",
     }
-    args = ProposeArgs(kind="promotion", payload=promo_payload)
+    args = tool.parse(promo_payload)
+    assert isinstance(args, PromotionPayload)
 
     # 1. At bypass: allowed without approval, Propose.run applies proposal
     await set_permission_level(databases, project_id, "bypass")
@@ -354,12 +353,16 @@ async def test_two_previews_of_one_call_leave_one_draft_and_one_event(
         services: Services = app.state.services
         project_id = await add_local_project(app, tmp_path, git_env)
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         with swapped_kind(services.proposal_kinds, test_kind):
-            tool = ProposeTool(services.proposals, services.proposal_kinds)
+            tool = TypedProposeTool(
+                kind=CONNECTIONS_KIND,
+                proposals=services.proposals,
+                kinds=services.proposal_kinds,
+            )
 
             ctx = _dummy_ctx(project_id, turn_id="trn_preview", tool_call_id="call_preview")
-            args = ProposeArgs.model_validate({"kind": CONNECTIONS_KIND, "payload": connections()})
+            args = connections()
 
             # First preview
             p1 = await tool.preview(ctx, args)
@@ -401,13 +404,17 @@ async def test_two_same_kind_calls_in_one_step_duplicate_tool_error(
         services: Services = app.state.services
         project_id = await add_local_project(app, tmp_path, git_env)
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         with swapped_kind(services.proposal_kinds, test_kind):
-            tool = ProposeTool(services.proposals, services.proposal_kinds)
+            tool = TypedProposeTool(
+                kind=CONNECTIONS_KIND,
+                proposals=services.proposals,
+                kinds=services.proposal_kinds,
+            )
 
             ctx1 = _dummy_ctx(project_id, turn_id="trn_dup", tool_call_id="call_1")
             ctx2 = _dummy_ctx(project_id, turn_id="trn_dup", tool_call_id="call_2")
-            args = ProposeArgs.model_validate({"kind": CONNECTIONS_KIND, "payload": connections()})
+            args = connections()
 
             # First call preview succeeds
             await tool.preview(ctx1, args)
@@ -459,20 +466,15 @@ async def test_propose_pauses_at_every_level_including_bypass(
         project_id = await add_local_project(app, tmp_path, git_env)
         await _use_model(services, fake_openai, "fake-tools")
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         with swapped_kind(services.proposal_kinds, test_kind):
-            # Ensure onboarding has Propose tool
-            onb = services.catalog.get("onboarding")
-            services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
-                update={"tools": (*onb.tools, PROPOSE_TOOL_NAME)}
-            )
-
+            tool_name = propose_tool_name(CONNECTIONS_KIND)
             await set_permission_level(services.databases, project_id, level)
 
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": PROPOSE_TOOL_NAME,
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": tool_name,
+                    "arguments": connections(),
                 }
             ]
 
@@ -487,7 +489,7 @@ async def test_propose_pauses_at_every_level_including_bypass(
             pending = await ApprovalStore(services.databases).get(project_id, approval_id)
             assert pending is not None
             assert pending.proposal_kind == CONNECTIONS_KIND
-            assert pending.tool == PROPOSE_TOOL_NAME
+            assert pending.tool == tool_name
 
             # Approve resumes turn and succeeds
             fake_openai.state.scripted_tool_calls = None
@@ -509,17 +511,13 @@ async def test_propose_reject_resumes_with_rejection(
         project_id = await add_local_project(app, tmp_path, git_env)
         await _use_model(services, fake_openai, "fake-tools")
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         with swapped_kind(services.proposal_kinds, test_kind):
-            onb = services.catalog.get("onboarding")
-            services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
-                update={"tools": (*onb.tools, PROPOSE_TOOL_NAME)}
-            )
-
+            tool_name = propose_tool_name(CONNECTIONS_KIND)
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": PROPOSE_TOOL_NAME,
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": tool_name,
+                    "arguments": connections(),
                 }
             ]
 
@@ -557,20 +555,16 @@ async def test_failed_part_gives_is_error_naming_the_part(
         project_id = await add_local_project(app, tmp_path, git_env)
         await _use_model(services, fake_openai, "fake-tools")
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         test_kind.apply_result = ApplyResult(
             applied=["conn_hotel"], failed={"s3_conn": "Bucket does not exist"}
         )
         with swapped_kind(services.proposal_kinds, test_kind):
-            onb = services.catalog.get("onboarding")
-            services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
-                update={"tools": (*onb.tools, PROPOSE_TOOL_NAME)}
-            )
-
+            tool_name = propose_tool_name(CONNECTIONS_KIND)
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": PROPOSE_TOOL_NAME,
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": tool_name,
+                    "arguments": connections(),
                 }
             ]
 
@@ -629,14 +623,18 @@ async def test_two_steps_of_one_turn_proposing_same_kind_read_their_own_result(
         services: Services = app.state.services
         project_id = await add_local_project(app, tmp_path, git_env)
 
-        test_kind = ScriptedTestKind(CONNECTIONS_KIND)
+        test_kind = ScriptedTestKind(CONNECTIONS_KIND, payload_model=ConnectionsPayload)
         with swapped_kind(services.proposal_kinds, test_kind):
-            tool = ProposeTool(services.proposals, services.proposal_kinds)
+            tool = TypedProposeTool(
+                kind=CONNECTIONS_KIND,
+                proposals=services.proposals,
+                kinds=services.proposal_kinds,
+            )
 
             turn_id = "trn_multistep"
             ctx1 = _dummy_ctx(project_id, turn_id=turn_id, tool_call_id="call_step1")
             ctx2 = _dummy_ctx(project_id, turn_id=turn_id, tool_call_id="call_step2")
-            args = ProposeArgs.model_validate({"kind": CONNECTIONS_KIND, "payload": connections()})
+            args = connections()
 
             # Step 1 proposal
             await tool.preview(ctx1, args)
@@ -690,18 +688,15 @@ async def test_secret_scrubbing_after_propose_post_credential_approve_cycle(
 
         test_kind = ScriptedTestKind(
             name=CONNECTIONS_KIND,
+            payload_model=ConnectionsPayload,
             slots=[CredentialSlot(index=0, label="Secret Token", source_type="token")],
         )
         with swapped_kind(services.proposal_kinds, test_kind):
-            onb = services.catalog.get("onboarding")
-            services.catalog._by_name["onboarding"] = onb.model_copy(  # pyright: ignore[reportPrivateUsage]
-                update={"tools": (*onb.tools, PROPOSE_TOOL_NAME)}
-            )
-
+            tool_name = propose_tool_name(CONNECTIONS_KIND)
             fake_openai.state.scripted_tool_calls = [
                 {
-                    "name": PROPOSE_TOOL_NAME,
-                    "arguments": {"kind": CONNECTIONS_KIND, "payload": connections()},
+                    "name": tool_name,
+                    "arguments": connections(),
                 }
             ]
 
@@ -779,7 +774,9 @@ async def test_secret_scrubbing_after_propose_post_credential_approve_cycle(
 
 def test_propose_serves_the_code_parser_contract() -> None:
     # The agent writes a code parser's script against the contract its card shows (#634).
-    tool = ProposeTool(MagicMock(), MagicMock())
+    from mlops_agents.proposals.contract import PARSER_KIND
+
+    tool = TypedProposeTool(kind=PARSER_KIND, proposals=MagicMock(), kinds=MagicMock())
     assert CODE_PARSER_CONTRACT in tool.schema()["function"]["description"]
 
 
@@ -795,7 +792,7 @@ async def test_propose_parser_mapping_refuses_ran_at_in_defaults_or_missing_from
     proposals_service.create = AsyncMock()
     kinds = ProposalKinds()
     kinds.register(ParserKind(parsers_mock))
-    tool = ProposeTool(proposals_service, kinds)
+    tool = TypedProposeTool(kind=PARSER_KIND, proposals=proposals_service, kinds=kinds)
     ctx = _dummy_ctx()
 
     bad_defaults_payload: dict[str, Any] = {
@@ -812,7 +809,7 @@ async def test_propose_parser_mapping_refuses_ran_at_in_defaults_or_missing_from
         "sample_records": [],
     }
     with pytest.raises(ToolFailure, match="time the check ran"):
-        await tool.preview(ctx, ProposeArgs(kind=PARSER_KIND, payload=bad_defaults_payload))
+        await tool.preview(ctx, bad_defaults_payload)
 
     bad_fields_payload: dict[str, Any] = {
         "spec": {
@@ -828,17 +825,18 @@ async def test_propose_parser_mapping_refuses_ran_at_in_defaults_or_missing_from
         "sample_records": [],
     }
     with pytest.raises(ToolFailure, match="time the check ran"):
-        await tool.preview(ctx, ProposeArgs(kind=PARSER_KIND, payload=bad_fields_payload))
+        await tool.preview(ctx, bad_fields_payload)
 
 
 def test_propose_serves_check_spec_cadence_description() -> None:
+    from mlops_agents.proposals.contract import PARSER_KIND
     from mlops_agents.proposals.payloads import CheckSpec
 
     cadence_desc = CheckSpec.model_fields["cadence"].description
     assert cadence_desc is not None, "CheckSpec.cadence must define a field description"
     assert "never judged silent" in cadence_desc
 
-    tool = ProposeTool(MagicMock(), MagicMock())
+    tool = TypedProposeTool(kind=PARSER_KIND, proposals=MagicMock(), kinds=MagicMock())
     schema_desc = tool.schema()["function"]["description"]
     assert cadence_desc in schema_desc
 
