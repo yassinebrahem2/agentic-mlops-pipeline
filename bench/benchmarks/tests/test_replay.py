@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from demo_world.answer_key import Record
 from mlops_agents.api.app import create_app
 from mlops_agents.config import RunMode, load_settings
 from mlops_agents.monitoring.scheduler.loop import AppScheduler
@@ -205,3 +206,145 @@ async def test_replay_stamps_only_files_written_on_day_not_prior_days(tmp_path: 
     expected_mtime = datetime(2030, 1, 7, 0, 0, 0, tzinfo=UTC)
     # The file must retain day 1's timestamp and NOT be re-stamped on day 2, 3, or 4
     assert day1_mtime == expected_mtime
+
+
+async def _get_replay_incidents(run_dir: Path) -> list[dict[str, Any]]:
+    settings = load_settings(
+        RunMode.LOCAL,
+        port=8765,
+        env={
+            "MLOPS_AGENTS_HOME": str(run_dir / "home"),
+            "MLOPS_AGENTS_ACCESS_TOKEN": "test-token",
+        },
+    )
+    app = create_app(settings)
+    app.state.access_token = "test-token"
+    async with app.router.lifespan_context(app):
+        services = app.state.services
+        projects = await services.workspace.list_projects()
+        assert len(projects) == 1
+        proj_id = projects[0].id
+        client = in_process(app, "test-token")
+        inc_page = await client.get(f"/projects/{proj_id}/incidents")
+        return list(inc_page["rows"])
+
+
+@pytest.mark.asyncio
+async def test_replay_resolves_incident_after_three_day_problem_stops_firing(
+    tmp_path: Path,
+) -> None:
+    """A 3-business-day problem gives exactly one incident, resolved after results stop firing."""
+    run_dir = tmp_path / "run_3day"
+    days = (
+        date(2030, 1, 7),
+        date(2030, 1, 8),
+        date(2030, 1, 9),
+        date(2030, 1, 10),
+    )
+    spike_days = (date(2030, 1, 7), date(2030, 1, 8), date(2030, 1, 9))
+    key = (
+        Record(
+            kind="null_spike",
+            category="data_quality",
+            column="feature_a",
+            start="2030-01-07",
+            end="2030-01-09",
+        ),
+    )
+    dataset = FixtureDataset(days=days, spike_days=spike_days, key=key)
+    score_res = await replay(dataset, run_dir)
+
+    assert len(score_res.matched) == 1
+    (inc_id, _problem) = next(iter(score_res.matched.items()))
+    assert score_res.verdicts[inc_id].value == "real_issue"
+    assert len(score_res.misses) == 0
+
+    incidents = await _get_replay_incidents(run_dir)
+    assert len(incidents) == 1
+    inc = incidents[0]
+    assert inc["category"] == "data_quality"
+    assert inc["resolved_at"] is not None
+    # Resolved after results stop firing on day 4 (2030-01-10 01:00 UTC)
+    assert datetime.fromisoformat(inc["resolved_at"]) == datetime(2030, 1, 10, 1, 0, 0, tzinfo=UTC)
+    # Closed by scorer after verdict
+    assert inc["status"] == "closed"
+    assert inc["closed_at"] is not None
+    assert len(inc["signal_ids"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_replay_two_problems_nine_days_apart_give_two_incidents(
+    tmp_path: Path,
+) -> None:
+    """Two problems on the same cause key spaced 9 days apart give two incidents."""
+    run_dir = tmp_path / "run_two_problems"
+    days = tuple(date(2030, 1, d) for d in range(7, 18))
+    spike_days = (date(2030, 1, 7), date(2030, 1, 16))
+    key = (
+        Record(
+            kind="null_spike",
+            category="data_quality",
+            column="feature_a",
+            start="2030-01-07",
+            end="2030-01-07",
+        ),
+        Record(
+            kind="null_spike",
+            category="data_quality",
+            column="feature_a",
+            start="2030-01-16",
+            end="2030-01-16",
+        ),
+    )
+    dataset = FixtureDataset(days=days, spike_days=spike_days, key=key)
+    score_res = await replay(dataset, run_dir)
+
+    incidents = await _get_replay_incidents(run_dir)
+    assert len(incidents) == 2
+    assert incidents[0]["id"] != incidents[1]["id"]
+    assert incidents[0]["resolved_at"] is not None
+    assert incidents[1]["resolved_at"] is not None
+    # Both resolved and then closed by scorer
+    assert incidents[0]["status"] == "closed"
+    assert incidents[1]["status"] == "closed"
+
+    assert len(score_res.matched) == 2
+    assert len(score_res.misses) == 0
+    for inc_id in score_res.matched:
+        assert score_res.verdicts[inc_id].value == "real_issue"
+
+
+@pytest.mark.asyncio
+async def test_replay_incident_still_firing_at_end_of_run_stays_open(
+    tmp_path: Path,
+) -> None:
+    """An incident still firing at the end of the run stays open."""
+    run_dir = tmp_path / "run_still_firing"
+    days = (
+        date(2030, 1, 7),
+        date(2030, 1, 8),
+    )
+    spike_days = (date(2030, 1, 8),)
+    key = (
+        Record(
+            kind="null_spike",
+            category="data_quality",
+            column="feature_a",
+            start="2030-01-08",
+            end="2030-01-08",
+        ),
+    )
+    dataset = FixtureDataset(days=days, spike_days=spike_days, key=key)
+    score_res = await replay(dataset, run_dir)
+
+    assert len(score_res.matched) == 1
+    (inc_id, _problem) = next(iter(score_res.matched.items()))
+    assert score_res.verdicts[inc_id].value == "real_issue"
+
+    incidents = await _get_replay_incidents(run_dir)
+    assert len(incidents) == 1
+    inc = incidents[0]
+    assert inc["category"] == "data_quality"
+    assert inc["status"] == "open"
+    assert inc["resolved_at"] is None
+    assert inc["closed_at"] is None

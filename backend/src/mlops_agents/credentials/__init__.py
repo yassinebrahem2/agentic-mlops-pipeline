@@ -1,10 +1,19 @@
 from mlops_agents.config import ConfigError, RunMode, Settings
 from mlops_agents.credentials.file_store import EncryptedFileStore
 from mlops_agents.credentials.keyring_store import KeyringStore
-from mlops_agents.credentials.keystore import KeyStore, KeyStoreError
+from mlops_agents.credentials.keystore import (
+    KeyStore,
+    KeyStoreError,
+    KeyTooLongError,
+)
 from mlops_agents.paths import DataPaths
 
-__all__ = ["KeyStore", "KeyStoreError", "open_keystore"]
+__all__ = [
+    "KeyStore",
+    "KeyStoreError",
+    "KeyTooLongError",
+    "open_keystore",
+]
 
 
 def open_keystore(settings: Settings, paths: DataPaths) -> KeyStore:

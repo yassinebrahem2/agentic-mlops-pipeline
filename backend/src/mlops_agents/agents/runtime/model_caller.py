@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
@@ -97,18 +98,76 @@ def _extract_text_deltas(content: object) -> list[str]:
     return deltas
 
 
-def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None) -> ModelReply:
-    usage: dict[str, Any] | None = None
-    if total_chunk is not None and hasattr(total_chunk, "usage_metadata"):
-        usage = cast(dict[str, Any] | None, total_chunk.usage_metadata)
-    if usage is None and last_chunk is not None and hasattr(last_chunk, "usage_metadata"):
-        usage = cast(dict[str, Any] | None, last_chunk.usage_metadata)
+def _resolve_stream_usage(usages: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    """Resolve token usage across stream chunks.
 
+    Providers report stream usage differently:
+    - cumulatively on several chunks (e.g. Gemini OpenAI-compatible endpoint): counts once (the
+      last report);
+    - on a single chunk (e.g. standard OpenAI on the final chunk): counts once;
+    - per-chunk deltas (if a provider sends them): adds up.
+    """
+    if not usages:
+        return None, None
+    if len(usages) == 1:
+        u = usages[0]
+        return u.get("input_tokens"), u.get("output_tokens")
+
+    inputs: list[int] = [
+        int(u["input_tokens"]) for u in usages if u.get("input_tokens") is not None
+    ]
+    outputs: list[int] = [
+        int(u["output_tokens"]) for u in usages if u.get("output_tokens") is not None
+    ]
+
+    positive_inputs = [x for x in inputs if x > 0]
+    has_input_drop_to_zero = any(a > 0 and b == 0 for a, b in itertools.pairwise(inputs))
+    outputs_non_decreasing = len(outputs) <= 1 or all(
+        b >= a for a, b in itertools.pairwise(outputs)
+    )
+
+    is_cumulative = (
+        len(positive_inputs) > 1 and not has_input_drop_to_zero and outputs_non_decreasing
+    )
+
+    if is_cumulative:
+        last_input = next(
+            (int(u["input_tokens"]) for u in reversed(usages) if u.get("input_tokens") is not None),
+            None,
+        )
+        last_output = next(
+            (
+                int(u["output_tokens"])
+                for u in reversed(usages)
+                if u.get("output_tokens") is not None
+            ),
+            None,
+        )
+        return last_input, last_output
+
+    prompt_tokens = sum(inputs) if inputs else None
+    completion_tokens = sum(outputs) if outputs else None
+    return prompt_tokens, completion_tokens
+
+
+def _reply(
+    total_chunk: AIMessageChunk | None,
+    last_chunk: AIMessageChunk | None,
+    usages: list[dict[str, Any]] | None = None,
+) -> ModelReply:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
-    if usage is not None:
-        prompt_tokens = usage.get("input_tokens")
-        completion_tokens = usage.get("output_tokens")
+    if usages:
+        prompt_tokens, completion_tokens = _resolve_stream_usage(usages)
+    else:
+        usage: dict[str, Any] | None = None
+        if last_chunk is not None and hasattr(last_chunk, "usage_metadata"):
+            usage = cast(dict[str, Any] | None, last_chunk.usage_metadata)
+        if usage is None and total_chunk is not None and hasattr(total_chunk, "usage_metadata"):
+            usage = cast(dict[str, Any] | None, total_chunk.usage_metadata)
+        if usage is not None:
+            prompt_tokens = usage.get("input_tokens")
+            completion_tokens = usage.get("output_tokens")
 
     tool_call_indices: dict[str, int] = {}
     if total_chunk is not None and total_chunk.tool_call_chunks:
@@ -139,6 +198,13 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
     if total_chunk is None:
         final_message = AIMessage(content="")
     else:
+        resolved_usage = None
+        if prompt_tokens is not None or completion_tokens is not None:
+            resolved_usage = {
+                "input_tokens": prompt_tokens or 0,
+                "output_tokens": completion_tokens or 0,
+                "total_tokens": (prompt_tokens or 0) + (completion_tokens or 0),
+            }
         final_message = AIMessage(
             content=total_chunk.content,
             tool_calls=total_chunk.tool_calls,
@@ -146,6 +212,7 @@ def _reply(total_chunk: AIMessageChunk | None, last_chunk: AIMessageChunk | None
             response_metadata=total_chunk.response_metadata,
             id=total_chunk.id,
             additional_kwargs=additional_kwargs,
+            usage_metadata=resolved_usage,
         )
 
     return ModelReply(
@@ -329,13 +396,16 @@ class ModelCaller:
         )
         total_chunk: AIMessageChunk | None = None
         last_chunk: AIMessageChunk | None = None
+        usages: list[dict[str, Any]] = []
         async for chunk in runnable.astream(messages):
             aim_chunk = cast(AIMessageChunk, chunk)
             last_chunk = aim_chunk
+            if hasattr(aim_chunk, "usage_metadata") and aim_chunk.usage_metadata:
+                usages.append(cast(dict[str, Any], aim_chunk.usage_metadata))
             total_chunk = aim_chunk if total_chunk is None else total_chunk + aim_chunk
             for delta in _extract_text_deltas(aim_chunk.content):
                 await stream.text(delta)
-        return _reply(total_chunk, last_chunk)
+        return _reply(total_chunk, last_chunk, usages)
 
     async def _flag_if_unfixable(
         self, provider: Provider, states: list[KeyState], message: str

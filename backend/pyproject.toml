@@ -38,6 +38,7 @@ dev = [
   "types-pyyaml>=6.0.12",
   "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
+  "jsonschema>=4.26.0",
 ]
 
 [build-system]

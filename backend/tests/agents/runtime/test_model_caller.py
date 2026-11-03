@@ -272,3 +272,51 @@ async def test_on_text_error_is_raised_as_is_and_never_fails_over(
     provider = await env.providers.get_provider_by_id(env.model.provider_id)
     states = env.failover.states(provider, env.model.wire_model_id)
     assert [state.status for state in states] == ["ok", "ok"]
+
+
+async def test_stream_cumulative_usage_counts_once(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    fake_openai.state.cumulative_usage_in_stream = True
+    env = await build_caller_env(
+        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
+    )
+    reply = await env.caller.call(env.model, [HumanMessage(content="hi")], [], _noop)
+    assert reply.prompt_tokens == 100
+    assert reply.completion_tokens == 10
+
+
+async def test_stream_usage_reported_only_on_last_chunk_counts_once(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    env = await build_caller_env(
+        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
+    )
+    reply = await env.caller.call(env.model, [HumanMessage(content="hi")], [], _noop)
+    assert reply.prompt_tokens == 100
+    assert reply.completion_tokens == 10
+
+
+async def test_stream_per_chunk_deltas_add_up(
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    fake_openai.state.stream_usage_chunks = [
+        {"prompt_tokens": 100, "completion_tokens": 1},
+        {"prompt_tokens": 0, "completion_tokens": 1},
+        {"prompt_tokens": 0, "completion_tokens": 1},
+    ]
+    env = await build_caller_env(
+        databases, keystore, fake_openai, model_http, wire_model_ids=["fake-no-tools"]
+    )
+    reply = await env.caller.call(env.model, [HumanMessage(content="hi")], [], _noop)
+    assert reply.prompt_tokens == 100
+    assert reply.completion_tokens == 3

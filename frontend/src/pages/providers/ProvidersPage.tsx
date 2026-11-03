@@ -1,3 +1,4 @@
+import { PageFrame } from "@/components/PageFrame";
 import { errorText } from "@/lib/api";
 import { useProviders } from "@/lib/useProviders";
 import { AddModelDialog } from "./AddModelDialog";
@@ -11,7 +12,7 @@ export function ProvidersPage() {
   const providers = useProviders();
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-8 p-6">
+    <PageFrame width="5xl" className="flex flex-col gap-8">
       <h1 className="text-2xl font-semibold">AI providers</h1>
 
       <section aria-labelledby="providers-heading" className="flex flex-col gap-4">
@@ -46,6 +47,6 @@ export function ProvidersPage() {
       </section>
 
       <AgentDefaults />
-    </div>
+    </PageFrame>
   );
 }
