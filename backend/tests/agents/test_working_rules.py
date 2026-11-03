@@ -83,6 +83,30 @@ You are an agent.
     assert "link recent changes" in rules.lower()
     assert "after an incident" in rules.lower()
     assert "revert only your own" in rules.lower()
+    # CI rule
+    assert "run what the team's ci runs" in rules.lower()
+    assert ".github/workflows/" in rules
+    assert "lint, format, tests" in rules.lower()
+
+
+def test_every_agent_working_rules_hold_speak_up_and_never_claim() -> None:
+    from mlops_agents.agents.catalog import AgentCatalog
+    from tests.conftest import STAGE_2_TOOLS, STAGE_3_HOOKS
+
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        rules = working_rules(defn)
+        low = rules.lower()
+        assert "write one short line to the person saying what and why" in low
+        assert "not a line per tool call" in low
+        assert (
+            "don't re-read a file you already read" in low
+            or "do not re-read a file you already read" in low
+        )
+        assert (
+            "never say you ran or tested something you didn't" in low
+            or "never say you ran or tested something you did not" in low
+        )
 
 
 def test_working_rules_alert_prioritization() -> None:
@@ -179,8 +203,8 @@ You run commands.
     assert "package installs fail: no network, no root" in low
     assert "a task's container is removed with the task" in low
     assert "changes do not persist" not in low
-    assert "test suite may not run" in low
-    assert "gap" in low
+    assert "test suite may not run" not in low
+    assert "report this as a gap" not in low
     assert "duckdb is the `duckdb` command" in rules or "duckdb is the duckdb command" in low
     assert "environment failure is reported once and not retried in variants" in low
     assert "137" not in rules

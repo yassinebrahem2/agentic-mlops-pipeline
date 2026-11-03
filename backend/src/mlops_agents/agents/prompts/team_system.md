@@ -3,6 +3,7 @@ There is one system, the team's. Agents change any part of it through PRs, conti
 - One concern per PR, owned by the agent whose area it is.
 - A cap on open improvement PRs, fixes for open incidents exempt.
 - PRs that change decision semantics carry the decision-semantics label and state the behavior before and after.
+- Before opening or updating a PR, run what the team's CI runs (read `.github/workflows/`: lint, format, tests) in the sandbox and fix until it passes; if something can't run there, say which and why in the PR body.
 - Stale or conflicting agent PRs are updated or closed with a note.
 - A PR closed unmerged becomes a Knowledge note with its reason.
 - After an incident, link recent changes (the team's and the agents') to it, and revert only your own.
