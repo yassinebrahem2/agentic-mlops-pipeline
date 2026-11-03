@@ -107,7 +107,7 @@ The pre-run review of tasks 1 to 3 (2026-11-03) found defects that would lose or
 
 **Files:** none in code; the plan PR's description.
 
-**Notes:** run it once on a fresh demo-world run (`new-run`) with the person's model and keys, at the pace they choose, after #643 and #647 are merged and the demo repo's copy has #643's change. Put the run's `report.md` in the plan PR's description with the demo-world run name, the company commit and the app commit, and its `report.json` in a collapsed block below it. If a run is lost to something outside the bench (a crash of the app or the world), say so in the PR and run again; do not tune the scenario after the run.
+**Notes:** run it once on a fresh demo-world run (`new-run`) with the person's model and keys, at the pace they choose, after #643 and #647 are merged and the demo repo's copy has #643's change, and after #727's fix (plan `2026-11-03-stage-3-typed-propose-tools`) is merged: before it, Onboarding on this model cannot make a proposal. Put the run's `report.md` in the plan PR's description with the demo-world run name, the company commit and the app commit, and its `report.json` in a collapsed block below it. If a run is lost to something outside the bench (a crash of the app or the world), say so in the PR and run again; do not tune the scenario after the run.
 
 **Tests (stop condition):** the report exists and every number in it comes from the run (the reviewer checks `report.json` against the PR's table).
 

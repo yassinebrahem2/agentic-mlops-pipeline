@@ -245,7 +245,7 @@ Role prompt.
 ## Tools
 
 - General work uses Claude Code's standard tools and argument shapes: Read, Write, Edit, Glob, Grep, Bash.
-- Specialized tasks get specialized tools (ListAgents, SendMessage, PR/issue tools, SaveNote, SearchNotes, TrackingHistory, Propose), only where Bash cannot do the job: the tool reads or writes the app's own database, needs a secret the sandbox must not hold, or needs its own approval. Data exploration is Bash in the sandbox.
+- Specialized tasks get specialized tools (ListAgents, SendMessage, PR/issue tools, SaveNote, SearchNotes, TrackingHistory, the `Propose<Kind>` tools), only where Bash cannot do the job: the tool reads or writes the app's own database, needs a secret the sandbox must not hold, or needs its own approval. Data exploration is Bash in the sandbox.
 - Bash only ever runs inside the Docker sandbox (stage 2).
 - Every tool belongs to one risk class (below). The permission policy is enforced by the runtime, never by prompts.
 
@@ -259,7 +259,7 @@ Role prompt.
 | `message` | SendMessage, ScheduleWakeup |
 | `github` | OpenPullRequest, OpenIssue, CommentOnIssue |
 | `deploy` | action hooks: the team's train, evaluate, deploy, rollback, rerun, hold and fall-back commands; MergePullRequest |
-| `propose` | Propose (connections, handoff; stage 4: parsers, rules, action hooks, maintenance windows). Checks are delivered by PR (`github`). |
+| `propose` | `Propose<Kind>`, one tool per proposal kind (connections, handoff; stage 4: parsers, rules, action hooks, maintenance windows). Checks are delivered by PR (`github`). |
 
 Policy: risk class x permission level -> `allow` / `ask` / `deny` (stage 2 spec §5):
 
