@@ -77,9 +77,7 @@ class ConnectionSpec(_Strict):
     name: Annotated[str, StringConstraints(pattern=CONNECTION_NAME_PATTERN)] = Field(
         description="Connection name: lowercase letters, digits and dashes, starting with a letter or digit, at most 40 characters."
     )
-    settings: LocalFolderSettings = Field(
-        description="Connection settings. For local_folder, path is the folder on the person's machine as they gave it, never the sandbox's /data/<name>."
-    )
+    settings: LocalFolderSettings
     why: str = Field(description="Why this connection is needed for the project.")
 
 
@@ -366,15 +364,33 @@ class Grants(_Strict):
 class HandoffPayload(_Strict):
     """Propose the project handoff configuration for user approval. Defines models, pipelines, tracking, and operational settings."""
 
-    models: list[ModelSpec]
-    commands: list[CommandSpec]  # project-level: rerun a data job, hold or quarantine a batch
-    data_roles: list[DataRole]
-    tracking: list[TrackingSourceSpec]
-    pipeline: list[PipelineStage]
-    edges: list[PipelineEdge]
-    operations: Operations
-    gaps: list[Gap]
-    grants: Grants
+    models: list[ModelSpec] = Field(
+        description="Models in the project, their profiles, environment aliases, prediction/label tables, and promotion gate mode."
+    )
+    commands: list[CommandSpec] = Field(
+        description="Project-level action commands (such as batch rerun, quarantine, or pipeline triggers) and their parameter templates."
+    )
+    data_roles: list[DataRole] = Field(
+        description="Mapping of data connections and tables to their roles (feature tables, training sets, inference inputs)."
+    )
+    tracking: list[TrackingSourceSpec] = Field(
+        description="Tracking systems (such as MLflow or GitHub Actions) and credentials used to log runs and artifacts."
+    )
+    pipeline: list[PipelineStage] = Field(
+        description="Pipeline stages (such as data-prep, train, eval), their entry points, inputs, and outputs."
+    )
+    edges: list[PipelineEdge] = Field(
+        description="Directed dependency edges connecting upstream pipeline stage outputs to downstream stage inputs."
+    )
+    operations: Operations = Field(
+        description="Operational configuration: schedulers, check specifications, on-call contacts, and results storage."
+    )
+    gaps: list[Gap] = Field(
+        description="Identified gaps or missing configurations with next steps for human follow-up."
+    )
+    grants: Grants = Field(
+        description="Requested runtime permissions: network access and permission level (suggest, ask, or autonomous)."
+    )
 
     @model_validator(mode="after")
     def _references_resolve(self) -> HandoffPayload:

@@ -18,7 +18,6 @@ from pydantic_core import core_schema
 
 MAX_CONDITION_DEPTH: Final = 4
 MAX_CONDITION_NODES: Final = 32
-TOOL_CONDITION_DEPTH: Final = 2
 
 
 class Compare(BaseModel):

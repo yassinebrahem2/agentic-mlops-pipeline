@@ -1159,3 +1159,31 @@ def test_text_where_object_belongs_reports_text_arrived() -> None:
     assert isinstance(out, ToolOutput)
     assert out.is_error
     assert "text arrived" in out.content.lower()
+
+
+def test_propose_connections_schema_reads_leaf_host_folder_rule() -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.proposals.contract import CONNECTIONS_KIND
+    from mlops_agents.proposals.payloads import ConnectionsPayload
+
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload))
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=MagicMock(), kinds=kinds)
+
+    schema = tool.schema()
+    items = schema["function"]["parameters"]["properties"]["connections"]["items"]
+    path_prop = items["properties"]["settings"]["properties"]["path"]
+    assert (
+        "folder on the person's machine as they gave it, never the sandbox's /data/<name>"
+        in path_prop["description"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_proposal_kinds_matches_startup_registered_kinds(tmp_path: Path) -> None:
+    from mlops_agents.proposals.contract import PROPOSAL_KINDS
+    from tests.api.conftest import started_app
+
+    async with started_app(tmp_path) as app:
+        services = app.state.services
+        assert tuple(services.proposal_kinds.names()) == tuple(sorted(PROPOSAL_KINDS))
