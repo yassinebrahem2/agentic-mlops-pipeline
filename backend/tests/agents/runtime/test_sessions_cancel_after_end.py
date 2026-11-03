@@ -11,8 +11,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TurnEnd
-from mlops_agents.agents.runtime.executor import TurnExecutor
+from mlops_agents.agents.runtime.executor import TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.shielded import shielded
 from mlops_agents.agents.runtime.store import SessionStore
@@ -171,7 +170,7 @@ async def test_a_cancel_during_the_failed_write_keeps_the_turn_failed(
         turn_id: str,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
-    ) -> tuple[TurnEnd, str | None]:
+    ) -> TurnOutcome:
         raise RuntimeError("an error that escapes the executor")
 
     monkeypatch.setattr(TurnExecutor, "run", failing_run)

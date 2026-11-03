@@ -222,12 +222,23 @@ class SessionHub:
                 )
             self._publish_raw(ev)
 
-    async def turn_ended(self, turn_id: str, status: TurnEnd, error: str | None = None) -> None:
+    async def turn_ended(
+        self,
+        turn_id: str,
+        status: TurnEnd,
+        error: str | None = None,
+        stopped_reason: str | None = None,
+    ) -> None:
         async with self._lock:
             ev = TurnEnded(
                 seq=self._next_seq(),
                 type="turn.ended",
-                data=TurnEndedData(turn_id=turn_id, status=status, error=error),
+                data=TurnEndedData(
+                    turn_id=turn_id,
+                    status=status,
+                    error=error,
+                    stopped_reason=stopped_reason,
+                ),
             )
             self._publish_raw(ev)
 

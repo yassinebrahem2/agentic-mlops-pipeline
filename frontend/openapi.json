@@ -7704,6 +7704,17 @@
             "title": "Last Seq",
             "type": "integer"
           },
+          "last_stopped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Stopped Reason"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/MessageView"
@@ -9097,6 +9108,17 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "stopped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped Reason"
           },
           "turn_id": {
             "title": "Turn Id",
