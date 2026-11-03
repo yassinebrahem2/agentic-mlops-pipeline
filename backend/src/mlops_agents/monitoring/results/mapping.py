@@ -187,6 +187,13 @@ def _map_row(
         if extracted is not None:
             item_dict[target_field] = extracted
 
+    # Categories applied after field mapping and before defaults (a check not listed takes default)
+    check_id = item_dict.get("check_id")
+    if check_id is not None and str(check_id) in mapping.categories:
+        item_dict["category"] = mapping.categories[str(check_id)]
+    elif "category" in mapping.defaults:
+        item_dict["category"] = mapping.defaults["category"]
+
     # Determine source_key
     custom_key = item_dict.pop("source_key", None) or item_dict.pop("key", None)
     source_key = str(custom_key) if custom_key is not None else f"{origin_ref}:{key_suffix}"

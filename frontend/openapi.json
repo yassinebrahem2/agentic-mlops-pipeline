@@ -5844,6 +5844,20 @@
       "ParserMapping": {
         "additionalProperties": false,
         "properties": {
+          "categories": {
+            "additionalProperties": {
+              "enum": [
+                "data_quality",
+                "drift",
+                "model_performance",
+                "operational"
+              ],
+              "type": "string"
+            },
+            "default": {},
+            "title": "Categories",
+            "type": "object"
+          },
           "defaults": {
             "additionalProperties": true,
             "default": {},

@@ -68,6 +68,22 @@ export const ParserProposalCard: ApprovalCardComponent = ({
                   </ul>
                 </div>
 
+                {Object.keys(payload.spec.mapping.categories).length > 0 && (
+                  <div className="space-y-1">
+                    <span className="font-medium text-muted-foreground">Categories:</span>
+                    <ul className="space-y-0.5 font-mono text-[11px] text-muted-foreground">
+                      {Object.entries(payload.spec.mapping.categories).map(
+                        ([checkId, category]) => (
+                          <li key={checkId}>
+                            <span className="font-semibold text-foreground">{checkId}</span>:{" "}
+                            {category}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                )}
+
                 <div className="space-y-1">
                   <span className="font-medium text-muted-foreground">Fired Condition:</span>
                   <pre className="overflow-x-auto rounded bg-muted p-1.5 font-mono text-[11px]">
