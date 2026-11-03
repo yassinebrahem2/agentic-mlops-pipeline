@@ -22,7 +22,7 @@ const FIELDS: { name: NumberName; label: string; help: string }[] = [
   {
     name: "grouping_window_minutes",
     label: "Grouping window (minutes)",
-    help: "Signals raised within this window are grouped into one incident.",
+    help: "How close a team check's firing must be to an incident's signal to count as the team having fired on it.",
   },
   {
     name: "reopen_window_hours",

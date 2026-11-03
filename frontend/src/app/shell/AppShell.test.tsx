@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Bot, Settings } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { buildRouter } from "../router";
@@ -9,13 +10,13 @@ import type { PageRoute } from "../routes";
 const fakeAppRoute: PageRoute = {
   path: "/settings",
   element: <div>App Settings Page</div>,
-  nav: { area: "app", label: "Settings", order: 1 },
+  nav: { area: "app", label: "Settings", order: 1, icon: Settings },
 };
 
 const fakeProjectRoute: PageRoute = {
   path: "/projects/:projectId/agents",
   element: <div>Project Agents Page</div>,
-  nav: { area: "project", label: "Agents", order: 1 },
+  nav: { area: "project", label: "Agents", order: 1, icon: Bot },
 };
 
 const fakeProjectsNewRoute: PageRoute = {

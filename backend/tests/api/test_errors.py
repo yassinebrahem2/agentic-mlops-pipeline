@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from mlops_agents.credentials import KeyStoreError
+from mlops_agents.credentials import KeyStoreError, KeyTooLongError
 from mlops_agents.errors import DomainError
 
 
@@ -89,6 +89,26 @@ async def test_keystore_error_is_503_with_its_message(
     assert response.json() == {
         "code": "keystore_unavailable",
         "message": "Unlock your keyring.",
+        "detail": None,
+    }
+
+
+async def test_key_too_long_error_is_422_with_its_message(
+    app: FastAPI, client: httpx2.AsyncClient
+) -> None:
+    async def fail() -> None:
+        raise KeyTooLongError(
+            "The key is too long to be a key (Windows Credential Manager holds at most 1280 characters)."
+        )
+
+    app.add_api_route("/api/test/key-too-long", fail)
+
+    response = await client.get("/api/test/key-too-long")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "key_too_long",
+        "message": "The key is too long to be a key (Windows Credential Manager holds at most 1280 characters).",
         "detail": None,
     }
 

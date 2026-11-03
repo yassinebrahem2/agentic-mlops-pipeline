@@ -22,7 +22,8 @@
 **Files:** `backend/src/mlops_agents/monitoring/results/file_source.py`; the parser apply path (the one place a parser version is stored); tests under `backend/tests/monitoring/results/`.
 
 **Notes:**
-- A file's cursor does not move past lines rejected for a source-level cause (no parser for lines that are not the agents' own records, a parser error); lines rejected one by one for their own content (a malformed line) still move it, as today.
+- A file's cursor does not move past lines rejected for a source-level cause in a source a parser can read (a check's or a feed's file source: no parser yet for lines that are not the agents' own records, or the parser raising); lines rejected one by one for their own content still move it, as today. In the handoff's `results_location` (the agents' own results, never parsed) a line without `origin: "agent"` is skipped as today, so it never blocks the lines after it (#721 review).
+- Every file source with an enabled parser except the `results_location` is read through its parser (#721). In a source read through its parser, a line that is already a valid agent record (`origin: "agent"`) is stored as one, through the agent path with its own key, and never parsed, so a re-read never stores it twice nor relabels it as the team's (#721 re-review).
 - Storing a new parser version for a source resets that source's cursor, so its files are read again from the start; records already stored are not stored twice (the store's dedup on `(source_id, source_key)`).
 - A line without `origin: "agent"` in a source with no parser fails with a message that says these look like the team's own records and a `parser` proposal reads them.
 
@@ -30,10 +31,10 @@
 
 ### Task 2: A failing source keeps its incident from resolving
 
-**Files:** `backend/src/mlops_agents/monitoring/incidents/service.py` (`update`'s resolve guard only); tests under `backend/tests/monitoring/incidents/`.
+**Files:** `backend/src/mlops_agents/monitoring/incidents/service.py` (`update`'s resolve guard only); `monitoring/results/contract.py` and `results/service.py` (`Results.source_state`, the stage 4-6 overview's `Results` line, changed with this plan); tests under `backend/tests/monitoring/incidents/` and `results/`.
 
 **Notes:**
-- An incident with a `source_failure` or `parser_failure` signal resolves only when that source's latest read succeeded (its failure state is clear), read from the results module's own query, never its tables; otherwise `incident_still_firing`, as for the other signals. Plan #695 task 1 changes the grouping call in this file's `raise_signal`; this task touches only `update`.
+- An incident with a `source_failure` or `parser_failure` signal resolves only when that source's latest read succeeded (its failure state is clear), read through `Results.source_state(project_id, source_id)`, never the results store; a source with no state (removed from the handoff, never read) does not hold the incident; otherwise `incident_still_firing`, as for the other signals. Plan #695 task 1 changes the grouping call in this file's `raise_signal`; this task touches only `update`.
 
 **Tests (stop condition):** first, one that fails on `main`: a source failure incident cannot be resolved while the source still fails, and can once a read succeeds; the same for a parser failure; silence and fired-result guards unchanged; backend suite, ruff, pyright; CI green.
 

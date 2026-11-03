@@ -50,6 +50,7 @@ STAGE_2_TOOLS: frozenset[str] = frozenset(
         "TrackingHistory",
         "Propose",
         "ReadHandoff",
+        "ProposalShape",
         INCIDENT_UPDATE,
         INCIDENT_MERGE,
         INCIDENT_SPLIT,
