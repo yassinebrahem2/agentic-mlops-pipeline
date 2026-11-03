@@ -246,26 +246,6 @@ def evaluate_mapping(
                     errors.append(f"Offset {line_offset} is not a JSON object")
                     continue
                 data = cast(dict[str, Any], raw_parsed)
-                # In a source read through its parser, an already valid agent record is stored
-                # through the agent path with its own key and never parsed
-                if data.get("origin") == "agent":
-                    try:
-                        agent_dict = dict(data)
-                        custom_key = agent_dict.pop("source_key", None) or agent_dict.pop(
-                            "key", None
-                        )
-                        k = (
-                            str(custom_key)
-                            if custom_key is not None
-                            else f"{origin_ref}:{line_offset}"
-                        )
-                        if not agent_dict.get("source_ref"):
-                            agent_dict["source_ref"] = origin_ref
-                        rec = ResultRecord.model_validate(agent_dict)
-                        records.append((k, rec))
-                    except Exception as exc:
-                        errors.append(f"Offset {line_offset}: {exc}")
-                    continue
                 k, rec = _map_row(data, mapping, origin_ref, line_offset)
                 records.append((k, rec))
             except Exception as exc:
@@ -282,24 +262,6 @@ def evaluate_mapping(
                         continue
                     try:
                         item = cast(dict[str, Any], item_obj)
-                        if item.get("origin") == "agent":
-                            try:
-                                agent_dict = dict(item)
-                                custom_key = agent_dict.pop("source_key", None) or agent_dict.pop(
-                                    "key", None
-                                )
-                                k = (
-                                    str(custom_key)
-                                    if custom_key is not None
-                                    else f"{origin_ref}:{idx}"
-                                )
-                                if not agent_dict.get("source_ref"):
-                                    agent_dict["source_ref"] = origin_ref
-                                rec = ResultRecord.model_validate(agent_dict)
-                                records.append((k, rec))
-                            except Exception as exc:
-                                errors.append(f"Item {idx}: {exc}")
-                            continue
                         k, rec = _map_row(item, mapping, origin_ref, idx)
                         records.append((k, rec))
                     except Exception as exc:

@@ -64,6 +64,91 @@ class RawReadOutcome:
     last_error: str | None = None
 
 
+def extract_agent_records_and_team_chunks(
+    chunk: RawChunk,
+) -> tuple[list[tuple[str, ResultRecord]], list[RawChunk]]:
+    """Diverts lines that are already valid agent records, returning them keyed as in
+    file_source.py, along with chunks containing only the remaining (team) lines."""
+    if not chunk.content:
+        return [], []
+
+    agent_records: list[tuple[str, ResultRecord]] = []
+    team_chunks: list[RawChunk] = []
+    current_team_lines: list[str] = []
+    current_team_start_offset: int | None = None
+    cur_offset = chunk.start_offset
+
+    lines = chunk.content.splitlines(keepends=True)
+    for raw_line in lines:
+        line_bytes = raw_line.encode("utf-8", errors="surrogateescape")
+        line_offset = cur_offset
+        cur_offset += len(line_bytes)
+
+        line_str = raw_line.strip()
+        is_agent = False
+        if line_str:
+            try:
+                parsed_json: object = json.loads(line_str)
+                if isinstance(parsed_json, dict):
+                    raw_dict = cast(dict[str, Any], parsed_json)
+                    if raw_dict.get("origin") == "agent":
+                        agent_dict = dict(raw_dict)
+                        custom_key: Any = agent_dict.pop("source_key", None) or agent_dict.pop(
+                            "key", None
+                        )
+                        source_key = (
+                            str(custom_key)
+                            if custom_key is not None
+                            else f"{chunk.rel_posix}:{line_offset}"
+                        )
+                        if not agent_dict.get("source_ref"):
+                            agent_dict["source_ref"] = chunk.rel_posix
+                        rec = ResultRecord.model_validate(agent_dict)
+                        agent_records.append((source_key, rec))
+                        is_agent = True
+            except Exception:
+                is_agent = False
+
+        if is_agent:
+            if current_team_lines and current_team_start_offset is not None:
+                team_content = "".join(current_team_lines)
+                team_chunks.append(
+                    RawChunk(
+                        rel_posix=chunk.rel_posix,
+                        content=team_content,
+                        start_offset=current_team_start_offset,
+                        new_offset=line_offset,
+                        size=chunk.size,
+                        mtime=chunk.mtime,
+                        csv_header=chunk.csv_header,
+                        incomplete_tail_offset=None,
+                    )
+                )
+                current_team_lines = []
+                current_team_start_offset = None
+        else:
+            if current_team_start_offset is None:
+                current_team_start_offset = line_offset
+            current_team_lines.append(raw_line)
+
+    if current_team_lines and current_team_start_offset is not None:
+        team_content = "".join(current_team_lines)
+        team_chunks.append(
+            RawChunk(
+                rel_posix=chunk.rel_posix,
+                content=team_content,
+                start_offset=current_team_start_offset,
+                new_offset=chunk.new_offset,
+                size=chunk.size,
+                mtime=chunk.mtime,
+                csv_header=chunk.csv_header,
+                incomplete_tail_offset=chunk.incomplete_tail_offset,
+            )
+        )
+
+    return agent_records, team_chunks
+
+
 def _quiet(mtime: float, now: datetime) -> bool:
     """Whether the file has been unchanged for the quiet time, so its writer has stopped."""
     return now.timestamp() - mtime >= HELD_TAIL_QUIET_SECONDS

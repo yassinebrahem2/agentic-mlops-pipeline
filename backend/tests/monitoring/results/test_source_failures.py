@@ -9,16 +9,21 @@ from typing import Any
 
 import pytest
 
+from mlops_agents.connections.contract import Mount
+from mlops_agents.connections.kinds import DATA_MOUNT_ROOT
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
+from mlops_agents.monitoring.results.code_parser import CodeParserRunner
 from mlops_agents.monitoring.results.contract import (
+    ParserCode,
     ParserMapping,
     ParserSpec,
     ResultQuery,
     SourceState,
     source_id,
 )
+from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import (
@@ -29,7 +34,13 @@ from mlops_agents.proposals.payloads import (
     Operations,
 )
 from mlops_agents.storage.databases import Databases
-from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs
+from tests.monitoring.results.conftest import (
+    FakeConnections,
+    FakeHandoffs,
+    FakeSandbox,
+    LocalExecDockerRunner,
+    MountsConnections,
+)
 from tests.proposals.samples import handoff as sample_handoff_dict
 
 
@@ -519,7 +530,7 @@ async def test_mixed_check_source_reread_stores_each_record_once_and_preserves_a
     # Line 3: team record without origin: "agent"
     team_line_3 = (
         b'{"check_id": "c3", "ran_at": "2026-10-30T10:10:00Z", '
-        b'"fired": false, "category": "model_quality", "subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+        b'"fired": false, "category": "model_performance", "subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
     )
     full_content = agent_line_1 + agent_line_2 + team_line_3
     target.write_bytes(full_content)
@@ -619,6 +630,156 @@ async def test_mixed_check_source_reread_stores_each_record_once_and_preserves_a
     assert res_by_check["c2"].source_key == f"results.jsonl:{len(agent_line_1)}"
     assert res_by_check["c3"].origin == "team"
     assert res_by_check["c3"].source_key == f"results.jsonl:{len(agent_line_1) + len(agent_line_2)}"
+
+    # 4. Third collect: cursor is at EOF, 0 stored
+    rep3 = await service.collect(project_id, now + timedelta(minutes=10))
+    assert rep3.stored == 0
+    all_res3 = await service.store.query(project_id, ResultQuery(limit=50))
+    assert len(all_res3.rows) == 3
+
+
+@pytest.mark.asyncio
+async def test_mixed_check_source_code_parser_reread_stores_each_record_once_and_preserves_agent_origin(
+    databases: Databases,
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    events = SqliteEventLog(databases)
+    data_dir = tmp_path / "mixed_code_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "results.jsonl"
+
+    # Line 1: agent record with explicit custom source_key
+    agent_line_1 = (
+        b'{"check_id": "c1", "origin": "agent", "source_key": "K1", '
+        b'"ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", '
+        b'"subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    # Line 2: agent record without custom source_key
+    agent_line_2 = (
+        b'{"check_id": "c2", "origin": "agent", '
+        b'"ran_at": "2026-10-30T10:05:00Z", "fired": true, "category": "operational", '
+        b'"subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    # Line 3: team record without origin: "agent"
+    team_line_3 = (
+        b'{"check_id": "c3", "ran_at": "2026-10-30T10:10:00Z", '
+        b'"fired": false, "category": "model_performance", "subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    full_content = agent_line_1 + agent_line_2 + team_line_3
+    target.write_bytes(full_content)
+
+    mount = Mount(host_path=data_dir, container_path=f"{DATA_MOUNT_ROOT}/conn_mixed_code")
+    connections = MountsConnections([mount])
+    connections.add_local_folder("conn_mixed_code", data_dir)
+    docker_runner = LocalExecDockerRunner("sandbox:test-tag", [mount])
+    runner = CodeParserRunner(
+        sandbox=FakeSandbox(tag="sandbox:test-tag"),
+        docker_runner=docker_runner,
+        connections=connections,
+    )
+    parsers = SqliteParsers(databases, code_runner=runner)
+
+    ops = Operations(
+        scheduler=None,
+        feeds=[],
+        on_call=[],
+        checks=[
+            CheckSpec(
+                check_id="c1",
+                name="Mixed code check",
+                category="data_quality",
+                cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+                timezone="UTC",
+                results=FileResults(connection="conn_mixed_code", path_pattern="*.jsonl"),
+            )
+        ],
+        results_location=FileResults(
+            connection="conn_mixed_code", path_pattern="agent_results/*.jsonl"
+        ),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    handoffs = FakeHandoffs(
+        HandoffView(
+            proposal_id="prop_mixed_code",
+            version=1,
+            approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+            payload=payload,
+        )
+    )
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        parsers=parsers,
+    )
+
+    s_id = source_id("file", "*.jsonl", "conn_mixed_code")
+    now = datetime(2026, 10, 30, 10, 15, 0, tzinfo=UTC)
+
+    # 1. First collect (no parser stored yet): agent lines c1 and c2 are stored, team line halts with SourceLevelError
+    rep1 = await service.collect(project_id, now)
+    assert rep1.stored == 2
+    assert s_id in rep1.failures
+    st1 = await service.store.get_source_state(project_id, s_id)
+    assert st1 is not None
+    assert st1.cursor["files"]["results.jsonl"]["offset"] == len(agent_line_1) + len(agent_line_2)
+
+    stored_c1 = await service.store.query(project_id, ResultQuery(check_id="c1"))
+    assert len(stored_c1.rows) == 1
+    assert stored_c1.rows[0].origin == "agent"
+    assert stored_c1.rows[0].source_key == "K1"
+
+    stored_c2 = await service.store.query(project_id, ResultQuery(check_id="c2"))
+    assert len(stored_c2.rows) == 1
+    assert stored_c2.rows[0].origin == "agent"
+    assert stored_c2.rows[0].source_key == f"results.jsonl:{len(agent_line_1)}"
+
+    # 2. Store code parser that re-emits each line without origin
+    re_emit_script = """
+import json, sys
+for line in sys.stdin.read().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    data = json.loads(line)
+    data.pop("origin", None)
+    print(json.dumps(data))
+"""
+    spec = ParserSpec(
+        source_id=s_id,
+        code=ParserCode(script=re_emit_script, timeout_s=60),
+    )
+    await service.parsers.store(project_id, spec, "prop_reemit_parser")
+    st_after = await service.store.get_source_state(project_id, s_id)
+    assert st_after is not None
+    assert st_after.cursor == {}
+
+    # 3. Second collect (with code parser):
+    # Agent lines c1 and c2 are diverted and never reach the script; deduplicated against existing rows.
+    # The script sees only t1, re-emits it without origin, and it is stored as origin "team".
+    rep2 = await service.collect(project_id, now + timedelta(minutes=5))
+    assert rep2.stored == 1
+    assert s_id not in rep2.failures
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.cursor["files"]["results.jsonl"]["offset"] == len(full_content)
+
+    # Total rows in results table is exactly 3: c1 (agent, K1), c2 (agent, results.jsonl:len(c1)), c3 (team)
+    all_res = await service.store.query(project_id, ResultQuery(limit=50))
+    assert len(all_res.rows) == 3
+
+    res_by_check = {r.check_id: r for r in all_res.rows}
+    assert res_by_check["c1"].origin == "agent"
+    assert res_by_check["c1"].source_key == "K1"
+    assert res_by_check["c2"].origin == "agent"
+    assert res_by_check["c2"].source_key == f"results.jsonl:{len(agent_line_1)}"
+    assert res_by_check["c3"].origin == "team"
+    assert (
+        res_by_check["c3"].source_key == f"results.jsonl:{len(agent_line_1) + len(agent_line_2)}:0"
+    )
 
     # 4. Third collect: cursor is at EOF, 0 stored
     rep3 = await service.collect(project_id, now + timedelta(minutes=10))
