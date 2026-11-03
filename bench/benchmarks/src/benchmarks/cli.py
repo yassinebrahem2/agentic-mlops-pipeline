@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from benchmarks.agents_run import register_agents_run_cli, run_agents_run_cli
 from benchmarks.replay import register_replay_cli, run_replay_cli
 from benchmarks.report import register_report_cli, run_report_cli
 
@@ -30,6 +31,12 @@ COMMANDS: list[Command] = [
         help="Replay a benchmark dataset",
         register=register_replay_cli,
         run=run_replay_cli,
+    ),
+    Command(
+        name="agents-run",
+        help="Run benchmarks in agents mode against demo-world",
+        register=register_agents_run_cli,
+        run=run_agents_run_cli,
     ),
 ]
 

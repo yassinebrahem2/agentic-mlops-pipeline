@@ -43,3 +43,9 @@ def test_cli_subcommand_dispatch() -> None:
         assert called == ["bar"]
     finally:
         COMMANDS.remove(dummy_cmd)
+
+
+def test_cli_agents_run_help() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["agents-run", "--help"])
+    assert exc_info.value.code == 0
