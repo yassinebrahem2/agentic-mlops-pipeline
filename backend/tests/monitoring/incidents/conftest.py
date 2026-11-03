@@ -51,6 +51,9 @@ class FakeResults:
     async def get_source_state(self, project_id: str, source_id: str) -> SourceState | None:
         return await self.store.get_source_state(project_id, source_id)
 
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        return self.source_states.get(source_id)
+
     def add_observer(self, observer: ResultsObserver) -> None:
         self.observers.append(observer)
 

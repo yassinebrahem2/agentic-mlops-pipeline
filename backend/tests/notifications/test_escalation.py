@@ -27,6 +27,7 @@ from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     ResultQuery,
     ResultsObserver,
+    SourceState,
     StoredResult,
 )
 from mlops_agents.notifications.channels import default_channels
@@ -96,6 +97,9 @@ class FakeResults:
 
     async def query(self, project_id: str, q: ResultQuery) -> Page[StoredResult]:
         return Page(rows=[], total=0, truncated=False)
+
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        return None
 
 
 class FakeSeverityPolicy:

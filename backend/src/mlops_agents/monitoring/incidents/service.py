@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import RowMapping
 
@@ -41,7 +41,7 @@ from mlops_agents.monitoring.incidents.store import (
     row_to_incident_view,
 )
 from mlops_agents.monitoring.incidents.subtype import determine_subtype
-from mlops_agents.monitoring.results.contract import Results, SourceState
+from mlops_agents.monitoring.results.contract import Results
 from mlops_agents.monitoring.settings import get_monitoring_settings
 from mlops_agents.monitoring.verdicts.contract import Verdicts, VerdictView
 from mlops_agents.providers.failover import Clock
@@ -70,22 +70,6 @@ def _not_live(incident_id: str, status: str) -> DomainError:
         f"Incident '{incident_id}' is {status}; that change no longer applies to it.",
         status=409,
     )
-
-
-@runtime_checkable
-class _SourceStateStore(Protocol):
-    async def get_source_state(self, project_id: str, source_id: str) -> SourceState | None: ...
-
-
-@runtime_checkable
-class _ResultsWithStore(Protocol):
-    @property
-    def store(self) -> _SourceStateStore: ...
-
-
-@runtime_checkable
-class _ResultsWithSourceState(Protocol):
-    async def get_source_state(self, project_id: str, source_id: str) -> SourceState | None: ...
 
 
 class IncidentsService(Incidents):
@@ -670,13 +654,6 @@ class IncidentsService(Incidents):
             )
         return issues
 
-    async def _get_source_state(self, project_id: str, source_id: str) -> SourceState | None:
-        if isinstance(self._results, _ResultsWithStore):
-            return await self._results.store.get_source_state(project_id, source_id)
-        if isinstance(self._results, _ResultsWithSourceState):
-            return await self._results.get_source_state(project_id, source_id)
-        return None
-
     async def update(
         self,
         project_id: str,
@@ -740,8 +717,10 @@ class IncidentsService(Incidents):
                     if source_id in checked_sources:
                         continue
                     checked_sources.add(source_id)
-                    st = await self._get_source_state(project_id, source_id)
-                    if st is None or st.last_error is not None or st.consecutive_failures > 0:
+                    st = await self._results.source_state(project_id, source_id)
+                    if st is not None and (
+                        st.last_error is not None or st.consecutive_failures > 0
+                    ):
                         raise DomainError(
                             "incident_still_firing",
                             f"Source '{source_id}' is still failing.",

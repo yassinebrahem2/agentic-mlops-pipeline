@@ -752,18 +752,7 @@ async def test_update_resolved_refused_for_failing_source(
     outcome = await service.raise_signal(project_id, draft, seen_at=now)
     inc_id = outcome.incident_id
 
-    # 1. Missing source state (None) -> 409 incident_still_firing
-    with pytest.raises(DomainError) as exc_info:
-        await service.update(
-            project_id,
-            inc_id,
-            agent="agent_1",
-            patch=IncidentPatch(status="resolved"),
-        )
-    assert exc_info.value.status == 409
-    assert exc_info.value.code == "incident_still_firing"
-
-    # 2. Failing state with error and consecutive_failures -> 409
+    # 1. Failing state with error and consecutive_failures -> 409
     fake_results.source_states[source_id] = SourceState(
         source_id=source_id,
         kind="file",
@@ -782,7 +771,7 @@ async def test_update_resolved_refused_for_failing_source(
     assert exc_info.value.status == 409
     assert exc_info.value.code == "incident_still_firing"
 
-    # 3. Failing state with consecutive_failures > 0 even if last_error is None -> 409
+    # 2. Failing state with consecutive_failures > 0 even if last_error is None -> 409
     fake_results.source_states[source_id] = SourceState(
         source_id=source_id,
         kind="file",
@@ -801,7 +790,7 @@ async def test_update_resolved_refused_for_failing_source(
     assert exc_info.value.status == 409
     assert exc_info.value.code == "incident_still_firing"
 
-    # 4. Once latest read succeeded (consecutive_failures == 0 and last_error is None), resolve succeeds
+    # 3. Once latest read succeeded (consecutive_failures == 0 and last_error is None), resolve succeeds
     fake_results.source_states[source_id] = SourceState(
         source_id=source_id,
         kind="file",
@@ -819,6 +808,27 @@ async def test_update_resolved_refused_for_failing_source(
     )
     assert resolved.status == "resolved"
     assert resolved.resolved_at is not None
+
+    # 4. A source with no state (None, e.g. removed from handoff or never read) does not hold the incident
+    draft_no_state = SignalDraft(
+        kind="source_failure",
+        category="operational",
+        subject="file:removed:data/*.json",
+        model=None,
+        ran_at=fake_clock.now(),
+        detail={"error": "Not found", "source_id": "file:removed:data/*.json"},
+        source_ref="file:removed:data/*.json",
+    )
+    outcome_no_state = await service.raise_signal(
+        project_id, draft_no_state, seen_at=fake_clock.now()
+    )
+    resolved_no_state = await service.update(
+        project_id,
+        outcome_no_state.incident_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved_no_state.status == "resolved"
 
 
 @pytest.mark.asyncio

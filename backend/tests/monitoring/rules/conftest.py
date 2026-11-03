@@ -11,6 +11,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultRecord,
     Results,
     ResultsObserver,
+    SourceState,
     StoredResult,
 )
 from mlops_agents.monitoring.results.store import ResultsStore
@@ -45,3 +46,6 @@ class ResultsAdapter(Results):
         self, project_id: str, subject: str, model: str | None
     ) -> list[StoredResult]:
         raise NotImplementedError
+
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        return await self._store.get_source_state(project_id, source_id)

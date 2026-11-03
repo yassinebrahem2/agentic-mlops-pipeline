@@ -105,6 +105,7 @@ def _read_files_sync(
     consecutive_failures: int = 0,
     *,
     now: datetime,
+    is_results_location: bool = False,
 ) -> SourceReadOutcome:
     """Synchronous file scanner and reader for local folder paths."""
     files_cursor: dict[str, dict[str, Any]] = dict(cursor.get("files", {}))
@@ -254,6 +255,8 @@ def _read_files_sync(
 
                 origin_val = raw_dict.get("origin")
                 if origin_val != "agent":
+                    if is_results_location:
+                        raise ValueError(f"origin must be 'agent', found {origin_val!r}")
                     raise SourceLevelError(
                         f"origin must be 'agent', found {origin_val!r}: "
                         "these look like the team's own records and a parser proposal reads them"
@@ -311,6 +314,7 @@ class FileSourceReader:
         *,
         now: datetime,
         consecutive_failures: int = 0,
+        is_results_location: bool = False,
     ) -> SourceReadOutcome:
         """Reads new result records from files matching source_id pattern. A file's quiet
         time is judged against `now`, the collection time."""
@@ -379,6 +383,7 @@ class FileSourceReader:
                 cursor,
                 consecutive_failures,
                 now=now,
+                is_results_location=is_results_location,
             )
         except Exception as exc:
             return SourceReadOutcome(

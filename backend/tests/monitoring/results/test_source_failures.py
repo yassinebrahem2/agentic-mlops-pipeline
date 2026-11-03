@@ -12,7 +12,12 @@ import pytest
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcome
-from mlops_agents.monitoring.results.contract import ParserMapping, ParserSpec, source_id
+from mlops_agents.monitoring.results.contract import (
+    ParserMapping,
+    ParserSpec,
+    SourceState,
+    source_id,
+)
 from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import FileResults, HandoffPayload, Operations
@@ -290,6 +295,7 @@ async def test_failing_source_scrubs_url_credentials_from_error_signal_and_logs(
             *,
             now: datetime,
             consecutive_failures: int = 0,
+            is_results_location: bool = False,
         ) -> SourceReadOutcome:
             raise RuntimeError(raw_error)
 
@@ -443,3 +449,38 @@ async def test_team_lines_without_parser_leave_cursor_and_reread_when_parser_app
     st3 = await service.store.get_source_state(project_id, s_id)
     assert st3 is not None
     assert st3.cursor["files"]["results.jsonl"]["offset"] == len(full_content)
+
+
+@pytest.mark.asyncio
+async def test_results_service_source_state(databases: Databases, project_id: str) -> None:
+    events = SqliteEventLog(databases)
+    handoffs = FakeHandoffs()
+    connections = FakeConnections()
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+    s_id = "file:conn_test:*.json"
+    # Initially None
+    st = await service.source_state(project_id, s_id)
+    assert st is None
+
+    # After saving source state via store
+    saved = SourceState(
+        source_id=s_id,
+        kind="file",
+        cursor={"files": {}},
+        last_read=datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC),
+        last_error=None,
+        consecutive_failures=0,
+    )
+    await service.store.save_source_state(project_id, saved)
+
+    # Now returns the SourceState
+    st = await service.source_state(project_id, s_id)
+    assert st is not None
+    assert st.source_id == s_id
+    assert st.consecutive_failures == 0
+    assert st.last_error is None

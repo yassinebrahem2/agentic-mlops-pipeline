@@ -230,6 +230,38 @@ async def test_team_line_without_parser_stops_reading_and_leaves_cursor_at_its_o
     assert out.cursor["files"]["results.jsonl"]["offset"] == len(line1)
 
 
+async def test_results_location_skips_non_agent_line_and_reads_subsequent_lines(
+    tmp_path: Path, project_id: str
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    line1 = b'{"check_id": "chk_valid_1", "origin": "agent", "ran_at": "2026-10-30T10:00:00Z", "fired": false, "value": 0.01, "threshold": 0.05, "category": "data_quality", "subject": "s", "model": "m", "detail": {}, "source_ref": "r", "version": "1.0", "not_enough_data": false}\n'
+    line2 = b'{"check_id": "chk_team", "origin": "team", "ran_at": "2026-10-30T10:05:00Z", "fired": false}\n'
+    line3 = b'{"check_id": "chk_valid_2", "origin": "agent", "ran_at": "2026-10-30T10:10:00Z", "fired": false, "value": 0.02, "threshold": 0.05, "category": "data_quality", "subject": "s", "model": "m", "detail": {}, "source_ref": "r", "version": "1.0", "not_enough_data": false}\n'
+    content = line1 + line2 + line3
+    target = data_dir / "results.jsonl"
+    target.write_bytes(content)
+
+    connections = FakeConnections()
+    connections.add_local_folder("data_conn", data_dir)
+    reader = FileSourceReader(connections)
+    s_id = source_id("file", "results.jsonl", "data_conn")
+
+    out = await reader.read(project_id, s_id, cursor={}, now=_NOW, is_results_location=True)
+    # Both agent lines are returned; the non-agent line is skipped
+    assert len(out.records) == 2
+    assert out.records[0][1].check_id == "chk_valid_1"
+    assert out.records[1][1].check_id == "chk_valid_2"
+
+    # Source records error and failure count for the skipped line
+    assert out.consecutive_failures == 1
+    assert out.last_error is not None
+    assert "origin must be 'agent', found 'team'" in out.last_error
+
+    # Cursor advances past all lines (offset == len(content))
+    assert out.cursor["files"]["results.jsonl"]["offset"] == len(content)
+
+
 async def test_pattern_with_dotdot_symlink_out_of_root_and_env_store_nothing(
     tmp_path: Path, project_id: str
 ) -> None:

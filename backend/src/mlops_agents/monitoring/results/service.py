@@ -564,6 +564,7 @@ class ResultsService(Results):
                         cursor=current_cursor,
                         now=now,
                         consecutive_failures=prev_failures,
+                        is_results_location=is_results_loc,
                     )
                 elif kind == "ci":
                     if self._ci_reader is None:
@@ -679,3 +680,7 @@ class ResultsService(Results):
     ) -> list[StoredResult]:
         """Fetches newest stored result per check for subject and model."""
         return await self._store.latest_per_check(project_id, subject, model)
+
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        """Returns the recorded source state for a source, or None if none recorded."""
+        return await self._store.get_source_state(project_id, source_id)
