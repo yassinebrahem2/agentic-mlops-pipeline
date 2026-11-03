@@ -43,6 +43,9 @@ from mlops_agents.agents.tools.names import (
     RUN_HOOK,
     SAVE_REPORT,
 )
+from mlops_agents.agents.tools.proposal_shape import (
+    PROPOSAL_SHAPE_TOOL_NAME as PROPOSAL_SHAPE,
+)
 from mlops_agents.agents.tools.propose import ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.save_note import SaveNote
@@ -436,10 +439,16 @@ TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
     for row in STAGE_3_TABLE
     if OpenPullRequestTool.name in row["tools"]
 }
+TASK_4_COLUMN: dict[str, tuple[str, ...]] = {
+    row["name"]: (PROPOSAL_SHAPE,)
+    for row in STAGE_3_TABLE
+    if ProposeTool.name in (row["tools"] + TASK_2_COLUMN.get(row["name"], ()))
+}
 TASK_COLUMNS: tuple[dict[str, tuple[str, ...]], ...] = (
     TASK_1_COLUMN,
     TASK_2_COLUMN,
     TASK_3_COLUMN,
+    TASK_4_COLUMN,
 )
 AGENT_TABLE: list[dict[str, Any]] = [
     {
@@ -751,6 +760,15 @@ def test_merge_pull_request_holders_are_the_open_pull_request_holders() -> None:
     mergers = {d.name for d in catalog.all() if MERGE_PULL_REQUEST in d.tools}
     openers = {d.name for d in catalog.all() if OpenPullRequestTool.name in d.tools}
     assert mergers == openers and mergers
+
+
+def test_propose_holders_hold_proposal_shape() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for defn in catalog.all():
+        if ProposeTool.name in defn.tools:
+            assert PROPOSAL_SHAPE in defn.tools, (
+                f"{defn.name} holds Propose but missing {PROPOSAL_SHAPE}"
+            )
 
 
 # The matrix's last column: the prompts that name each kind as `` `<kind>` proposal ``.

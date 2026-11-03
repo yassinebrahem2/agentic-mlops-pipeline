@@ -26,3 +26,6 @@ class ProposalKinds:
                 status=422,
             )
         return kind
+
+    def names(self) -> list[str]:
+        return sorted(self._kinds.keys())

@@ -88,6 +88,8 @@ class FakeState:
     server_error_remaining: int = 0
     auth_fail: bool = False
     usage_in_stream: bool = True
+    cumulative_usage_in_stream: bool = False
+    stream_usage_chunks: list[dict[str, int]] | None = None
     # Per-token USD strings, as OpenRouter's /models publishes them, by model id.
     pricing: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
     drop_after_chunks: int | None = None
@@ -127,6 +129,8 @@ class FakeState:
         self.server_error_remaining = 0
         self.auth_fail = False
         self.usage_in_stream = True
+        self.cumulative_usage_in_stream = False
+        self.stream_usage_chunks = None
         self.pricing.clear()
         self.drop_after_chunks = None
         self.scripted_tool_calls = None
@@ -173,14 +177,21 @@ def _error(status: int, message: str, code: str, headers: dict[str, str] | None 
     return JSONResponse(body, status_code=status, headers=headers)
 
 
-def _chunk(model: str, delta: dict[str, Any], finish: str | None = None) -> str:
-    payload = {
+def _chunk(
+    model: str,
+    delta: dict[str, Any],
+    finish: str | None = None,
+    usage: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
         "id": "chatcmpl-fake",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
     }
+    if usage is not None:
+        payload["usage"] = usage
     return f"data: {json.dumps(payload)}\n\n"
 
 
@@ -269,8 +280,37 @@ async def _stream(
         yielded += 1
 
     text, tool_calls = _reply(state, model, messages, tools)
+    custom_usage_iter = (
+        iter(state.stream_usage_chunks) if state.stream_usage_chunks is not None else None
+    )
+    words = text.split(" ") if tool_calls is None else []
+    total_words = len(words)
+
+    def chunk_usage(word_idx: int | None = None) -> dict[str, int] | None:
+        if custom_usage_iter is not None:
+            raw = next(custom_usage_iter, None)
+            if raw is None:
+                return None
+            pt = int(raw.get("prompt_tokens", 0))
+            ct = int(raw.get("completion_tokens", 0))
+            tt = int(raw.get("total_tokens", pt + ct))
+            return {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
+        if state.cumulative_usage_in_stream and usage:
+            if word_idx is not None and total_words > 0:
+                ct = round((word_idx + 1) / total_words * 10)
+            elif word_idx is not None and word_idx < 0:
+                ct = 0
+            else:
+                ct = 10
+            return {"prompt_tokens": 100, "completion_tokens": ct, "total_tokens": 100 + ct}
+        return None
+
     maybe_drop()
-    yield _chunk(model, {"role": "assistant", "content": ""})
+    yield _chunk(
+        model,
+        {"role": "assistant", "content": ""},
+        usage=chunk_usage(word_idx=-1 if state.cumulative_usage_in_stream else None),
+    )
     if state.sse_error_remaining > 0:
         state.sse_error_remaining -= 1
         sse_err = {
@@ -308,7 +348,7 @@ async def _stream(
                 first["extra_content"] = extra_content
 
             maybe_drop()
-            yield _chunk(model, {"tool_calls": [first]})
+            yield _chunk(model, {"tool_calls": [first]}, usage=chunk_usage())
             maybe_drop()
             second: dict[str, Any] = {
                 "index": idx,
@@ -323,21 +363,22 @@ async def _stream(
             yield _chunk(
                 model,
                 {"tool_calls": [second]},
+                usage=chunk_usage(),
             )
         finish = "tool_calls"
     else:
-        for i, word in enumerate(text.split(" ")):
+        for i, word in enumerate(words):
             if model == "fake-slow":
                 await asyncio.sleep(0.05)
             maybe_drop()
-            yield _chunk(model, {"content": word if i == 0 else " " + word})
+            yield _chunk(model, {"content": word if i == 0 else " " + word}, usage=chunk_usage(i))
             if model == "fake-slow" and i == 0:
                 while not state._slow_gate.is_set():
                     await asyncio.sleep(0.02)
         finish = "stop"
     maybe_drop()
-    yield _chunk(model, {}, finish)
-    if usage:
+    yield _chunk(model, {}, finish, usage=chunk_usage())
+    if usage and state.stream_usage_chunks is None:
         tail: dict[str, Any] = {
             "id": "chatcmpl-fake",
             "object": "chat.completion.chunk",
