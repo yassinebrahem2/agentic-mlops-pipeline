@@ -1326,10 +1326,12 @@
         "properties": {
           "kind": {
             "const": "local_folder",
+            "description": "Connection kind ('local_folder').",
             "title": "Kind",
             "type": "string"
           },
           "name": {
+            "description": "Connection name: lowercase letters, digits and dashes, starting with a letter or digit, at most 40 characters.",
             "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
             "title": "Name",
             "type": "string"
@@ -1338,6 +1340,7 @@
             "$ref": "#/components/schemas/LocalFolderSettings"
           },
           "why": {
+            "description": "Why this connection is needed for the project.",
             "title": "Why",
             "type": "string"
           }
@@ -1419,6 +1422,7 @@
       },
       "ConnectionsPayload": {
         "additionalProperties": false,
+        "description": "Propose project data connections for user approval. Configures read-only data connections such as local folders.",
         "properties": {
           "connections": {
             "items": {
@@ -3255,8 +3259,10 @@
       },
       "HandoffPayload": {
         "additionalProperties": false,
+        "description": "Propose the project handoff configuration for user approval. Defines models, pipelines, tracking, and operational settings.",
         "properties": {
           "commands": {
+            "description": "Project-level action commands (such as batch rerun, quarantine, or pipeline triggers) and their parameter templates.",
             "items": {
               "$ref": "#/components/schemas/CommandSpec"
             },
@@ -3264,6 +3270,7 @@
             "type": "array"
           },
           "data_roles": {
+            "description": "Mapping of data connections and tables to their roles ('training', 'serving_inputs', 'predictions', 'labels', 'other'). Every table used by a model must be declared, especially predictions and labels tables so they are never left unmapped.",
             "items": {
               "$ref": "#/components/schemas/DataRole"
             },
@@ -3271,6 +3278,7 @@
             "type": "array"
           },
           "edges": {
+            "description": "Directed dependency edges connecting upstream pipeline stage outputs to downstream stage inputs.",
             "items": {
               "$ref": "#/components/schemas/PipelineEdge"
             },
@@ -3278,6 +3286,7 @@
             "type": "array"
           },
           "gaps": {
+            "description": "Identified gaps or missing configurations with next steps for human follow-up.",
             "items": {
               "$ref": "#/components/schemas/Gap"
             },
@@ -3285,9 +3294,11 @@
             "type": "array"
           },
           "grants": {
-            "$ref": "#/components/schemas/Grants"
+            "$ref": "#/components/schemas/Grants",
+            "description": "Requested runtime permissions: network access and permission level (suggest, ask, or autonomous)."
           },
           "models": {
+            "description": "Models in the project, their profiles, environment aliases, prediction/label tables, and promotion gate mode.",
             "items": {
               "$ref": "#/components/schemas/ModelSpec"
             },
@@ -3295,9 +3306,11 @@
             "type": "array"
           },
           "operations": {
-            "$ref": "#/components/schemas/Operations"
+            "$ref": "#/components/schemas/Operations",
+            "description": "Operational configuration: schedulers, check specifications, on-call contacts, and results storage."
           },
           "pipeline": {
+            "description": "Pipeline stages (such as data-prep, train, eval), their entry points, inputs, and outputs.",
             "items": {
               "$ref": "#/components/schemas/PipelineStage"
             },
@@ -3305,6 +3318,7 @@
             "type": "array"
           },
           "tracking": {
+            "description": "Tracking systems (such as MLflow or GitHub Actions) used to log runs and artifacts. A tracking source holds no credentials ('auth' is 'none' or 'credential'; any secret is entered by the human at proposal approval, never in this payload).",
             "items": {
               "$ref": "#/components/schemas/TrackingSourceSpec"
             },
@@ -3611,8 +3625,10 @@
       },
       "HooksPayload": {
         "additionalProperties": false,
+        "description": "Propose automation hooks for user approval. Registers command or CI dispatch hooks for pipeline tasks.",
         "properties": {
           "hooks": {
+            "description": "The list of automation hooks to register.",
             "items": {
               "$ref": "#/components/schemas/HookProposal"
             },
@@ -4038,6 +4054,7 @@
         "additionalProperties": false,
         "properties": {
           "path": {
+            "description": "The folder on the person's machine as they gave it, never the sandbox's /data/<name>",
             "title": "Path",
             "type": "string"
           }
@@ -4080,9 +4097,11 @@
       },
       "MaintenancePayload": {
         "additionalProperties": false,
+        "description": "Propose a scheduled maintenance window for user approval. Silences alerts and pauses automated actions during the window.",
         "properties": {
           "window": {
-            "$ref": "#/components/schemas/WindowSpec"
+            "$ref": "#/components/schemas/WindowSpec",
+            "description": "The maintenance window schedule and scope."
           }
         },
         "required": [
@@ -5887,12 +5906,15 @@
       },
       "ParserPayload": {
         "additionalProperties": false,
+        "description": "Propose a results parser for user approval. Defines how monitoring check outputs are parsed into result records.",
         "properties": {
           "sample_input": {
+            "description": "Sample raw input text to test the parser against.",
             "title": "Sample Input",
             "type": "string"
           },
           "sample_records": {
+            "description": "Sample parsed records demonstrating expected output.",
             "items": {
               "$ref": "#/components/schemas/ResultRecord"
             },
@@ -5900,7 +5922,8 @@
             "type": "array"
           },
           "spec": {
-            "$ref": "#/components/schemas/ParserSpec"
+            "$ref": "#/components/schemas/ParserSpec",
+            "description": "The parser specification including source ID and parser details."
           }
         },
         "required": [
@@ -6434,8 +6457,10 @@
       },
       "PromotionPayload": {
         "additionalProperties": false,
+        "description": "Propose promoting a candidate model version to production for user approval. Triggers model promotion and deployment hooks.",
         "properties": {
           "candidate_version": {
+            "description": "The candidate model version to promote.",
             "title": "Candidate Version",
             "type": "string"
           },
@@ -6448,17 +6473,21 @@
                 "type": "null"
               }
             ],
+            "description": "Current champion model version being replaced, if any.",
             "title": "Champion Version"
           },
           "deploy_hook_id": {
+            "description": "Hook ID to execute for deployment.",
             "title": "Deploy Hook Id",
             "type": "string"
           },
           "model": {
+            "description": "The model name to promote.",
             "title": "Model",
             "type": "string"
           },
           "report_id": {
+            "description": "Evaluation report ID demonstrating candidate readiness.",
             "title": "Report Id",
             "type": "string"
           }
@@ -7152,11 +7181,13 @@
         "properties": {
           "per_day": {
             "default": 1,
+            "description": "Maximum automated actions allowed across all incidents per day.",
             "title": "Per Day",
             "type": "integer"
           },
           "per_incident": {
             "default": 1,
+            "description": "Maximum automated actions allowed per incident before requiring human intervention.",
             "title": "Per Incident",
             "type": "integer"
           }
@@ -7166,9 +7197,11 @@
       },
       "RulePayload": {
         "additionalProperties": false,
+        "description": "Propose an automated incident mitigation rule for user approval. Triggers remediation hooks when monitoring signals match.",
         "properties": {
           "spec": {
-            "$ref": "#/components/schemas/RuleSpec"
+            "$ref": "#/components/schemas/RuleSpec",
+            "description": "Rule specification detailing the trigger terms, remediation hook, and safety limits."
           }
         },
         "required": [
@@ -7281,10 +7314,12 @@
         "additionalProperties": false,
         "properties": {
           "hook_id": {
+            "description": "ID of the action hook to execute when trigger terms are met.",
             "title": "Hook Id",
             "type": "string"
           },
           "hook_kind": {
+            "description": "Type of remediation action the hook executes: 'rollback', 'rerun', or 'fall_back'.",
             "enum": [
               "rollback",
               "rerun",
@@ -7294,7 +7329,8 @@
             "type": "string"
           },
           "limits": {
-            "$ref": "#/components/schemas/RuleLimits"
+            "$ref": "#/components/schemas/RuleLimits",
+            "description": "Rate and count limits to prevent runaway automated actions."
           },
           "model": {
             "anyOf": [
@@ -7305,13 +7341,16 @@
                 "type": "null"
               }
             ],
+            "description": "Optional model name this rule applies to, or None for project-wide rules.",
             "title": "Model"
           },
           "name": {
+            "description": "Unique identifier for the mitigation rule (e.g. 'drift-auto-rollback').",
             "title": "Name",
             "type": "string"
           },
           "terms": {
+            "description": "Trigger terms evaluated against check results; at least one term is required.",
             "items": {
               "$ref": "#/components/schemas/RuleTerm"
             },
@@ -7319,6 +7358,7 @@
             "type": "array"
           },
           "why": {
+            "description": "Reason why this rule is proposed and what operational issue it addresses.",
             "title": "Why",
             "type": "string"
           }
@@ -7338,11 +7378,13 @@
         "additionalProperties": false,
         "properties": {
           "check_id": {
+            "description": "ID of the check whose fired results trigger this term (from handoff operations.checks or recent incidents).",
             "title": "Check Id",
             "type": "string"
           },
           "min_records": {
             "default": 1,
+            "description": "Minimum number of check records required in the window before evaluating (at least 1).",
             "title": "Min Records",
             "type": "integer"
           },
@@ -7355,9 +7397,11 @@
                 "type": "null"
               }
             ],
+            "description": "Optional model name to match. If omitted, matches results across all models.",
             "title": "Model"
           },
           "quantifier": {
+            "description": "Aggregation over window results: 'latest' for the most recent record, 'any' if at least one matches, 'all' if every record matches.",
             "enum": [
               "latest",
               "any",
@@ -7381,9 +7425,11 @@
                 "$ref": "#/components/schemas/Not"
               }
             ],
+            "description": "Condition expression evaluated against check result record fields to trigger the term.",
             "title": "When"
           },
           "window_minutes": {
+            "description": "Lookback window in minutes over which to evaluate check results.",
             "title": "Window Minutes",
             "type": "integer"
           }
@@ -8779,6 +8825,7 @@
       },
       "TrainingPolicyPayload": {
         "additionalProperties": false,
+        "description": "Propose an automated training policy for user approval. Configures retraining schedules, hooks, and limits for a model.",
         "properties": {
           "evaluate_hook_id": {
             "anyOf": [
@@ -8789,30 +8836,37 @@
                 "type": "null"
               }
             ],
+            "description": "Hook ID to execute for model evaluation, if any.",
             "title": "Evaluate Hook Id"
           },
           "max_runs_per_week": {
+            "description": "Maximum training runs allowed per week.",
             "title": "Max Runs Per Week",
             "type": "integer"
           },
           "min_interval_hours": {
+            "description": "Minimum hours between consecutive training runs.",
             "title": "Min Interval Hours",
             "type": "integer"
           },
           "model": {
+            "description": "The model name this training policy governs.",
             "title": "Model",
             "type": "string"
           },
           "run_time_limit_minutes": {
+            "description": "Execution time limit in minutes for training runs.",
             "title": "Run Time Limit Minutes",
             "type": "integer"
           },
           "train_hook_id": {
+            "description": "Hook ID to execute for model training.",
             "title": "Train Hook Id",
             "type": "string"
           },
           "window": {
-            "$ref": "#/components/schemas/WindowRule"
+            "$ref": "#/components/schemas/WindowRule",
+            "description": "Data window rule specifying training data range."
           }
         },
         "required": [

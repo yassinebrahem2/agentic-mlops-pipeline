@@ -1,4 +1,4 @@
-"""A real provider accepts the Propose tool's schema as the app sends it (acceptance, run once by
+"""A real provider accepts the ProposeConnections tool's schema as the app sends it (acceptance, run once by
 hand with `uv run pytest -m live`; it does not gate CI)."""
 
 from __future__ import annotations
@@ -10,8 +10,9 @@ from typing import cast
 import httpx2
 import pytest
 
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.api.services import Services
+from mlops_agents.proposals.contract import CONNECTIONS_KIND
 from mlops_agents.providers.env_keys import KNOWN_ENV_KEYS
 from tests.api.conftest import started_app
 
@@ -36,7 +37,7 @@ async def test_a_real_provider_accepts_the_propose_schema(tmp_path: Path) -> Non
     # The schema exactly as ModelCaller binds it: the registry's, after _clean_schema.
     async with started_app(tmp_path / "data") as app:
         services: Services = app.state.services
-        [tool] = services.tools.schemas([PROPOSE_TOOL_NAME])
+        [tool] = services.tools.schemas([propose_tool_name(CONNECTIONS_KIND)])
     assert _refs(tool) == []
 
     live_model = os.environ.get("MLOPS_AGENTS_LIVE_MODEL")

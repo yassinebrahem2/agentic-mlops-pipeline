@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, Final, Literal, Self, cast
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    GetJsonSchemaHandler,
+    TypeAdapter,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 
 MAX_CONDITION_DEPTH: Final = 4
 MAX_CONDITION_NODES: Final = 32
@@ -83,9 +92,42 @@ def _validate_limits(c: ConditionNode) -> ConditionNode:
     return c
 
 
+class AllOfBounded(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    all_of: list[Compare]
+
+
+class AnyOfBounded(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    any_of: list[Compare]
+
+
+class NotBounded(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    not_: Compare
+
+
+BoundedCondition = Compare | AllOfBounded | AnyOfBounded | NotBounded
+
+
+class _BoundedConditionSchema:
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, _schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        schema_gen = getattr(handler, "generate_json_schema", None)
+        if schema_gen is not None and type(schema_gen).__module__.startswith("fastapi"):
+            return handler(_schema)
+        return handler(TypeAdapter(BoundedCondition).core_schema)
+
+
 Condition = Annotated[
     Compare | AllOf | AnyOf | Not,
     AfterValidator(_validate_limits),
+    _BoundedConditionSchema,
 ]
 
 

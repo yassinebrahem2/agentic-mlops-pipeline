@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.monitoring.expectations.contract import ExpectationKey
 from mlops_agents.monitoring.results.contract import ResultCategory
@@ -273,6 +273,8 @@ class WindowSpec(BaseModel):
 
 
 class MaintenancePayload(BaseModel):
+    """Propose a scheduled maintenance window for user approval. Silences alerts and pauses automated actions during the window."""
+
     model_config = ConfigDict(extra="forbid")
 
-    window: WindowSpec
+    window: WindowSpec = Field(description="The maintenance window schedule and scope.")

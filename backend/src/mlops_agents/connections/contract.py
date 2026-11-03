@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 ConnectionStatus = Literal["ok", "unreachable"]
 
@@ -19,7 +19,9 @@ LOCAL_FOLDER_KIND: LocalFolderKindName = "local_folder"
 class LocalFolderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    path: str = Field(
+        description="The folder on the person's machine as they gave it, never the sandbox's /data/<name>"
+    )
 
 
 class TableRef(BaseModel):

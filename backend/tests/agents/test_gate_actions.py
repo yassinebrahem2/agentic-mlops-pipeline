@@ -38,6 +38,7 @@ from mlops_agents.agents.tools.base import (
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from tests.agents.gate_helpers import (
+    DummyArgs,
     FakeFileAccess,
     make_call,
     setup_session_and_turn,
@@ -273,17 +274,16 @@ class _FakeActionTool(AgentTool[_FakeActionArgs]):
         )
 
 
-class _FakeProposeArgs(BaseModel):
-    kind: str
-
-
-class _FakeProposeTool(AgentTool[_FakeProposeArgs]):
+class _FakeProposeTool(AgentTool[DummyArgs]):
     name: ClassVar[str] = "fake_propose"
     description: ClassVar[str] = "Fake propose"
     risk: ClassVar[RiskClass] = RiskClass.PROPOSE
-    args_model: ClassVar[type[BaseModel]] = _FakeProposeArgs
+    args_model: ClassVar[type[BaseModel]] = DummyArgs
 
-    async def run(self, ctx: ToolContext, args: _FakeProposeArgs) -> ToolOutput:
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+
+    async def run(self, ctx: ToolContext, args: DummyArgs) -> ToolOutput:
         return ToolOutput("proposed")
 
 
@@ -461,9 +461,10 @@ async def test_gate_bypass_propose_overrides(databases: Databases, paths: DataPa
     store = ApprovalStore(databases)
     gate = ApprovalGate(databases, store=store)
 
-    tool = _FakeProposeTool()
-    call_promo = make_call(tool, "c_promo", project_id, args=_FakeProposeArgs(kind="promotion"))
-    call_rule = make_call(tool, "c_rule", project_id, args=_FakeProposeArgs(kind="rule"))
+    tool_promo = _FakeProposeTool(kind="promotion")
+    tool_rule = _FakeProposeTool(kind="rule")
+    call_promo = make_call(tool_promo, "c_promo", project_id)
+    call_rule = make_call(tool_rule, "c_rule", project_id)
 
     decisions = await gate.decide([call_promo, call_rule])
     assert decisions["c_promo"].outcome == "allow"

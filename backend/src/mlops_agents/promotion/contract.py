@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mlops_agents.tracking.contract import EvaluationRecord
 from mlops_agents.training.contract import TrainingWindow
@@ -118,13 +118,17 @@ class Reports(Protocol):
 
 
 class PromotionPayload(BaseModel):
+    """Propose promoting a candidate model version to production for user approval. Triggers model promotion and deployment hooks."""
+
     model_config = ConfigDict(extra="forbid")
 
-    model: str
-    report_id: str
-    candidate_version: str
-    champion_version: str | None = None
-    deploy_hook_id: str
+    model: str = Field(description="The model name to promote.")
+    report_id: str = Field(description="Evaluation report ID demonstrating candidate readiness.")
+    candidate_version: str = Field(description="The candidate model version to promote.")
+    champion_version: str | None = Field(
+        default=None, description="Current champion model version being replaced, if any."
+    )
+    deploy_hook_id: str = Field(description="Hook ID to execute for deployment.")
 
 
 class PromotionView(BaseModel):

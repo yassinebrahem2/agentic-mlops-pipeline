@@ -30,6 +30,7 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import audit as audit_table
 from tests.agents.approval_env import STALL_PREVIEW
+from tests.agents.gate_helpers import DummyArgs
 from tests.agents.runtime.session_env import SessionEnv, build_session_env
 from tests.agents.runtime.test_resuming_turns import (
     collect_until_turn_ended,
@@ -40,26 +41,22 @@ from tests.conftest import MemoryKeyStore
 from tests.fakes.fake_openai import RunningFake
 
 
-class ProposeArgs(BaseModel):
-    kind: str
-    payload: dict[str, str] = {}
-
-
-class RecordingProposeTool(AgentTool[ProposeArgs]):
+class RecordingProposeTool(AgentTool[DummyArgs]):
     name: ClassVar[str] = "propose_test"
     description: ClassVar[str] = "A tool of class propose"
     risk: ClassVar[RiskClass] = RiskClass.PROPOSE
-    args_model: ClassVar[type[BaseModel]] = ProposeArgs
+    args_model: ClassVar[type[BaseModel]] = DummyArgs
 
-    def __init__(self) -> None:
+    def __init__(self, kind: str = "handoff") -> None:
+        self.kind = kind
         self.preview_call_ids: list[str] = []
         self.run_call_ids: list[str] = []
 
-    async def preview(self, ctx: ToolContext, args: ProposeArgs) -> Preview:
+    async def preview(self, ctx: ToolContext, args: DummyArgs) -> Preview:
         self.preview_call_ids.append(ctx.tool_call_id)
-        return Preview(kind="text", title=f"Propose {args.kind}", body="{}")
+        return Preview(kind="text", title=f"Propose {self.kind}", body="{}")
 
-    async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
+    async def run(self, ctx: ToolContext, args: DummyArgs) -> ToolOutput:
         self.run_call_ids.append(ctx.tool_call_id)
         return ToolOutput("Applied.")
 
@@ -122,9 +119,7 @@ async def test_a_propose_call_asks_at_every_level_and_its_part_carries_the_propo
     await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases, env.manager, store=store)
     env.manager.bind_approvals(approvals)
-    fake_openai.state.scripted_tool_calls = [
-        {"name": "propose_test", "arguments": {"kind": "handoff", "payload": {}}}
-    ]
+    fake_openai.state.scripted_tool_calls = [{"name": "propose_test", "arguments": {}}]
 
     sub = env.manager.subscribe(env.project_id, "proposer", after_seq=None)
     await anext(sub)
@@ -218,9 +213,7 @@ async def test_rejecting_a_stall_ends_its_turn_stopped_with_no_audit_record(
     await env.settings.set_default_model("proposer", f"{env.provider}:fake-tools")
     approvals = ApprovalsService(databases, env.manager, store=store, audit_log=audit)
     env.manager.bind_approvals(approvals)
-    fake_openai.state.scripted_tool_calls = [
-        {"name": "propose_test", "arguments": {"kind": "handoff", "payload": {}}}
-    ]
+    fake_openai.state.scripted_tool_calls = [{"name": "propose_test", "arguments": {}}]
     sub = env.manager.subscribe(env.project_id, "proposer", after_seq=None)
     await anext(sub)
     await env.manager.send(env.project_id, "proposer", "Propose the handoff")

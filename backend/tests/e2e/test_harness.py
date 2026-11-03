@@ -16,7 +16,7 @@ from mlops_agents.agents.tools.names import (
     MONITORING_QUERY,
     RUN_HOOK,
 )
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.incidents.grouping import is_downstream
 from mlops_agents.proposals.payloads import HandoffPayload
@@ -313,7 +313,10 @@ def test_monitoring_script_deployment_rollback() -> None:
 
 def test_monitoring_script_onboarding_night() -> None:
     """onboarding_night_reply asks for data, proposes connections, proposes handoff, and finishes."""
-    tools = [{"type": "function", "function": {"name": PROPOSE_TOOL_NAME}}]
+    tools = [
+        {"type": "function", "function": {"name": propose_tool_name("connections")}},
+        {"type": "function", "function": {"name": propose_tool_name("handoff")}},
+    ]
 
     # Turn 1: No data path yet
     text, calls = onboarding_night_reply([{"role": "user", "content": "Hello"}], tools)
@@ -328,8 +331,8 @@ def test_monitoring_script_onboarding_night() -> None:
     text, calls = onboarding_night_reply([user_msg], tools)
     assert text == ""
     assert calls is not None
-    assert calls[0]["name"] == PROPOSE_TOOL_NAME
-    assert calls[0]["arguments"]["kind"] == "connections"
+    assert calls[0]["name"] == propose_tool_name("connections")
+    assert "connections" in calls[0]["arguments"]
 
     # Turn 3: Tool response for connections -> propose handoff
     text, calls = onboarding_night_reply(
@@ -337,8 +340,8 @@ def test_monitoring_script_onboarding_night() -> None:
     )
     assert text == ""
     assert calls is not None
-    assert calls[0]["name"] == PROPOSE_TOOL_NAME
-    assert calls[0]["arguments"]["kind"] == "handoff"
+    assert calls[0]["name"] == propose_tool_name("handoff")
+    assert "models" in calls[0]["arguments"]
 
     # Turn 4: Tool response for handoff -> onboarding complete
     text, calls = onboarding_night_reply(

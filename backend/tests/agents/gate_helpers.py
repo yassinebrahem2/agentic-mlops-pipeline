@@ -113,19 +113,18 @@ class DeployTool(AgentTool[DummyArgs]):
         return Preview(kind="text", title=self.name, body=f"preview for {self.name}")
 
 
-class ProposeArgs(BaseModel):
-    kind: object = None
-
-
-class ProposeTool(AgentTool[ProposeArgs]):
-    """A tool of class propose, as the proposals plan's Propose will be; its name is not read."""
+class ProposeTool(AgentTool[DummyArgs]):
+    """A tool of class propose; its name is not read."""
 
     name: ClassVar[str] = "propose_something"
     description: ClassVar[str] = "Dummy propose tool"
     risk: ClassVar[RiskClass] = RiskClass.PROPOSE
-    args_model: ClassVar[type[BaseModel]] = ProposeArgs
+    args_model: ClassVar[type[BaseModel]] = DummyArgs
 
-    async def run(self, ctx: ToolContext, args: ProposeArgs) -> ToolOutput:
+    def __init__(self, kind: Any = None) -> None:
+        self.kind = kind
+
+    async def run(self, ctx: ToolContext, args: DummyArgs) -> ToolOutput:
         return ToolOutput("ok")
 
 

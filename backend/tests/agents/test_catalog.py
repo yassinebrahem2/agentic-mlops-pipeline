@@ -127,16 +127,21 @@ def test_load_passes_the_hook_names(tmp_path: Path) -> None:
 
 
 def test_packaged_orchestrator() -> None:
+    from mlops_agents.agents.tools.propose import propose_tool_name
+    from mlops_agents.proposals.contract import PROPOSAL_KINDS
+
     catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
     orchestrator = catalog.get("orchestrator")
-    assert set(orchestrator.tools) == STAGE_2_TOOLS - {
-        "Propose",
-        "ProposalShape",
-        ADJUST_SEVERITY,
-        RECORD_FIX_CHOICE,
-        SAVE_REPORT,
-        REGISTER_CHECK,
-    }
+    propose_tools = {propose_tool_name(k) for k in PROPOSAL_KINDS}
+    assert set(orchestrator.tools) == STAGE_2_TOOLS - (
+        propose_tools
+        | {
+            ADJUST_SEVERITY,
+            RECORD_FIX_CHOICE,
+            SAVE_REPORT,
+            REGISTER_CHECK,
+        }
+    )
     assert orchestrator.chat
     assert catalog.all()[0].name == "orchestrator"
     with pytest.raises(DomainError) as err:

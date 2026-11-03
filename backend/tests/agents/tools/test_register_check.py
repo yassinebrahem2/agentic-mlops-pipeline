@@ -277,10 +277,16 @@ def test_category_description_lists_every_result_category() -> None:
         assert category in described, f"category description omits {category}"
 
 
-def test_register_check_description_and_propose_description_carry_ran_at_description() -> None:
+def test_register_check_description_and_propose_parser_description_carry_ran_at_description() -> (
+    None
+):
     from unittest.mock import MagicMock
 
-    from mlops_agents.agents.tools.propose import ProposeTool
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.monitoring.results.contract import ParserPayload
+    from mlops_agents.proposals.contract import PARSER_KIND
+    from mlops_agents.proposals.kinds import ProposalKinds
+    from tests.proposals.conftest import ScriptedTestKind
 
     ran_at_desc = ResultRecord.model_fields["ran_at"].description
     assert ran_at_desc is not None, "ResultRecord.ran_at must define a field description"
@@ -289,7 +295,9 @@ def test_register_check_description_and_propose_description_carry_ran_at_descrip
     assert "the time the result describes" not in RegisterCheck.description
     assert ran_at_desc in RegisterCheck.description
 
-    tool = ProposeTool(MagicMock(), MagicMock())
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=PARSER_KIND, payload_model=ParserPayload))
+    tool = TypedProposeTool(kind=PARSER_KIND, proposals=MagicMock(), kinds=kinds)
     schema_desc = tool.schema()["function"]["description"]
     assert "the time the result describes" not in schema_desc
     assert ran_at_desc in schema_desc

@@ -18,7 +18,7 @@ from mlops_agents.agents.tools.names import (
     RUN_HOOK,
     SAVE_REPORT,
 )
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.promotion.constants import REQUIRED_REPORT_FIELDS
 
 if TYPE_CHECKING:
@@ -53,7 +53,10 @@ ASK_FOR_DATA: Final = (
     f"Where does the data live? Answer with {DATA_PATH_KEY}<folder> and {MLFLOW_URL_KEY}<url>, "
     "each on its own line."
 )
-NO_PROPOSE: Final = f"I cannot set the project up: the {PROPOSE_TOOL_NAME} tool is not offered."
+PROPOSE_CONNECTIONS_TOOL: Final = propose_tool_name("connections")
+NO_PROPOSE: Final = (
+    f"I cannot set the project up: the {PROPOSE_CONNECTIONS_TOOL} tool is not offered."
+)
 ONBOARDING_COMPLETE: Final = "Onboarding is complete."
 
 _deployment_hook_id: str | None = None
@@ -255,7 +258,7 @@ def onboarding_night_reply(
     ]
     if not asked:
         return ASK_FOR_DATA, None
-    if not any(tool["function"]["name"] == PROPOSE_TOOL_NAME for tool in tools):
+    if not any(tool["function"]["name"] == PROPOSE_CONNECTIONS_TOOL for tool in tools):
         return NO_PROPOSE, None
     start = asked[-1]
     request = _text(messages[start].get("content"))
@@ -263,22 +266,16 @@ def onboarding_night_reply(
     if results == 0:
         return "", [
             {
-                "name": PROPOSE_TOOL_NAME,
-                "arguments": {
-                    "kind": "connections",
-                    "payload": connections_payload(_value(request, DATA_PATH_KEY)),
-                },
+                "name": propose_tool_name("connections"),
+                "arguments": connections_payload(_value(request, DATA_PATH_KEY)),
             }
         ]
     if results == 1:
         mlflow_url = _value(request, MLFLOW_URL_KEY) or "http://127.0.0.1:5000"
         return "", [
             {
-                "name": PROPOSE_TOOL_NAME,
-                "arguments": {
-                    "kind": "handoff",
-                    "payload": handoff(mlflow_url),
-                },
+                "name": propose_tool_name("handoff"),
+                "arguments": handoff(mlflow_url),
             }
         ]
     return ONBOARDING_COMPLETE, None
@@ -372,16 +369,13 @@ def _promote_request_reply(results: list[str]) -> tuple[str, list[ToolCall] | No
     if len(results) == 2 and hook_id is not None and report_id is not None:
         return "", [
             {
-                "name": PROPOSE_TOOL_NAME,
+                "name": propose_tool_name(PROMOTION_KIND_NAME),
                 "arguments": {
-                    "kind": PROMOTION_KIND_NAME,
-                    "payload": {
-                        "model": MODEL_NAME,
-                        "report_id": report_id,
-                        "candidate_version": CHALLENGER_VERSION,
-                        "champion_version": CHAMPION_VERSION,
-                        "deploy_hook_id": hook_id,
-                    },
+                    "model": MODEL_NAME,
+                    "report_id": report_id,
+                    "candidate_version": CHALLENGER_VERSION,
+                    "champion_version": CHAMPION_VERSION,
+                    "deploy_hook_id": hook_id,
                 },
             }
         ]
@@ -464,16 +458,13 @@ def retraining_reply(
     if len(results) == 2 and ids.deploy_hook_id is not None and report_id is not None:
         return "", [
             {
-                "name": PROPOSE_TOOL_NAME,
+                "name": propose_tool_name(PROMOTION_KIND_NAME),
                 "arguments": {
-                    "kind": PROMOTION_KIND_NAME,
-                    "payload": {
-                        "model": ids.model,
-                        "report_id": report_id,
-                        "candidate_version": ids.candidate_version,
-                        "champion_version": ids.champion_version,
-                        "deploy_hook_id": ids.deploy_hook_id,
-                    },
+                    "model": ids.model,
+                    "report_id": report_id,
+                    "candidate_version": ids.candidate_version,
+                    "champion_version": ids.champion_version,
+                    "deploy_hook_id": ids.deploy_hook_id,
                 },
             }
         ]

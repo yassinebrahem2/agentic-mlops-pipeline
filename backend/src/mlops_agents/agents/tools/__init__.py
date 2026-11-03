@@ -16,12 +16,10 @@ from mlops_agents.agents.tools.issues import (
 )
 from mlops_agents.agents.tools.list_agents import ListAgentsTool
 from mlops_agents.agents.tools.merge import MergePullRequest, MergePullRequestTool
-from mlops_agents.agents.tools.proposal_shape import (
-    PROPOSAL_SHAPE_TOOL_NAME,
-    ProposalShape,
-    ProposalShapeTool,
+from mlops_agents.agents.tools.propose import (
+    TypedProposeTool,
+    propose_tool_name,
 )
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.read_handoff import ReadHandoffTool
@@ -42,6 +40,7 @@ from mlops_agents.monitoring.incidents.tools import (
     IncidentSplit,
     IncidentUpdate,
 )
+from mlops_agents.proposals.contract import PROPOSAL_KINDS
 from mlops_agents.training.tools import RecordFixChoice, RequestFix
 
 if TYPE_CHECKING:
@@ -73,8 +72,6 @@ if TYPE_CHECKING:
     from mlops_agents.workspace.service import WorkspaceService
 
 __all__ = [
-    "PROPOSAL_SHAPE_TOOL_NAME",
-    "PROPOSE_TOOL_NAME",
     "AdjustSeverity",
     "BashTool",
     "CommentOnIssueTool",
@@ -92,9 +89,6 @@ __all__ = [
     "MonitoringQueryTool",
     "OpenIssueTool",
     "OpenPullRequestTool",
-    "ProposalShape",
-    "ProposalShapeTool",
-    "ProposeTool",
     "ReadHandoffTool",
     "ReadTool",
     "RecordFixChoice",
@@ -110,8 +104,10 @@ __all__ = [
     "StartTaskTool",
     "ToolRegistry",
     "TrackingHistory",
+    "TypedProposeTool",
     "WriteTool",
     "default_registry",
+    "propose_tool_name",
 ]
 
 
@@ -160,10 +156,9 @@ def default_registry(
     ]
     if tracking is not None:
         tools.append(TrackingHistory(tracking=tracking))
-    if proposal_kinds is not None:
-        tools.append(ProposalShapeTool(proposal_kinds))
     if proposals is not None and proposal_kinds is not None:
-        tools.append(ProposeTool(proposals, proposal_kinds))
+        for kind in PROPOSAL_KINDS:
+            tools.append(TypedProposeTool(kind=kind, proposals=proposals, kinds=proposal_kinds))
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(

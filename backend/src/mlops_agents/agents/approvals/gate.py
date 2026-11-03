@@ -50,12 +50,12 @@ def _extract_target(tool_name: str, args: BaseModel) -> str:
 
 
 def _proposal_kind(call: GateCall) -> str | None:
-    """The kind a call of a tool of class propose proposes: its `kind` argument when that is a
-    string. The risk class decides, never the tool's name."""
+    """The kind a call of a tool of class propose proposes: check the tool's `kind` attribute.
+    The risk class decides, never the tool's name."""
     if call.tool.risk != RiskClass.PROPOSE:
         return None
-    kind: object = getattr(call.args, "kind", None)
-    return kind if isinstance(kind, str) else None
+    tool_kind: object = getattr(call.tool, "kind", None)
+    return tool_kind if isinstance(tool_kind, str) else None
 
 
 class ApprovalGate(Gate):

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.agents.approvals.authority import Authority
 from mlops_agents.proposals.payloads import CommandSpec
@@ -166,9 +166,11 @@ class HookProposal(BaseModel):
 
 
 class HooksPayload(BaseModel):
+    """Propose automation hooks for user approval. Registers command or CI dispatch hooks for pipeline tasks."""
+
     model_config = ConfigDict(extra="forbid")
 
-    hooks: list[HookProposal]
+    hooks: list[HookProposal] = Field(description="The list of automation hooks to register.")
 
 
 # I36 pipeline-runs types

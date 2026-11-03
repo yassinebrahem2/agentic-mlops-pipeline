@@ -192,11 +192,17 @@ class ParseOutcome(BaseModel):
 
 
 class ParserPayload(BaseModel):
+    """Propose a results parser for user approval. Defines how monitoring check outputs are parsed into result records."""
+
     model_config = ConfigDict(extra="forbid")
 
-    spec: ParserSpec
-    sample_input: str
-    sample_records: list[ResultRecord]
+    spec: ParserSpec = Field(
+        description="The parser specification including source ID and parser details."
+    )
+    sample_input: str = Field(description="Sample raw input text to test the parser against.")
+    sample_records: list[ResultRecord] = Field(
+        description="Sample parsed records demonstrating expected output."
+    )
 
 
 class Parsers(Protocol):

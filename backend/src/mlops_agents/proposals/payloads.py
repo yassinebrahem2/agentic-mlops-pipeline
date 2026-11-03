@@ -73,13 +73,17 @@ class _Strict(BaseModel):
 
 class ConnectionSpec(_Strict):
     # Settings are typed per kind, so no secret can ride in a free-form dict.
-    kind: LocalFolderKindName
-    name: Annotated[str, StringConstraints(pattern=CONNECTION_NAME_PATTERN)]
+    kind: LocalFolderKindName = Field(description="Connection kind ('local_folder').")
+    name: Annotated[str, StringConstraints(pattern=CONNECTION_NAME_PATTERN)] = Field(
+        description="Connection name: lowercase letters, digits and dashes, starting with a letter or digit, at most 40 characters."
+    )
     settings: LocalFolderSettings
-    why: str
+    why: str = Field(description="Why this connection is needed for the project.")
 
 
 class ConnectionsPayload(_Strict):
+    """Propose project data connections for user approval. Configures read-only data connections such as local folders."""
+
     connections: Annotated[list[ConnectionSpec], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -358,15 +362,44 @@ class Grants(_Strict):
 
 
 class HandoffPayload(_Strict):
-    models: list[ModelSpec]
-    commands: list[CommandSpec]  # project-level: rerun a data job, hold or quarantine a batch
-    data_roles: list[DataRole]
-    tracking: list[TrackingSourceSpec]
-    pipeline: list[PipelineStage]
-    edges: list[PipelineEdge]
-    operations: Operations
-    gaps: list[Gap]
-    grants: Grants
+    """Propose the project handoff configuration for user approval. Defines models, pipelines, tracking, and operational settings."""
+
+    models: list[ModelSpec] = Field(
+        description="Models in the project, their profiles, environment aliases, prediction/label tables, and promotion gate mode."
+    )
+    commands: list[CommandSpec] = Field(
+        description="Project-level action commands (such as batch rerun, quarantine, or pipeline triggers) and their parameter templates."
+    )
+    data_roles: list[DataRole] = Field(
+        description=(
+            "Mapping of data connections and tables to their roles ('training', "
+            "'serving_inputs', 'predictions', 'labels', 'other'). Every table used by "
+            "a model must be declared, especially predictions and labels tables so they "
+            "are never left unmapped."
+        )
+    )
+    tracking: list[TrackingSourceSpec] = Field(
+        description=(
+            "Tracking systems (such as MLflow or GitHub Actions) used to log runs and artifacts. "
+            "A tracking source holds no credentials ('auth' is 'none' or 'credential'; any secret "
+            "is entered by the human at proposal approval, never in this payload)."
+        )
+    )
+    pipeline: list[PipelineStage] = Field(
+        description="Pipeline stages (such as data-prep, train, eval), their entry points, inputs, and outputs."
+    )
+    edges: list[PipelineEdge] = Field(
+        description="Directed dependency edges connecting upstream pipeline stage outputs to downstream stage inputs."
+    )
+    operations: Operations = Field(
+        description="Operational configuration: schedulers, check specifications, on-call contacts, and results storage."
+    )
+    gaps: list[Gap] = Field(
+        description="Identified gaps or missing configurations with next steps for human follow-up."
+    )
+    grants: Grants = Field(
+        description="Requested runtime permissions: network access and permission level (suggest, ask, or autonomous)."
+    )
 
     @model_validator(mode="after")
     def _references_resolve(self) -> HandoffPayload:

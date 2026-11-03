@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Final, cast
 
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME
+from mlops_agents.agents.tools.propose import propose_tool_name
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
 from mlops_agents.proposals.contract import CONNECTIONS_KIND, HANDOFF_KIND
 
@@ -25,12 +25,15 @@ LABELS: Final = "labels_e2e"
 TABLES: Final = (BOOKINGS, PREDICTIONS, LABELS)
 FEED_TIMEZONE: Final = "Europe/Lisbon"
 ON_CALL_TIMEZONE: Final = "Europe/Madrid"
+PROPOSE_CONNECTIONS_TOOL: Final = propose_tool_name(CONNECTIONS_KIND)
 
 ASK_FOR_DATA: Final = (
     f"Where does the data live? Answer with {DATA_PATH_KEY}<folder> and {MLFLOW_URL_KEY}<url>, "
     "each on its own line."
 )
-NO_PROPOSE: Final = f"I cannot set the project up: the {PROPOSE_TOOL_NAME} tool is not offered."
+NO_PROPOSE: Final = (
+    f"I cannot set the project up: the {PROPOSE_CONNECTIONS_TOOL} tool is not offered."
+)
 ONBOARDING_COMPLETE: Final = "Onboarding is complete."
 AUDIT_CONTEXT: Final = "Audit context included: "
 AUDIT_NO_DATA: Final = "Audit saw no data."
@@ -59,7 +62,7 @@ def _value(text: str, key: str) -> str:
 
 def _propose(kind: str, payload: dict[str, Any]) -> ToolCall:
     # The fake server serializes the arguments with json.dumps, so a path's backslashes survive.
-    return {"name": PROPOSE_TOOL_NAME, "arguments": {"kind": kind, "payload": payload}}
+    return {"name": propose_tool_name(kind), "arguments": payload}
 
 
 def connections_payload(path: str) -> dict[str, Any]:
@@ -220,7 +223,7 @@ def onboarding_reply(
     ]
     if not asked:
         return ASK_FOR_DATA, None
-    if not any(tool["function"]["name"] == PROPOSE_TOOL_NAME for tool in tools):
+    if not any(tool["function"]["name"] == PROPOSE_CONNECTIONS_TOOL for tool in tools):
         return NO_PROPOSE, None
     start = asked[-1]
     request = _text(messages[start].get("content"))

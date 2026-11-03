@@ -196,7 +196,7 @@ async def test_reject_observer_records_rejection_only_on_rejected(
         turn_id="turn_1",
         kind="tool",
         tool_call_id="call_1",
-        tool="Propose",
+        tool="ProposePromotion",
         risk_class=RiskClass.PROPOSE,
         step=1,
         proposal_kind=PROMOTION_KIND,

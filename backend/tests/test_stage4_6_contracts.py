@@ -445,7 +445,7 @@ def test_tool_names_in_names_py_are_unique_and_collide_with_no_registered_tool()
     }
     stage1_3_registry = default_registry(**stage1_3_services)
     stage1_3_tool_names = stage1_3_registry.names()
-    assert len(stage1_3_tool_names) == 21
+    assert len(stage1_3_tool_names) == 27
     assert set(canonical_names) & stage1_3_tool_names == set()
 
 

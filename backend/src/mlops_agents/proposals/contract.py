@@ -31,6 +31,17 @@ MAINTENANCE_KIND: Final = "maintenance"
 TRAINING_POLICY_KIND: Final = "training_policy"
 PROMOTION_KIND: Final = "promotion"
 
+PROPOSAL_KINDS: Final[tuple[str, ...]] = (
+    CONNECTIONS_KIND,
+    HANDOFF_KIND,
+    PARSER_KIND,
+    RULE_KIND,
+    HOOKS_KIND,
+    MAINTENANCE_KIND,
+    TRAINING_POLICY_KIND,
+    PROMOTION_KIND,
+)
+
 ProposalStatus = Literal["pending", "approved", "rejected", "superseded"]
 
 
