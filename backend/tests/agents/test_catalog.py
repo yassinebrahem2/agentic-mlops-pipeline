@@ -131,6 +131,7 @@ def test_packaged_orchestrator() -> None:
     orchestrator = catalog.get("orchestrator")
     assert set(orchestrator.tools) == STAGE_2_TOOLS - {
         "Propose",
+        "ProposalShape",
         ADJUST_SEVERITY,
         RECORD_FIX_CHOICE,
         SAVE_REPORT,
