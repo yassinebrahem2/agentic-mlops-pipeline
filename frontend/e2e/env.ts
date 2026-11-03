@@ -5,10 +5,12 @@
 export const APP_PORT = 8798;
 export const FAKE_PORT = 8799;
 export const MLFLOW_PORT = 8800;
+export const SEEDED_MLFLOW_PORT = 8801;
 
 export const APP_URL = `http://127.0.0.1:${String(APP_PORT)}`;
 export const FAKE_BASE_URL = `http://127.0.0.1:${String(FAKE_PORT)}/v1`;
 export const FAKE_MLFLOW_URL = `http://127.0.0.1:${String(MLFLOW_PORT)}`;
+export const SEEDED_MLFLOW_URL = `http://127.0.0.1:${String(SEEDED_MLFLOW_PORT)}`;
 
 function required(name: string): string {
   const value = process.env[name];
