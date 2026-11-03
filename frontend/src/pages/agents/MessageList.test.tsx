@@ -94,6 +94,72 @@ describe("MessageList stick-to-bottom", () => {
     expect(scrollIntoView).not.toHaveBeenCalledWith(
       expect.objectContaining({ behavior: "smooth" }),
     );
+    scrollIntoView.mockRestore();
+  });
+
+  it("renders at the bottom on async message arrival after switching agents even if previously scrolled up", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { getByRole, rerender } = render(
+      <MessageList sessionAgent="agent-1" messages={[createMessage("m1", "Session 1 msg")]} />,
+    );
+    expect(scrollIntoView).toHaveBeenCalled();
+
+    // User scrolls up in session 1
+    const log = getByRole("log", { name: "Messages" });
+    Object.defineProperties(log, {
+      scrollHeight: { value: 1000, configurable: true },
+      clientHeight: { value: 500, configurable: true },
+    });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+
+    scrollIntoView.mockClear();
+
+    // In the real app: agent switches first (still rendering old messages before effect clears state)
+    rerender(
+      <MessageList sessionAgent="agent-2" messages={[createMessage("m1", "Session 1 msg")]} />,
+    );
+
+    // useSession clears state: messages become empty []
+    rerender(<MessageList sessionAgent="agent-2" messages={[]} />);
+
+    scrollIntoView.mockClear();
+
+    // Fetched messages for agent-2 arrive asynchronously
+    rerender(
+      <MessageList
+        sessionAgent="agent-2"
+        messages={[createMessage("m2", "Session 2 msg 1"), createMessage("m3", "Session 2 msg 2")]}
+      />,
+    );
+
+    // It MUST scroll into view at the bottom without behavior: "smooth"
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
+
+    // If the user then scrolls up in session 2:
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    scrollIntoView.mockClear();
+
+    // Subsequent message arrives: should not scroll
+    rerender(
+      <MessageList
+        sessionAgent="agent-2"
+        messages={[
+          createMessage("m2", "Session 2 msg 1"),
+          createMessage("m3", "Session 2 msg 2"),
+          createMessage("m4", "Session 2 msg 3"),
+        ]}
+      />,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    scrollIntoView.mockRestore();
   });
 
   it("does not scroll when the user has scrolled up", () => {
