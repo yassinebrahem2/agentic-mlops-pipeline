@@ -29,7 +29,7 @@ Runbook, in order:
 1. `new-run`, then `backfill`.
 2. `up --hold-before-start` with the pace, the merge delay and `scenarios/agents-short.toml`.
 3. The app on a dedicated `MLOPS_AGENTS_HOME`.
-4. `bench agents-run`, with the same pace and scenario as `up` and the access token.
+4. `bench agents-run`, with the same pace and scenario as `up` and `MLOPS_AGENTS_ACCESS_TOKEN` set to the app's access token (`export MLOPS_AGENTS_ACCESS_TOKEN=<token>`).
 5. While it runs: approve Onboarding's proposals, merge the first-audit PRs by hand, press Try again on every stall, give no verdict or label, keep the machine awake.
 
 ## Datasets

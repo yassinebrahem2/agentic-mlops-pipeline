@@ -16,15 +16,34 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, TextIO, cast
 
+import httpx2
 from demo_world import answer_key, newrun, paths, simulate
 from demo_world.answer_key import Record
 
-from benchmarks.client import BenchClient, sign_in
+from benchmarks.client import BenchClient, BenchConnectionError, BenchHttpError, sign_in
 from benchmarks.jobs_days import day_starts_from_jobs
 from benchmarks.report import Pause, RunInfo, write_report
 from benchmarks.scorer import AlreadyScored, Score, score
 
 log = logging.getLogger(__name__)
+
+ROUTE_ERRORS = (BenchHttpError, BenchConnectionError, httpx2.HTTPError)
+
+
+def is_route_error(exc: BaseException) -> bool:
+    """Returns True if the exception represents an HTTP/route/connection error."""
+    if isinstance(exc, ROUTE_ERRORS):
+        return True
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "route" in name
+        or "route error" in msg
+        or "connection error" in msg
+        or "500 internal" in msg
+        or "http" in name
+    )
+
 
 DEFAULT_END_DATE: Final[date] = date(2016, 9, 11)
 DEFAULT_POLL_INTERVAL: Final[float] = 30.0
@@ -85,34 +104,46 @@ def _read_env_settings(path: Path) -> dict[str, str]:
 
 
 def resolve_run_paths(run: str | Path) -> tuple[Path, Path, Path]:
-    """Resolves (run_dir, world_dir, data_dir) from a run name or path."""
-    p = Path(run)
-    if p.exists():
-        if (p / newrun.RUN_FILE).is_file():
-            try:
-                settings = _read_env_settings(p / newrun.RUN_FILE)
-                world_dir = Path(settings.get(paths.WORLD_VARIABLE, str(p / "world")))
-                data_dir = Path(settings.get(paths.DATA_VARIABLE, str(p / "data")))
-                return p, world_dir, data_dir
-            except OSError:
-                pass
-        if (p / simulate.STATE_FILE).is_file() or (p / simulate.HOLD_FILE).is_file():
-            # p is world_dir
-            return p.parent, p, p.parent / "data"
-        if (p / "world").is_dir():
-            return p, p / "world", p / "data"
-        return p, p, p
+    """Resolves (run_dir, world_dir, data_dir) from a run name or path.
 
-    try:
-        folder = newrun.run_folder(str(run))
-        if (folder / newrun.RUN_FILE).is_file():
-            settings = newrun.load_run(str(run))
-            world_dir = Path(settings[paths.WORLD_VARIABLE])
-            data_dir = Path(settings[paths.DATA_VARIABLE])
-            return folder, world_dir, data_dir
-        return folder, folder / "world", folder / "data"
-    except newrun.RunError:
-        return p, p / "world", p / "data"
+    Fails with the path if run.env cannot be found or read, without fallback guessing.
+    """
+    p = Path(run)
+    run_dir: Path | None = None
+    if p.is_dir() and (p / newrun.RUN_FILE).is_file():
+        run_dir = p
+    elif p.is_file() and p.name == newrun.RUN_FILE:
+        run_dir = p.parent
+    elif not p.exists():
+        try:
+            folder = newrun.run_folder(str(run))
+            if (folder / newrun.RUN_FILE).is_file():
+                run_dir = folder
+            else:
+                raise FileNotFoundError(f"run.env not found at {folder / newrun.RUN_FILE}")
+        except newrun.RunError as exc:
+            raise FileNotFoundError(f"run.env not found at {p / newrun.RUN_FILE}") from exc
+    else:
+        raise FileNotFoundError(f"run.env not found at {p / newrun.RUN_FILE}")
+
+    env_path = run_dir / newrun.RUN_FILE
+    if not env_path.is_file():
+        raise FileNotFoundError(f"run.env not found at {env_path}")
+
+    settings = _read_env_settings(env_path)
+    if paths.WORLD_VARIABLE not in settings:
+        raise ValueError(f"Missing {paths.WORLD_VARIABLE} in {env_path}")
+    if paths.DATA_VARIABLE not in settings:
+        raise ValueError(f"Missing {paths.DATA_VARIABLE} in {env_path}")
+
+    world_dir = Path(settings[paths.WORLD_VARIABLE])
+    data_dir = Path(settings[paths.DATA_VARIABLE])
+    if not world_dir.exists():
+        raise FileNotFoundError(f"World directory not found at {world_dir}")
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Data directory not found at {data_dir}")
+
+    return run_dir, world_dir, data_dir
 
 
 def _get_app_commit() -> str:
@@ -480,290 +511,418 @@ async def drive_agents_run(
     window_duration = timedelta(seconds=2 * renewal_interval)
     effective_maint_interval = min(maintenance_interval, renewal_interval)
 
-    # --- Phase 1: Wait before day 1 ---
-    wait_start = clock()
-    last_maint_time: datetime | None = None
-    last_printed_reason: str | None = None
+    state_file = world_dir / simulate.STATE_FILE
+    if not state_file.is_file():
+        raise FileNotFoundError(f"state.json not found at {state_file}")
+    if read_world_state(world_dir) is None:
+        raise ValueError(f"World state file {state_file} could not be read or is invalid")
 
-    while True:
-        now = clock()
-        if (
-            last_maint_time is None
-            or (now - last_maint_time).total_seconds() >= effective_maint_interval
-        ):
-            await maintain_hold_windows(client, project_id, now, duration=window_duration)
-            last_maint_time = now
+    try:
+        # --- Phase 1: Wait before day 1 ---
+        wait_start = clock()
+        last_maint_time: datetime | None = None
+        last_printed_reason: str | None = None
 
-        is_ready, waiting_reason = await check_readiness(client, project_id)
-        if is_ready:
-            break
+        while True:
+            now = clock()
+            if (
+                last_maint_time is None
+                or (now - last_maint_time).total_seconds() >= effective_maint_interval
+            ):
+                await maintain_hold_windows(client, project_id, now, duration=window_duration)
+                last_maint_time = now
 
-        if waiting_reason != last_printed_reason and waiting_reason is not None:
-            stdout.write(f"{waiting_reason}\n")
-            stdout.flush()
-            last_printed_reason = waiting_reason
+            is_ready, waiting_reason = await check_readiness(client, project_id)
+            if is_ready:
+                break
 
-        await sleep(renewal_interval)
+            if waiting_reason != last_printed_reason and waiting_reason is not None:
+                stdout.write(f"{waiting_reason}\n")
+                stdout.flush()
+                last_printed_reason = waiting_reason
 
-    wait_end = clock()
-    pauses.append(Pause(reason="ready_wait", start=wait_start, end=wait_end))
-    if hold_file.exists():
-        with contextlib.suppress(OSError):
-            hold_file.unlink()
+            await sleep(renewal_interval)
 
-    # Seed seen stall events at end of readiness wait so onboarding stalls are not counted as pauses.
-    initial_stalls_page: object = await client.get(
-        f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
-    )
-    seen_stall_event_ids: set[str] = {s.id for s in _extract_stall_events(initial_stalls_page)}
-    warned_user_verdict_ids: set[str] = set()
+        wait_end = clock()
+        pauses.append(Pause(reason="ready_wait", start=wait_start, end=wait_end))
+        if hold_file.exists():
+            with contextlib.suppress(OSError):
+                hold_file.unlink()
 
-    # --- Phase 2: Play, holding on a stall ---
-    while True:
+        # Seed seen stall events at end of readiness wait so onboarding stalls are not counted as pauses.
+        initial_stalls_page: object = await client.get(
+            f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
+        )
+        seen_stall_event_ids: set[str] = {s.id for s in _extract_stall_events(initial_stalls_page)}
+        warned_user_verdict_ids: set[str] = set()
+
+        # --- Phase 2: Play, holding on a stall ---
+        while True:
+            state = read_world_state(world_dir)
+            if state is not None and state.last_done >= end_date:
+                break
+
+            # Poll for early user verdicts
+            try:
+                raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
+                if isinstance(raw_verdicts, list):
+                    for v in cast(list[object], raw_verdicts):
+                        if _extract_string_field(v, "source") == "user":
+                            inc_id = _extract_string_field(v, "incident_id")
+                            if inc_id and inc_id not in warned_user_verdict_ids:
+                                warned_user_verdict_ids.add(inc_id)
+                                stdout.write(
+                                    f"Warning: person's verdict detected on incident {inc_id}\n"
+                                )
+                                stdout.flush()
+            except Exception as exc:
+                stdout.write(f"Warning: error polling verdicts: {exc}; retrying...\n")
+                stdout.flush()
+
+            stall_detected = False
+            stall_event_ts: datetime | None = None
+            try:
+                activity_page = await client.get(
+                    f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
+                )
+            except Exception as exc:
+                if is_route_error(exc):
+                    stdout.write(f"Route error polling activity: {exc}; retrying...\n")
+                    stdout.flush()
+                    await sleep(renewal_interval)
+                    continue
+                raise
+
+            new_stalls = [
+                s for s in _extract_stall_events(activity_page) if s.id not in seen_stall_event_ids
+            ]
+            if new_stalls:
+                for s in new_stalls:
+                    seen_stall_event_ids.add(s.id)
+                stall_detected = True
+                stall_event_ts = min(s.ts for s in new_stalls)
+
+            try:
+                approvals = await client.get(f"/projects/{project_id}/approvals")
+            except Exception as exc:
+                if is_route_error(exc):
+                    stdout.write(f"Route error polling approvals: {exc}; retrying...\n")
+                    stdout.flush()
+                    await sleep(renewal_interval)
+                    continue
+                raise
+
+            if _filter_stall_approvals(approvals):
+                stall_detected = True
+
+            if stall_detected:
+                stall_start = stall_event_ts if stall_event_ts is not None else clock()
+                with contextlib.suppress(OSError):
+                    hold_file.touch(exist_ok=True)
+
+                last_stall_maint: datetime | None = None
+                # First window starts at stall event time (can be in past)
+                try:
+                    await maintain_hold_windows(
+                        client, project_id, clock(), duration=window_duration, start=stall_start
+                    )
+                except Exception as exc:
+                    if is_route_error(exc):
+                        stdout.write(f"Route error maintaining windows: {exc}; retrying...\n")
+                        stdout.flush()
+                    else:
+                        raise
+                last_stall_maint = clock()
+
+                while True:
+                    now = clock()
+                    if (now - last_stall_maint).total_seconds() >= renewal_interval:
+                        try:
+                            await maintain_hold_windows(
+                                client, project_id, now, duration=window_duration
+                            )
+                            last_stall_maint = now
+                        except Exception as exc:
+                            if is_route_error(exc):
+                                stdout.write(
+                                    f"Route error maintaining windows: {exc}; retrying...\n"
+                                )
+                                stdout.flush()
+                            else:
+                                raise
+
+                    # A stall raised while a hold is already on joins that hold: mark its event seen
+                    try:
+                        cur_act = await client.get(
+                            f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
+                        )
+                        for s in _extract_stall_events(cur_act):
+                            seen_stall_event_ids.add(s.id)
+                    except Exception as exc:
+                        if is_route_error(exc):
+                            stdout.write(
+                                f"Route error polling stall activity: {exc}; retrying...\n"
+                            )
+                            stdout.flush()
+                        else:
+                            raise
+
+                    try:
+                        cur_approvals = await client.get(f"/projects/{project_id}/approvals")
+                    except Exception as exc:
+                        if is_route_error(exc):
+                            stdout.write(
+                                f"Route error polling stall approvals: {exc}; retrying...\n"
+                            )
+                            stdout.flush()
+                            await sleep(renewal_interval)
+                            continue
+                        raise
+
+                    if not _filter_stall_approvals(cur_approvals):
+                        stall_end = clock()
+                        pauses.append(Pause(reason="model_stall", start=stall_start, end=stall_end))
+                        if hold_file.exists():
+                            with contextlib.suppress(OSError):
+                                hold_file.unlink()
+                        break
+
+                    await sleep(renewal_interval)
+
+            await sleep(renewal_interval)
+
+        # --- Phase 3: Drain agents after last day ---
+        drain_deadline = clock() + timedelta(seconds=drain_timeout)
+        drain_timed_out = False
+
+        while True:
+            any_busy = False
+            try:
+                agents_list_obj = await client.get(f"/projects/{project_id}/agents")
+                if isinstance(agents_list_obj, list):
+                    for ag in cast(list[object], agents_list_obj):
+                        ag_name = _extract_string_field(ag, "name")
+                        chat_val = _extract_field(ag, "chat")
+                        if chat_val is False or not ag_name:
+                            continue
+                        sess = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
+                        if _is_session_active(sess):
+                            any_busy = True
+                            break
+            except Exception as exc:
+                if is_route_error(exc):
+                    stdout.write(f"Route error draining agents: {exc}; retrying...\n")
+                    stdout.flush()
+                    any_busy = True
+                else:
+                    raise
+
+            stalls_open = False
+            try:
+                cur_approvals = await client.get(f"/projects/{project_id}/approvals")
+                if _filter_stall_approvals(cur_approvals):
+                    stalls_open = True
+            except Exception as exc:
+                if is_route_error(exc):
+                    stdout.write(f"Route error draining approvals: {exc}; retrying...\n")
+                    stdout.flush()
+                    stalls_open = True
+                else:
+                    raise
+
+            if not any_busy and not stalls_open:
+                break
+
+            if clock() >= drain_deadline:
+                drain_timed_out = True
+                stdout.write("Warning: agent drain timed out before all sessions were idle\n")
+                stdout.flush()
+                break
+
+            await sleep(renewal_interval)
+
+        # --- Phase 4: Score and report ---
+        state_file = world_dir / simulate.STATE_FILE
+        if not state_file.is_file():
+            raise FileNotFoundError(f"state.json not found at {state_file}")
         state = read_world_state(world_dir)
-        if state is not None and state.last_done >= end_date:
-            break
+        if state is None:
+            raise ValueError(f"World state file {state_file} could not be read or is invalid")
 
-        # Poll for early user verdicts
-        with contextlib.suppress(Exception):
+        # 1. Read metadata BEFORE score()
+        agents_list = await client.get(f"/projects/{project_id}/agents")
+        provider, model = _extract_model_and_provider(agents_list)
+
+        if provider is None:
+            try:
+                provs: object = await client.get("/providers")
+                if isinstance(provs, list) and len(cast(list[object], provs)) > 0:
+                    p0 = cast(list[object], provs)[0]
+                    p_name = _extract_string_field(p0, "name")
+                    if p_name:
+                        provider = p_name
+            except Exception:
+                log.warning("Could not read providers from /providers")
+
+        app_commit = _get_app_commit()
+
+        # 2. Check for person's verdicts before scoring; refuse with judged incidents after saving metadata
+        user_judged_incidents: list[str] = []
+        try:
             raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
             if isinstance(raw_verdicts, list):
                 for v in cast(list[object], raw_verdicts):
                     if _extract_string_field(v, "source") == "user":
                         inc_id = _extract_string_field(v, "incident_id")
-                        if inc_id and inc_id not in warned_user_verdict_ids:
-                            warned_user_verdict_ids.add(inc_id)
-                            stdout.write(
-                                f"Warning: person's verdict detected on incident {inc_id}\n"
-                            )
-                            stdout.flush()
-
-        stall_detected = False
-        stall_event_ts: datetime | None = None
-        activity_page: object = await client.get(
-            f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
-        )
-        new_stalls = [
-            s for s in _extract_stall_events(activity_page) if s.id not in seen_stall_event_ids
-        ]
-        if new_stalls:
-            for s in new_stalls:
-                seen_stall_event_ids.add(s.id)
-            stall_detected = True
-            stall_event_ts = min(s.ts for s in new_stalls)
-
-        approvals: object = await client.get(f"/projects/{project_id}/approvals")
-        if _filter_stall_approvals(approvals):
-            stall_detected = True
-
-        if stall_detected:
-            stall_start = stall_event_ts if stall_event_ts is not None else clock()
-            with contextlib.suppress(OSError):
-                hold_file.touch(exist_ok=True)
-
-            last_stall_maint: datetime | None = None
-            # First window starts at stall event time (can be in past)
-            await maintain_hold_windows(
-                client, project_id, clock(), duration=window_duration, start=stall_start
+                        if inc_id and inc_id not in user_judged_incidents:
+                            user_judged_incidents.append(inc_id)
+        except Exception as exc:
+            meta_dict = {
+                "mode": "agents",
+                "dataset": "hotel-demo",
+                "scenario": scenario_name,
+                "app_commit": app_commit,
+                "started": run_started.isoformat(),
+                "ended": clock().isoformat(),
+                "provider": provider,
+                "model": model,
+                "seconds_per_day": seconds_per_day,
+                "error": f"Failed checking verdicts: {exc}",
+            }
+            final_run_dir.mkdir(parents=True, exist_ok=True)
+            (final_run_dir / "metadata.json").write_text(
+                json.dumps(meta_dict, indent=2), encoding="utf-8"
             )
-            last_stall_maint = clock()
+            raise RuntimeError(f"Failed to check verdicts before scoring: {exc}") from exc
 
-            while True:
-                now = clock()
-                if (now - last_stall_maint).total_seconds() >= renewal_interval:
-                    await maintain_hold_windows(client, project_id, now, duration=window_duration)
-                    last_stall_maint = now
-
-                cur_approvals: object = await client.get(f"/projects/{project_id}/approvals")
-                if not _filter_stall_approvals(cur_approvals):
-                    stall_end = clock()
-                    pauses.append(Pause(reason="model_stall", start=stall_start, end=stall_end))
-                    if hold_file.exists():
-                        with contextlib.suppress(OSError):
-                            hold_file.unlink()
-                    break
-
-                await sleep(renewal_interval)
-
-        await sleep(renewal_interval)
-
-    # --- Phase 3: Drain agents after last day ---
-    drain_deadline = clock() + timedelta(seconds=drain_timeout)
-    drain_timed_out = False
-
-    while True:
-        any_busy = False
-        try:
-            agents_list_obj: object = await client.get(f"/projects/{project_id}/agents")
-            if isinstance(agents_list_obj, list):
-                for ag in cast(list[object], agents_list_obj):
-                    ag_name = _extract_string_field(ag, "name")
-                    chat_val = _extract_field(ag, "chat")
-                    if chat_val is False or not ag_name:
-                        continue
-                    sess = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
-                    if _is_session_active(sess):
-                        any_busy = True
-                        break
-        except Exception:
-            any_busy = True
-
-        stalls_open = False
-        try:
-            cur_approvals = await client.get(f"/projects/{project_id}/approvals")
-            if _filter_stall_approvals(cur_approvals):
-                stalls_open = True
-        except Exception:
-            stalls_open = True
-
-        if not any_busy and not stalls_open:
-            break
-
-        if clock() >= drain_deadline:
-            drain_timed_out = True
-            stdout.write("Warning: agent drain timed out before all sessions were idle\n")
-            stdout.flush()
-            break
-
-        await sleep(renewal_interval)
-
-    # --- Phase 4: Score and report ---
-    state = read_world_state(world_dir)
-    if state is None:
-        raise RuntimeError(
-            f"World state file {world_dir / simulate.STATE_FILE} not found or incomplete"
-        )
-
-    # 1. Read metadata BEFORE score()
-    agents_list = await client.get(f"/projects/{project_id}/agents")
-    provider, model = _extract_model_and_provider(agents_list)
-
-    if provider is None:
-        try:
-            provs: object = await client.get("/providers")
-            if isinstance(provs, list) and len(cast(list[object], provs)) > 0:
-                p0 = cast(list[object], provs)[0]
-                p_name = _extract_string_field(p0, "name")
-                if p_name:
-                    provider = p_name
-        except Exception:
-            log.warning("Could not read providers from /providers")
-
-    app_commit = _get_app_commit()
-
-    # 2. Check for person's verdicts before scoring; refuse with judged incidents after saving metadata
-    user_judged_incidents: list[str] = []
-    with contextlib.suppress(Exception):
-        raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
-        if isinstance(raw_verdicts, list):
-            for v in cast(list[object], raw_verdicts):
-                if _extract_string_field(v, "source") == "user":
-                    inc_id = _extract_string_field(v, "incident_id")
-                    if inc_id and inc_id not in user_judged_incidents:
-                        user_judged_incidents.append(inc_id)
-
-    if user_judged_incidents:
-        meta_dict = {
-            "mode": "agents",
-            "dataset": "hotel-demo",
-            "scenario": scenario_name,
-            "app_commit": app_commit,
-            "started": run_started.isoformat(),
-            "ended": clock().isoformat(),
-            "provider": provider,
-            "model": model,
-            "seconds_per_day": seconds_per_day,
-            "user_judged_incidents": sorted(user_judged_incidents),
-        }
-        final_run_dir.mkdir(parents=True, exist_ok=True)
-        (final_run_dir / "metadata.json").write_text(
-            json.dumps(meta_dict, indent=2), encoding="utf-8"
-        )
-        judged_str = ", ".join(sorted(user_judged_incidents))
-        raise AlreadyScored(f"Cannot score: user verdicts recorded for incident(s): {judged_str}")
-
-    # 3. Read answer key via demo-world's reader
-    try:
-        raw_lines = answer_key.lines(world_dir)
-    except Exception as exc:
-        raise ValueError(f"Failed to read answer key from {world_dir}: {exc}") from exc
-
-    records: list[Record] = []
-    for d in raw_lines:
-        kind = d.get("kind")
-        if not isinstance(kind, str):
-            raise ValueError(f"Malformed answer key line: missing 'kind' in {d!r}")
-        if kind in ("ci_failure_set", "ci_failure_restored", "pr_merged", "pr_not_merged"):
-            continue
-        if "category" not in d or "start" not in d or "end" not in d:
-            raise ValueError(f"Malformed answer key record: {d!r}")
-        col_val = d.get("column")
-        col_str = str(col_val) if col_val is not None else None
-        records.append(
-            Record(
-                kind=kind,
-                category=cast(answer_key.Category, d["category"]),
-                column=col_str,
-                start=str(d["start"]),
-                end=str(d["end"]),
+        if user_judged_incidents:
+            meta_dict = {
+                "mode": "agents",
+                "dataset": "hotel-demo",
+                "scenario": scenario_name,
+                "app_commit": app_commit,
+                "started": run_started.isoformat(),
+                "ended": clock().isoformat(),
+                "provider": provider,
+                "model": model,
+                "seconds_per_day": seconds_per_day,
+                "user_judged_incidents": sorted(user_judged_incidents),
+            }
+            final_run_dir.mkdir(parents=True, exist_ok=True)
+            (final_run_dir / "metadata.json").write_text(
+                json.dumps(meta_dict, indent=2), encoding="utf-8"
             )
-        )
+            judged_str = ", ".join(sorted(user_judged_incidents))
+            raise AlreadyScored(
+                f"Cannot score: user verdicts recorded for incident(s): {judged_str}"
+            )
 
-    jobs_dir = data_dir / "jobs"
-    starts, gaps = day_starts_from_jobs(jobs_dir, date_range=(state.first, state.last_done))
+        # 3. Read answer key via demo-world's reader
+        key_file = world_dir / answer_key.ANSWER_KEY_FILE
+        if not key_file.is_file():
+            raise FileNotFoundError(f"Answer key not found at {key_file}")
+        try:
+            raw_lines = answer_key.lines(world_dir)
+        except Exception as exc:
+            raise ValueError(f"Failed to read answer key from {key_file}: {exc}") from exc
 
-    # 4. Score
-    score_res = await score(client, project_id, records, starts=starts)
-
-    # 5. Write score result immediately to disk
-    score_dict = _serialize_score(score_res)
-    final_run_dir.mkdir(parents=True, exist_ok=True)
-    (final_run_dir / "score_result.json").write_text(
-        json.dumps(score_dict, indent=2), encoding="utf-8"
-    )
-    (final_run_dir / "score.json").write_text(json.dumps(score_dict, indent=2), encoding="utf-8")
-
-    run_ended = clock()
-    info = RunInfo(
-        mode="agents",
-        dataset="hotel-demo",
-        scenario=scenario_name,
-        seed=None,
-        app_commit=app_commit,
-        started=run_started,
-        ended=run_ended,
-        provider=provider,
-        model=model,
-        seconds_per_day=seconds_per_day,
-        pauses=pauses,
-        day_gaps=gaps,
-    )
-
-    try:
-        await write_report(client, project_id, final_run_dir, info, score_res)
-    except Exception as exc:
-        log.warning("write_report failed: %s; writing fallback report", exc)
-        _write_fallback_report(final_run_dir, info, score_res, score_dict)
-
-    if drain_timed_out:
-        rep_json_path = final_run_dir / "report.json"
-        if rep_json_path.exists():
-            with contextlib.suppress(Exception):
-                rep_dict = json.loads(rep_json_path.read_text(encoding="utf-8"))
-                if "info" in rep_dict and isinstance(rep_dict["info"], dict):
-                    rep_dict["info"]["drain_timeout"] = True
-                rep_dict["drain_timeout"] = True
-                rep_json_path.write_text(json.dumps(rep_dict, indent=2), encoding="utf-8")
-        rep_md_path = final_run_dir / "report.md"
-        if rep_md_path.exists():
-            with contextlib.suppress(Exception):
-                rep_md_text = rep_md_path.read_text(encoding="utf-8")
-                rep_md_text += (
-                    "\n> **Warning:** agent drain timed out before all sessions were idle.\n"
+        records: list[Record] = []
+        for d in raw_lines:
+            kind = d.get("kind")
+            if not isinstance(kind, str):
+                raise ValueError(
+                    f"Malformed answer key line in {key_file}: missing 'kind' in {d!r}"
                 )
-                rep_md_path.write_text(rep_md_text, encoding="utf-8")
+            if kind in ("ci_failure_set", "ci_failure_restored", "pr_merged", "pr_not_merged"):
+                continue
+            if "category" not in d or "start" not in d or "end" not in d:
+                raise ValueError(f"Malformed answer key record in {key_file}: {d!r}")
+            col_val = d.get("column")
+            col_str = str(col_val) if col_val is not None else None
+            records.append(
+                Record(
+                    kind=kind,
+                    category=cast(answer_key.Category, d["category"]),
+                    column=col_str,
+                    start=str(d["start"]),
+                    end=str(d["end"]),
+                )
+            )
 
-    return score_res
+        if not records:
+            raise ValueError(f"Answer key at {key_file} holds no problem records")
+
+        jobs_dir = data_dir / "jobs"
+        starts, gaps = day_starts_from_jobs(jobs_dir, date_range=(state.first, state.last_done))
+
+        # 4. Score
+        score_res = await score(client, project_id, records, starts=starts)
+
+        # 5. Write score result immediately to disk
+        score_dict = _serialize_score(score_res)
+        final_run_dir.mkdir(parents=True, exist_ok=True)
+        (final_run_dir / "score_result.json").write_text(
+            json.dumps(score_dict, indent=2), encoding="utf-8"
+        )
+        (final_run_dir / "score.json").write_text(
+            json.dumps(score_dict, indent=2), encoding="utf-8"
+        )
+
+        run_ended = clock()
+        info = RunInfo(
+            mode="agents",
+            dataset="hotel-demo",
+            scenario=scenario_name,
+            seed=None,
+            app_commit=app_commit,
+            started=run_started,
+            ended=run_ended,
+            provider=provider,
+            model=model,
+            seconds_per_day=seconds_per_day,
+            pauses=pauses,
+            day_gaps=gaps,
+        )
+
+        try:
+            await write_report(client, project_id, final_run_dir, info, score_res)
+        except Exception as exc:
+            log.warning("write_report failed: %s; writing fallback report", exc)
+            _write_fallback_report(final_run_dir, info, score_res, score_dict)
+
+        if drain_timed_out:
+            rep_json_path = final_run_dir / "report.json"
+            if rep_json_path.exists():
+                try:
+                    rep_dict = json.loads(rep_json_path.read_text(encoding="utf-8"))
+                    if "info" in rep_dict and isinstance(rep_dict["info"], dict):
+                        rep_dict["info"]["drain_timeout"] = True
+                    rep_dict["drain_timeout"] = True
+                    rep_json_path.write_text(json.dumps(rep_dict, indent=2), encoding="utf-8")
+                except Exception as exc:
+                    stdout.write(
+                        f"Warning: failed to record drain timeout in {rep_json_path}: {exc}\n"
+                    )
+                    stdout.flush()
+            rep_md_path = final_run_dir / "report.md"
+            if rep_md_path.exists():
+                try:
+                    rep_md_text = rep_md_path.read_text(encoding="utf-8")
+                    rep_md_text += (
+                        "\n> **Warning:** agent drain timed out before all sessions were idle.\n"
+                    )
+                    rep_md_path.write_text(rep_md_text, encoding="utf-8")
+                except Exception as exc:
+                    stdout.write(
+                        f"Warning: failed to record drain timeout in {rep_md_path}: {exc}\n"
+                    )
+                    stdout.flush()
+
+        return score_res
+    finally:
+        if hold_file.exists():
+            with contextlib.suppress(OSError):
+                hold_file.unlink()
 
 
 async def agents_run_cli(
@@ -877,11 +1036,13 @@ __all__ = [
     "DEFAULT_END_DATE",
     "DEFAULT_MAINTENANCE_INTERVAL",
     "DEFAULT_POLL_INTERVAL",
+    "ROUTE_ERRORS",
     "StallEvent",
     "WorldState",
     "agents_run_cli",
     "check_readiness",
     "drive_agents_run",
+    "is_route_error",
     "maintain_hold_windows",
     "read_world_state",
     "register_agents_run_cli",

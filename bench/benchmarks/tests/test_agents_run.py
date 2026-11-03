@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
 import json
 import shutil
@@ -34,7 +35,11 @@ from benchmarks.agents_run import (
     register_agents_run_cli,
     resolve_run_paths,
 )
-from benchmarks.client import BenchClient, in_process
+from benchmarks.client import (
+    BenchClient,
+    BenchHttpError,
+    in_process,
+)
 from benchmarks.fake_clock import FakeClock
 from benchmarks.scorer import AlreadyScored, Score
 
@@ -91,6 +96,16 @@ async def _setup_test_app(
     settings = load_settings(RunMode.LOCAL, port=8765, env=env)
     app = create_app(settings, keystore=_MemoryKeyStore(), clock=clock)
     app.state.access_token = token
+
+    world_dir = tmp_path / "world"
+    world_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    env_file = tmp_path / newrun.RUN_FILE
+    env_file.write_text(
+        f"{paths.WORLD_VARIABLE}={world_dir.resolve()}\n{paths.DATA_VARIABLE}={data_dir.resolve()}\n",
+        encoding="utf-8",
+    )
 
     async with app.router.lifespan_context(app):
         services: Services = app.state.services
@@ -151,10 +166,10 @@ def test_read_world_state_and_resolve_paths(tmp_path: Path) -> None:
     run_dir.mkdir()
     (run_dir / "world").mkdir()
     (run_dir / "data").mkdir()
-    r, w, d = resolve_run_paths(run_dir)
-    assert r == run_dir
-    assert w == run_dir / "world"
-    assert d == run_dir / "data"
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    # No fallback guessing: missing run.env stops with that path
+    with pytest.raises(FileNotFoundError, match=r"run\.env"):
+        resolve_run_paths(run_dir)
 
     env_file = run_dir / newrun.RUN_FILE
     env_file.write_text(
@@ -264,7 +279,10 @@ async def test_turn_stalled_creates_hold_and_two_stalls_resolution(tmp_path: Pat
         (jobs_dir / "2016-07-01.jsonl").write_text(
             '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
 
         ready_client = ReadyAuditClient(client)
 
@@ -436,7 +454,10 @@ async def test_failure_after_score_leaves_score_result_and_report_on_disk(tmp_pa
         (jobs_dir / "2016-07-01.jsonl").write_text(
             '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
 
         ready_client = ReadyAuditClient(client)
 
@@ -491,7 +512,10 @@ async def test_person_verdict_during_play_warns_and_refuses_scoring(tmp_path: Pa
         (jobs_dir / "2016-07-02.jsonl").write_text(
             '{"started": "2016-07-02T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-01"}\n',
+            encoding="utf-8",
+        )
 
         ready_client = ReadyAuditClient(client)
         stdout_buf = io.StringIO()
@@ -558,7 +582,10 @@ async def test_stall_raised_during_onboarding_is_not_a_pause(tmp_path: Path) -> 
         (jobs_dir / "2016-07-01.jsonl").write_text(
             '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
 
         ready_client = ReadyAuditClient(client)
 
@@ -619,20 +646,83 @@ async def test_stall_window_starts_at_its_event_time(tmp_path: Path) -> None:
             source="handoff",
         )
         await services.expectations.register(project_id, spec)
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
 
-        # Stall event happened 5 minutes ago (09:55:00)
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T10:00:00Z"}\n', encoding="utf-8"
+        )
+
         stall_event_time = datetime(2016, 7, 1, 9, 55, tzinfo=UTC)
-        await maintain_hold_windows(
-            client,
-            project_id,
-            clock.now(),
-            start=stall_event_time,
-            duration=timedelta(minutes=10),
+
+        class StallDriverClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.stalled = False
+                self.approvals_list: list[dict[str, Any]] = []
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and params and params.get("type") == "turn.stalled":
+                    if self.stalled:
+                        return {
+                            "entries": [
+                                {
+                                    "event": {
+                                        "id": "ev_stall_1",
+                                        "type": "turn.stalled",
+                                        "ts": stall_event_time.isoformat(),
+                                    }
+                                }
+                            ]
+                        }
+                    return {"entries": []}
+                if "/approvals" in path:
+                    return list(self.approvals_list)
+                return await super().get(path, params)
+
+        fake_client = StallDriverClient(client)
+        call_count = 0
+
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count == 1:
+                fake_client.stalled = True
+                fake_client.approvals_list = [{"id": "app_stall_1", "kind": "stall"}]
+            elif call_count == 2:
+                fake_client.approvals_list = []
+            elif call_count >= 3:
+                (world_dir / simulate.STATE_FILE).write_text(
+                    '{"first": "2016-07-01", "last_done": "2016-07-02"}\n', encoding="utf-8"
+                )
+                (jobs_dir / "2016-07-02.jsonl").write_text(
+                    '{"started": "2016-07-02T10:00:00Z"}\n', encoding="utf-8"
+                )
+
+        await drive_agents_run(
+            client=cast(BenchClient, fake_client),
+            project_id=project_id,
+            run=tmp_path,
+            end_date=date(2016, 7, 2),
+            poll_interval=0.01,
+            sleep=controlled_sleep,
+            clock=clock.now,
         )
 
         windows = await services.maintenance_windows.list(project_id)
-        assert len(windows) == 1
-        assert windows[0].start == stall_event_time
+        stall_windows = [w for w in windows if w.start == stall_event_time]
+        assert len(stall_windows) >= 1
+        assert stall_windows[0].start == stall_event_time
 
 
 @pytest.mark.asyncio
@@ -648,22 +738,492 @@ async def test_after_resume_no_window_outlives_twice_renewal_interval(tmp_path: 
             source="handoff",
         )
         await services.expectations.register(project_id, spec)
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
 
-        # Pace: 60s per day -> renewal_interval = min(30, 60/4) = 15s. Window duration = 30s.
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+
+        class ResumeDriverClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.stalled = False
+                self.approvals_list: list[dict[str, Any]] = []
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and params and params.get("type") == "turn.stalled":
+                    if self.stalled:
+                        return {
+                            "entries": [
+                                {
+                                    "event": {
+                                        "id": "ev_stall_resume",
+                                        "type": "turn.stalled",
+                                        "ts": "2016-07-01T08:05:00Z",
+                                    }
+                                }
+                            ]
+                        }
+                    return {"entries": []}
+                if "/approvals" in path:
+                    return list(self.approvals_list)
+                return await super().get(path, params)
+
+        fake_client = ResumeDriverClient(client)
+        call_count = 0
+        resume_time: datetime | None = None
         seconds_per_day = 60.0
-        renewal_interval = min(30.0, seconds_per_day / 4.0)
-        window_duration = timedelta(seconds=2 * renewal_interval)
 
-        # Simulate hold renewals: 3 renewals every 15s
-        for _ in range(3):
-            await maintain_hold_windows(client, project_id, clock.now(), duration=window_duration)
-            clock.advance(timedelta(seconds=renewal_interval))
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count, resume_time
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count == 1:
+                fake_client.stalled = True
+                fake_client.approvals_list = [{"id": "app_stall_resume", "kind": "stall"}]
+            elif call_count in (2, 3):
+                pass
+            elif call_count == 4:
+                fake_client.approvals_list = []
+                resume_time = clock.now()
+            elif call_count >= 5:
+                (world_dir / simulate.STATE_FILE).write_text(
+                    '{"first": "2016-07-01", "last_done": "2016-07-02"}\n', encoding="utf-8"
+                )
+                (jobs_dir / "2016-07-02.jsonl").write_text(
+                    '{"started": "2016-07-02T08:00:00Z"}\n', encoding="utf-8"
+                )
 
-        resume_time = clock.now()
-        # Check all posted windows: none extends beyond resume_time + 2 * renewal_interval
+        await drive_agents_run(
+            client=cast(BenchClient, fake_client),
+            project_id=project_id,
+            run=tmp_path,
+            end_date=date(2016, 7, 2),
+            seconds_per_day=seconds_per_day,
+            sleep=controlled_sleep,
+            clock=clock.now,
+        )
+
+        assert resume_time is not None
         windows = await services.maintenance_windows.list(project_id)
+        renewal_interval = min(30.0, seconds_per_day / 4.0)
+        max_allowed_end = resume_time + timedelta(seconds=2 * renewal_interval)
         for w in windows:
-            assert w.end <= resume_time + timedelta(seconds=2 * renewal_interval)
+            assert w.end <= max_allowed_end
+
+
+@pytest.mark.asyncio
+async def test_stall_during_existing_hold_joins_hold_one_pause(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+
+        class MultiStallClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.events: list[dict[str, Any]] = []
+                self.approvals_list: list[dict[str, Any]] = []
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and params and params.get("type") == "turn.stalled":
+                    return {"entries": [{"event": e} for e in self.events]}
+                if "/approvals" in path:
+                    return list(self.approvals_list)
+                return await super().get(path, params)
+
+        fake_client = MultiStallClient(client)
+        call_count = 0
+
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count == 1:
+                # Stall A happens
+                fake_client.events.append(
+                    {"id": "ev_stall_A", "type": "turn.stalled", "ts": "2016-07-01T08:05:00Z"}
+                )
+                fake_client.approvals_list.append({"id": "app_A", "kind": "stall"})
+            elif call_count == 2:
+                # Stall B happens while hold is already on
+                fake_client.events.append(
+                    {"id": "ev_stall_B", "type": "turn.stalled", "ts": "2016-07-01T08:06:00Z"}
+                )
+                fake_client.approvals_list.append({"id": "app_B", "kind": "stall"})
+            elif call_count == 3:
+                # Stall A approval resolved, Stall B still pending
+                fake_client.approvals_list = [
+                    a for a in fake_client.approvals_list if a["id"] != "app_A"
+                ]
+            elif call_count == 4:
+                # Stall B approval resolved
+                fake_client.approvals_list = []
+            elif call_count >= 5:
+                (world_dir / simulate.STATE_FILE).write_text(
+                    '{"first": "2016-07-01", "last_done": "2016-07-02"}\n', encoding="utf-8"
+                )
+                (jobs_dir / "2016-07-02.jsonl").write_text(
+                    '{"started": "2016-07-02T08:00:00Z"}\n', encoding="utf-8"
+                )
+
+        await drive_agents_run(
+            client=cast(BenchClient, fake_client),
+            project_id=project_id,
+            run=tmp_path,
+            end_date=date(2016, 7, 2),
+            poll_interval=0.01,
+            sleep=controlled_sleep,
+            clock=clock.now,
+        )
+
+        rep_json = tmp_path / "report.json"
+        rep_data = json.loads(rep_json.read_text(encoding="utf-8"))
+        model_pauses = [p for p in rep_data["info"]["pauses"] if p["reason"] == "model_stall"]
+        assert len(model_pauses) == 1
+
+
+@pytest.mark.asyncio
+async def test_route_error_during_play_retried_and_run_succeeds(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+
+        class PlayRouteErrorClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.failed_once = False
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and not self.failed_once:
+                    self.failed_once = True
+                    raise BenchHttpError(path, 500)
+                return await super().get(path, params)
+
+        fake_client = PlayRouteErrorClient(client)
+        call_count = 0
+
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count >= 2:
+                (world_dir / simulate.STATE_FILE).write_text(
+                    '{"first": "2016-07-01", "last_done": "2016-07-02"}\n', encoding="utf-8"
+                )
+                (jobs_dir / "2016-07-02.jsonl").write_text(
+                    '{"started": "2016-07-02T08:00:00Z"}\n', encoding="utf-8"
+                )
+
+        score_res = await drive_agents_run(
+            client=cast(BenchClient, fake_client),
+            project_id=project_id,
+            run=tmp_path,
+            end_date=date(2016, 7, 2),
+            poll_interval=0.01,
+            sleep=controlled_sleep,
+            clock=clock.now,
+        )
+        assert score_res is not None
+        assert fake_client.failed_once
+
+
+@pytest.mark.asyncio
+async def test_non_route_error_or_cancellation_during_hold_leaves_no_hold_file(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        hold_file = world_dir / simulate.HOLD_FILE
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+
+        class StallCrashClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.stalled = False
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and params and params.get("type") == "turn.stalled":
+                    if self.stalled:
+                        return {
+                            "entries": [
+                                {
+                                    "event": {
+                                        "id": "ev_stall_crash",
+                                        "type": "turn.stalled",
+                                        "ts": "2016-07-01T08:05:00Z",
+                                    }
+                                }
+                            ]
+                        }
+                    return {"entries": []}
+                if "/approvals" in path:
+                    if self.stalled:
+                        # Non-route error during hold!
+                        raise RuntimeError("Unexpected disk failure")
+                    return []
+                return await super().get(path, params)
+
+        fake_client = StallCrashClient(client)
+        call_count = 0
+
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count == 1:
+                fake_client.stalled = True
+
+        with pytest.raises(RuntimeError, match="Unexpected disk failure"):
+            await drive_agents_run(
+                client=cast(BenchClient, fake_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 2),
+                poll_interval=0.01,
+                sleep=controlled_sleep,
+                clock=clock.now,
+            )
+
+        assert not hold_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_hold_leaves_no_hold_file(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        hold_file = world_dir / simulate.HOLD_FILE
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+
+        class StallCancelClient(ReadyAuditClient):
+            def __init__(self, inner: BenchClient) -> None:
+                super().__init__(inner)
+                self.stalled = False
+
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/activity" in path and params and params.get("type") == "turn.stalled":
+                    if self.stalled:
+                        return {
+                            "entries": [
+                                {
+                                    "event": {
+                                        "id": "ev_stall_cancel",
+                                        "type": "turn.stalled",
+                                        "ts": "2016-07-01T08:05:00Z",
+                                    }
+                                }
+                            ]
+                        }
+                    return {"entries": []}
+                if "/approvals" in path:
+                    if self.stalled:
+                        raise asyncio.CancelledError()
+                    return []
+                return await super().get(path, params)
+
+        fake_client = StallCancelClient(client)
+        call_count = 0
+
+        async def controlled_sleep(duration: float) -> None:
+            nonlocal call_count
+            call_count += 1
+            clock.advance(timedelta(seconds=duration + 0.1))
+            if call_count == 1:
+                fake_client.stalled = True
+
+        with pytest.raises(asyncio.CancelledError):
+            await drive_agents_run(
+                client=cast(BenchClient, fake_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 2),
+                poll_interval=0.01,
+                sleep=controlled_sleep,
+                clock=clock.now,
+            )
+
+        assert not hold_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_verdict_check_failure_before_score_saves_metadata_and_fails_loudly(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-01"}\n',
+            encoding="utf-8",
+        )
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+
+        class VerdictCheckFailClient(ReadyAuditClient):
+            async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+                if "/verdicts" in path:
+                    raise RuntimeError("DB connection dropped")
+                return await super().get(path, params)
+
+        fake_client = VerdictCheckFailClient(client)
+
+        with pytest.raises(RuntimeError, match="Failed to check verdicts before scoring"):
+            await drive_agents_run(
+                client=cast(BenchClient, fake_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 1),
+                poll_interval=0.01,
+                clock=clock.now,
+            )
+
+        meta_file = tmp_path / "metadata.json"
+        assert meta_file.exists()
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        assert "error" in meta
+        assert "DB connection dropped" in meta["error"]
+
+
+@pytest.mark.asyncio
+async def test_missing_state_file_stops_the_run(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-01"}\n',
+            encoding="utf-8",
+        )
+        # Ensure state.json is missing
+        state_file = world_dir / simulate.STATE_FILE
+        if state_file.exists():
+            state_file.unlink()
+
+        ready_client = ReadyAuditClient(client)
+        with pytest.raises(FileNotFoundError, match=r"state\.json"):
+            await drive_agents_run(
+                client=cast(BenchClient, ready_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 1),
+                poll_interval=0.01,
+                clock=clock.now,
+            )
+
+
+@pytest.mark.asyncio
+async def test_missing_answer_key_stops_the_run(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+        # Ensure answer key does not exist
+        key_file = world_dir / answer_key.ANSWER_KEY_FILE
+        if key_file.exists():
+            key_file.unlink()
+
+        ready_client = ReadyAuditClient(client)
+        with pytest.raises(FileNotFoundError, match=r"answer_key\.jsonl"):
+            await drive_agents_run(
+                client=cast(BenchClient, ready_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 1),
+                poll_interval=0.01,
+                clock=clock.now,
+            )
+
+
+@pytest.mark.asyncio
+async def test_answer_key_without_problem_records_stops_the_run(tmp_path: Path) -> None:
+    clock = FakeClock(start=datetime(2016, 7, 1, 8, 0, tzinfo=UTC))
+    async with _setup_test_app(tmp_path, clock) as (client, services, project_id):
+        await services.handoffs.store(project_id, "prp_handoff", FixtureDataset().handoff())
+        world_dir = tmp_path / "world"
+        jobs_dir = tmp_path / "data" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (world_dir / simulate.STATE_FILE).write_text(
+            '{"first": "2016-07-01", "last_done": "2016-07-01"}\n', encoding="utf-8"
+        )
+        (jobs_dir / "2016-07-01.jsonl").write_text(
+            '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
+        )
+        # Answer key with only PR decision, no problem records
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "pr_merged", "pr": 1, "branch": "fix", "opened": "2016-07-01", "date": "2016-07-01", "delay_days": 0, "merge_after_days": 1, "reason": null}\n',
+            encoding="utf-8",
+        )
+
+        ready_client = ReadyAuditClient(client)
+        with pytest.raises(ValueError, match="holds no problem records"):
+            await drive_agents_run(
+                client=cast(BenchClient, ready_client),
+                project_id=project_id,
+                run=tmp_path,
+                end_date=date(2016, 7, 1),
+                poll_interval=0.01,
+                clock=clock.now,
+            )
 
 
 @pytest.mark.asyncio
@@ -743,7 +1303,10 @@ async def test_scoring_waits_for_agents_still_in_a_turn_and_records_timeout(tmp_
         (jobs_dir / "2016-07-01.jsonl").write_text(
             '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-02"}\n',
+            encoding="utf-8",
+        )
 
         ready_client = ReadyAuditClient(client)
 
@@ -838,7 +1401,10 @@ async def test_waiting_prints_what_it_is_waiting_for_nothing_else(tmp_path: Path
         (jobs_dir / "2016-07-01.jsonl").write_text(
             '{"started": "2016-07-01T08:00:00Z"}\n', encoding="utf-8"
         )
-        (world_dir / answer_key.ANSWER_KEY_FILE).write_text("", encoding="utf-8")
+        (world_dir / answer_key.ANSWER_KEY_FILE).write_text(
+            '{"kind": "null_spike", "category": "data_quality", "column": "lead_time", "start": "2016-07-01", "end": "2016-07-01"}\n',
+            encoding="utf-8",
+        )
 
         stdout_buf = io.StringIO()
         call_count = 0
