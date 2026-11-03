@@ -453,9 +453,13 @@ def test_system_message_sandbox_network_granted_and_not_granted(tmp_path: Path) 
         sandbox_network=False,
     )
     msg_no_net = system_message(agent_no_net, None)
-    content_no_net = str(msg_no_net.content).lower()
-    assert "sandbox limits" in content_no_net
-    assert "network off" in content_no_net or "network is off" in content_no_net
+    content_no_net = str(msg_no_net.content)
+    assert "sandbox limits" in content_no_net.lower()
+    assert "network off" in content_no_net.lower() or "network is off" in content_no_net.lower()
+    assert (
+        "package installs fail: no network, no root; a task's container is removed with the task"
+        in content_no_net
+    )
 
     agent_net = Agent(
         definition=defn,
@@ -468,6 +472,14 @@ def test_system_message_sandbox_network_granted_and_not_granted(tmp_path: Path) 
         sandbox_network=True,
     )
     msg_net = system_message(agent_net, None)
-    content_net = str(msg_net.content).lower()
-    assert "sandbox limits" in content_net
-    assert "network enabled" in content_net
+    content_net = str(msg_net.content)
+    assert "sandbox limits" in content_net.lower()
+    assert (
+        "network: enabled" in content_net.lower()
+        or "network access is granted" in content_net.lower()
+    )
+    assert "no network" not in content_net.lower()
+    assert (
+        "package installs fail for lack of root and do not persist past the task's container"
+        in content_net
+    )

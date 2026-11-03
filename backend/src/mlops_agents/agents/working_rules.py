@@ -29,15 +29,22 @@ def _load_prompt(filename: str) -> str:
 def sandbox_limits(*, sandbox_network: bool = SANDBOX_DEFAULT_NETWORK) -> str:
     """Return the sandbox limits section tailored to the sandbox network setting."""
     net_status = "enabled" if sandbox_network else "off"
-    net_bullet = (
-        "- Network: enabled (network access is granted)."
-        if sandbox_network
-        else "- No network: network is off unless granted."
-    )
+    if sandbox_network:
+        net_bullet = "- Network: enabled (network access is granted)."
+        pkg_bullet = (
+            "- No system package installs (package installs fail for lack of root and do"
+            " not persist past the task's container)."
+        )
+    else:
+        net_bullet = "- No network: network is off unless granted."
+        pkg_bullet = (
+            "- No system package installs (package installs fail: no network, no root; a"
+            " task's container is removed with the task)."
+        )
     return (
         f"Sandbox limits ({SANDBOX_CPUS} CPUs, {SANDBOX_MEMORY} memory, network {net_status}):\n"
         f"{net_bullet}\n"
-        "- No system package installs (package installs fail: no network, no root; a task's container is removed with the task).\n"
+        f"{pkg_bullet}\n"
         "- The project's own test suite may not run there; report this as a gap rather than retried.\n"
         "- duckdb is the `duckdb` command (CLI, not Python `import duckdb`).\n"
         "- An environment failure is reported once and not retried in variants."

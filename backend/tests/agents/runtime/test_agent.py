@@ -21,6 +21,8 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.projects import DatabaseSandboxProjects, Mount
+from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
@@ -40,6 +42,12 @@ from tests.conftest import (
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.providers.fake_clock import FakeClock
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog
+
+
+class _FakeConnections:
+    async def mounts(self, project_id: str) -> tuple[Mount, ...]:
+        return ()
 
 
 async def _set_project_status(
@@ -478,42 +486,46 @@ async def test_builder_carries_real_network_setting_into_system_message(
     project = await workspace_svc.add_local(str(repo_dir))
     await settings_svc.set_default_model("onboarding", f"{prov.name}:fake-tools")
 
-    # 1. Builder with databases (default network is off)
-    builder_db = AgentBuilder(
+    sandbox_projects = DatabaseSandboxProjects(databases, workspace_svc, _FakeConnections())
+    sandbox_svc = SandboxService(
+        FakeDockerRunner(), projects=sandbox_projects, events=FakeEventLog()
+    )
+
+    builder = AgentBuilder(
         catalog=catalog,
         tools=tools,
         settings=settings_svc,
         workspace=workspace_svc,
         workspaces=workspaces,
         store=store,
-        databases=databases,
-    )
-    agent_db_off = await builder_db.build(project.id, "onboarding")
-    assert not agent_db_off.sandbox_network
-    sys_off = system_message(agent_db_off, None)
-    assert (
-        "network: off" in str(sys_off.content).lower()
-        or "no network" in str(sys_off.content).lower()
+        sandbox=sandbox_svc,
     )
 
-    # 2. Builder with sandbox reporting network=True
-    class _NetSandbox:
-        async def get_network(self, project_id: str) -> bool:
-            return True
-
-    builder_sb_on = AgentBuilder(
-        catalog=catalog,
-        tools=tools,
-        settings=settings_svc,
-        workspace=workspace_svc,
-        workspaces=workspaces,
-        store=store,
-        sandbox=_NetSandbox(),  # type: ignore[arg-type]
-    )
-    agent_sb_on = await builder_sb_on.build(project.id, "onboarding")
-    assert agent_sb_on.sandbox_network
-    sys_on = system_message(agent_sb_on, None)
+    # 1. Default (ungranted) project: network is off
+    agent_off = await builder.build(project.id, "onboarding")
+    assert not agent_off.sandbox_network
+    sys_off = system_message(agent_off, None)
+    content_off = str(sys_off.content)
+    assert "network: off" in content_off.lower() or "network is off" in content_off.lower()
     assert (
-        "network: enabled" in str(sys_on.content).lower()
-        or "network enabled" in str(sys_on.content).lower()
+        "package installs fail: no network, no root; a task's container is removed with the task"
+        in content_off
+    )
+
+    # 2. Grant network access via sandbox_svc
+    await sandbox_svc.set_network(project.id, True)
+
+    # 3. Build agent again: network is enabled
+    agent_on = await builder.build(project.id, "onboarding")
+    assert agent_on.sandbox_network
+    sys_on = system_message(agent_on, None)
+    content_on = str(sys_on.content)
+    assert (
+        "network: enabled" in content_on.lower()
+        or "network access is granted" in content_on.lower()
+    )
+    assert "no network" not in content_on.lower()
+    assert (
+        "package installs fail for lack of root and do not persist past the task's container"
+        in content_on
     )

@@ -208,6 +208,11 @@ You run commands.
     assert (
         "network enabled" in low or "network: enabled" in low or "network access is granted" in low
     )
+    assert "no network" not in low
+    assert (
+        "package installs fail for lack of root and do not persist past the task's container"
+        in rules
+    )
 
 
 def test_working_rules_without_bash_omits_sandbox_limits() -> None:

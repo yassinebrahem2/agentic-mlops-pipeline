@@ -100,7 +100,6 @@ class SessionManager(AgentSessions):
             hooks=hooks,
             store=self._store,
             sandbox=sandbox,
-            databases=databases,
         )
         self._executor = TurnExecutor(
             store=self._store,
