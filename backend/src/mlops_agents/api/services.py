@@ -627,6 +627,7 @@ async def build_services(
         hooks=turn_hooks,
         audit_log=audit,
         event_log=events,
+        sandbox=sandbox,
     )
     inbound.bind(sessions)
     status_board.bind_sessions(sessions)

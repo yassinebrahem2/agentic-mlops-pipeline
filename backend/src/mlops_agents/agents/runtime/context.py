@@ -26,6 +26,7 @@ from mlops_agents.agents.runtime.contract import (
 )
 from mlops_agents.agents.tools.base import FileAccess
 from mlops_agents.agents.working_rules import working_rules
+from mlops_agents.sandbox.containers import SANDBOX_DEFAULT_NETWORK
 from mlops_agents.workspace.models import Project
 
 if TYPE_CHECKING:
@@ -69,6 +70,7 @@ def system_message(agent: Agent, summary: str | None) -> SystemMessage:
         summary,
         agent.hook_context,
         reply_limit_text=reply_limit_text,
+        sandbox_network=agent.sandbox_network,
     )
 
 
@@ -79,9 +81,10 @@ def _system_message(
     summary: str | None,
     hook_context: str | None,
     reply_limit_text: str | None = None,
+    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK,
 ) -> SystemMessage:
     sections = [definition.prompt.strip()]
-    sections.append(working_rules(definition))
+    sections.append(working_rules(definition, sandbox_network=sandbox_network))
 
     project_lines = [
         "Project:",
