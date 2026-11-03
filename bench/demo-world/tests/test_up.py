@@ -314,7 +314,6 @@ def test_hold_keeps_server_answering_while_loop_waits_until_removed(
     world = simulate.World(loaded, paths.data_dir(), paths.world_dir(), company=the_company)
     hold = paths.world_dir() / simulate.HOLD_FILE
     paths.world_dir().mkdir(parents=True, exist_ok=True)
-    hold.touch()
 
     checked_server: list[bool] = []
 
@@ -331,6 +330,7 @@ def test_hold_keeps_server_answering_while_loop_waits_until_removed(
     pace = simulate.Pace(seconds_per_day=0, sleep=sleep_and_check)
 
     def play() -> simulate.Summary:
+        hold.touch()
         return simulate.simulate(world, FIXTURE_START, date(2016, 1, 2), pace)
 
     summary = _up_with(checkout, play)
@@ -369,4 +369,21 @@ def test_hold_before_start_holds_after_first_model_exists_and_before_day_one_fil
     assert saw_model_before_day_one
     assert summary.days == 2
     assert (world.data / "bookings" / f"{FIXTURE_START.isoformat()}.parquet").exists()
+    assert_all_stopped(_server_pids(checkout))
+
+
+def test_up_removes_stale_hold_file_at_start(loaded: pd.DataFrame, checkout: Path) -> None:
+    the_company = fake_company(checkout)
+    world = simulate.World(loaded, paths.data_dir(), paths.world_dir(), company=the_company)
+    hold = paths.world_dir() / simulate.HOLD_FILE
+    paths.world_dir().mkdir(parents=True, exist_ok=True)
+    hold.touch()
+
+    def play() -> simulate.Summary:
+        assert not hold.exists()
+        return simulate.simulate(world, FIXTURE_START, date(2016, 1, 2), FAST)
+
+    summary = _up_with(checkout, play, hold_before_start=False)
+    assert summary.days == 2
+    assert not hold.exists()
     assert_all_stopped(_server_pids(checkout))

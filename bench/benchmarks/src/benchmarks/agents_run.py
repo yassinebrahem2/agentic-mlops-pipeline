@@ -22,14 +22,21 @@ from demo_world.answer_key import Record
 from benchmarks.client import BenchClient, sign_in
 from benchmarks.jobs_days import day_starts_from_jobs
 from benchmarks.report import Pause, RunInfo, write_report
-from benchmarks.scorer import Score, score
+from benchmarks.scorer import AlreadyScored, Score, score
 
 log = logging.getLogger(__name__)
 
 DEFAULT_END_DATE: Final[date] = date(2016, 9, 11)
 DEFAULT_POLL_INTERVAL: Final[float] = 30.0
 DEFAULT_MAINTENANCE_INTERVAL: Final[float] = 300.0  # 5 minutes
+DEFAULT_DRAIN_TIMEOUT: Final[float] = 300.0
 MAINTENANCE_WINDOW_DURATION: Final[timedelta] = timedelta(minutes=10)
+AUDIT_AGENTS: Final[tuple[str, ...]] = (
+    "data-quality",
+    "model-performance",
+    "retraining",
+    "deployment",
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,12 @@ class WorldState:
 
     first: date
     last_done: date
+
+
+@dataclass(frozen=True)
+class StallEvent:
+    id: str
+    ts: datetime
 
 
 def read_world_state(world_dir: Path) -> WorldState | None:
@@ -103,19 +116,20 @@ def resolve_run_paths(run: str | Path) -> tuple[Path, Path, Path]:
 
 
 def _get_app_commit() -> str:
-    repo_root = Path(__file__).resolve().parents[4]
-    git_bin = shutil.which("git") or "git"
-    res = subprocess.run(  # noqa: S603
-        [git_bin, "rev-parse", "HEAD"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    commit = res.stdout.strip()[:8]
-    if not commit:
-        raise RuntimeError("git rev-parse HEAD returned empty commit")
-    return commit
+    try:
+        repo_root = Path(__file__).resolve().parents[4]
+        git_bin = shutil.which("git") or "git"
+        res = subprocess.run(  # noqa: S603
+            [git_bin, "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit = res.stdout.strip()[:8]
+        return commit if commit else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _extract_field(item: object, field: str) -> object:
@@ -151,6 +165,50 @@ def _is_session_active(sess: object) -> bool:
     return busy or active_msg
 
 
+def _has_handoff_and_finished_turn(sess: object) -> tuple[bool, str | None]:
+    busy_obj = _extract_field(sess, "busy")
+    if bool(busy_obj):
+        return False, "session is busy"
+
+    msgs_obj = _extract_field(sess, "messages")
+    msgs = cast(list[object], msgs_obj) if isinstance(msgs_obj, list) else []
+
+    if any(_extract_string_field(m, "status") in ("running", "queued") for m in msgs):
+        return False, "has running or queued message"
+
+    handoff_idx: int | None = None
+    for i, m in enumerate(msgs):
+        author_name = _extract_string_field(m, "author_name")
+        from_agent = _extract_string_field(m, "from_agent")
+        if author_name == "Handoff" or from_agent == "Handoff":
+            handoff_idx = i
+            break
+        parts = _extract_field(m, "parts")
+        if isinstance(parts, list):
+            for part in cast(list[object], parts):
+                text = _extract_string_field(part, "text")
+                if text and "[handoff " in text:
+                    handoff_idx = i
+                    break
+        if handoff_idx is not None:
+            break
+
+    if handoff_idx is None:
+        return False, "waiting for handoff message"
+
+    after_msgs = msgs[handoff_idx + 1 :]
+    if not after_msgs:
+        return False, "waiting for finished turn after handoff"
+
+    finished = any(
+        _extract_string_field(m, "status") not in ("running", "queued") for m in after_msgs
+    )
+    if not finished:
+        return False, "waiting for finished turn after handoff"
+
+    return True, None
+
+
 def _filter_stall_approvals(approvals: object) -> list[object]:
     if not isinstance(approvals, list):
         return []
@@ -175,10 +233,10 @@ def _find_open_pr_number(gh_items: object) -> int | None:
     return None
 
 
-def _extract_stall_event_ids(activity_page: object) -> list[str]:
+def _extract_stall_events(activity_page: object) -> list[StallEvent]:
     entries_obj = _extract_field(activity_page, "entries")
     entries = cast(list[object], entries_obj) if isinstance(entries_obj, list) else []
-    stall_ids: list[str] = []
+    stalls: list[StallEvent] = []
     for entry in entries:
         ev = _extract_field(entry, "event")
         if ev is None:
@@ -186,8 +244,16 @@ def _extract_stall_event_ids(activity_page: object) -> list[str]:
         ev_type = _extract_string_field(ev, "type")
         ev_id = _extract_string_field(ev, "id")
         if ev_type == "turn.stalled" and ev_id:
-            stall_ids.append(ev_id)
-    return stall_ids
+            ts_str = _extract_string_field(ev, "ts")
+            if ts_str:
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except ValueError:
+                    ts = datetime.now(UTC)
+            else:
+                ts = datetime.now(UTC)
+            stalls.append(StallEvent(id=ev_id, ts=ts))
+    return stalls
 
 
 def _extract_model_and_provider(agents_list: object) -> tuple[str | None, str | None]:
@@ -206,10 +272,90 @@ def _extract_model_and_provider(agents_list: object) -> tuple[str | None, str | 
     return None, None
 
 
+def _serialize_score(sc: Score) -> dict[str, Any]:
+    return {
+        "matched": {
+            inc_id: {
+                "kind": p.kind,
+                "category": str(p.category),
+                "start": p.start.isoformat(),
+                "end": p.end.isoformat(),
+                "columns": list(p.columns),
+            }
+            for inc_id, p in sc.matched.items()
+        },
+        "verdicts": {
+            inc_id: v.model_dump(mode="json", exclude_none=True)
+            for inc_id, v in sc.verdicts.items()
+        },
+        "misses": [
+            {
+                "kind": p.kind,
+                "category": str(p.category),
+                "start": p.start.isoformat(),
+                "end": p.end.isoformat(),
+                "columns": list(p.columns),
+            }
+            for p in sc.misses
+        ],
+        "silent": {res_id: str(v) for res_id, v in sc.silent.items()},
+        "excluded": list(sc.excluded),
+    }
+
+
+def _write_fallback_report(
+    run_dir: Path,
+    info: RunInfo,
+    sc: Score,
+    score_data: dict[str, Any],
+) -> None:
+    rep_title = f"{info.mode.title()} {info.scenario} on {info.dataset}"
+    json_data: dict[str, Any] = {
+        "title": rep_title,
+        "info": {
+            "title": rep_title,
+            "mode": info.mode,
+            "dataset": info.dataset,
+            "scenario": info.scenario,
+            "seed": info.seed,
+            "app_commit": info.app_commit,
+            "started": info.started.isoformat(),
+            "ended": info.ended.isoformat(),
+            "provider": info.provider,
+            "model": info.model,
+            "seconds_per_day": info.seconds_per_day,
+            "pauses": [
+                {
+                    "reason": p.reason,
+                    "start": p.start.isoformat(),
+                    "end": p.end.isoformat(),
+                    "duration_s": (p.end - p.start).total_seconds(),
+                }
+                for p in info.pauses
+            ],
+            "day_gaps": [d.isoformat() for d in info.day_gaps],
+        },
+        "score": score_data,
+    }
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "report.json").write_text(json.dumps(json_data, indent=2), encoding="utf-8")
+    md_lines = [
+        f"# {rep_title}\n",
+        f"- Mode: {info.mode}",
+        f"- Commit: {info.app_commit}",
+        f"- Matched: {len(sc.matched)}",
+        f"- Misses: {len(sc.misses)}",
+    ]
+    (run_dir / "report.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+
 async def maintain_hold_windows(
     client: BenchClient,
     project_id: str,
     now: datetime,
+    *,
+    duration: timedelta = MAINTENANCE_WINDOW_DURATION,
+    start: datetime | None = None,
 ) -> None:
     """Keeps a maintenance window open across all expectation refs during a hold."""
     raw_exp: object = await client.get(f"/projects/{project_id}/expectations")
@@ -217,9 +363,10 @@ async def maintain_hold_windows(
     if not scope:
         return
 
+    win_start = start if start is not None else now
     body: dict[str, Any] = {
-        "start": now.isoformat(),
-        "end": (now + MAINTENANCE_WINDOW_DURATION).isoformat(),
+        "start": win_start.isoformat(),
+        "end": (now + duration).isoformat(),
         "scope": scope,
         "reason": "benchmark hold",
     }
@@ -233,35 +380,59 @@ async def check_readiness(
     """Checks whether the project is ready to begin day 1.
 
     Returns (is_ready, waiting_reason). When not ready, waiting_reason states
-    what is being waited for, nothing else.
+    what is being waited for, nothing else. Route errors count as not ready.
     """
     # 1. Handoff exists
-    handoff: object = await client.get(f"/projects/{project_id}/handoff")
+    try:
+        handoff: object = await client.get(f"/projects/{project_id}/handoff")
+    except Exception as exc:
+        return False, f"route error: {exc}"
     if handoff is None:
         return False, "waiting for handoff"
 
-    # 2. No agent's session has a running or queued message
-    agents_list: object = await client.get(f"/projects/{project_id}/agents")
+    # 2. Check the four audit agents
+    for ag_name in AUDIT_AGENTS:
+        try:
+            sess: object = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
+        except Exception as exc:
+            return False, f"route error: {exc}"
+        has_finished, reason = _has_handoff_and_finished_turn(sess)
+        if not has_finished:
+            return False, f"waiting for agent {ag_name} ({reason})"
+
+    # 3. Check other chat agents are not active
+    try:
+        agents_list: object = await client.get(f"/projects/{project_id}/agents")
+    except Exception as exc:
+        return False, f"route error: {exc}"
     if isinstance(agents_list, list):
         for ag in cast(list[object], agents_list):
+            ag_name = _extract_string_field(ag, "name")
+            if not ag_name or ag_name in AUDIT_AGENTS:
+                continue
             chat_val = _extract_field(ag, "chat")
             if chat_val is False:
                 continue
-            ag_name = _extract_string_field(ag, "name")
-            if not ag_name:
-                continue
-            with contextlib.suppress(Exception):
-                sess: object = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
-                if _is_session_active(sess):
-                    return False, f"waiting for agent {ag_name} session to finish"
+            try:
+                sess = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
+            except Exception as exc:
+                return False, f"route error: {exc}"
+            if _is_session_active(sess):
+                return False, f"waiting for agent {ag_name} session to finish"
 
-    # 3. No approval is pending
-    approvals: object = await client.get(f"/projects/{project_id}/approvals")
+    # 4. No approval is pending
+    try:
+        approvals: object = await client.get(f"/projects/{project_id}/approvals")
+    except Exception as exc:
+        return False, f"route error: {exc}"
     if isinstance(approvals, list) and len(cast(list[object], approvals)) > 0:
         return False, f"waiting for {len(cast(list[object], approvals))} pending approval(s)"
 
-    # 4. No agent PR is open
-    gh_items: object = await client.get(f"/projects/{project_id}/github/activity")
+    # 5. No agent PR is open
+    try:
+        gh_items: object = await client.get(f"/projects/{project_id}/github/activity")
+    except Exception as exc:
+        return False, f"route error: {exc}"
     open_pr_num = _find_open_pr_number(gh_items)
     if open_pr_num is not None:
         return False, f"waiting for open PR #{open_pr_num}"
@@ -279,6 +450,7 @@ async def drive_agents_run(
     seconds_per_day: float | None = None,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     maintenance_interval: float = DEFAULT_MAINTENANCE_INTERVAL,
+    drain_timeout: float = DEFAULT_DRAIN_TIMEOUT,
     run_dir: Path | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -288,8 +460,9 @@ async def drive_agents_run(
 
     1. Wait before day 1 until ready, holding world and maintaining windows.
     2. Play business days, creating hold on model stall and resuming when stall approvals clear.
-    3. Maintain maintenance windows every 5 minutes during every hold.
-    4. Score and report after the last simulated day completes.
+    3. Maintain maintenance windows every renewal interval during every hold.
+    4. Drain agents after last day until sessions are idle.
+    5. Score and report after the last simulated day completes.
     """
     resolved_run_dir, world_dir, data_dir = resolve_run_paths(run)
     final_run_dir = run_dir if run_dir is not None else resolved_run_dir
@@ -297,6 +470,15 @@ async def drive_agents_run(
 
     run_started = clock()
     pauses: list[Pause] = []
+
+    # Pace-derived renewal interval and maintenance window duration:
+    # Renewal interval is min(30.0, pace / 4.0), and window duration is twice renewal interval.
+    if seconds_per_day is not None and seconds_per_day > 0:
+        renewal_interval = min(30.0, seconds_per_day / 4.0)
+    else:
+        renewal_interval = min(30.0, poll_interval)
+    window_duration = timedelta(seconds=2 * renewal_interval)
+    effective_maint_interval = min(maintenance_interval, renewal_interval)
 
     # --- Phase 1: Wait before day 1 ---
     wait_start = clock()
@@ -307,9 +489,9 @@ async def drive_agents_run(
         now = clock()
         if (
             last_maint_time is None
-            or (now - last_maint_time).total_seconds() >= maintenance_interval
+            or (now - last_maint_time).total_seconds() >= effective_maint_interval
         ):
-            await maintain_hold_windows(client, project_id, now)
+            await maintain_hold_windows(client, project_id, now, duration=window_duration)
             last_maint_time = now
 
         is_ready, waiting_reason = await check_readiness(client, project_id)
@@ -321,7 +503,7 @@ async def drive_agents_run(
             stdout.flush()
             last_printed_reason = waiting_reason
 
-        await sleep(poll_interval)
+        await sleep(renewal_interval)
 
     wait_end = clock()
     pauses.append(Pause(reason="ready_wait", start=wait_start, end=wait_end))
@@ -329,44 +511,67 @@ async def drive_agents_run(
         with contextlib.suppress(OSError):
             hold_file.unlink()
 
-    # --- Phase 2: Play, holding on a stall ---
-    seen_stall_event_ids: set[str] = set()
+    # Seed seen stall events at end of readiness wait so onboarding stalls are not counted as pauses.
+    initial_stalls_page: object = await client.get(
+        f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
+    )
+    seen_stall_event_ids: set[str] = {s.id for s in _extract_stall_events(initial_stalls_page)}
+    warned_user_verdict_ids: set[str] = set()
 
+    # --- Phase 2: Play, holding on a stall ---
     while True:
         state = read_world_state(world_dir)
         if state is not None and state.last_done >= end_date:
             break
 
+        # Poll for early user verdicts
+        with contextlib.suppress(Exception):
+            raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
+            if isinstance(raw_verdicts, list):
+                for v in cast(list[object], raw_verdicts):
+                    if _extract_string_field(v, "source") == "user":
+                        inc_id = _extract_string_field(v, "incident_id")
+                        if inc_id and inc_id not in warned_user_verdict_ids:
+                            warned_user_verdict_ids.add(inc_id)
+                            stdout.write(
+                                f"Warning: person's verdict detected on incident {inc_id}\n"
+                            )
+                            stdout.flush()
+
         stall_detected = False
+        stall_event_ts: datetime | None = None
         activity_page: object = await client.get(
             f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
         )
-        new_stall_ids = [
-            sid
-            for sid in _extract_stall_event_ids(activity_page)
-            if sid not in seen_stall_event_ids
+        new_stalls = [
+            s for s in _extract_stall_events(activity_page) if s.id not in seen_stall_event_ids
         ]
-        if new_stall_ids:
-            seen_stall_event_ids.update(new_stall_ids)
+        if new_stalls:
+            for s in new_stalls:
+                seen_stall_event_ids.add(s.id)
             stall_detected = True
+            stall_event_ts = min(s.ts for s in new_stalls)
 
         approvals: object = await client.get(f"/projects/{project_id}/approvals")
         if _filter_stall_approvals(approvals):
             stall_detected = True
 
         if stall_detected:
-            stall_start = clock()
+            stall_start = stall_event_ts if stall_event_ts is not None else clock()
             with contextlib.suppress(OSError):
                 hold_file.touch(exist_ok=True)
 
             last_stall_maint: datetime | None = None
+            # First window starts at stall event time (can be in past)
+            await maintain_hold_windows(
+                client, project_id, clock(), duration=window_duration, start=stall_start
+            )
+            last_stall_maint = clock()
+
             while True:
                 now = clock()
-                if (
-                    last_stall_maint is None
-                    or (now - last_stall_maint).total_seconds() >= maintenance_interval
-                ):
-                    await maintain_hold_windows(client, project_id, now)
+                if (now - last_stall_maint).total_seconds() >= renewal_interval:
+                    await maintain_hold_windows(client, project_id, now, duration=window_duration)
                     last_stall_maint = now
 
                 cur_approvals: object = await client.get(f"/projects/{project_id}/approvals")
@@ -378,9 +583,49 @@ async def drive_agents_run(
                             hold_file.unlink()
                     break
 
-                await sleep(poll_interval)
+                await sleep(renewal_interval)
 
-        await sleep(poll_interval)
+        await sleep(renewal_interval)
+
+    # --- Phase 3: Drain agents after last day ---
+    drain_deadline = clock() + timedelta(seconds=drain_timeout)
+    drain_timed_out = False
+
+    while True:
+        any_busy = False
+        try:
+            agents_list_obj: object = await client.get(f"/projects/{project_id}/agents")
+            if isinstance(agents_list_obj, list):
+                for ag in cast(list[object], agents_list_obj):
+                    ag_name = _extract_string_field(ag, "name")
+                    chat_val = _extract_field(ag, "chat")
+                    if chat_val is False or not ag_name:
+                        continue
+                    sess = await client.get(f"/projects/{project_id}/agents/{ag_name}/session")
+                    if _is_session_active(sess):
+                        any_busy = True
+                        break
+        except Exception:
+            any_busy = True
+
+        stalls_open = False
+        try:
+            cur_approvals = await client.get(f"/projects/{project_id}/approvals")
+            if _filter_stall_approvals(cur_approvals):
+                stalls_open = True
+        except Exception:
+            stalls_open = True
+
+        if not any_busy and not stalls_open:
+            break
+
+        if clock() >= drain_deadline:
+            drain_timed_out = True
+            stdout.write("Warning: agent drain timed out before all sessions were idle\n")
+            stdout.flush()
+            break
+
+        await sleep(renewal_interval)
 
     # --- Phase 4: Score and report ---
     state = read_world_state(world_dir)
@@ -389,43 +634,8 @@ async def drive_agents_run(
             f"World state file {world_dir / simulate.STATE_FILE} not found or incomplete"
         )
 
-    jobs_dir = data_dir / "jobs"
-    starts, gaps = day_starts_from_jobs(jobs_dir, date_range=(state.first, state.last_done))
-
-    records: list[Record] = []
-    key_path = world_dir / answer_key.ANSWER_KEY_FILE
-    if key_path.is_file():
-        for line in key_path.read_text(encoding="utf-8").splitlines():
-            line_str = line.strip()
-            if not line_str:
-                continue
-            try:
-                d: object = json.loads(line_str)
-            except json.JSONDecodeError:
-                continue
-            if (
-                isinstance(d, dict)
-                and "kind" in d
-                and "category" in d
-                and "start" in d
-                and "end" in d
-            ):
-                raw_d = cast(dict[str, object], d)
-                col_val = raw_d.get("column")
-                col_str = str(col_val) if col_val is not None else None
-                records.append(
-                    Record(
-                        kind=str(raw_d["kind"]),
-                        category=cast(answer_key.Category, raw_d["category"]),
-                        column=col_str,
-                        start=str(raw_d["start"]),
-                        end=str(raw_d["end"]),
-                    )
-                )
-
-    score_res = await score(client, project_id, records, starts=starts)
-
-    agents_list: object = await client.get(f"/projects/{project_id}/agents")
+    # 1. Read metadata BEFORE score()
+    agents_list = await client.get(f"/projects/{project_id}/agents")
     provider, model = _extract_model_and_provider(agents_list)
 
     if provider is None:
@@ -440,8 +650,80 @@ async def drive_agents_run(
             log.warning("Could not read providers from /providers")
 
     app_commit = _get_app_commit()
-    run_ended = clock()
 
+    # 2. Check for person's verdicts before scoring; refuse with judged incidents after saving metadata
+    user_judged_incidents: list[str] = []
+    with contextlib.suppress(Exception):
+        raw_verdicts = await client.get(f"/projects/{project_id}/verdicts")
+        if isinstance(raw_verdicts, list):
+            for v in cast(list[object], raw_verdicts):
+                if _extract_string_field(v, "source") == "user":
+                    inc_id = _extract_string_field(v, "incident_id")
+                    if inc_id and inc_id not in user_judged_incidents:
+                        user_judged_incidents.append(inc_id)
+
+    if user_judged_incidents:
+        meta_dict = {
+            "mode": "agents",
+            "dataset": "hotel-demo",
+            "scenario": scenario_name,
+            "app_commit": app_commit,
+            "started": run_started.isoformat(),
+            "ended": clock().isoformat(),
+            "provider": provider,
+            "model": model,
+            "seconds_per_day": seconds_per_day,
+            "user_judged_incidents": sorted(user_judged_incidents),
+        }
+        final_run_dir.mkdir(parents=True, exist_ok=True)
+        (final_run_dir / "metadata.json").write_text(
+            json.dumps(meta_dict, indent=2), encoding="utf-8"
+        )
+        judged_str = ", ".join(sorted(user_judged_incidents))
+        raise AlreadyScored(f"Cannot score: user verdicts recorded for incident(s): {judged_str}")
+
+    # 3. Read answer key via demo-world's reader
+    try:
+        raw_lines = answer_key.lines(world_dir)
+    except Exception as exc:
+        raise ValueError(f"Failed to read answer key from {world_dir}: {exc}") from exc
+
+    records: list[Record] = []
+    for d in raw_lines:
+        kind = d.get("kind")
+        if not isinstance(kind, str):
+            raise ValueError(f"Malformed answer key line: missing 'kind' in {d!r}")
+        if kind in ("ci_failure_set", "ci_failure_restored", "pr_merged", "pr_not_merged"):
+            continue
+        if "category" not in d or "start" not in d or "end" not in d:
+            raise ValueError(f"Malformed answer key record: {d!r}")
+        col_val = d.get("column")
+        col_str = str(col_val) if col_val is not None else None
+        records.append(
+            Record(
+                kind=kind,
+                category=cast(answer_key.Category, d["category"]),
+                column=col_str,
+                start=str(d["start"]),
+                end=str(d["end"]),
+            )
+        )
+
+    jobs_dir = data_dir / "jobs"
+    starts, gaps = day_starts_from_jobs(jobs_dir, date_range=(state.first, state.last_done))
+
+    # 4. Score
+    score_res = await score(client, project_id, records, starts=starts)
+
+    # 5. Write score result immediately to disk
+    score_dict = _serialize_score(score_res)
+    final_run_dir.mkdir(parents=True, exist_ok=True)
+    (final_run_dir / "score_result.json").write_text(
+        json.dumps(score_dict, indent=2), encoding="utf-8"
+    )
+    (final_run_dir / "score.json").write_text(json.dumps(score_dict, indent=2), encoding="utf-8")
+
+    run_ended = clock()
     info = RunInfo(
         mode="agents",
         dataset="hotel-demo",
@@ -457,7 +739,30 @@ async def drive_agents_run(
         day_gaps=gaps,
     )
 
-    await write_report(client, project_id, final_run_dir, info, score_res)
+    try:
+        await write_report(client, project_id, final_run_dir, info, score_res)
+    except Exception as exc:
+        log.warning("write_report failed: %s; writing fallback report", exc)
+        _write_fallback_report(final_run_dir, info, score_res, score_dict)
+
+    if drain_timed_out:
+        rep_json_path = final_run_dir / "report.json"
+        if rep_json_path.exists():
+            with contextlib.suppress(Exception):
+                rep_dict = json.loads(rep_json_path.read_text(encoding="utf-8"))
+                if "info" in rep_dict and isinstance(rep_dict["info"], dict):
+                    rep_dict["info"]["drain_timeout"] = True
+                rep_dict["drain_timeout"] = True
+                rep_json_path.write_text(json.dumps(rep_dict, indent=2), encoding="utf-8")
+        rep_md_path = final_run_dir / "report.md"
+        if rep_md_path.exists():
+            with contextlib.suppress(Exception):
+                rep_md_text = rep_md_path.read_text(encoding="utf-8")
+                rep_md_text += (
+                    "\n> **Warning:** agent drain timed out before all sessions were idle.\n"
+                )
+                rep_md_path.write_text(rep_md_text, encoding="utf-8")
+
     return score_res
 
 
@@ -470,6 +775,7 @@ async def agents_run_cli(
     scenario_name: str = "agents-short",
     seconds_per_day: float | None = None,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
+    drain_timeout: float = DEFAULT_DRAIN_TIMEOUT,
     run_dir: Path | None = None,
 ) -> Score:
     client = await sign_in(base_url)
@@ -481,6 +787,7 @@ async def agents_run_cli(
         scenario_name=scenario_name,
         seconds_per_day=seconds_per_day,
         poll_interval=poll_interval,
+        drain_timeout=drain_timeout,
         run_dir=run_dir,
     )
 
@@ -526,6 +833,12 @@ def register_agents_run_cli(parser: argparse.ArgumentParser) -> None:
         help="Poll interval in seconds (default: 30.0)",
     )
     parser.add_argument(
+        "--drain-timeout",
+        type=float,
+        default=DEFAULT_DRAIN_TIMEOUT,
+        help="Timeout in seconds to wait for agent sessions to drain (default: 300.0)",
+    )
+    parser.add_argument(
         "--run-dir",
         type=Path,
         default=None,
@@ -545,6 +858,7 @@ def run_agents_run_cli(args: argparse.Namespace) -> int:
                 scenario_name=str(args.scenario),
                 seconds_per_day=cast(float | None, args.seconds_per_day),
                 poll_interval=float(args.poll_interval),
+                drain_timeout=float(args.drain_timeout),
                 run_dir=cast(Path | None, args.run_dir),
             )
         )
@@ -558,9 +872,12 @@ def run_agents_run_cli(args: argparse.Namespace) -> int:
 
 
 __all__ = [
+    "AUDIT_AGENTS",
+    "DEFAULT_DRAIN_TIMEOUT",
     "DEFAULT_END_DATE",
     "DEFAULT_MAINTENANCE_INTERVAL",
     "DEFAULT_POLL_INTERVAL",
+    "StallEvent",
     "WorldState",
     "agents_run_cli",
     "check_readiness",
