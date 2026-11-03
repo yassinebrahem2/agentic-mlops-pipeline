@@ -312,11 +312,43 @@ describe("useSession", () => {
     );
 
     postSpy.mockRejectedValue(new ApiError("unauthorized", "Unauthorized", 401));
-    await expect(result.current.send("Fail")).rejects.toThrow("Unauthorized");
+    await act(async () => {
+      await expect(result.current.send("Fail")).rejects.toThrow("Unauthorized");
+    });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth"] });
 
     postSpy.mockRestore();
     invalidateSpy.mockRestore();
+    unmount();
+  });
+
+  it("populates last_stopped_reason on snapshot when idle and clears it on send", async () => {
+    vi.spyOn(api, "POST").mockResolvedValue({
+      data: {},
+      response: new Response(null, { status: 200 }),
+    });
+    getSpy = vi.spyOn(api, "GET").mockResolvedValue({
+      data: {
+        ...initialSession,
+        busy: false,
+        last_stopped_reason: "max_steps",
+      },
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.state?.last_stopped_reason).toBe("max_steps");
+    });
+
+    await act(async () => {
+      await result.current.send("Continue");
+    });
+
+    expect(result.current.state?.busy).toBe(true);
+    expect(result.current.state?.last_stopped_reason).toBeNull();
+
     unmount();
   });
 });

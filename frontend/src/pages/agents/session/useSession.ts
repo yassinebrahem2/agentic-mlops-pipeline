@@ -101,6 +101,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         busy: session.busy,
         lastSeq: session.last_seq,
         current_task: session.current_task,
+        last_stopped_reason: session.busy ? null : (session.last_stopped_reason ?? null),
       };
     };
 
@@ -298,6 +299,10 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
 
   const send = useCallback(
     async (text: string) => {
+      setState((prev) => (prev ? { ...prev, busy: true, last_stopped_reason: null } : prev));
+      if (stateRef.current) {
+        stateRef.current = { ...stateRef.current, busy: true, last_stopped_reason: null };
+      }
       await sendMutation.mutateAsync(text);
     },
     [sendMutation],
