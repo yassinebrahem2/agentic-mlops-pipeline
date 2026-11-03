@@ -68,6 +68,7 @@ from tests.e2e.fixture_project import (
     TEAM_CHECK_ID,
     TEAM_SOURCE_ID,
     WEATHER_FEED_NAME,
+    agent_parser_payload,
     create_fixture_repo,
     handoff_payload,
     monitoring_settings_payload,
@@ -216,6 +217,23 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 )
                 assert parser_result is not None
                 assert parser_result.failed == {}
+
+                # The agent check's mapping parser
+                agent_src_id = f"file:{CONNECTION_NAME}:checks/*.jsonl"
+                agent_prop = await services1.proposals.create(
+                    project_id,
+                    agent="architect",
+                    kind=PARSER_KIND,
+                    key=agent_src_id,
+                    payload=agent_parser_payload(ran_at=harness.clock.now()),
+                    turn_id="trn_night_agent_parser",
+                    tool_call_id="call_night_agent_parser",
+                )
+                agent_res = await services1.proposals.decide(
+                    project_id, agent_prop.id, approved=True
+                )
+                assert agent_res is not None
+                assert agent_res.failed == {}
 
                 # Configure deployment rollback scripted reply IDs and record invocation order
                 order: list[str] = []
