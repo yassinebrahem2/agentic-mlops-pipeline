@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for conftest.py keystore parameter, harness.py, fixture_project.py,
 monitoring_script.py, and fake_openai.py integration.
 """

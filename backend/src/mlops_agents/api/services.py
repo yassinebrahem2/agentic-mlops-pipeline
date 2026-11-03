@@ -507,7 +507,7 @@ async def build_services(
         databases=databases,
     )
     incidents.add_observer(reactor)
-    prioritization_wake = PrioritizationWake(waker=waker, events=events)
+    prioritization_wake = PrioritizationWake(waker=waker, events=events, incidents=incidents)
     incidents.add_observer(prioritization_wake)
 
     fixes = SqliteFixes(

@@ -643,3 +643,36 @@ async def test_tool_registry_and_risk_class(
     # When severity is not provided, AdjustSeverity is not registered
     reg_no_sev = default_registry(incidents=incidents_service)
     assert ADJUST_SEVERITY not in reg_no_sev.names()
+
+
+async def test_prioritization_wake_skips_resolved_offline(
+    databases: Databases,
+    event_log: SqliteEventLog,
+    waker: Waker,
+    fake_sessions: FakeSessions,
+    incidents_service: IncidentsService,
+    fake_clock: FakeClock,
+) -> None:
+    """PrioritizationWake skips waking alert-prioritization when incident resolved offline."""
+    project_id = "prj_testoffline"
+    prioritization_wake = PrioritizationWake(
+        waker=waker, events=event_log, incidents=incidents_service
+    )
+    incidents_service.add_observer(prioritization_wake)
+
+    outcome = await incidents_service.raise_signal(
+        project_id,
+        SignalDraft(
+            kind="fired_result",
+            category="data_quality",
+            subject="tbl_test",
+            ran_at=fake_clock.now(),
+            detail={"cleared": True},
+            cleared=True,
+        ),
+        seen_at=fake_clock.now(),
+    )
+    inc = await incidents_service.get(project_id, outcome.incident_id)
+    assert inc is not None
+    assert inc.resolved_offline is True
+    assert len(fake_sessions.posted_messages) == 0

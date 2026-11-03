@@ -49,12 +49,16 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from mlops_agents.agents.approvals.store import ApprovalStore
+from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.tools.base import Preview, RiskClass
+from mlops_agents.clock import to_iso
 from mlops_agents.connections.contract import LOCAL_FOLDER_KIND
-from mlops_agents.monitoring.incidents.routing import OnCallRouter
 from mlops_agents.monitoring.results.contract import ResultQuery, ResultRecord
 from mlops_agents.monitoring.settings import set_monitoring_settings
-from mlops_agents.proposals.contract import HANDOFF_KIND, PARSER_KIND, RULE_KIND
-from mlops_agents.storage.tables import agent_wakes, notification_log
+from mlops_agents.notifications.contract import Message
+from mlops_agents.proposals.contract import HANDOFF_KIND, HOOKS_KIND, PARSER_KIND, RULE_KIND
+from mlops_agents.storage.tables import agent_wakes, notification_log, sessions, turns
 from tests.e2e.fixture_project import (
     AGENT_CHECK_ID,
     CONNECTION_NAME,
@@ -67,6 +71,7 @@ from tests.e2e.fixture_project import (
     create_fixture_repo,
     handoff_payload,
     monitoring_settings_payload,
+    rollback_command_spec,
     rollback_rule_spec,
     team_parser_payload,
     write_fixture_data_folder,
@@ -145,7 +150,31 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 assert handoff_res is not None
                 assert handoff_res.failed == {}
 
-                # Find and approve rollback hook via API route
+                # Propose rollback hook via proposals (HooksProposalCard) and decide
+                hook_spec = rollback_command_spec()
+                hook_prop = await services1.proposals.create(
+                    project_id,
+                    agent="architect",
+                    kind=HOOKS_KIND,
+                    key="project",
+                    payload={
+                        "hooks": [
+                            {
+                                "name": hook_spec.kind,
+                                "model": None,
+                                "spec": hook_spec.model_dump(mode="json"),
+                                "why": "Automated rollback for scoring failure",
+                            }
+                        ]
+                    },
+                    turn_id="trn_night_hook",
+                    tool_call_id="call_night_hook",
+                )
+                hook_res = await services1.proposals.decide(project_id, hook_prop.id, approved=True)
+                assert hook_res is not None
+                assert hook_res.failed == {}
+
+                # Find and approve rollback hook via API route to pin commit
                 all_hooks = await services1.hooks.list(project_id)
                 rollback_hook = next(h for h in all_hooks if h.spec.kind == "rollback")
                 approve_resp = await client1.post(
@@ -284,9 +313,12 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 assert links[0].team_check_id == TEAM_CHECK_ID
 
                 # 01:30 is outside on-call hours (09:00 - 18:00 UTC), so notification is held for morning
-                router1 = OnCallRouter(on_call=services1.on_call, databases=services1.databases)
-                bookings_plan = await router1.plan(project_id, bookings_inc, harness.clock.now())
-                assert all("morning" in d.when for d in bookings_plan.deliveries)
+                async with engine1.connect() as conn:
+                    stmt = select(notification_log).where(
+                        notification_log.c.incident == bookings_inc.id
+                    )
+                    notifs_bookings_1b = (await conn.execute(stmt)).mappings().all()
+                assert len(notifs_bookings_1b) == 0
                 assert len(harness.fake_discord.state.posts) == 0
 
                 # 1c. Same check fires on predictions (downstream) at 01:40 UTC
@@ -318,6 +350,14 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 assert len(sigs) == 2
                 assert {s.subject for s in sigs} == {TABLE_BOOKINGS, TABLE_PREDICTIONS}
                 assert len(harness.fake_discord.state.posts) == posts_before_predictions
+
+                # notification_log count for bookings incident remains 0 after downstream predictions
+                async with engine1.connect() as conn:
+                    stmt = select(notification_log).where(
+                        notification_log.c.incident == bookings_inc.id
+                    )
+                    notifs_bookings_1c = (await conn.execute(stmt)).mappings().all()
+                assert len(notifs_bookings_1c) == len(notifs_bookings_1b) == 0
 
                 # Data Quality was not woken again for downstream predictions
                 async with engine1.connect() as conn:
@@ -508,17 +548,13 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 )
                 assert res_rates.total == 1
 
-                # Check holidays woke no one and rates woke Data Quality once and was held for morning
+                # Check holidays woke no one (including alert-prioritization) and rates woke Data Quality once
                 engine2 = await services2.databases.project(project_id)
                 async with engine2.connect() as conn:
                     stmt_wakes = select(agent_wakes)
                     wakes_rows = (await conn.execute(stmt_wakes)).mappings().all()
 
-                holidays_wakes = [
-                    r
-                    for r in wakes_rows
-                    if r["subject"] == holidays_inc.id and r["agent"] != "alert-prioritization"
-                ]
+                holidays_wakes = [r for r in wakes_rows if r["subject"] == holidays_inc.id]
                 assert len(holidays_wakes) == 0
 
                 rates_wakes = [
@@ -528,9 +564,25 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 ]
                 assert len(rates_wakes) == 1
 
-                router2 = OnCallRouter(on_call=services2.on_call, databases=services2.databases)
-                rates_plan = await router2.plan(project_id, rates_inc, harness.clock.now())
-                assert all("morning" in d.when for d in rates_plan.deliveries)
+                # Count wakes from fake model's requests: rates woke DQ once (2 model steps: tool + conclusion), holidays woke no one
+                rates_dq_requests = [
+                    r
+                    for r in harness.fake_openai.state.requests
+                    if rates_inc.id in str(r) and r.get("model") == "fake-data-quality"
+                ]
+                assert len(rates_dq_requests) == 2
+                holidays_requests = [
+                    r for r in harness.fake_openai.state.requests if holidays_inc.id in str(r)
+                ]
+                assert len(holidays_requests) == 0
+
+                # Check rates notification was held for morning
+                async with engine2.connect() as conn:
+                    stmt_rates_notifs = select(notification_log).where(
+                        notification_log.c.incident == rates_inc.id
+                    )
+                    rates_notifs = (await conn.execute(stmt_rates_notifs)).mappings().all()
+                assert len(rates_notifs) == 0
 
                 # Check no duplicate notifications in notification_log
                 async with engine2.connect() as conn:
@@ -539,25 +591,97 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                     notif_keys = [(r["incident"], r["person"], r["kind"]) for r in notif_rows]
                     assert len(notif_keys) == len(set(notif_keys))
 
-                # Check no wakes duplicated
-                wake_keys = [(r["agent"], r["label"], r["subject"], r["key"]) for r in wakes_rows]
-                assert len(wake_keys) == len(set(wake_keys))
+                # Check no duplicate notification.sent events per (incident, person) after restart
+                notif_events = await services2.events.page(
+                    project_id, types=["notification.sent"], limit=100
+                )
+                sent_pairs = [
+                    (e.subject_id, str(e.payload.get("person")))
+                    for e in notif_events
+                    if e.subject_id
+                ]
+                assert len(sent_pairs) == len(set(sent_pairs))
 
                 # -----------------------------------------------------------------
                 # SCENE 5: Morning report at 09:00 UTC
                 # -----------------------------------------------------------------
+                # Create a pending approval waiting for a person at morning report
+                async with engine2.connect() as conn:
+                    dq_sess_row = (
+                        (
+                            await conn.execute(
+                                select(sessions).where(sessions.c.agent == "data-quality")
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    dq_session_id = str(dq_sess_row["id"])
+
+                async with engine2.begin() as conn:
+                    await conn.execute(
+                        turns.insert().values(
+                            id="trn_dq_followup",
+                            session_id=dq_session_id,
+                            trigger_message_id="msg_trigger_followup",
+                            status="waiting",
+                            error=None,
+                            created_at=to_iso(harness.clock.now()),
+                            started_at=to_iso(harness.clock.now()),
+                            ended_at=None,
+                        )
+                    )
+
+                approval_msg = await SessionStore(services2.databases).add_message(
+                    project_id,
+                    dq_session_id,
+                    turn_id="trn_dq_followup",
+                    author_kind="agent",
+                    author_name="data-quality",
+                    parts=[],
+                    status="waiting",
+                )
+
+                await ApprovalStore(services2.databases).create(
+                    project_id,
+                    id="apr_dq_review",
+                    turn_id="trn_dq_followup",
+                    session_id=dq_session_id,
+                    message_id=approval_msg.id,
+                    agent="data-quality",
+                    tool_call_id="call_dq_review",
+                    tool="review_action",
+                    risk_class=RiskClass.WRITE_CODE,
+                    preview=Preview(
+                        kind="text",
+                        title="Data quality follow-up",
+                        body="Manual review of bookings data",
+                    ),
+                    proposal_kind=None,
+                )
+
                 harness.clock.set(datetime(2026, 10, 31, 9, 0, 0, tzinfo=UTC))
                 posts_before_morning = len(harness.fake_discord.state.posts)
 
+                morning_deliveries: dict[str, Message] = {}
+                orig_send = services2.notification_channels["discord"].send
+
+                async def tracking_send(target: str, message: Message) -> None:
+                    morning_deliveries[target] = message
+                    await orig_send(target, message)
+
+                services2.notification_channels["discord"].send = tracking_send
+
                 await run_due(services2, project_id, harness.clock.now())
 
-                # Morning report delivered to on-call people
+                # Assert one report each for u_alice and u_bob by recipient
+                assert set(morning_deliveries.keys()) == {"u_alice", "u_bob"}
                 morning_posts = harness.fake_discord.state.posts[posts_before_morning:]
                 assert len(morning_posts) == 2
 
                 # Check contents of morning report
                 report_text = " ".join(str(p) for p in morning_posts)
-                assert "Morning report" in report_text or "morning" in report_text.lower()
+                assert "Morning report" in report_text
                 assert "resolved offline" in report_text.lower()
 
                 # Lists all 5 night incidents by ID
@@ -567,12 +691,21 @@ async def test_monitoring_night_end_to_end(tmp_path: Path, git_env: dict[str, st
                 # Mentions the rule cited in the rollback
                 assert "rollback (rule)" in report_text.lower()
 
-                # What waits for a person: no approvals pending (rollback ran via rule)
-                assert await services2.approvals.pending(project_id) == []
+                # Assert rendered Waiting: section is present with what waits
+                assert "Waiting:" in report_text
+                assert "data-quality: review_action" in report_text
 
                 # -----------------------------------------------------------------
                 # SCENE 6: Verdict and close
                 # -----------------------------------------------------------------
+                # Person decides the pending approval
+                pending_apps = await services2.approvals.pending(project_id)
+                assert len(pending_apps) == 1
+                await services2.approvals.decide(
+                    project_id, pending_apps[0].id, approve=True, note="approved"
+                )
+                assert await services2.approvals.pending(project_id) == []
+
                 # Person records verdict through route
                 verdict_resp = await client2.post(
                     f"/api/projects/{project_id}/incidents/{bookings_inc.id}/verdict",
