@@ -21,7 +21,6 @@ from mlops_agents.monitoring.results.contract import (
     ResultOrigin,
     ResultQuery,
     ResultsObserver,
-    SourceKind,
     SourceState,
     StoredResult,
 )
@@ -62,9 +61,6 @@ class FakeResults:
 
     async def query(self, project_id: str, q: ResultQuery) -> Page[StoredResult]:
         return Page(rows=[], total=0, truncated=False)
-
-    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
-        return []
 
 
 class FakeMaintenance:

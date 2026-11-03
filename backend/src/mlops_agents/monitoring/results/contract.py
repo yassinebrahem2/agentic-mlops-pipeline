@@ -138,8 +138,6 @@ class Results(Protocol):
 
     async def source_state(self, project_id: str, source_id: str) -> SourceState | None: ...
 
-    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]: ...
-
 
 class ParserMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")

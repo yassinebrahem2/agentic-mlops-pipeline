@@ -34,7 +34,6 @@ from mlops_agents.monitoring.results.contract import (
     CollectionReport,
     ResultQuery,
     ResultsObserver,
-    SourceKind,
     SourceState,
     StoredResult,
 )
@@ -109,9 +108,6 @@ class FakeResults:
 
     async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
         return None
-
-    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
-        return []
 
 
 class FakeSeverityPolicy:

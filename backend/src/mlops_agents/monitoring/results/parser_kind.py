@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -16,7 +16,7 @@ from mlops_agents.monitoring.results.constants import (
 from mlops_agents.monitoring.results.contract import (
     ParserPayload,
     Parsers,
-    Results,
+    SourceKind,
 )
 from mlops_agents.proposals.contract import (
     PARSER_KIND,
@@ -58,6 +58,10 @@ CODE_PARSER_CONTRACT = (
 )
 
 
+class ResultsSourceProvider(Protocol):
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]: ...
+
+
 def _payload(payload: Any) -> ParserPayload:
     if isinstance(payload, ParserPayload):
         return payload
@@ -70,7 +74,7 @@ class ParserKind(ProposalCheck):
     name = PARSER_KIND
     payload_model: type[BaseModel] = ParserPayload
 
-    def __init__(self, parsers: Parsers, results: Results | None = None) -> None:
+    def __init__(self, parsers: Parsers, results: ResultsSourceProvider | None = None) -> None:
         self._parsers = parsers
         self._results = results
 
