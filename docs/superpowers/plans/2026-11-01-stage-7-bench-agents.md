@@ -95,6 +95,14 @@ The pre-run review of tasks 1 to 3 (2026-11-03) found defects that would lose or
 - A stale `hold` file is removed.
 - `uv run pytest`, ruff, ruff format and pyright in `bench/benchmarks` and `bench/demo-world`; CI green.
 
+**Review round (2026-11-03, on 542f86df).** Fix on the same branch before #663:
+- The window tests go through the driver: a fake client that raises a stall, and the test reads the windows the driver posted (start at the event's time; after a resume none outlives twice the renewal interval). A test that calls `maintain_hold_windows` itself or computes the duration itself does not count.
+- A stall raised while a hold is already on joins that hold: its event is marked seen, so one hold is one pause, never two overlapping ones (test: stall B during stall A's hold, one pause).
+- Route errors after readiness are printed and retried like readiness's, never the end of a multi-hour run; whatever ends the run (an error, Ctrl+C) releases the `hold` file, so the world never stays frozen (test: an exception other than a route error, or a cancellation, during a hold leaves no `hold` file).
+- No `contextlib.suppress(Exception)`: the verdict poll in play retries and prints its error, the verdict check before `score()` fails loudly (metadata saved first, as for a verdict found), and a failed write of the drain timeout into the report is printed.
+- No silent empty score: a run folder whose `run.env`, `state.json` or answer key cannot be found or read, or whose answer key holds no problem record, stops the run with that path (no fallback guessing in `resolve_run_paths`).
+- The runbook names `MLOPS_AGENTS_ACCESS_TOKEN`.
+
 ### Task 4: The run and its report
 
 **Files:** none in code; the plan PR's description.
