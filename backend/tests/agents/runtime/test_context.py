@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -408,3 +409,65 @@ def test_prompt_messages_trims_older_tool_results_and_keeps_stored_intact() -> N
 
     # Stored part in message view remains untouched
     assert stored_part.content == large_content
+
+
+def test_system_message_sandbox_network_granted_and_not_granted(tmp_path: Path) -> None:
+    from mlops_agents.agents.runtime.agent import Agent
+    from mlops_agents.agents.runtime.context import system_message
+    from mlops_agents.agents.tools.files import RepoFiles
+    from mlops_agents.integrations.github.git import GitRunner
+    from mlops_agents.providers.bridge import ResolvedModel
+
+    defn = AgentDefinition(
+        name="onboarding",
+        display_name="Onboarding",
+        description="Onboarding agent",
+        tools=("Read", "Bash"),
+        chat=True,
+        schedules=False,
+        can_message=(),
+        context_hooks=(),
+        limits=Limits(max_steps=25),
+        prompt="You onboard.",
+    )
+    proj = _make_project()
+    model = ResolvedModel(
+        address="fake:fake-tools",
+        provider_id="fake",
+        provider_name="fake",
+        base_url="http://fake",
+        wire_model_id="fake-tools",
+        context_window=32768,
+        keys=(),
+    )
+    files = RepoFiles(tmp_path, GitRunner(Path("/bin")))
+
+    agent_no_net = Agent(
+        definition=defn,
+        project=proj,
+        layout="README.md",
+        model=model,
+        max_steps=25,
+        tools=(),
+        files=files,
+        sandbox_network=False,
+    )
+    msg_no_net = system_message(agent_no_net, None)
+    content_no_net = str(msg_no_net.content).lower()
+    assert "sandbox limits" in content_no_net
+    assert "network off" in content_no_net or "network is off" in content_no_net
+
+    agent_net = Agent(
+        definition=defn,
+        project=proj,
+        layout="README.md",
+        model=model,
+        max_steps=25,
+        tools=(),
+        files=files,
+        sandbox_network=True,
+    )
+    msg_net = system_message(agent_net, None)
+    content_net = str(msg_net.content).lower()
+    assert "sandbox limits" in content_net
+    assert "network enabled" in content_net

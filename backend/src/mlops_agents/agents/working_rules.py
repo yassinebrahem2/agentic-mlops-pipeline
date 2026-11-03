@@ -37,7 +37,7 @@ def sandbox_limits(*, sandbox_network: bool = SANDBOX_DEFAULT_NETWORK) -> str:
     return (
         f"Sandbox limits ({SANDBOX_CPUS} CPUs, {SANDBOX_MEMORY} memory, network {net_status}):\n"
         f"{net_bullet}\n"
-        "- No system package installs (changes do not persist across container runs).\n"
+        "- No system package installs (package installs fail: no network, no root; a task's container is removed with the task).\n"
         "- The project's own test suite may not run there; report this as a gap rather than retried.\n"
         "- duckdb is the `duckdb` command (CLI, not Python `import duckdb`).\n"
         "- An environment failure is reported once and not retried in variants."
@@ -46,13 +46,10 @@ def sandbox_limits(*, sandbox_network: bool = SANDBOX_DEFAULT_NETWORK) -> str:
 
 def working_rules(
     definition: AgentDefinition,
-    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK,
     *,
-    network: bool | None = None,
+    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK,
 ) -> str:
     """Return the hard limits and team system rules tailored to this agent."""
-    if network is not None:
-        sandbox_network = network
     hard_limits = _load_prompt("hard_limits.md")
     parts = [hard_limits]
     if "OpenPullRequest" in definition.tools:

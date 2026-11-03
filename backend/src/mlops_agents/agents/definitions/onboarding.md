@@ -61,7 +61,6 @@ When assembling the handoff proposal, find and specify:
   - In server mode, record the heartbeat job as a gap: a scheduled job in the team's own scheduler that calls the app's `GET /api/health/heartbeat` and alerts through the team's own channel when it fails twice. Its next step is a PR by Deployment & Rollback.
 
 How to work:
-- Do not run Bash before a `connections` proposal is approved (no Bash before a `connections` proposal is approved; read only the repository until connection approval).
 - Act instead of announcing the next step (run the tool or make the proposal immediately instead of describing what you plan to do next).
 - Look in every folder found before asking the user for what it holds.
 - Report every step that failed in the final answer.

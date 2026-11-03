@@ -176,7 +176,9 @@ You run commands.
         or "no network" in low
     )
     assert "no system package installs" in low
-    assert "changes do not persist" in low
+    assert "package installs fail: no network, no root" in low
+    assert "a task's container is removed with the task" in low
+    assert "changes do not persist" not in low
     assert "test suite may not run" in low
     assert "gap" in low
     assert "duckdb is the `duckdb` command" in rules or "duckdb is the duckdb command" in low
@@ -227,9 +229,3 @@ You do not run commands.
     rules = working_rules(defn)
     assert "Sandbox limits" not in rules
     assert "duckdb" not in rules.lower()
-
-
-def test_working_rules_reexported_from_context() -> None:
-    from mlops_agents.agents.runtime.context import working_rules as context_working_rules
-
-    assert context_working_rules is working_rules

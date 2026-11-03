@@ -25,10 +25,9 @@ from mlops_agents.agents.runtime.contract import (
     ToolResultPart,
 )
 from mlops_agents.agents.tools.base import FileAccess
-from mlops_agents.agents.working_rules import working_rules as working_rules
+from mlops_agents.agents.working_rules import working_rules
+from mlops_agents.sandbox.containers import SANDBOX_DEFAULT_NETWORK
 from mlops_agents.workspace.models import Project
-
-__all__ = ["history_messages", "system_message", "top_level_layout", "working_rules"]
 
 if TYPE_CHECKING:
     # agent.py imports this module.
@@ -71,7 +70,7 @@ def system_message(agent: Agent, summary: str | None) -> SystemMessage:
         summary,
         agent.hook_context,
         reply_limit_text=reply_limit_text,
-        sandbox_network=getattr(agent, "sandbox_network", False),
+        sandbox_network=agent.sandbox_network,
     )
 
 
@@ -82,7 +81,7 @@ def _system_message(
     summary: str | None,
     hook_context: str | None,
     reply_limit_text: str | None = None,
-    sandbox_network: bool = False,
+    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK,
 ) -> SystemMessage:
     sections = [definition.prompt.strip()]
     sections.append(working_rules(definition, sandbox_network=sandbox_network))

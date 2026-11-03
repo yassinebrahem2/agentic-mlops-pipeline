@@ -19,6 +19,10 @@ from mlops_agents.agents.tools.base import AgentTool, FileAccess, ToolRegistry
 from mlops_agents.credentials.keystore import KeyStoreError
 from mlops_agents.errors import DomainError
 from mlops_agents.providers.bridge import ResolvedModel
+from mlops_agents.sandbox.containers import SANDBOX_DEFAULT_NETWORK
+from mlops_agents.sandbox.contract import Sandbox
+from mlops_agents.sandbox.projects import get_network
+from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.models import Project
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -33,6 +37,7 @@ class Agent:
     tools: tuple[AgentTool[Any], ...]  # exactly the definition's tools, in its order
     files: FileAccess  # the repository's view the layout was read from; the turn's tools reuse it
     hook_context: str | None = None  # the context hooks' blocks, rendered for this turn
+    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK
 
 
 class TurnRefused(Exception):
@@ -53,6 +58,8 @@ class AgentBuilder:
         workspaces: TaskWorkspaces,
         store: SessionStore,
         hooks: HookRegistry | None = None,
+        sandbox: Sandbox | None = None,
+        databases: Databases | None = None,
     ) -> None:
         self._catalog = catalog
         self._tools = tools
@@ -61,6 +68,8 @@ class AgentBuilder:
         self._workspaces = workspaces
         self._store = store
         self._hooks = hooks
+        self._sandbox = sandbox
+        self._databases = databases
 
     async def build(
         self,
@@ -112,6 +121,12 @@ class AgentBuilder:
             )
             hook_context = await self._hooks.run(definition.hook_names, ctx)
 
+        sandbox_network = SANDBOX_DEFAULT_NETWORK
+        if self._sandbox is not None:
+            sandbox_network = await self._sandbox.get_network(project_id)
+        elif self._databases is not None:
+            sandbox_network = await get_network(self._databases, project_id)
+
         return Agent(
             definition=definition,
             project=project,
@@ -121,6 +136,7 @@ class AgentBuilder:
             tools=tuple(agent_tools),
             files=files,
             hook_context=hook_context,
+            sandbox_network=sandbox_network,
         )
 
     async def _trigger_text(self, project_id: str, session_id: str, turn_id: str) -> str:
