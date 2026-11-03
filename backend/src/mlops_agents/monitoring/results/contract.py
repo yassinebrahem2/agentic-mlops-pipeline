@@ -136,6 +136,8 @@ class Results(Protocol):
         self, project_id: str, subject: str, model: str | None
     ) -> list[StoredResult]: ...
 
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None: ...
+
 
 class ParserMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -21,6 +21,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultOrigin,
     ResultQuery,
     ResultsObserver,
+    SourceState,
     StoredResult,
 )
 from mlops_agents.monitoring.verdicts.contract import MissReport, VerdictDraft, VerdictView
@@ -33,6 +34,10 @@ class FakeResults:
     def __init__(self) -> None:
         self.observers: list[ResultsObserver] = []
         self.latest_results: list[StoredResult] = []
+        self.source_states: dict[str, SourceState] = {}
+
+    async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
+        return self.source_states.get(source_id)
 
     def add_observer(self, observer: ResultsObserver) -> None:
         self.observers.append(observer)

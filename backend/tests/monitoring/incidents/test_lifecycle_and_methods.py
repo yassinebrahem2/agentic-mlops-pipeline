@@ -19,6 +19,7 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalDraft,
 )
 from mlops_agents.monitoring.incidents.service import IncidentsService
+from mlops_agents.monitoring.results.contract import SourceState
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import notification_log
 from tests.monitoring.incidents.conftest import (
@@ -728,3 +729,234 @@ async def test_snooze_refusal_order_is_not_found_then_not_live_then_past(
     with pytest.raises(DomainError) as in_past:
         await service.snooze(project_id, ids[0], until=past)
     assert (in_past.value.status, in_past.value.code) == (422, "snooze_in_past")
+
+
+@pytest.mark.asyncio
+async def test_update_resolved_refused_for_failing_source(
+    service: IncidentsService,
+    fake_results: FakeResults,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    now = fake_clock.now()
+    source_id = "file:local_s3:results/*.json"
+    draft = SignalDraft(
+        kind="source_failure",
+        category="operational",
+        subject=source_id,
+        model=None,
+        ran_at=now,
+        detail={"error": "Connection refused", "source_id": source_id},
+        source_ref=source_id,
+    )
+    outcome = await service.raise_signal(project_id, draft, seen_at=now)
+    inc_id = outcome.incident_id
+
+    # 1. Failing state with error and consecutive_failures -> 409
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=now,
+        last_error="Connection refused",
+        consecutive_failures=1,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # 2. Failing state with consecutive_failures > 0 even if last_error is None -> 409
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=now,
+        last_error=None,
+        consecutive_failures=2,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # 3. Once latest read succeeded (consecutive_failures == 0 and last_error is None), resolve succeeds
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=fake_clock.now(),
+        last_error=None,
+        consecutive_failures=0,
+    )
+    fake_clock.advance(30)
+    resolved = await service.update(
+        project_id,
+        inc_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved.status == "resolved"
+    assert resolved.resolved_at is not None
+
+    # 4. A source with no state (None, e.g. removed from handoff or never read) does not hold the incident
+    draft_no_state = SignalDraft(
+        kind="source_failure",
+        category="operational",
+        subject="file:removed:data/*.json",
+        model=None,
+        ran_at=fake_clock.now(),
+        detail={"error": "Not found", "source_id": "file:removed:data/*.json"},
+        source_ref="file:removed:data/*.json",
+    )
+    outcome_no_state = await service.raise_signal(
+        project_id, draft_no_state, seen_at=fake_clock.now()
+    )
+    resolved_no_state = await service.update(
+        project_id,
+        outcome_no_state.incident_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved_no_state.status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_update_resolved_refused_for_failing_parser(
+    service: IncidentsService,
+    fake_results: FakeResults,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    now = fake_clock.now()
+    source_id = "file:local_s3:data/*.csv"
+    draft = SignalDraft(
+        kind="parser_failure",
+        category="operational",
+        subject=source_id,
+        model=None,
+        ran_at=now,
+        detail={"error": "Malformed CSV row", "source_id": source_id},
+        source_ref=source_id,
+    )
+    outcome = await service.raise_signal(project_id, draft, seen_at=now)
+    inc_id = outcome.incident_id
+
+    # 1. State is failing -> 409
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=now,
+        last_error="Malformed CSV row",
+        consecutive_failures=1,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # 2. Once parser succeeds and source state clears, resolve succeeds
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=fake_clock.now(),
+        last_error=None,
+        consecutive_failures=0,
+    )
+    fake_clock.advance(30)
+    resolved = await service.update(
+        project_id,
+        inc_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved.status == "resolved"
+    assert resolved.resolved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_resolved_with_both_source_failure_and_fired_result(
+    service: IncidentsService,
+    fake_results: FakeResults,
+    project_id: str,
+    fake_clock: FakeClock,
+) -> None:
+    now = fake_clock.now()
+    source_id = "file:local_s3:results/*.json"
+    draft1 = SignalDraft(
+        kind="source_failure",
+        category="operational",
+        subject=source_id,
+        model=None,
+        ran_at=now,
+        detail={"error": "Connection error", "source_id": source_id},
+        source_ref=source_id,
+    )
+    outcome1 = await service.raise_signal(project_id, draft1, seen_at=now)
+    inc_id = outcome1.incident_id
+
+    # Raise fired_result grouped or linked
+    # Let's add fired result into latest_results for this subject/model
+    fake_results.latest_results = [
+        make_stored_result("res_1", fired=True, subject=source_id, model=None)
+    ]
+    # Source is failing, fired_result is firing -> 409
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # Source clears, but fired_result still firing -> 409
+    fake_results.source_states[source_id] = SourceState(
+        source_id=source_id,
+        kind="file",
+        cursor={},
+        last_read=fake_clock.now(),
+        last_error=None,
+        consecutive_failures=0,
+    )
+    with pytest.raises(DomainError) as exc_info:
+        await service.update(
+            project_id,
+            inc_id,
+            agent="agent_1",
+            patch=IncidentPatch(status="resolved"),
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "incident_still_firing"
+
+    # Fired result clears too -> resolve succeeds
+    fake_results.latest_results = [
+        make_stored_result("res_1", fired=False, subject=source_id, model=None)
+    ]
+    fake_clock.advance(30)
+    resolved = await service.update(
+        project_id,
+        inc_id,
+        agent="agent_1",
+        patch=IncidentPatch(status="resolved"),
+    )
+    assert resolved.status == "resolved"
+    assert resolved.resolved_at is not None

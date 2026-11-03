@@ -34,6 +34,17 @@ class SandboxProjects(Protocol):
     async def mounts(self, project_id: str) -> Sequence[Mount]: ...
 
 
+async def get_network(databases: Databases, project_id: str) -> bool:
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        value = (
+            await conn.execute(
+                select(project_settings.c.value).where(project_settings.c.key == "sandbox_network")
+            )
+        ).scalar_one_or_none()
+    return value is not None and value.strip().lower() == "true"
+
+
 class DatabaseSandboxProjects:
     def __init__(
         self,
@@ -50,16 +61,7 @@ class DatabaseSandboxProjects:
         return self._workspace.repo_root(project)
 
     async def get_network(self, project_id: str) -> bool:
-        engine = await self._databases.project(project_id)
-        async with engine.connect() as conn:
-            value = (
-                await conn.execute(
-                    select(project_settings.c.value).where(
-                        project_settings.c.key == "sandbox_network"
-                    )
-                )
-            ).scalar_one_or_none()
-        return value is not None and value.strip().lower() == "true"
+        return await get_network(self._databases, project_id)
 
     async def set_network(self, project_id: str, enabled: bool) -> None:
         engine = await self._databases.project(project_id)
