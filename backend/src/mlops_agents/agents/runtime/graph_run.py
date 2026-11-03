@@ -47,8 +47,8 @@ async def run_turn_graph(
     graph_input: Any,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
-) -> bool:
-    """Run the turn graph from `graph_input`; True when the turn now waits for approval.
+) -> tuple[bool, str | None]:
+    """Run the turn graph from `graph_input`; returns (is_interrupted, stopped_reason).
 
     A waiting turn keeps its checkpoint for the resume, and its wait is stored and told
     (`handle_turn_waiting`); any other run deletes the checkpoint thread.
@@ -75,6 +75,7 @@ async def run_turn_graph(
             hooks=hooks,
         )
         config: RunnableConfig = {"configurable": {"thread_id": turn_id}}
+        res: Any = None
         try:
             res = await graph.ainvoke(  # pyright: ignore[reportUnknownMemberType]
                 graph_input, config=config, durability=TURN_DURABILITY
@@ -117,4 +118,11 @@ async def run_turn_graph(
             lock=lock,
             observers=observers,
         )
-    return is_interrupted
+        return True, None
+
+    stopped_reason: str | None = None
+    if isinstance(res, dict):
+        raw = res.get("stopped_reason")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if isinstance(raw, str):
+            stopped_reason = raw
+    return False, stopped_reason

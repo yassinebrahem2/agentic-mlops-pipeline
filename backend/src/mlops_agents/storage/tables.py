@@ -117,6 +117,7 @@ turns = Table(
     Column("created_at", Text, nullable=False),
     Column("started_at", Text),
     Column("ended_at", Text),
+    Column("stopped_reason", Text),
 )
 
 messages = Table(
@@ -174,6 +175,8 @@ tasks = Table(
     Column("pr_url", Text),
     Column("created_at", Text, nullable=False),
     Column("ended_at", Text),
+    Column("ci_woken_sha", Text),
+    Column("ci_wakes", Integer, nullable=False, server_default="0"),
 )
 
 task_reads = Table(
