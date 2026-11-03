@@ -105,6 +105,7 @@ class SessionView(BaseModel):
     messages: list[MessageView]  # full history, oldest first
     last_seq: int  # stream position this view matches
     current_task: TaskView | None
+    last_stopped_reason: str | None = None
 
 
 class MessageData(BaseModel):
@@ -134,6 +135,7 @@ class TurnEndedData(BaseModel):
     turn_id: str
     status: TurnEnd
     error: str | None
+    stopped_reason: str | None = None
 
 
 class ResyncData(BaseModel):

@@ -35,7 +35,7 @@ __all__ = [
     "TurnSink",
 ]
 
-TurnOutcome = tuple[TurnEnd, str | None] | tuple[Literal["waiting"], None]
+TurnOutcome = tuple[TurnEnd, str | None, str | None] | tuple[Literal["waiting"], None, None]
 
 
 @dataclass
@@ -287,7 +287,7 @@ class TurnExecutor:
                 await self._finish_message(
                     project_id, sink, lock, message.id, message.parts, "complete"
                 )
-            return ("done", None)
+            return ("done", None, None)
         if message.id is None:
             notice: list[Part] = [TextPart(type="text", text=refused.text)]
             await self._add_message(
@@ -297,7 +297,7 @@ class TurnExecutor:
             await self.record_failure(
                 project_id, session_id, turn_id, sink, lock, refused.text, parts=message.parts
             )
-        return ("failed", refused.text)
+        return ("failed", refused.text, None)
 
     async def delete_checkpoint(self, project_id: str, turn_id: str) -> None:
         """Delete a turn's checkpoint thread from the SQLite checkpointer."""
@@ -325,7 +325,7 @@ class TurnExecutor:
                 await self.record_failure(
                     project_id, session_id, turn_id, sink, lock, err.message, parts=message.parts
                 )
-                return ("failed", err.message)
+                return ("failed", err.message, None)
             except ProviderCallError as err:
                 msg = (
                     REQUEST_TOO_LARGE_MESSAGE
@@ -335,7 +335,7 @@ class TurnExecutor:
                 await self.record_failure(
                     project_id, session_id, turn_id, sink, lock, msg, parts=message.parts
                 )
-                return ("failed", msg)
+                return ("failed", msg, None)
             except Exception:
                 logger.exception("Turn %s failed unexpectedly", turn_id)
                 await self.record_failure(
@@ -347,7 +347,7 @@ class TurnExecutor:
                     UNEXPECTED_FAILURE_TEXT,
                     parts=message.parts,
                 )
-                return ("failed", UNEXPECTED_FAILURE_TEXT)
+                return ("failed", UNEXPECTED_FAILURE_TEXT, None)
         except asyncio.CancelledError:
             if message.id is not None:
                 await self._finish_message(
@@ -385,7 +385,7 @@ class TurnExecutor:
     ) -> TurnOutcome:
         """Run the turn graph from `graph_input` (a new turn's state, or a resume) to its end,
         or to a wait for approval."""
-        waits = await run_turn_graph(
+        waits, stopped_reason = await run_turn_graph(
             agent=built_agent,
             caller=self._caller,
             store=self._store,
@@ -401,6 +401,6 @@ class TurnExecutor:
             lock=lock,
         )
         if waits:
-            return ("waiting", None)
+            return ("waiting", None, None)
         await self._finish_message(project_id, sink, lock, message_id, parts, "complete")
-        return ("done", None)
+        return ("done", None, stopped_reason)
