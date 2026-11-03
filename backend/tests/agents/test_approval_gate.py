@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import datetime
+import json
+
 import pytest
+from pydantic import BaseModel
+from sqlalchemy import select
 
 from mlops_agents.agents.approvals.gate import ApprovalGate
 from mlops_agents.agents.approvals.settings import set_permission_level
@@ -13,7 +18,7 @@ from mlops_agents.events.audit import SqliteAuditLog
 from mlops_agents.events.log import SqliteEventLog
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
-from mlops_agents.storage.tables import turns
+from mlops_agents.storage.tables import audit, turns
 from tests.agents.gate_helpers import (
     DeployTool,
     DummyArgs,
@@ -331,3 +336,36 @@ async def test_preview_tool_failure_in_decide_returns_deny(
     assert decision.approval_id is None
     pending = await store.pending(project_id)
     assert pending == []
+
+
+class _DatedArgs(BaseModel):
+    ran_at: datetime.datetime
+    target: str = "test_target"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["ask", "autonomous"])
+async def test_gate_audits_arguments_holding_datetimes(
+    databases: Databases, paths: DataPaths, level: PermissionLevel
+) -> None:
+    # A propose tool's sample records carry datetimes; the audit detail must store them as text.
+    project_id = f"prj_gatedated{level}"
+    paths.project_dir(project_id).mkdir(parents=True, exist_ok=True)
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    await set_permission_level(databases, project_id, level)
+
+    store = ApprovalStore(databases)
+    audit_log = SqliteAuditLog(databases, secrets=[])
+    event_log = SqliteEventLog(databases)
+    gate = ApprovalGate(databases, store=store, audit_log=audit_log, event_log=event_log)
+
+    ran_at = datetime.datetime(2016, 7, 1, 12, 0, tzinfo=datetime.UTC)
+    call = make_call(WriteTool(), "c_dated", project_id, args=_DatedArgs(ran_at=ran_at))
+
+    decisions = await gate.decide([call])
+
+    assert decisions["c_dated"].outcome == ("ask" if level == "ask" else "allow")
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        rows = (await conn.execute(select(audit.c.detail))).scalars().all()
+    assert [json.loads(r)["ran_at"] for r in rows] == ["2016-07-01T12:00:00Z"]

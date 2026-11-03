@@ -201,7 +201,7 @@ class ApprovalGate(Gate):
                     policy_dec = decide_action(level, action, auth)
 
             target = _extract_target(call.tool.name, call.args)
-            detail = call.args.model_dump()
+            detail = call.args.model_dump(mode="json")
 
             if policy_dec == "allow":
                 if self._audit_log is not None:
