@@ -529,8 +529,17 @@ async def drive_agents_run(
                 last_maint_time is None
                 or (now - last_maint_time).total_seconds() >= effective_maint_interval
             ):
-                await maintain_hold_windows(client, project_id, now, duration=window_duration)
-                last_maint_time = now
+                try:
+                    await maintain_hold_windows(client, project_id, now, duration=window_duration)
+                    last_maint_time = now
+                except Exception as exc:
+                    if is_route_error(exc):
+                        stdout.write(
+                            f"Route error maintaining readiness windows: {exc}; retrying...\n"
+                        )
+                        stdout.flush()
+                    else:
+                        raise
 
             is_ready, waiting_reason = await check_readiness(client, project_id)
             if is_ready:
@@ -550,10 +559,21 @@ async def drive_agents_run(
                 hold_file.unlink()
 
         # Seed seen stall events at end of readiness wait so onboarding stalls are not counted as pauses.
-        initial_stalls_page: object = await client.get(
-            f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
-        )
-        seen_stall_event_ids: set[str] = {s.id for s in _extract_stall_events(initial_stalls_page)}
+        seen_stall_event_ids: set[str] = set()
+        while True:
+            try:
+                initial_stalls_page: object = await client.get(
+                    f"/projects/{project_id}/activity", params={"type": "turn.stalled"}
+                )
+                seen_stall_event_ids = {s.id for s in _extract_stall_events(initial_stalls_page)}
+                break
+            except Exception as exc:
+                if is_route_error(exc):
+                    stdout.write(f"Route error seeding stalls: {exc}; retrying...\n")
+                    stdout.flush()
+                    await sleep(renewal_interval)
+                    continue
+                raise
         warned_user_verdict_ids: set[str] = set()
 
         # --- Phase 2: Play, holding on a stall ---
@@ -620,27 +640,40 @@ async def drive_agents_run(
                 with contextlib.suppress(OSError):
                     hold_file.touch(exist_ok=True)
 
+                stall_window_posted = False
                 last_stall_maint: datetime | None = None
                 # First window starts at stall event time (can be in past)
                 try:
                     await maintain_hold_windows(
                         client, project_id, clock(), duration=window_duration, start=stall_start
                     )
+                    stall_window_posted = True
+                    last_stall_maint = clock()
                 except Exception as exc:
                     if is_route_error(exc):
                         stdout.write(f"Route error maintaining windows: {exc}; retrying...\n")
                         stdout.flush()
                     else:
                         raise
-                last_stall_maint = clock()
 
                 while True:
                     now = clock()
-                    if (now - last_stall_maint).total_seconds() >= renewal_interval:
+                    needs_maint = (
+                        not stall_window_posted
+                        or last_stall_maint is None
+                        or (now - last_stall_maint).total_seconds() >= renewal_interval
+                    )
+                    if needs_maint:
                         try:
+                            maint_start = stall_start if not stall_window_posted else None
                             await maintain_hold_windows(
-                                client, project_id, now, duration=window_duration
+                                client,
+                                project_id,
+                                now,
+                                duration=window_duration,
+                                start=maint_start,
                             )
+                            stall_window_posted = True
                             last_stall_maint = now
                         except Exception as exc:
                             if is_route_error(exc):
