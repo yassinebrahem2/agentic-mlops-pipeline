@@ -90,6 +90,112 @@ describe("MessageView", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
+  it("shows 'Failed' and warning icon on collapsed error tool step, neither on success, and 'Running' when running", () => {
+    const errorMsg: MessageViewType = {
+      id: "a-error",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "tool_call",
+          id: "c-err",
+          name: "Read",
+          input: { file_path: "missing.txt" },
+        },
+        {
+          type: "tool_result",
+          tool_call_id: "c-err",
+          content: "File not found",
+          is_error: true,
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:03Z",
+    };
+
+    const { rerender } = render(<MessageView message={errorMsg} />);
+
+    // 1. A step with an error result shows "Failed" and the warning icon without being expanded.
+    const failedButton = screen.getByRole("button", { name: /Read missing\.txt/i });
+    expect(failedButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("File not found")).not.toBeInTheDocument();
+
+    const failedBadge = screen.getByText("Failed");
+    expect(failedBadge).toBeInTheDocument();
+    expect(failedBadge.closest("[data-slot='badge']")).toHaveAttribute(
+      "data-variant",
+      "destructive",
+    );
+    const warningIcon = failedBadge.querySelector("svg");
+    expect(warningIcon).toBeInTheDocument();
+    expect(warningIcon).toHaveAttribute("aria-hidden", "true");
+    expect(warningIcon).toHaveClass("text-destructive");
+
+    // 2. A successful step shows neither.
+    const successMsg: MessageViewType = {
+      id: "a-success",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "tool_call",
+          id: "c-ok",
+          name: "Read",
+          input: { file_path: "README.md" },
+        },
+        {
+          type: "tool_result",
+          tool_call_id: "c-ok",
+          content: "File contents",
+          is_error: false,
+        },
+      ],
+      status: "complete",
+      created_at: "2026-10-21T18:00:04Z",
+    };
+    rerender(<MessageView message={successMsg} />);
+    const successButton = screen.getByRole("button", { name: /Read README\.md/i });
+    expect(successButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(
+      successButton.querySelector("svg[aria-hidden='true'].text-destructive"),
+    ).not.toBeInTheDocument();
+
+    // 3. A step with no result still shows "Running".
+    const runningMsg: MessageViewType = {
+      id: "a-running",
+      turn_id: "trn_1",
+      author_kind: "agent",
+      author_name: "orchestrator",
+      from_agent: null,
+      parts: [
+        {
+          type: "tool_call",
+          id: "c-run",
+          name: "Grep",
+          input: { pattern: "TODO" },
+        },
+      ],
+      status: "streaming",
+      created_at: "2026-10-21T18:00:05Z",
+    };
+    rerender(<MessageView message={runningMsg} />);
+    const runningButton = screen.getByRole("button", { name: /Grep TODO/i });
+    expect(runningButton).toHaveAttribute("aria-expanded", "false");
+    const runningBadge = screen.getByText("Running");
+    expect(runningBadge).toBeInTheDocument();
+    expect(runningBadge.closest("[data-slot='badge']")).toHaveAttribute(
+      "data-variant",
+      "secondary",
+    );
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+  });
+
   it("styles tool result errors as error", async () => {
     const user = userEvent.setup();
     const agentMsg: MessageViewType = {
