@@ -841,3 +841,323 @@ def test_propose_serves_check_spec_cadence_description() -> None:
     tool = ProposeTool(MagicMock(), MagicMock())
     schema_desc = tool.schema()["function"]["description"]
     assert cadence_desc in schema_desc
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Typed propose tools
+# ---------------------------------------------------------------------------
+
+
+def test_propose_tool_name() -> None:
+    from mlops_agents.agents.tools.propose import propose_tool_name
+    from mlops_agents.proposals.contract import (
+        CONNECTIONS_KIND,
+        HANDOFF_KIND,
+        HOOKS_KIND,
+        MAINTENANCE_KIND,
+        PARSER_KIND,
+        PROMOTION_KIND,
+        RULE_KIND,
+        TRAINING_POLICY_KIND,
+    )
+
+    assert propose_tool_name(CONNECTIONS_KIND) == "ProposeConnections"
+    assert propose_tool_name(HANDOFF_KIND) == "ProposeHandoff"
+    assert propose_tool_name(PARSER_KIND) == "ProposeParser"
+    assert propose_tool_name(RULE_KIND) == "ProposeRule"
+    assert propose_tool_name(HOOKS_KIND) == "ProposeHooks"
+    assert propose_tool_name(MAINTENANCE_KIND) == "ProposeMaintenance"
+    assert propose_tool_name(TRAINING_POLICY_KIND) == "ProposeTrainingPolicy"
+    assert propose_tool_name(PROMOTION_KIND) == "ProposePromotion"
+
+
+def test_proposal_kinds_and_registered_tools() -> None:
+    from mlops_agents.agents.tools import default_registry
+    from mlops_agents.agents.tools.propose import TypedProposeTool, propose_tool_name
+    from mlops_agents.proposals.contract import PROPOSAL_KINDS
+
+    mock_proposals = MagicMock(spec=ProposalsService)
+    mock_kinds = MagicMock(spec=ProposalKinds)
+
+    reg = default_registry(proposals=mock_proposals, proposal_kinds=mock_kinds)
+    registered_names = set(reg.names())
+
+    for kind in PROPOSAL_KINDS:
+        expected_name = propose_tool_name(kind)
+        assert expected_name in registered_names, f"Expected {expected_name} in registry"
+        tool = reg.get(expected_name)
+        assert isinstance(tool, TypedProposeTool)
+        assert tool.kind == kind
+
+
+@pytest.mark.asyncio
+async def test_propose_connections_call_creates_pending_proposal(tmp_path: Path) -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.proposals.contract import CONNECTIONS_KIND
+    from mlops_agents.proposals.payloads import ConnectionsPayload
+
+    databases = Databases(DataPaths(tmp_path / "data"))
+    project_id = "prj_conn"
+    engine = await databases.project(project_id)
+    async with engine.begin() as _conn:
+        pass
+
+    event_log = SqliteEventLog(databases)
+    key_store = MemoryKeyStore()
+    project_secrets = ProjectSecrets(key_store, databases)
+    kinds = ProposalKinds()
+    conn_kind = ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload)
+    kinds.register(conn_kind)
+    proposals_service = ProposalsService(databases, project_secrets, kinds, event_log)
+
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=proposals_service, kinds=kinds)
+    ctx = _dummy_ctx(project_id=project_id, turn_id="trn_conn", tool_call_id="call_conn")
+
+    raw_args = connections()
+    parsed = tool.parse(raw_args)
+    assert isinstance(parsed, ConnectionsPayload)
+
+    preview = await tool.preview(ctx, parsed)
+    assert preview.title == "Proposal: connections"
+
+    key = conn_kind.key(parsed)
+    pending = await proposals_service.pending(project_id, CONNECTIONS_KIND, key)
+    assert pending is not None
+    assert pending.status == "pending"
+    assert pending.turn_id == "trn_conn"
+    assert pending.tool_call_id == "call_conn"
+
+
+def test_every_typed_tool_schema_has_no_ref_and_validates(tmp_path: Path) -> None:
+    import json
+
+    import jsonschema
+
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.monitoring.hooks.contract import HooksPayload
+    from mlops_agents.monitoring.incidents.contract import MaintenancePayload
+    from mlops_agents.monitoring.results.contract import ParserPayload
+    from mlops_agents.monitoring.rules.contract import RulePayload
+    from mlops_agents.promotion.contract import PromotionPayload
+    from mlops_agents.proposals.contract import PROPOSAL_KINDS
+    from mlops_agents.proposals.payloads import ConnectionsPayload, HandoffPayload
+    from mlops_agents.training.contract import TrainingPolicyPayload
+    from tests.proposals.samples import command
+
+    mock_proposals = MagicMock(spec=ProposalsService)
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name="connections", payload_model=ConnectionsPayload))
+    kinds.register(ScriptedTestKind(name="handoff", payload_model=HandoffPayload))
+    kinds.register(ScriptedTestKind(name="parser", payload_model=ParserPayload))
+    kinds.register(ScriptedTestKind(name="rule", payload_model=RulePayload))
+    kinds.register(ScriptedTestKind(name="hooks", payload_model=HooksPayload))
+    kinds.register(ScriptedTestKind(name="maintenance", payload_model=MaintenancePayload))
+    kinds.register(ScriptedTestKind(name="training_policy", payload_model=TrainingPolicyPayload))
+    kinds.register(ScriptedTestKind(name="promotion", payload_model=PromotionPayload))
+
+    # Samples of valid payloads for each kind
+    valid_payloads: dict[str, dict[str, Any]] = {
+        "connections": connections(),
+        "handoff": handoff(),
+        "parser": {
+            "spec": {
+                "source_id": "file:conn:out.jsonl",
+                "mapping": {
+                    "format": "jsonl",
+                    "fields": {"check_id": "id", "ran_at": "ts"},
+                    "fired_when": {"field": "v", "op": "gt", "value": 1.0},
+                },
+            },
+            "sample_input": "{}",
+            "sample_records": [],
+        },
+        "rule": {
+            "spec": {
+                "name": "perf_drop",
+                "why": "detect accuracy drop",
+                "terms": [
+                    {
+                        "check_id": "chk_acc",
+                        "when": {
+                            "all_of": [
+                                {"field": "accuracy", "op": "lt", "value": 0.8},
+                                {"field": "latency", "op": "gt", "value": 100.0},
+                            ]
+                        },
+                        "quantifier": "all",
+                        "min_records": 1,
+                        "window_minutes": 60,
+                    }
+                ],
+                "hook_id": "hok_rollback",
+                "hook_kind": "rollback",
+                "limits": {"per_incident": 1, "per_day": 3},
+            }
+        },
+        "hooks": {
+            "hooks": [
+                {
+                    "name": "hok_test",
+                    "spec": command(),
+                    "why": "retrain model",
+                }
+            ]
+        },
+        "maintenance": {
+            "window": {
+                "start": "2026-11-03T12:00:00Z",
+                "end": "2026-11-03T14:00:00Z",
+                "scope": ["training"],
+                "reason": "db upgrade",
+            }
+        },
+        "training_policy": {
+            "model": "fraud_model",
+            "train_hook_id": "hok_train",
+            "window": {"kind": "trailing_days", "days": 30},
+            "min_interval_hours": 24,
+            "max_runs_per_week": 3,
+            "run_time_limit_minutes": 60,
+        },
+        "promotion": {
+            "model": "fraud_model",
+            "report_id": "rep_123",
+            "candidate_version": "v2",
+            "champion_version": "v1",
+            "deploy_hook_id": "hok_deploy",
+        },
+    }
+
+    for kind in PROPOSAL_KINDS:
+        tool = TypedProposeTool(kind=kind, proposals=mock_proposals, kinds=kinds)
+        tool_schema = tool.schema()
+        schema_json = json.dumps(tool_schema)
+        assert "$ref" not in schema_json, f"$ref found in schema for kind {kind}"
+        assert "$defs" not in schema_json, f"$defs found in schema for kind {kind}"
+
+        params_schema = tool_schema["function"]["parameters"]
+        payload_data = valid_payloads[kind]
+        # Validate against the json schema
+        jsonschema.validate(instance=payload_data, schema=params_schema)
+
+
+@pytest.mark.asyncio
+async def test_typed_promotion_at_bypass_and_other_kinds(tmp_path: Path) -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.promotion.contract import PromotionPayload
+    from mlops_agents.proposals.contract import CONNECTIONS_KIND, PROMOTION_KIND
+    from mlops_agents.proposals.payloads import ConnectionsPayload
+
+    databases = Databases(DataPaths(tmp_path / "data"))
+    project_id = "prj_bypass"
+    engine = await databases.project(project_id)
+    async with engine.begin() as _conn:
+        pass
+
+    event_log = SqliteEventLog(databases)
+    key_store = MemoryKeyStore()
+    project_secrets = ProjectSecrets(key_store, databases)
+    kinds = ProposalKinds()
+    promo_kind = ScriptedTestKind(name=PROMOTION_KIND, payload_model=PromotionPayload)
+    conn_kind = ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload)
+    kinds.register(promo_kind)
+    kinds.register(conn_kind)
+    proposals_service = ProposalsService(databases, project_secrets, kinds, event_log)
+
+    promo_tool = TypedProposeTool(kind=PROMOTION_KIND, proposals=proposals_service, kinds=kinds)
+    conn_tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=proposals_service, kinds=kinds)
+
+    approval_store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=approval_store, event_log=event_log)
+
+    await set_permission_level(databases, project_id, "bypass")
+
+    # 1. ProposePromotion at bypass is allowed
+    ctx_promo = _dummy_ctx(project_id=project_id, turn_id="trn_p", tool_call_id="call_p")
+    promo_args = promo_tool.parse(
+        {
+            "model": "mdl_1",
+            "report_id": "rep_1",
+            "candidate_version": "v2",
+            "champion_version": "v1",
+            "deploy_hook_id": "hok_1",
+        }
+    )
+    assert isinstance(promo_args, PromotionPayload)
+    await promo_tool.preview(ctx_promo, promo_args)
+    call_promo = GateCall(
+        tool_call_id="call_p",
+        message_id="msg_p",
+        tool=promo_tool,
+        args=promo_args,
+        ctx=ctx_promo,
+    )
+    decisions = await gate.decide([call_promo])
+    assert decisions["call_p"].outcome == "allow"
+
+    # 2. ProposeConnections at bypass still asks
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_c")
+    ctx_conn = _dummy_ctx(project_id=project_id, turn_id="trn_c", tool_call_id="call_c")
+    conn_args = conn_tool.parse(connections())
+    assert isinstance(conn_args, ConnectionsPayload)
+    await conn_tool.preview(ctx_conn, conn_args)
+    call_conn = GateCall(
+        tool_call_id="call_c",
+        message_id="msg_c",
+        tool=conn_tool,
+        args=conn_args,
+        ctx=ctx_conn,
+    )
+    decisions_conn = await gate.decide([call_conn])
+    assert decisions_conn["call_c"].outcome == "ask"
+
+
+def test_bad_connection_name_reports_field_path() -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.proposals.contract import CONNECTIONS_KIND
+    from mlops_agents.proposals.payloads import ConnectionsPayload
+
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload))
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=MagicMock(), kinds=kinds)
+
+    bad_args = {
+        "connections": [
+            {
+                "name": "INVALID_NAME_WITH_CAPS",
+                "kind": "local_folder",
+                "settings": {"path": "data/test"},
+                "why": "testing",
+            }
+        ]
+    }
+    out = tool.parse(bad_args)
+    assert isinstance(out, ToolOutput)
+    assert out.is_error
+    assert "connections.0.name" in out.content
+
+
+def test_text_where_object_belongs_reports_text_arrived() -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.proposals.contract import CONNECTIONS_KIND
+    from mlops_agents.proposals.payloads import ConnectionsPayload
+
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=CONNECTIONS_KIND, payload_model=ConnectionsPayload))
+    tool = TypedProposeTool(kind=CONNECTIONS_KIND, proposals=MagicMock(), kinds=kinds)
+
+    # settings should be an object (dict), but text string is provided
+    bad_args = {
+        "connections": [
+            {
+                "name": "valid-name",
+                "kind": "local_folder",
+                "settings": "not an object, just a string",
+                "why": "testing",
+            }
+        ]
+    }
+    out = tool.parse(bad_args)
+    assert isinstance(out, ToolOutput)
+    assert out.is_error
+    assert "text arrived" in out.content.lower()

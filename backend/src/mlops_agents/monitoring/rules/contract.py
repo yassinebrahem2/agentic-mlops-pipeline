@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.monitoring.expr import Condition
 
@@ -70,9 +70,11 @@ class RuleView(BaseModel):
 
 
 class RulePayload(BaseModel):
+    """Propose an automated incident mitigation rule for user approval. Triggers remediation hooks when monitoring signals match."""
+
     model_config = ConfigDict(extra="forbid")
 
-    spec: RuleSpec
+    spec: RuleSpec = Field(description="The mitigation rule specification.")
 
 
 class Rules(Protocol):

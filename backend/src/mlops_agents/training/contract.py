@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 FixChoice = Literal["re_threshold", "recalibrate", "retrain", "decline"]
 FixStatus = Literal["requested", "chosen", "running", "done", "declined", "escalated"]
@@ -100,15 +100,21 @@ class WindowRule(BaseModel):
 
 
 class TrainingPolicyPayload(BaseModel):
+    """Propose an automated training policy for user approval. Configures retraining schedules, hooks, and limits for a model."""
+
     model_config = ConfigDict(extra="forbid")
 
-    model: str
-    train_hook_id: str
-    evaluate_hook_id: str | None = None
-    window: WindowRule
-    min_interval_hours: int
-    max_runs_per_week: int
-    run_time_limit_minutes: int
+    model: str = Field(description="The model name this training policy governs.")
+    train_hook_id: str = Field(description="Hook ID to execute for model training.")
+    evaluate_hook_id: str | None = Field(
+        default=None, description="Hook ID to execute for model evaluation, if any."
+    )
+    window: WindowRule = Field(description="Data window rule specifying training data range.")
+    min_interval_hours: int = Field(description="Minimum hours between consecutive training runs.")
+    max_runs_per_week: int = Field(description="Maximum training runs allowed per week.")
+    run_time_limit_minutes: int = Field(
+        description="Execution time limit in minutes for training runs."
+    )
 
 
 class TrainingPolicyView(BaseModel):

@@ -73,13 +73,19 @@ class _Strict(BaseModel):
 
 class ConnectionSpec(_Strict):
     # Settings are typed per kind, so no secret can ride in a free-form dict.
-    kind: LocalFolderKindName
-    name: Annotated[str, StringConstraints(pattern=CONNECTION_NAME_PATTERN)]
-    settings: LocalFolderSettings
-    why: str
+    kind: LocalFolderKindName = Field(description="Connection kind ('local_folder').")
+    name: Annotated[str, StringConstraints(pattern=CONNECTION_NAME_PATTERN)] = Field(
+        description="Connection name: lowercase letters, digits and dashes, starting with a letter or digit, at most 40 characters."
+    )
+    settings: LocalFolderSettings = Field(
+        description="Connection settings. For local_folder, path is the folder on the person's machine as they gave it, never the sandbox's /data/<name>."
+    )
+    why: str = Field(description="Why this connection is needed for the project.")
 
 
 class ConnectionsPayload(_Strict):
+    """Propose project data connections for user approval. Configures read-only data connections such as local folders."""
+
     connections: Annotated[list[ConnectionSpec], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -358,6 +364,8 @@ class Grants(_Strict):
 
 
 class HandoffPayload(_Strict):
+    """Propose the project handoff configuration for user approval. Defines models, pipelines, tracking, and operational settings."""
+
     models: list[ModelSpec]
     commands: list[CommandSpec]  # project-level: rerun a data job, hold or quarantine a batch
     data_roles: list[DataRole]

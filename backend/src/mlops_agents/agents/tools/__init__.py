@@ -21,7 +21,12 @@ from mlops_agents.agents.tools.proposal_shape import (
     ProposalShape,
     ProposalShapeTool,
 )
-from mlops_agents.agents.tools.propose import PROPOSE_TOOL_NAME, ProposeTool
+from mlops_agents.agents.tools.propose import (
+    PROPOSE_TOOL_NAME,
+    ProposeTool,
+    TypedProposeTool,
+    propose_tool_name,
+)
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.read_handoff import ReadHandoffTool
@@ -42,6 +47,7 @@ from mlops_agents.monitoring.incidents.tools import (
     IncidentSplit,
     IncidentUpdate,
 )
+from mlops_agents.proposals.contract import PROPOSAL_KINDS
 from mlops_agents.training.tools import RecordFixChoice, RequestFix
 
 if TYPE_CHECKING:
@@ -110,8 +116,10 @@ __all__ = [
     "StartTaskTool",
     "ToolRegistry",
     "TrackingHistory",
+    "TypedProposeTool",
     "WriteTool",
     "default_registry",
+    "propose_tool_name",
 ]
 
 
@@ -164,6 +172,8 @@ def default_registry(
         tools.append(ProposalShapeTool(proposal_kinds))
     if proposals is not None and proposal_kinds is not None:
         tools.append(ProposeTool(proposals, proposal_kinds))
+        for kind in PROPOSAL_KINDS:
+            tools.append(TypedProposeTool(kind=kind, proposals=proposals, kinds=proposal_kinds))
     if tasks is not None:
         effective_sandbox = sandbox if sandbox is not None else getattr(tasks, "sandbox", None)
         tools.extend(

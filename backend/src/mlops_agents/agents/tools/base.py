@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
 
 from pydantic import BaseModel, ValidationError
+from pydantic_core import ErrorDetails
 
 if TYPE_CHECKING:
     from mlops_agents.agents.approvals.authority import ActionCall, Authority
@@ -86,11 +87,28 @@ class Preview(BaseModel):
     body: str
 
 
-def _summary(exc: ValidationError) -> str:
-    return "; ".join(
-        f"{'.'.join(str(p) for p in error['loc']) or 'arguments'}: {error['msg']}"
-        for error in exc.errors()
-    )
+def _format_error(error: ErrorDetails | Mapping[str, Any]) -> str:
+    loc = ".".join(str(p) for p in error["loc"]) or "arguments"
+    msg = error["msg"]
+    if isinstance(error.get("input"), str):
+        err_type = str(error.get("type", ""))
+        msg_lower = msg.lower()
+        if err_type in ("model_type", "dict_type") or any(
+            s in msg_lower for s in ("dictionary", "instance of", "valid object", "mapping")
+        ):
+            msg = f"{msg} (text arrived where an object belongs)"
+        elif err_type == "list_type" or "list" in msg_lower:
+            msg = f"{msg} (text arrived where a list belongs)"
+        elif err_type == "json_type" or "json" in msg_lower:
+            msg = f"{msg} (text arrived where an object belongs)"
+    return f"{loc}: {msg}"
+
+
+def format_validation_error(exc: ValidationError) -> str:
+    return "; ".join(_format_error(error) for error in exc.errors())
+
+
+_summary = format_validation_error
 
 
 def _inline_refs(node: object, defs: Mapping[str, Any], seen: tuple[str, ...] = ()) -> Any:
@@ -114,7 +132,7 @@ def _inline_refs(node: object, defs: Mapping[str, Any], seen: tuple[str, ...] = 
     return out
 
 
-def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
+def clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
     # A tool schema sent to a provider is self-contained: not every provider resolves `$ref`.
     defs = schema.pop("$defs", None)
     if isinstance(defs, dict):
@@ -146,12 +164,15 @@ def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
                             for k, v in unwrapped.items():
                                 if k not in prop_dict:
                                     prop_dict[k] = v
-                _clean_schema(prop_dict)
+                clean_schema(prop_dict)
     items = schema.get("items")
     if isinstance(items, dict):
         cast(dict[str, Any], items).pop("title", None)
-        _clean_schema(cast(dict[str, Any], items))
+        clean_schema(cast(dict[str, Any], items))
     return schema
+
+
+_clean_schema = clean_schema
 
 
 class AgentTool[A: BaseModel](ABC):
