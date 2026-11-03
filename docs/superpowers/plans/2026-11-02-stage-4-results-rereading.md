@@ -23,7 +23,7 @@
 
 **Notes:**
 - A file's cursor does not move past lines rejected for a source-level cause in a source a parser can read (a check's or a feed's file source: no parser yet for lines that are not the agents' own records, or the parser raising); lines rejected one by one for their own content still move it, as today. In the handoff's `results_location` (the agents' own results, never parsed) a line without `origin: "agent"` is skipped as today, so it never blocks the lines after it (#721 review).
-- Every file source with an enabled parser except the `results_location` is read through its parser (#721). The parser path keys a record by its own `source_key` when it carries one, as the agent path does, else by file and offset, so a re-read never stores a record twice.
+- Every file source with an enabled parser except the `results_location` is read through its parser (#721). In a source read through its parser, a line that is already a valid agent record (`origin: "agent"`) is stored as one, through the agent path with its own key, and never parsed, so a re-read never stores it twice nor relabels it as the team's (#721 re-review).
 - Storing a new parser version for a source resets that source's cursor, so its files are read again from the start; records already stored are not stored twice (the store's dedup on `(source_id, source_key)`).
 - A line without `origin: "agent"` in a source with no parser fails with a message that says these look like the team's own records and a `parser` proposal reads them.
 
