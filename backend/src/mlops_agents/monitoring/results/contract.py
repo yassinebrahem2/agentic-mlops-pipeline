@@ -138,6 +138,8 @@ class Results(Protocol):
 
     async def source_state(self, project_id: str, source_id: str) -> SourceState | None: ...
 
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]: ...
+
 
 class ParserMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -159,7 +161,12 @@ class ParserCode(BaseModel):
 class ParserSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_id: str
+    source_id: str = Field(
+        description=(
+            "the id of a results source exactly as the app names it"
+            " (`file:<connection>:<pattern>`, `ci:<workflow>`, …); a refusal lists the valid ones."
+        )
+    )
     mapping: ParserMapping | None = None
     code: ParserCode | None = None
 

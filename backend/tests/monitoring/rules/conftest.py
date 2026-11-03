@@ -11,6 +11,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultRecord,
     Results,
     ResultsObserver,
+    SourceKind,
     SourceState,
     StoredResult,
 )
@@ -49,3 +50,6 @@ class ResultsAdapter(Results):
 
     async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
         return await self._store.get_source_state(project_id, source_id)
+
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
+        return []

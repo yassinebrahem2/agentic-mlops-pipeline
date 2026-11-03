@@ -521,7 +521,7 @@ async def test_merged_check_location_becomes_results_source_and_updates_version(
     )
 
     # Pending PR: not yet a derived source
-    sources_before = await results_service._derive_sources(project_id)  # pyright: ignore[reportPrivateUsage]
+    sources_before = await results_service.sources(project_id)
     assert not any(s[0] == "file:local:checks/data.jsonl" for s in sources_before)
 
     # 2. Merge PR
@@ -538,7 +538,7 @@ async def test_merged_check_location_becomes_results_source_and_updates_version(
     )
 
     # Active check: now in derived sources!
-    sources_after = await results_service._derive_sources(project_id)  # pyright: ignore[reportPrivateUsage]
+    sources_after = await results_service.sources(project_id)
     assert any(s[0] == "file:local:checks/data.jsonl" for s in sources_after)
 
     # 3. Simulate a result record stored for this check with version "v1.2.3"

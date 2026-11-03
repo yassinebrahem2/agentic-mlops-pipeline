@@ -13,7 +13,10 @@ import pytest
 from mlops_agents.api import services as services_module
 from mlops_agents.api.services import Services
 from mlops_agents.events.log import SqliteEventLog
+from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.results.contract import (
+    ParserMapping,
+    ParserSpec,
     ResultRecord,
     StoredResult,
     source_id,
@@ -155,6 +158,16 @@ async def test_two_sources_interleaved_times_reach_observer_in_ran_at_order(
     handoffs = FakeHandoffs(handoff)
 
     service = ResultsService(databases, handoffs, connections, events)
+    spec_b = ParserSpec(
+        source_id="file:conn_b:*.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check_id", "ran_at": "ran_at"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "data_quality", "subject": "s"},
+        ),
+    )
+    await service.parsers.store(project_id, spec_b, "prop_b")
     observer = FakeObserver()
     service.add_observer(observer)
 

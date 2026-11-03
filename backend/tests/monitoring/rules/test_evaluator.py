@@ -17,6 +17,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultRecord,
     Results,
     ResultsObserver,
+    SourceKind,
     SourceState,
     StoredResult,
     source_id,
@@ -469,6 +470,9 @@ class InterceptingResults(Results):
 
     async def source_state(self, project_id: str, source_id: str) -> SourceState | None:
         return await self.inner.source_state(project_id, source_id)
+
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
+        return await self.inner.sources(project_id)
 
 
 @pytest.mark.asyncio
