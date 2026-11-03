@@ -103,11 +103,17 @@ The pre-run review of tasks 1 to 3 (2026-11-03) found defects that would lose or
 - No silent empty score: a run folder whose `run.env`, `state.json` or answer key cannot be found or read, or whose answer key holds no problem record, stops the run with that path (no fallback guessing in `resolve_run_paths`).
 - The runbook names `MLOPS_AGENTS_ACCESS_TOKEN`.
 
+**Review round 2 (2026-11-03, on 8eb58285).** Bullets 1, 4, 5 and 6 are done; finish these before #663 (each test is checked by breaking the code it covers):
+- The join test plays at least one more outer poll after the hold ends and asserts exactly one `model_stall` pause; today it passes with the hold loop's `seen_stall_event_ids.add` removed.
+- The hold-release tests raise inside the hold (on an approvals poll after the `hold` file is written) and assert the file existed then and is gone after; today they pass with the `finally` body removed.
+- A failed first window post keeps `start=` at the stall's time until one post succeeds, so no stretch of the stall is left unwindowed.
+- The activity read that seeds the stall IDs after readiness, and the window upkeep in the readiness wait, retry route errors like the rest.
+
 ### Task 4: The run and its report
 
 **Files:** none in code; the plan PR's description.
 
-**Notes:** run it once on a fresh demo-world run (`new-run`) with the person's model and keys, at the pace they choose, after #643 and #647 are merged and the demo repo's copy has #643's change. Put the run's `report.md` in the plan PR's description with the demo-world run name, the company commit and the app commit, and its `report.json` in a collapsed block below it. If a run is lost to something outside the bench (a crash of the app or the world), say so in the PR and run again; do not tune the scenario after the run.
+**Notes:** run it once on a fresh demo-world run (`new-run`) with the person's model and keys, at the pace they choose, after #643 and #647 are merged and the demo repo's copy has #643's change, and after #727's fix (plan `2026-11-03-stage-3-typed-propose-tools`) is merged: before it, Onboarding on this model cannot make a proposal. Put the run's `report.md` in the plan PR's description with the demo-world run name, the company commit and the app commit, and its `report.json` in a collapsed block below it. If a run is lost to something outside the bench (a crash of the app or the world), say so in the PR and run again; do not tune the scenario after the run.
 
 **Tests (stop condition):** the report exists and every number in it comes from the run (the reviewer checks `report.json` against the PR's table).
 

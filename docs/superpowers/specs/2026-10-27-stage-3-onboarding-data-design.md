@@ -179,7 +179,7 @@ class ConnectionKind(Protocol):
 
 ## 9. Proposals
 
-**One tool, one record, one path.** `Propose(kind, payload)`; record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version, and a key (a newer pending proposal of the same kind and key supersedes the older one; the key is the kind's choice: the project for `connections` and `handoff`).
+**One tool per kind, one record, one path.** `Propose<Kind>(<the kind's payload fields>)` (one tool per registered kind since #727: an untyped `payload` reached models as text); record ID `prp`, kind, payload (validated by the kind's pydantic model), status (`pending`, `approved`, `rejected`, `superseded`), the proposing agent, the version, and a key (a newer pending proposal of the same kind and key supersedes the older one; the key is the kind's choice: the project for `connections` and `handoff`).
 - A proposal is a stage 2 approval: the tool call asks, the card renders the payload by its kind, the user approves or rejects with a note, the turn resumes. On approval the app runs the kind's `apply()`; the tool result tells the agent what was applied, what failed and why.
 - **Secrets never pass through a proposal.** A card that needs a credential (a tracker's) has a field that posts it straight to the keystore through its own endpoint, keyed by the proposal's ID and the source's position in the payload; the approval, its preview, the audit record, the events and the checkpoint only ever hold "credential set: yes or no". Applying the proposal moves the credential to the new tracking source; rejecting it, superseding it or failing to create that source deletes it, so no orphan secret stays in the keystore.
 - **New risk class `propose`:** it asks at every permission level, `bypass` included. A proposal changes what the agents may do or see, so the user always decides it. Roadmap change below.
@@ -222,7 +222,7 @@ All seven definition files change: their prompts describe what each can now do (
 | Agent | New tools | Hooks |
 |---|---|---|
 | Orchestrator | SaveNote, SearchNotes, TrackingHistory | status_board, tracking_summary, knowledge |
-| Onboarding & Diagnosis | SaveNote, SearchNotes, TrackingHistory, Propose | data_summary, knowledge |
+| Onboarding & Diagnosis | SaveNote, SearchNotes, TrackingHistory, the `Propose<Kind>` tools of its kinds | data_summary, knowledge |
 | Data Quality | SaveNote, SearchNotes | data_summary, knowledge |
 | Model Performance | SaveNote, SearchNotes, TrackingHistory | data_summary, tracking_summary, knowledge |
 | Retraining | SaveNote, SearchNotes, TrackingHistory | data_summary, tracking_summary, knowledge |
@@ -273,7 +273,7 @@ Made in `docs/roadmap.md` before any stage 3 plan:
 - `data_summary`: caps on a wide and a long table; cache hit on an unchanged table, recompute on a changed file, eviction past the cap; a path outside the connection is refused by DuckDB.
 - Tracking: the MLflow mapping (runs, metric history, versions, aliases into deployments); a second sync adds nothing; one failing source does not stop the other.
 - Knowledge: a keyword match and a meaning match both rank; changing the embedder re-embeds and never mixes dimensions.
-- Proposals: `Propose` asks at every level, `bypass` included; a credential never appears in the approval, audit, events or checkpoint; a credential entered for a proposal that is then rejected, superseded or fails to apply is deleted from the keystore; approving applies every part; a failing part is reported and the rest applied; a newer proposal supersedes the pending one; a handoff cannot set `bypass`.
+- Proposals: a `Propose<Kind>` tool asks at every level, `bypass` included; a credential never appears in the approval, audit, events or checkpoint; a credential entered for a proposal that is then rejected, superseded or fails to apply is deleted from the keystore; approving applies every part; a failing part is reported and the rest applied; a newer proposal supersedes the pending one; a handoff cannot set `bypass`.
 - Kickoff: four agents started at once by a system message labeled "handoff"; Onboarding is not woken by their replies; a restart neither repeats nor loses one.
 - End to end (fake model, a fixture repository and data folder): add the project, Onboarding proposes connections, approve, it proposes the handoff, approve, the connection and tracking appear, a kickoff turn runs with the data summary in its context.
 
