@@ -290,7 +290,14 @@ def test_stage4_6_protocol_methods() -> None:
     from mlops_agents.stats.contract import Stats
     from mlops_agents.training.contract import Fixes, Training
 
-    assert _methods(Results) == {"add_observer", "ingest", "collect", "query", "latest_per_check"}
+    assert _methods(Results) == {
+        "add_observer",
+        "ingest",
+        "collect",
+        "query",
+        "latest_per_check",
+        "source_state",
+    }
     assert _methods(ResultsObserver) == {"stored"}
     assert _methods(Parsers) == {"store", "current", "parse"}
     assert _methods(EvaluationCopies) == {"store_copy"}
