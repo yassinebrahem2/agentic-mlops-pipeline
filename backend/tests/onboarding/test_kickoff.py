@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from typing import Any
@@ -14,12 +15,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import MessageView
 from mlops_agents.clock import now_iso
+from mlops_agents.monitoring.results.contract import SourceKind
 from mlops_agents.onboarding.briefs import (
     AUDIT_BRIEFS,
     KICKOFF_AGENTS,
 )
 from mlops_agents.onboarding.handoff_preview import sections
-from mlops_agents.onboarding.kickoff import HANDOFF_AUTHOR, Kickoff, kickoff_text
+from mlops_agents.onboarding.kickoff import (
+    HANDOFF_AUTHOR,
+    PARSER_PROPOSAL_INSTRUCTION,
+    Kickoff,
+    kickoff_text,
+    onboarding_parser_message,
+)
 from mlops_agents.paths import DataPaths
 from mlops_agents.proposals.handoffs import SqliteHandoffs
 from mlops_agents.proposals.payloads import HandoffPayload
@@ -395,3 +403,102 @@ async def test_replies_stay_in_each_agents_session_and_onboarding_is_not_woken(
     for agent in KICKOFF_AGENTS:
         view = await env.manager.get(env.project_id, agent)
         assert any(m.author_kind == "agent" for m in view.messages), agent
+
+
+class FakeResultsProvider:
+    def __init__(self, sources: list[tuple[str, SourceKind, bool]]) -> None:
+        self._sources = sources
+
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
+        return self._sources
+
+
+async def test_start_with_sources_needing_parser_posts_message_to_onboarding(
+    env: SessionEnv, databases: Databases, handoffs: SqliteHandoffs
+) -> None:
+    version, payload = await _stored(handoffs, env.project_id)
+    sources: list[tuple[str, SourceKind, bool]] = [
+        ("file:hotel:dq/*.json", "file", True),
+        ("file:hotel:results/*.json", "file", False),
+    ]
+    results = FakeResultsProvider(sources)
+    kick = Kickoff(databases, env.manager, handoffs, results=results)
+
+    posted = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await all_idle(env.manager, env.project_id)
+
+    assert posted == list(KICKOFF_AGENTS)
+
+    engine = await databases.project(env.project_id)
+    async with engine.connect() as conn:
+        onboarding_msgs = (
+            (
+                await conn.execute(
+                    select(messages)
+                    .join(sessions, sessions.c.id == messages.c.session_id)
+                    .where(sessions.c.agent == "onboarding")
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    system_msgs = [m for m in onboarding_msgs if m["from_agent"] == "system"]
+    assert len(system_msgs) == 1
+    msg = system_msgs[0]
+    assert msg["author_name"] == "system"
+    assert msg["from_agent"] == "system"
+    parts_text = "".join(p["text"] for p in json.loads(msg["parts"]) if p["type"] == "text")
+    assert parts_text.startswith(marker(PROPOSAL))
+    assert "file:hotel:dq/*.json" in parts_text
+    assert "file:hotel:results/*.json" not in parts_text
+    assert PARSER_PROPOSAL_INSTRUCTION in parts_text
+    assert (
+        parts_text == f"{marker(PROPOSAL)}\n\n{onboarding_parser_message(['file:hotel:dq/*.json'])}"
+    )
+
+    # Repeated start does not post duplicate message to onboarding
+    again = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await all_idle(env.manager, env.project_id)
+    assert again == []
+
+    async with engine.connect() as conn:
+        onboarding_msgs_after = (
+            (
+                await conn.execute(
+                    select(messages)
+                    .join(sessions, sessions.c.id == messages.c.session_id)
+                    .where(sessions.c.agent == "onboarding")
+                )
+            )
+            .mappings()
+            .all()
+        )
+    system_msgs_after = [m for m in onboarding_msgs_after if m["from_agent"] == "system"]
+    assert len(system_msgs_after) == 1
+
+
+async def test_start_without_sources_needing_parser_posts_nothing_to_onboarding(
+    env: SessionEnv, databases: Databases, handoffs: SqliteHandoffs
+) -> None:
+    version, payload = await _stored(handoffs, env.project_id)
+    sources: list[tuple[str, SourceKind, bool]] = [
+        ("file:hotel:results/*.json", "file", False),
+        ("ci:train.yml", "ci", False),
+    ]
+    results = FakeResultsProvider(sources)
+    kick = Kickoff(databases, env.manager, handoffs, results=results)
+
+    posted = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await all_idle(env.manager, env.project_id)
+
+    assert posted == list(KICKOFF_AGENTS)
+
+    engine = await databases.project(env.project_id)
+    async with engine.connect() as conn:
+        onboarding_count = await conn.scalar(
+            select(func.count())
+            .select_from(messages.join(sessions, sessions.c.id == messages.c.session_id))
+            .where(sessions.c.agent == "onboarding")
+        )
+    assert onboarding_count == 0

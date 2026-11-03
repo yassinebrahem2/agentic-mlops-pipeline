@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import ValidationError
 from sqlalchemy import select, update
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_agents.agents.runtime.contract import AgentSessions
 from mlops_agents.clock import now_iso
+from mlops_agents.monitoring.results.contract import SourceKind
 from mlops_agents.onboarding.briefs import (
     AUDIT_BRIEFS,
     BRIEF_SECTIONS,
@@ -33,11 +34,31 @@ from mlops_agents.proposals.contract import Handoffs
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.migrate import MigrationError
-from mlops_agents.storage.tables import kickoff, messages, projects
+from mlops_agents.storage.tables import kickoff, messages, projects, sessions
 
 logger = logging.getLogger(__name__)
 
 HANDOFF_AUTHOR: Final = "Handoff"
+
+PARSER_PROPOSAL_INSTRUCTION: Final = (
+    "Propose a parser for each with ProposeParser, using the source id exactly as written, "
+    "test it on a real sample, then check with MonitoringQuery that its results arrive "
+    "(they are read within a minute) and tell the person what the Dashboard shows."
+)
+
+
+class ResultsSourceProvider(Protocol):
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]: ...
+
+
+def onboarding_parser_message(source_ids: list[str]) -> str:
+    listed = "\n".join(f"- {s}" for s in source_ids)
+    return (
+        f"These results sources need a parser before the app can read them:\n"
+        f"{listed}\n\n"
+        f"{PARSER_PROPOSAL_INSTRUCTION}"
+    )
+
 
 # What one project's kickoff at startup raises when its data cannot be read: a corrupt or
 # unreadable database file, a schema from a newer app, a database error while reading or
@@ -90,10 +111,17 @@ def kickoff_text(agent: str, proposal_id: str, payload: HandoffPayload) -> str:
 class Kickoff:
     """Posts each approved handoff's kickoff exactly once, and finishes any lost to a crash."""
 
-    def __init__(self, databases: Databases, sessions: AgentSessions, handoffs: Handoffs) -> None:
+    def __init__(
+        self,
+        databases: Databases,
+        sessions: AgentSessions,
+        handoffs: Handoffs,
+        results: ResultsSourceProvider | None = None,
+    ) -> None:
         self._databases = databases
         self._sessions = sessions
         self._handoffs = handoffs
+        self._results = results
         # One lock per (project, handoff version): `start` and `resume` never run one kickoff
         # twice at once.
         self._locks: dict[tuple[str, int], asyncio.Lock] = {}
@@ -106,7 +134,10 @@ class Kickoff:
     ) -> list[str]:
         """Post the kickoff of this handoff version; returns the agents posted by this call."""
         async with self._lock(project_id, version):
-            return await self._run(project_id, version, proposal_id, payload)
+            posted = await self._run(project_id, version, proposal_id, payload)
+            if self._results is not None:
+                await self._notify_onboarding_parsers(project_id, proposal_id)
+            return posted
 
     async def resume(self) -> None:
         """At startup: finish the kickoff of every project's current handoff. One project's
@@ -217,6 +248,48 @@ class Kickoff:
                 .where(
                     messages.c.from_agent == agent,
                     messages.c.author_name == HANDOFF_AUTHOR,
+                    messages.c.parts.contains(_marker(proposal_id), autoescape=True),
+                )
+                .order_by(messages.c.seq)
+                .limit(1)
+            )
+        return None if found is None else str(found)
+
+    async def _notify_onboarding_parsers(self, project_id: str, proposal_id: str) -> None:
+        if self._results is None:
+            return
+        sources = await self._results.sources(project_id)
+        needed_ids = [s_id for s_id, _kind, needs_parser in sources if needs_parser]
+        if not needed_ids:
+            return
+        try:
+            engine = await self._databases.project(project_id)
+            if await self._earlier_onboarding_post(engine, proposal_id) is not None:
+                return
+            await self._sessions.post(
+                project_id,
+                "onboarding",
+                author_name="system",
+                from_agent="system",
+                text=f"{_marker(proposal_id)}\n\n{onboarding_parser_message(needed_ids)}",
+                exchange_id=None,
+                hop=None,
+                system=True,
+            )
+        except Exception:
+            logger.exception(
+                "The parser notice to onboarding for handoff %s in project %s did not finish",
+                proposal_id,
+                project_id,
+            )
+
+    async def _earlier_onboarding_post(self, engine: AsyncEngine, proposal_id: str) -> str | None:
+        async with engine.connect() as conn:
+            found = await conn.scalar(
+                select(messages.c.id)
+                .join(sessions, sessions.c.id == messages.c.session_id)
+                .where(
+                    sessions.c.agent == "onboarding",
                     messages.c.parts.contains(_marker(proposal_id), autoescape=True),
                 )
                 .order_by(messages.c.seq)
