@@ -121,7 +121,11 @@ class Profile(_Strict):
     metric_rationale: str
     operating_threshold: float | None
     label_delay_days: int
-    label_maturity_days: int
+    label_maturity_days: int = Field(
+        description=(
+            "Days after the event until a label is final (not zero when labels can still change)."
+        )
+    )
     serving_mode: Literal["batch", "online", "streaming"]
     error_costs: str
     cost_ratio: float | None
@@ -139,11 +143,15 @@ class CommandSpec(_Strict):
         ),
     )
     workflow: str | None
-    inputs: dict[str, str]
+    inputs: dict[str, str] = Field(
+        description="Only for a `ci_dispatch`; a command template takes no inputs."
+    )
     placeholders: list[Placeholder] = Field(
         description=(
             "Declared placeholders used in the template or inputs. Must be drawn from: "
             + ", ".join(get_args(Placeholder))
+            + ". The team's own names (`{date}`, `{version}`, `{cutoff}`) map to the declared "
+            "ones (`window_start`/`window_end`, `candidate_version`)."
         )
     )
     deploys: bool
@@ -203,8 +211,8 @@ class ModelSpec(_Strict):
 class PipelineStage(_Strict):
     name: str
     entry: str
-    inputs: list[str]
-    outputs: list[str]
+    inputs: list[str] = Field(description="Use the data roles' table names.")
+    outputs: list[str] = Field(description="Use the data roles' table names.")
 
 
 class PipelineEdge(_Strict):
@@ -327,15 +335,25 @@ class Scheduler(_Strict):
 
 class Operations(_Strict):
     scheduler: Scheduler | None
-    feeds: list[Feed]
+    feeds: list[Feed] = Field(
+        description=(
+            "A `data` feed for a table that arrives on a cadence; a `job` feed for a job's "
+            "result lines."
+        )
+    )
     on_call: list[OnCall] = Field(
         description=(
             "On-call contacts for operational alerts and incidents. "
-            "May be an empty list [] when nobody is known."
+            "When the team names no on-call people, pass an empty list and record a gap; never invent a contact."
         )
     )
     checks: list[CheckSpec]
-    results_location: FileResults | MlflowResults
+    results_location: FileResults | MlflowResults = Field(
+        description=(
+            "Where the agents' own checks write; the team's existing checks are read "
+            "through their own `results`."
+        )
+    )
 
 
 class TrackingSourceSpec(_Strict):
@@ -375,7 +393,8 @@ class HandoffPayload(_Strict):
             "Mapping of data connections and tables to their roles ('training', "
             "'serving_inputs', 'predictions', 'labels', 'other'). Every table used by "
             "a model must be declared, especially predictions and labels tables so they "
-            "are never left unmapped."
+            "are never left unmapped. One table may have more than one role (a table of "
+            "served inputs that is also trained on gets a `training` and a `serving_inputs` row)."
         )
     )
     tracking: list[TrackingSourceSpec] = Field(
