@@ -8,6 +8,7 @@ from sqlalchemy import update
 
 from mlops_agents.agents.catalog import AgentCatalog, AgentDefinition
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused
+from mlops_agents.agents.runtime.context import system_message
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.settings import AgentSettingsService
 from mlops_agents.agents.tools import default_registry
@@ -20,6 +21,8 @@ from mlops_agents.paths import DataPaths
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.models import ModelCreate, ProviderCreate
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.projects import DatabaseSandboxProjects, Mount
+from mlops_agents.sandbox.service import SandboxService
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import projects
 from mlops_agents.workspace.service import WorkspaceService
@@ -39,6 +42,12 @@ from tests.conftest import (
 from tests.fakes.fake_openai import RunningFake
 from tests.fakes.workspaces import FakeWorkspaces
 from tests.providers.fake_clock import FakeClock
+from tests.sandbox.fakes import FakeDockerRunner, FakeEventLog
+
+
+class _FakeConnections:
+    async def mounts(self, project_id: str) -> tuple[Mount, ...]:
+        return ()
 
 
 async def _set_project_status(
@@ -435,3 +444,88 @@ async def test_orchestrator_system_message_contains_summary_and_other_agent_does
     assert "Status board:\n" in orch_content
     assert fake_board.summary_text in orch_content
     assert "Status board:" not in other_content
+
+
+@pytest.mark.asyncio
+async def test_builder_carries_real_network_setting_into_system_message(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+) -> None:
+    defn = AgentDefinition(
+        name="onboarding",
+        display_name="Onboarding",
+        description="Onboarding agent",
+        tools=("Read", "Bash"),
+        chat=True,
+        schedules=False,
+        can_message=(),
+        context_hooks=(),
+        prompt="You are onboarding.",
+    )
+    tools = default_registry()
+    catalog = AgentCatalog([defn], tool_names=tools.names() | {"Bash"})
+    failover = KeyFailover(FakeClock())
+    providers_svc = ProvidersService(databases, keystore, model_http, failover)
+    settings_svc = AgentSettingsService(databases, providers_svc, catalog)
+    workspace_svc = workspace_service(paths, databases, keystore)
+    workspaces = FakeWorkspaces(workspace=workspace_svc, git=GitRunner(paths.bin))
+    store = SessionStore(databases)
+
+    prov = await providers_svc.create_provider(
+        ProviderCreate(name="fake", kind="self_hosted", base_url=fake_openai.base_url)
+    )
+    await providers_svc.add_model(ModelCreate(provider=prov.name, wire_model_id="fake-tools"))
+    await providers_svc.verify_model(f"{prov.name}:fake-tools")
+
+    repo_dir = make_repo(tmp_path / "repo_net", {"README.md": "Line 1"}, git_env)
+    project = await workspace_svc.add_local(str(repo_dir))
+    await settings_svc.set_default_model("onboarding", f"{prov.name}:fake-tools")
+
+    sandbox_projects = DatabaseSandboxProjects(databases, workspace_svc, _FakeConnections())
+    sandbox_svc = SandboxService(
+        FakeDockerRunner(), projects=sandbox_projects, events=FakeEventLog()
+    )
+
+    builder = AgentBuilder(
+        catalog=catalog,
+        tools=tools,
+        settings=settings_svc,
+        workspace=workspace_svc,
+        workspaces=workspaces,
+        store=store,
+        sandbox=sandbox_svc,
+    )
+
+    # 1. Default (ungranted) project: network is off
+    agent_off = await builder.build(project.id, "onboarding")
+    assert not agent_off.sandbox_network
+    sys_off = system_message(agent_off, None)
+    content_off = str(sys_off.content)
+    assert "network: off" in content_off.lower() or "network is off" in content_off.lower()
+    assert (
+        "package installs fail: no network, no root; a task's container is removed with the task"
+        in content_off
+    )
+
+    # 2. Grant network access via sandbox_svc
+    await sandbox_svc.set_network(project.id, True)
+
+    # 3. Build agent again: network is enabled
+    agent_on = await builder.build(project.id, "onboarding")
+    assert agent_on.sandbox_network
+    sys_on = system_message(agent_on, None)
+    content_on = str(sys_on.content)
+    assert (
+        "network: enabled" in content_on.lower()
+        or "network access is granted" in content_on.lower()
+    )
+    assert "no network" not in content_on.lower()
+    assert (
+        "package installs fail for lack of root and do not persist past the task's container"
+        in content_on
+    )

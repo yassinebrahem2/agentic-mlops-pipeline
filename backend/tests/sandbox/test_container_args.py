@@ -77,6 +77,7 @@ def test_build_run_args_default_network_disabled(tmp_path: Path) -> None:
     env_vars = [args[i + 1] for i, v in enumerate(args) if v == "-e"]
     assert "HOME=/tmp" in env_vars
     assert "PYTHONPATH=/workspace/src:/workspace" in env_vars
+    assert "DUCKDB_AGENT_MODE=1" in env_vars
 
     # Posix user omitted when user=None
     assert "-u" not in args

@@ -43,6 +43,9 @@ class FakeSandbox(Sandbox):
     async def rebuild(self, project_id: str) -> EnvironmentStatus:
         return EnvironmentStatus(state="ready", tag="img:tag", detail=None)
 
+    async def get_network(self, project_id: str) -> bool:
+        return False
+
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:

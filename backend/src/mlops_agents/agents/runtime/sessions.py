@@ -42,6 +42,7 @@ from mlops_agents.events.contract import AuditLog, EventLog
 from mlops_agents.providers.errors import ProviderCallError
 from mlops_agents.providers.failover import KeyFailover
 from mlops_agents.providers.service import ProvidersService
+from mlops_agents.sandbox.contract import Sandbox
 from mlops_agents.storage.databases import Databases
 from mlops_agents.workspace.service import WorkspaceService
 
@@ -72,6 +73,7 @@ class SessionManager(AgentSessions):
         hooks: HookRegistry | None = None,
         audit_log: AuditLog | None = None,
         event_log: EventLog | None = None,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self._databases = databases
         self._workspace = workspace
@@ -97,6 +99,7 @@ class SessionManager(AgentSessions):
             workspaces=workspaces,
             hooks=hooks,
             store=self._store,
+            sandbox=sandbox,
         )
         self._executor = TurnExecutor(
             store=self._store,

@@ -5,6 +5,12 @@ from __future__ import annotations
 from importlib.resources import files
 from typing import TYPE_CHECKING
 
+from mlops_agents.sandbox.containers import (
+    SANDBOX_CPUS,
+    SANDBOX_DEFAULT_NETWORK,
+    SANDBOX_MEMORY,
+)
+
 if TYPE_CHECKING:
     from mlops_agents.agents.catalog import AgentDefinition
 
@@ -20,10 +26,43 @@ def _load_prompt(filename: str) -> str:
     return folder.joinpath(filename).read_text(encoding="utf-8").strip()
 
 
-def working_rules(definition: AgentDefinition) -> str:
+def sandbox_limits(*, sandbox_network: bool = SANDBOX_DEFAULT_NETWORK) -> str:
+    """Return the sandbox limits section tailored to the sandbox network setting."""
+    net_status = "enabled" if sandbox_network else "off"
+    if sandbox_network:
+        net_bullet = "- Network: enabled (network access is granted)."
+        pkg_bullet = (
+            "- No system package installs (package installs fail for lack of root and do"
+            " not persist past the task's container)."
+        )
+    else:
+        net_bullet = "- No network: network is off unless granted."
+        pkg_bullet = (
+            "- No system package installs (package installs fail: no network, no root; a"
+            " task's container is removed with the task)."
+        )
+    return (
+        f"Sandbox limits ({SANDBOX_CPUS} CPUs, {SANDBOX_MEMORY} memory, network {net_status}):\n"
+        f"{net_bullet}\n"
+        f"{pkg_bullet}\n"
+        "- The project's own test suite may not run there; report this as a gap rather than retried.\n"
+        "- duckdb is the `duckdb` command (CLI, not Python `import duckdb`).\n"
+        "- An environment failure is reported once and not retried in variants."
+    )
+
+
+def working_rules(
+    definition: AgentDefinition,
+    *,
+    sandbox_network: bool = SANDBOX_DEFAULT_NETWORK,
+) -> str:
     """Return the hard limits and team system rules tailored to this agent."""
     hard_limits = _load_prompt("hard_limits.md")
+    parts = [hard_limits]
     if "OpenPullRequest" in definition.tools:
-        team_system = _load_prompt("team_system.md")
-        return f"{hard_limits}\n\n{team_system}"
-    return f"{hard_limits}\n\n{_NO_PULL_REQUESTS_LINE}"
+        parts.append(_load_prompt("team_system.md"))
+    else:
+        parts.append(_NO_PULL_REQUESTS_LINE)
+    if "Bash" in definition.tools:
+        parts.append(sandbox_limits(sandbox_network=sandbox_network))
+    return "\n\n".join(parts)

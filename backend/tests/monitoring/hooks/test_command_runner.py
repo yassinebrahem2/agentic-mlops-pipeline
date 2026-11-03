@@ -106,6 +106,9 @@ class FakeSandbox(Sandbox):
             detail=None,
         )
 
+    async def get_network(self, project_id: str) -> bool:
+        return False
+
     async def run(self, project_id: str, task: Any, command: str, timeout_s: int) -> Any:
         raise NotImplementedError
 
