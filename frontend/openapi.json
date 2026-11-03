@@ -6058,6 +6058,7 @@
             ]
           },
           "source_id": {
+            "description": "the id of a results source exactly as the app names it (`file:<connection>:<pattern>`, `ci:<workflow>`, \u2026); a refusal lists the valid ones.",
             "title": "Source Id",
             "type": "string"
           }

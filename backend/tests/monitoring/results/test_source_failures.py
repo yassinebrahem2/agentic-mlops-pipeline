@@ -20,6 +20,7 @@ from mlops_agents.monitoring.results.contract import (
     ParserMapping,
     ParserSpec,
     ResultQuery,
+    ResultRecord,
     SourceState,
     source_id,
 )
@@ -423,18 +424,13 @@ async def test_team_lines_without_parser_leave_cursor_and_reread_when_parser_app
     s_id = source_id("file", "*.jsonl", "conn_team")
     now = datetime(2026, 10, 30, 10, 10, 0, tzinfo=UTC)
 
-    # 1. Team lines in a source with no parser fail and leave the cursor unchanged (at offset 0).
+    # 1. Team check source without a parser is waiting for a parser (reads nothing).
     rep = await service.collect(project_id, now)
     assert rep.stored == 0
-    assert s_id in rep.failures
-    assert (
-        "these look like the team's own records and a parser proposal reads them"
-        in rep.failures[s_id]
-    )
 
     st = await service.store.get_source_state(project_id, s_id)
     assert st is not None
-    assert st.cursor["files"]["results.jsonl"]["offset"] == 0
+    assert st.cursor == {}
 
     # 2. Approving a parser for that source resets cursor and stores every earlier record once.
     spec = ParserSpec(
@@ -573,14 +569,40 @@ async def test_mixed_check_source_reread_stores_each_record_once_and_preserves_a
     s_id = source_id("file", "*.jsonl", "conn_mixed")
     now = datetime(2026, 10, 30, 10, 15, 0, tzinfo=UTC)
 
-    # 1. First collect (no parser): agent lines c1 and c2 are stored, team line c3 halts with SourceLevelError
-    # cursor is preserved at offset of c3
+    # 1. Before parser: source is waiting for a parser (reads nothing, cursor empty)
     rep1 = await service.collect(project_id, now)
-    assert rep1.stored == 2
-    assert s_id in rep1.failures
+    assert rep1.stored == 0
     st1 = await service.store.get_source_state(project_id, s_id)
     assert st1 is not None
-    assert st1.cursor["files"]["results.jsonl"]["offset"] == len(agent_line_1) + len(agent_line_2)
+    assert st1.cursor == {}
+
+    # Pre-existing agent records stored earlier (from agent check or prior run)
+    rec_c1 = ResultRecord(
+        check_id="c1",
+        origin="agent",
+        ran_at=datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC),
+        fired=False,
+        category="data_quality",
+        subject="s",
+        detail={},
+        source_ref="results.jsonl",
+    )
+    rec_c2 = ResultRecord(
+        check_id="c2",
+        origin="agent",
+        ran_at=datetime(2026, 10, 30, 10, 5, 0, tzinfo=UTC),
+        fired=True,
+        category="operational",
+        subject="s",
+        detail={},
+        source_ref="results.jsonl",
+    )
+    await service.store.insert_items(
+        project_id,
+        s_id,
+        [("agent-key-1", rec_c1), (f"results.jsonl:{len(agent_line_1)}", rec_c2)],
+        now,
+    )
 
     # Verify the 2 stored records both have origin "agent"
     stored_c1 = await service.store.query(project_id, ResultQuery(check_id="c1"))
@@ -719,13 +741,40 @@ async def test_mixed_check_source_code_parser_reread_stores_each_record_once_and
     s_id = source_id("file", "*.jsonl", "conn_mixed_code")
     now = datetime(2026, 10, 30, 10, 15, 0, tzinfo=UTC)
 
-    # 1. First collect (no parser stored yet): agent lines c1 and c2 are stored, team line halts with SourceLevelError
+    # 1. Before parser: source is waiting for a parser (reads nothing, cursor empty)
     rep1 = await service.collect(project_id, now)
-    assert rep1.stored == 2
-    assert s_id in rep1.failures
+    assert rep1.stored == 0
     st1 = await service.store.get_source_state(project_id, s_id)
     assert st1 is not None
-    assert st1.cursor["files"]["results.jsonl"]["offset"] == len(agent_line_1) + len(agent_line_2)
+    assert st1.cursor == {}
+
+    # Pre-existing agent records stored earlier (from agent check or prior run)
+    rec_c1 = ResultRecord(
+        check_id="c1",
+        origin="agent",
+        ran_at=datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC),
+        fired=False,
+        category="data_quality",
+        subject="s",
+        detail={},
+        source_ref="results.jsonl",
+    )
+    rec_c2 = ResultRecord(
+        check_id="c2",
+        origin="agent",
+        ran_at=datetime(2026, 10, 30, 10, 5, 0, tzinfo=UTC),
+        fired=True,
+        category="operational",
+        subject="s",
+        detail={},
+        source_ref="results.jsonl",
+    )
+    await service.store.insert_items(
+        project_id,
+        s_id,
+        [("K1", rec_c1), (f"results.jsonl:{len(agent_line_1)}", rec_c2)],
+        now,
+    )
 
     stored_c1 = await service.store.query(project_id, ResultQuery(check_id="c1"))
     assert len(stored_c1.rows) == 1
