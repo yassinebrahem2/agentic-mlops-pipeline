@@ -18,6 +18,11 @@ from mlops_agents.sandbox.docker import (
 )
 from mlops_agents.sandbox.projects import Mount
 
+SANDBOX_CPUS = "2"
+SANDBOX_MEMORY = "4g"
+SANDBOX_PIDS_LIMIT = "512"
+SANDBOX_DEFAULT_NETWORK = False
+
 
 def container_name(task_id: str) -> str:
     """Returns the container name for a task."""
@@ -36,7 +41,7 @@ def build_run_args(
     task: TaskRef,
     image_tag: str,
     *,
-    network: bool = False,
+    network: bool = SANDBOX_DEFAULT_NETWORK,
     user: str | None = None,
     mounts: Sequence[Mount] = (),
 ) -> list[str]:
@@ -61,11 +66,11 @@ def build_run_args(
         "--label",
         f"{APP_NAME}.mounts={mounts_fingerprint(mounts)}",
         "--cpus",
-        "2",
+        SANDBOX_CPUS,
         "--memory",
-        "4g",
+        SANDBOX_MEMORY,
         "--pids-limit",
-        "512",
+        SANDBOX_PIDS_LIMIT,
         "--workdir",
         "/workspace",
         "-v",
@@ -86,6 +91,8 @@ def build_run_args(
             "HOME=/tmp",
             "-e",
             "PYTHONPATH=/workspace/src:/workspace",
+            "-e",
+            "DUCKDB_AGENT_MODE=1",
         ]
     )
     if user is not None:
@@ -115,11 +122,11 @@ def build_one_shot_run_args(
     args.extend(
         [
             "--cpus",
-            "2",
+            SANDBOX_CPUS,
             "--memory",
-            "4g",
+            SANDBOX_MEMORY,
             "--pids-limit",
-            "512",
+            SANDBOX_PIDS_LIMIT,
             "--workdir",
             "/workspace",
             "--label",
@@ -145,6 +152,8 @@ def build_one_shot_run_args(
             "HOME=/tmp",
             "-e",
             "PYTHONPATH=/workspace/src:/workspace",
+            "-e",
+            "DUCKDB_AGENT_MODE=1",
         ]
     )
     args.append(image_tag)
@@ -249,7 +258,7 @@ class ContainerManager:
         task: TaskRef,
         image_tag: str,
         *,
-        network: bool = False,
+        network: bool = SANDBOX_DEFAULT_NETWORK,
         mounts: Sequence[Mount] = (),
     ) -> str:
         """Starts a new container for the task and returns its name."""
@@ -364,7 +373,7 @@ class ContainerManager:
         task: TaskRef,
         image_tag: str,
         *,
-        network: bool = False,
+        network: bool = SANDBOX_DEFAULT_NETWORK,
         mounts: Sequence[Mount] = (),
     ) -> str:
         """Ensures a container is running for the task on the specified image, network, and mounts setting."""

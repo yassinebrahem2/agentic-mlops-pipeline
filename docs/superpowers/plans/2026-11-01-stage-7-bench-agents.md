@@ -15,7 +15,8 @@
 | 1 | demo-world holds its day loop with MLflow served | #533 |
 | 2 | The short scenario and the day starts from the jobs files | core task 3; task 1 |
 | 3 | The agents-run command | task 2; #643; #647 |
-| 4 | The run and its report | task 3 |
+| 3b | The run is safe to score (pre-run review, 2026-11-03) | task 3 |
+| 4 | The run and its report | task 3b |
 
 ---
 
@@ -58,6 +59,41 @@
 **Tests (stop condition):** against an in-process app and a fake world folder: the command holds before day 1 and releases only when ready; a `turn.stalled` event creates the hold; with two stalls pending, resolving one keeps the hold and resolving both removes it; while held, windows cover every expectation and a held slot raises no silence (evaluate across a held hour); the pauses reach the report; scoring runs once, after the last day.
 
 ---
+
+### Task 3b: The run is safe to score
+
+The pre-run review of tasks 1 to 3 (2026-11-03) found defects that would lose or bias the run. This task fixes them before task 4; nothing here changes the backend or the scorer.
+
+**Files:** `bench/benchmarks/src/benchmarks/agents_run.py` and its tests; `bench/demo-world/src/demo_world/up.py` (the stale hold, the dead cutoff code), `bench/demo-world/README.md`; `bench/benchmarks/README.md` (the runbook).
+
+**Notes:**
+- **First merge `origin/main`** into the branch: the run's app must start from the merged head (#720 grouping, #721 results re-reading, #722 sandbox limits, #723 token counts).
+- **The result is never lost.** Read every piece of the report's metadata (agents, providers, app commit) before `score()`; `_get_app_commit` never raises (unknown when git cannot say). Write the score result to the run folder as soon as `score()` returns, then the report.
+- **A person's verdict is caught early.** A person who confirms or labels an incident during the run makes `score()` refuse (`AlreadyScored`, merged core, unchanged). The run polls for verdicts during play and prints a warning the moment one appears. Before scoring it refuses with the list of judged incidents, after the metadata is saved.
+- **Stalls are dated by the stall.** Seed the seen stall events at the end of the readiness wait, so a stall during onboarding is not a pause. A stall's window starts at the stall event's `ts` (a window may start in the past). Poll every `min(30 s, pace / 4)`.
+- **Windows end soon after a resume** (the spec: windows are ended on resume; the maintenance routes have no update, and windows are never deleted). Each window lasts twice the renewal interval (renewal `min(30 s, pace / 4)`), and is renewed while the hold lasts, so after a resume at most half a simulated day stays suspended. `suspended()` also mutes real fires, so this bounds the bias.
+- **Readiness from the sessions, never from errors.** Ready when each of the four audit agents' sessions has the handoff message and a finished turn after it, and none is running. A route error counts as not ready: it is printed and retried, never read as idle.
+- **The answer key is read by demo-world's own reader** (`answer_key.lines()`, bench already depends on demo-world). A line it cannot read stops the run.
+- **Play ends when the agents are done.** After the last day, wait until every agent is idle and no stall is open, up to a timeout (a setting). A timeout is recorded in the report.
+- **demo-world `up`:** a `hold` file left by an earlier run is removed at start, unless `--hold-before-start` creates it again. Remove the dead state-derived cutoff code. The README says `backfill` comes before `up`.
+- **Runbook** (`bench/benchmarks/README.md`, "The agents run"), in order:
+  1. `new-run`, then `backfill`.
+  2. `up --hold-before-start` with the pace, the merge delay and `scenarios/agents-short.toml`.
+  3. The app on a dedicated `MLOPS_AGENTS_HOME`.
+  4. `bench agents-run`, with the same pace and scenario as `up` and the access token.
+  5. While it runs: approve Onboarding's proposals, merge the first-audit PRs by hand, press Try again on every stall, give no verdict or label, keep the machine awake.
+
+**Tests (stop condition):**
+- A failure after `score()` (an unreachable `/providers`) still leaves the score result and a report on disk.
+- A person's verdict during play is warned about, and scoring then refuses and names it.
+- A stall raised during onboarding is not a pause.
+- A stall's window starts at its event's time.
+- After a resume, no window outlives twice the renewal interval.
+- A route error during readiness keeps waiting.
+- A malformed answer-key line stops the run.
+- Scoring waits for agents still in a turn, and records a timeout.
+- A stale `hold` file is removed.
+- `uv run pytest`, ruff, ruff format and pyright in `bench/benchmarks` and `bench/demo-world`; CI green.
 
 ### Task 4: The run and its report
 

@@ -25,8 +25,28 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # Pyright checks tests/fakes as its own root (pyproject's executionEnvironments).
 if TYPE_CHECKING:
+    from monitoring_script import (
+        alert_prioritization_reply,
+        data_quality_reply,
+        deployment_promotion_reply,
+        deployment_rollback_reply,
+        model_performance_reply,
+        onboarding_night_reply,
+        onboarding_promotion_reply,
+        retraining_reply,
+    )
     from onboarding_script import audit_reply, onboarding_reply
 else:
+    from tests.fakes.monitoring_script import (
+        alert_prioritization_reply,
+        data_quality_reply,
+        deployment_promotion_reply,
+        deployment_rollback_reply,
+        model_performance_reply,
+        onboarding_night_reply,
+        onboarding_promotion_reply,
+        retraining_reply,
+    )
     from tests.fakes.onboarding_script import audit_reply, onboarding_reply
 
 MODELS: dict[str, int] = {
@@ -38,6 +58,14 @@ MODELS: dict[str, int] = {
     "fake-write": 32768,
     "fake-onboarding": 131072,
     "fake-audit": 131072,
+    "fake-alert-prioritization": 131072,
+    "fake-data-quality": 131072,
+    "fake-deployment-rollback": 131072,
+    "fake-onboarding-night": 131072,
+    "fake-model-performance": 131072,
+    "fake-retraining": 131072,
+    "fake-deployment-promotion": 131072,
+    "fake-onboarding-promotion": 131072,
 }
 EMBEDDING_MODELS: dict[str, int] = {
     "fake-embed": 16,
@@ -241,6 +269,22 @@ def _reply(
                 return "I have started the task and written NOTES.md.", None
             return "Done.", None
         return "", [{"name": "StartTask", "arguments": TOOL_ARGS["StartTask"]}]
+    if model == "fake-alert-prioritization":
+        return alert_prioritization_reply(messages, tools)
+    if model == "fake-data-quality":
+        return data_quality_reply(messages, tools)
+    if model == "fake-deployment-rollback":
+        return deployment_rollback_reply(messages, tools)
+    if model == "fake-onboarding-night":
+        return onboarding_night_reply(messages, tools)
+    if model == "fake-model-performance":
+        return model_performance_reply(messages, tools)
+    if model == "fake-retraining":
+        return retraining_reply(messages, tools)
+    if model == "fake-deployment-promotion":
+        return deployment_promotion_reply(messages, tools)
+    if model == "fake-onboarding-promotion":
+        return onboarding_promotion_reply(messages, tools)
     if last.get("role") == "tool":
         content = str(last.get("content") or "").strip()
         first_line = content.splitlines()[0] if content else "(empty)"

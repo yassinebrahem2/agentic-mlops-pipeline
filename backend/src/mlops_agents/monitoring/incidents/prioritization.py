@@ -12,7 +12,7 @@ from mlops_agents.monitoring.incidents.contract import (
 
 if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog, EventType
-    from mlops_agents.monitoring.incidents.contract import AgentWaker
+    from mlops_agents.monitoring.incidents.contract import AgentWaker, Incidents
 
 WAKE_LABEL: Final[str] = "incident"
 SEVERITY_CHANGED_EVENT: Final = "incident.severity_changed"
@@ -21,11 +21,21 @@ SEVERITY_CHANGED_EVENT: Final = "incident.severity_changed"
 class PrioritizationWake(IncidentObserver):
     """IncidentObserver that wakes alert-prioritization on relevant incident changes."""
 
-    def __init__(self, waker: AgentWaker, events: EventLog) -> None:
+    def __init__(
+        self,
+        waker: AgentWaker,
+        events: EventLog,
+        incidents: Incidents | None = None,
+    ) -> None:
         self._waker = waker
         self._events = events
+        self._incidents = incidents
 
     async def changed(self, project_id: str, change: IncidentChange) -> None:
+        if self._incidents is not None:
+            inc = await self._incidents.get(project_id, change.incident_id)
+            if inc is not None and inc.resolved_offline:
+                return
         if change.kind in ("severity_raised", "severity_lowered"):
             events = await self._events.page(
                 project_id,

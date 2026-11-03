@@ -44,6 +44,8 @@ class Sandbox(Protocol):
 
     async def rebuild(self, project_id: str) -> EnvironmentStatus: ...
 
+    async def get_network(self, project_id: str) -> bool: ...
+
     async def run(
         self, project_id: str, task: TaskRef, command: str, timeout_s: int
     ) -> CommandResult:

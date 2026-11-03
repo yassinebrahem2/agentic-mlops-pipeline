@@ -708,6 +708,25 @@ class IncidentsService(Incidents):
                                 "Expectation is still silent.",
                                 status=409,
                             )
+            # Source / parser failure signals check
+            source_sigs = [s for s in sigs if s.kind in ("source_failure", "parser_failure")]
+            if source_sigs:
+                checked_sources: set[str] = set()
+                for s in source_sigs:
+                    source_id = str(s.detail.get("source_id") or s.source_ref or s.subject)
+                    if source_id in checked_sources:
+                        continue
+                    checked_sources.add(source_id)
+                    st = await self._results.source_state(project_id, source_id)
+                    if st is not None and (
+                        st.last_error is not None or st.consecutive_failures > 0
+                    ):
+                        raise DomainError(
+                            "incident_still_firing",
+                            f"Source '{source_id}' is still failing.",
+                            status=409,
+                        )
+
             # Latest results check
             pairs: set[tuple[str, str | None]] = set()
             for s in sigs:
