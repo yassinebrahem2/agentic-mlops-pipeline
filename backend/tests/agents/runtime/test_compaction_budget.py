@@ -848,7 +848,7 @@ async def test_executor_turn_failure_displays_request_too_large_message(
         lock=asyncio.Lock(),
     )
 
-    status, err_msg = outcome
+    status, err_msg, _ = outcome
     assert status == "failed"
     assert err_msg == REQUEST_TOO_LARGE_MESSAGE
     # Confirm message in store is system failure message with REQUEST_TOO_LARGE_MESSAGE

@@ -33,7 +33,7 @@ EVENT_DATA: dict[str, dict[str, Any]] = {
     },
     "message.updated": {"message": MESSAGE},
     "turn.waiting": {"turn_id": "trn_01"},
-    "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None},
+    "turn.ended": {"turn_id": "trn_01", "status": "done", "error": None, "stopped_reason": None},
     "resync": {},
 }
 STREAM_EVENT: TypeAdapter[StreamEvent] = TypeAdapter(StreamEvent)
