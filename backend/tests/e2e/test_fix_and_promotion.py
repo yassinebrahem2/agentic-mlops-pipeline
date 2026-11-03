@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """The stage 5 end-to-end story (S5 §8, Task 2): a confirmed decay, the fix, the promotion.
 
 Parametrised over the two promotion modes, one project each. Both have a tracker-alias
@@ -17,9 +16,7 @@ Story progression:
    (basis `approval`). `team_gate`: no deploy hook runs; the gate's decision is read from the
    evaluation record and the first on-call person is notified.
 4. The production alias moves: Deployment & Rollback is woken once with `post_deploy` for that
-   move and registers a follow-up. That the whole story wakes it exactly once is a separate
-   test that fails until bug #649 is fixed: the champion's first appearance (none to version 1)
-   is recorded after the trigger's cursor was seeded, so it wakes it too.
+   move and registers a follow-up.
 5. Messaged by the test, Deployment & Rollback opens a pull request improving the evaluation
    step against the fake GitHub (its own test: the pull request needs the origin served from a
    bare repository, which the workflow dispatch of scene 1 cannot share).
@@ -537,12 +534,6 @@ async def alias_moves(story: Story) -> None:
     await wait_for_agent_idle(story.http, story.project_id, "deployment")
 
 
-def moved_to_challenger(wake: dict[str, Any]) -> bool:
-    return f"{MODEL_NAME}:{PRODUCTION_ALIAS}:{CHAMPION_VERSION}:{CHALLENGER_VERSION}:" in str(
-        wake["key"]
-    )
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("promotion", ["person", "team_gate"])
 async def test_incident_to_fix_to_promotion(
@@ -558,11 +549,9 @@ async def test_incident_to_fix_to_promotion(
         # The move of the alias to the new version woke Deployment & Rollback once with
         # post_deploy, and its scripted turn registered the follow-up.
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
-        # Only the wake of the real move: the baseline row's wake is the separate #649 failure.
-        moved = [w for w in wakes if moved_to_challenger(w)]
-        assert len(moved) == 1
-        assert moved[0]["agent"] == "deployment"
-        assert NEW_VERSION_LINE in moved[0]["text"]
+        assert len(wakes) == 1
+        assert wakes[0]["agent"] == "deployment"
+        assert NEW_VERSION_LINE in wakes[0]["text"]
         pending = await story.services.wakeups.list_pending(story.project_id, agent="deployment")
         assert pending
         assert {w.note for w in pending} == {POST_DEPLOY_FOLLOW_UP}
@@ -571,8 +560,7 @@ async def test_incident_to_fix_to_promotion(
         story.clock.advance(timedelta(minutes=10))
         await run_due(story.services, story.project_id, story.clock.now())
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
-        # Filtered as above (#649).
-        assert len([w for w in wakes if moved_to_challenger(w)]) == 1
+        assert len(wakes) == 1
 
 
 @pytest.mark.asyncio
@@ -581,11 +569,7 @@ async def test_alias_move_wakes_deployment_once(
     tmp_path: Path, git_env: dict[str, str], promotion: PromotionMode
 ) -> None:
     """Both modes: the whole story wakes Deployment & Rollback exactly once with post_deploy,
-    for the move of the alias and for nothing else.
-
-    Fails today because of bug #649: the champion's first deployment row (none to the champion)
-    is recorded by the second tracking sync, after the post-deploy cursor was seeded on the first
-    pass, so it counts as a move and wakes Deployment & Rollback a second time."""
+    for the move of the alias and for nothing else."""
     async with story_env(tmp_path, git_env, promotion) as story:
         dispatched = await decay_to_dispatch(story)
         linked = await pipeline_links(story, dispatched)
@@ -594,7 +578,9 @@ async def test_alias_move_wakes_deployment_once(
 
         wakes = await wake_rows(story.services, story.project_id, "post_deploy")
         assert len(wakes) == 1
-        assert moved_to_challenger(wakes[0])
+        assert f"{MODEL_NAME}:{PRODUCTION_ALIAS}:{CHAMPION_VERSION}:{CHALLENGER_VERSION}:" in str(
+            wakes[0]["key"]
+        )
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -57,6 +58,7 @@ ONBOARDING_COMPLETE: Final = "Onboarding is complete."
 
 _deployment_hook_id: str | None = None
 _deployment_rule_id: str | None = None
+_on_deployment_rollback_call: Callable[[], None] | None = None
 
 
 def set_deployment_ids(*, hook_id: str | None = None, rule_id: str | None = None) -> None:
@@ -65,10 +67,16 @@ def set_deployment_ids(*, hook_id: str | None = None, rule_id: str | None = None
     _deployment_rule_id = rule_id
 
 
+def set_on_deployment_rollback(cb: Callable[[], None] | None) -> None:
+    global _on_deployment_rollback_call
+    _on_deployment_rollback_call = cb
+
+
 def reset_deployment_ids() -> None:
-    global _deployment_hook_id, _deployment_rule_id
+    global _deployment_hook_id, _deployment_rule_id, _on_deployment_rollback_call
     _deployment_hook_id = None
     _deployment_rule_id = None
+    _on_deployment_rollback_call = None
 
 
 ToolCall = dict[str, Any]
@@ -211,6 +219,9 @@ def deployment_rollback_reply(
     last = messages[-1] if messages else {}
     if last.get("role") == "tool":
         return "Rollback executed via rule.", None
+
+    if _on_deployment_rollback_call is not None:
+        _on_deployment_rollback_call()
 
     inc_id = _find_incident_id(messages)
     hook_id = _deployment_hook_id or ROLLBACK_HOOK_ID
