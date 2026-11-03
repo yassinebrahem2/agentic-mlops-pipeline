@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatMetric as formatNumber } from "@/lib/format";
 
 type ReportView = components["schemas"]["ReportView"];
 type MetricValue = components["schemas"]["MetricValue"];
@@ -17,9 +18,9 @@ function formatMetric(val?: MetricValue | null): string {
   if (!val) return "-";
   const interval =
     val.ci_low != null && val.ci_high != null
-      ? ` [${String(val.ci_low)}, ${String(val.ci_high)}]`
+      ? ` [${formatNumber(val.ci_low)}, ${formatNumber(val.ci_high)}]`
       : "";
-  return `${String(val.value)}${interval} (n=${String(val.n)})`;
+  return `${formatNumber(val.value)}${interval} (n=${String(val.n)})`;
 }
 
 interface MetricsComparisonProps {
