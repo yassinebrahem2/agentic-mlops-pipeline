@@ -264,6 +264,8 @@ Both have risk class `write_code`.
 - It happens at most once per turn, and the note is not stored.
 - This replaces "open a PR automatically when the agent finishes" (`project_knowledge.md`, Changed).
 
+**CI on an agent's PR** (2026-11-03, `project_knowledge.md`): the PR sync reads the head commit's check runs; a completed failure not also red on the default branch wakes the owning agent with the failing checks, once per head commit, at most 3 times per task.
+
 ## 7. Agents talking to each other
 
 **ListAgents()**, risk class `read`. It returns every agent:

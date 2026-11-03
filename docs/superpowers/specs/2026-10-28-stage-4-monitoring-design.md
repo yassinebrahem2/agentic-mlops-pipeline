@@ -95,6 +95,8 @@ Agents' own wake-ups stay stage 2's, unchanged. Jobs are idempotent and keyed by
 
 **3a. Expected results and silence.** From the handoff's operations (every feed and job with its expected time or cadence and its grace period) the app keeps expectations. When the deadline plus grace passes with no result or no new data, it raises a `silence` signal (category `operational`, or `data_quality` for a data feed). Maintenance windows (§5) suspend expectations.
 
+An expectation nobody has judged yet (nothing seen, first deadline not passed) is `not_judged`, not `ok`. The Dashboard lists the team's fired checks as the team's alerts; they still never open incidents (2026-11-03, `project_knowledge.md`).
+
 ## 4. Checks written by agents
 
 - Agents (Data Quality, Model Performance, Retraining, Deployment & Rollback) write checks as code in the team's repository, test them in the sandbox on the mounted data, and deliver them by PR, adding each to the team's scheduler (a CI workflow, a cron entry, an Airflow task, whatever the handoff recorded).
