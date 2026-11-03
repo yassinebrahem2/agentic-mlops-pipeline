@@ -17,6 +17,11 @@ export const ParserProposalCard: ApprovalCardComponent = ({
   const payload =
     proposal && "spec" in proposal.payload ? (proposal.payload as ParserPayload) : null;
 
+  const mappingCategories = (
+    payload?.spec.mapping as { categories?: Record<string, string> | null } | undefined
+  )?.categories;
+  const hasCategories = Boolean(mappingCategories && Object.keys(mappingCategories).length > 0);
+
   return (
     <ProposalShell
       approval={approval}
@@ -68,18 +73,16 @@ export const ParserProposalCard: ApprovalCardComponent = ({
                   </ul>
                 </div>
 
-                {Object.keys(payload.spec.mapping.categories).length > 0 && (
+                {hasCategories && mappingCategories && (
                   <div className="space-y-1">
                     <span className="font-medium text-muted-foreground">Categories:</span>
                     <ul className="space-y-0.5 font-mono text-[11px] text-muted-foreground">
-                      {Object.entries(payload.spec.mapping.categories).map(
-                        ([checkId, category]) => (
-                          <li key={checkId}>
-                            <span className="font-semibold text-foreground">{checkId}</span>:{" "}
-                            {category}
-                          </li>
-                        ),
-                      )}
+                      {Object.entries(mappingCategories).map(([checkId, category]) => (
+                        <li key={checkId}>
+                          <span className="font-semibold text-foreground">{checkId}</span>:{" "}
+                          {category}
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}

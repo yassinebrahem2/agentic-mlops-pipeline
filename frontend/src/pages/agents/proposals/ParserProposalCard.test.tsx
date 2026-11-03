@@ -226,4 +226,34 @@ describe("ParserProposalCard", () => {
     expect(screen.getByText("null_metric")).toBeInTheDocument();
     expect(screen.getByText(/: data_quality$/)).toBeInTheDocument();
   });
+
+  it("renders safely when categories is omitted/undefined on legacy proposal", async () => {
+    const mappingWithoutCategories = { ...sampleMapping };
+    delete (mappingWithoutCategories as { categories?: unknown }).categories;
+
+    const payloadWithoutCategories = {
+      ...sampleMappingPayload,
+      spec: {
+        ...sampleMappingPayload.spec,
+        mapping: mappingWithoutCategories,
+      },
+    };
+
+    const proposalWithoutCategories: ProposalView = {
+      ...sampleMappingProposal,
+      payload: payloadWithoutCategories,
+    };
+
+    getSpy.mockImplementation(() =>
+      Promise.resolve({
+        data: proposalWithoutCategories,
+        response: new Response(JSON.stringify(proposalWithoutCategories), { status: 200 }),
+      }),
+    );
+
+    renderWithClient(<ParserProposalCard approval={baseApproval} projectId="prj_test" />);
+
+    expect(await screen.findByText("file:conn_data:logs/*.jsonl")).toBeInTheDocument();
+    expect(screen.queryByText("Categories:")).not.toBeInTheDocument();
+  });
 });
