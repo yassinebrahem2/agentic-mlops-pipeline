@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ from mlops_agents.monitoring.results.constants import (
 from mlops_agents.monitoring.results.contract import (
     ParserPayload,
     Parsers,
+    SourceKind,
 )
 from mlops_agents.monitoring.results.mapping import evaluate_mapping
 from mlops_agents.proposals.contract import (
@@ -59,6 +60,10 @@ CODE_PARSER_CONTRACT = (
 )
 
 
+class ResultsSourceProvider(Protocol):
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]: ...
+
+
 def _payload(payload: Any) -> ParserPayload:
     if isinstance(payload, ParserPayload):
         return payload
@@ -85,13 +90,26 @@ class ParserKind(ProposalCheck):
     name = PARSER_KIND
     payload_model: type[BaseModel] = ParserPayload
 
-    def __init__(self, parsers: Parsers) -> None:
+    def __init__(self, parsers: Parsers, results: ResultsSourceProvider | None = None) -> None:
         self._parsers = parsers
+        self._results = results
 
     async def check(self, project_id: str, payload: Any) -> list[str]:
         """Refusals returned at propose time before the gate."""
         p = _payload(payload)
         refusals: list[str] = []
+
+        if self._results is not None:
+            sources = await self._results.sources(project_id)
+            needs_parser_ids = [s_id for s_id, _kind, needs in sources if needs]
+            if p.spec.source_id not in needs_parser_ids:
+                if needs_parser_ids:
+                    refusals.append(
+                        f"Propose the parser for one of these source ids, exactly as written: {', '.join(needs_parser_ids)}"
+                    )
+                else:
+                    refusals.append("This project has no source that needs a parser.")
+
         if p.spec.mapping is not None:
             m = p.spec.mapping
             if "ran_at" in m.defaults:

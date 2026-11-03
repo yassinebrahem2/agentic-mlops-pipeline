@@ -34,7 +34,7 @@ function MarkdownPre({
   ...props
 }: React.ComponentProps<"pre"> & { node?: unknown }) {
   return (
-    <pre className={cn("overflow-x-auto rounded bg-muted/50 p-2", className)} {...props}>
+    <pre className={cn("my-3 overflow-x-auto rounded-lg bg-muted/50 p-3", className)} {...props}>
       <PreContext.Provider value={true}>{children}</PreContext.Provider>
     </pre>
   );
@@ -51,7 +51,7 @@ function MarkdownCode({
   }
   return (
     <code
-      className={cn("rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground", className)}
+      className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground", className)}
       {...props}
     />
   );
@@ -60,52 +60,52 @@ function MarkdownCode({
 const markdownComponents: Components = {
   h1: ({ node: _node, className, ...props }) => (
     <h1
-      className={cn("mt-3 mb-1.5 text-lg font-bold text-foreground first:mt-0", className)}
+      className={cn("mt-6 mb-3 text-2xl font-bold text-foreground first:mt-0", className)}
       {...props}
     />
   ),
   h2: ({ node: _node, className, ...props }) => (
     <h2
-      className={cn("mt-2.5 mb-1.5 text-base font-semibold text-foreground first:mt-0", className)}
+      className={cn("mt-5 mb-2.5 text-xl font-semibold text-foreground first:mt-0", className)}
       {...props}
     />
   ),
   h3: ({ node: _node, className, ...props }) => (
     <h3
-      className={cn("mt-2 mb-1 text-sm font-semibold text-foreground first:mt-0", className)}
+      className={cn("mt-4 mb-2 text-lg font-semibold text-foreground first:mt-0", className)}
       {...props}
     />
   ),
   h4: ({ node: _node, className, ...props }) => (
     <h4
-      className={cn("mt-1.5 mb-1 text-sm font-semibold text-foreground first:mt-0", className)}
+      className={cn("mt-3 mb-1.5 text-base font-semibold text-foreground first:mt-0", className)}
       {...props}
     />
   ),
   h5: ({ node: _node, className, ...props }) => (
     <h5
-      className={cn("mt-1 mb-0.5 text-xs font-semibold text-foreground first:mt-0", className)}
+      className={cn("mt-2.5 mb-1 text-sm font-semibold text-foreground first:mt-0", className)}
       {...props}
     />
   ),
   h6: ({ node: _node, className, ...props }) => (
     <h6
-      className={cn("mt-1 mb-0.5 text-xs font-medium text-muted-foreground first:mt-0", className)}
+      className={cn("mt-2 mb-1 text-xs font-semibold text-muted-foreground first:mt-0", className)}
       {...props}
     />
   ),
   p: ({ node: _node, className, ...props }) => (
-    <p className={cn("my-1.5 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
+    <p className={cn("my-3.5 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
   ),
   ul: ({ node: _node, className, ...props }) => (
     <ul
-      className={cn("my-1.5 list-disc pl-5 space-y-0.5 first:mt-0 last:mb-0", className)}
+      className={cn("my-3 list-disc pl-6 space-y-1.5 first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   ol: ({ node: _node, className, ...props }) => (
     <ol
-      className={cn("my-1.5 list-decimal pl-5 space-y-0.5 first:mt-0 last:mb-0", className)}
+      className={cn("my-3 list-decimal pl-6 space-y-1.5 first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
@@ -115,17 +115,17 @@ const markdownComponents: Components = {
   blockquote: ({ node: _node, className, ...props }) => (
     <blockquote
       className={cn(
-        "my-2 border-l-2 border-border pl-3 italic text-muted-foreground first:mt-0 last:mb-0",
+        "my-3.5 border-l-2 border-border pl-4 italic text-muted-foreground first:mt-0 last:mb-0",
         className,
       )}
       {...props}
     />
   ),
   hr: ({ node: _node, className, ...props }) => (
-    <hr className={cn("my-3 border-t border-border", className)} {...props} />
+    <hr className={cn("my-4 border-t border-border", className)} {...props} />
   ),
   table: ({ node: _node, className, ...props }) => (
-    <Table className={cn("my-2 border border-border", className)} {...props} />
+    <Table className={cn("my-4 border border-border", className)} {...props} />
   ),
   thead: ({ node: _node, className, ...props }) => <TableHeader className={className} {...props} />,
   tbody: ({ node: _node, className, ...props }) => <TableBody className={className} {...props} />,
@@ -218,7 +218,7 @@ export function MessageView({ message, sessionAgent, className }: MessageViewPro
             );
           }
           return (
-            <div key={idx} className="text-sm leading-relaxed text-foreground">
+            <div key={idx} className="text-base leading-relaxed text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                 {part.text}
               </ReactMarkdown>

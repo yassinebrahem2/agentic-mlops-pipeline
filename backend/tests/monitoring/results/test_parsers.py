@@ -1016,7 +1016,7 @@ async def test_source_derivation_preserves_needs_parser_when_merged_with_check(
     )
     service.bind_checks(FakeChecksStore())  # type: ignore[arg-type]
 
-    sources = await service._derive_sources(project_id)  # pyright: ignore[reportPrivateUsage]
+    sources = await service.sources(project_id)
     shared_src = next(s for s in sources if s[0] == "file:conn_deriv:shared/*.jsonl")
     # Crucial: needs_parser must be True, not overwritten with False!
     assert shared_src[2] is True

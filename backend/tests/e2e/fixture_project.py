@@ -483,6 +483,43 @@ def team_parser_payload(*, ran_at: datetime) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
+def agent_parser_payload(*, ran_at: datetime) -> dict[str, Any]:
+    """The proposal payload of the agent check's mapping parser."""
+    src_id = source_id("file", "checks/*.jsonl", CONNECTION_NAME)
+    mapping = ParserMapping(
+        format="jsonl",
+        fields={
+            "check_id": "check_id",
+            "ran_at": "ran_at",
+            "fired": "fired",
+            "category": "category",
+            "subject": "subject",
+        },
+        fired_when=Compare(op="eq", field="fired", value=True),
+        defaults={},
+    )
+    payload = ParserPayload(
+        spec=ParserSpec(source_id=src_id, mapping=mapping),
+        sample_input=(
+            '{"check_id": "agent-bookings-check", "ran_at": "2026-10-31T01:30:00Z", '
+            '"fired": true, "category": "data_quality", "subject": "bookings"}\n'
+        ),
+        sample_records=[
+            ResultRecord(
+                check_id=AGENT_CHECK_ID,
+                origin="team",
+                ran_at=ran_at,
+                fired=True,
+                category="data_quality",
+                subject=TABLE_BOOKINGS,
+                detail={},
+                source_ref="checks/checks.jsonl",
+            )
+        ],
+    )
+    return payload.model_dump(mode="json")
+
+
 def create_fixture_repo(path: Path, git_env: dict[str, str]) -> Path:
     """Creates a git repository with the rollback hook entry file and pipelines committed."""
     from tests.conftest import make_repo

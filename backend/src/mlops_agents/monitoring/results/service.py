@@ -209,7 +209,7 @@ class ResultsService(Results):
                 )
             await self._store.mark_delivered(project_id, exceeded, delivered_at=now)
 
-    async def _derive_sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
+    async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
         """Derives sources from the current handoff.
 
         Returns tuples of (source_id, kind, needs_parser).
@@ -246,7 +246,7 @@ class ResultsService(Results):
                         check.results.path_pattern,
                         check.results.connection,
                     )
-                    _add_source(s_id, "file", False)
+                    _add_source(s_id, "file", True)
                 elif isinstance(check.results, CiResults):
                     s_id = source_id("ci", check.results.workflow)
                     _add_source(s_id, "ci", False)
@@ -314,7 +314,7 @@ class ResultsService(Results):
         await self._deliver_undelivered_locked(project_id, now)
 
         # 2. Derive sources
-        sources = await self._derive_sources(project_id)
+        sources = await self.sources(project_id)
 
         # 3. Read every source oldest first (by last_read timestamp)
         source_states: list[tuple[str, SourceKind, bool, SourceState | None]] = []
