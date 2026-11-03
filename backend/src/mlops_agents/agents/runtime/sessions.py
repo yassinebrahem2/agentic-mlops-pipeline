@@ -182,6 +182,10 @@ class SessionManager(AgentSessions):
             else None
         )
 
+        last_stopped_reason = await self._store.last_finished_turn_stopped_reason(
+            project_id, session_id
+        )
+
         return SessionView(
             id=session_id,
             agent=agent,
@@ -189,6 +193,7 @@ class SessionManager(AgentSessions):
             messages=messages,
             last_seq=last_seq,
             current_task=current_task,
+            last_stopped_reason=last_stopped_reason,
         )
 
     async def _busy(self, project_id: str, session_id: str) -> bool:

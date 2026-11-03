@@ -107,6 +107,7 @@ class _Ending:
     status: TurnEnd | Literal["waiting"]
     error: str | None = None
     failure_notice: str | None = None
+    stopped_reason: str | None = None
 
 
 UNEXPECTED_FAILURE_TEXT = "The turn failed unexpectedly. The details are in the server log."
@@ -120,8 +121,8 @@ def _ending_of(turn_id: str, child_task: asyncio.Task[TurnOutcome]) -> _Ending:
     if error is not None:
         logger.error("Turn %s failed outside the executor", turn_id, exc_info=error)
         return _UNEXPECTED_FAILURE
-    end_status, end_error = child_task.result()
-    return _Ending(end_status, end_error)
+    end_status, end_error, stopped_reason = child_task.result()
+    return _Ending(end_status, end_error, stopped_reason=stopped_reason)
 
 
 async def _observed(call: Awaitable[None]) -> None:

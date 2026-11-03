@@ -83,7 +83,14 @@ class TurnEnds:
                 ending = await self._write_notice(
                     project_id, session_id, turn_id, hub, lock, ending
                 )
-                await self._store_end(project_id, turn_id, hub, status, ending.error)
+                await self._store_end(
+                    project_id,
+                    turn_id,
+                    hub,
+                    status,
+                    ending.error,
+                    stopped_reason=ending.stopped_reason,
+                )
             except Exception:
                 # As "disk full": the end is still recorded once more, with the writes it needs,
                 # and reported. It keeps its own status.
@@ -204,11 +211,25 @@ class TurnEnds:
         except Exception:
             logger.exception("Could not write the failure notice of turn %s", turn_id)
         try:
-            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
+            if ending.stopped_reason is not None:
+                await self._store.set_turn(
+                    project_id,
+                    turn_id,
+                    status,
+                    error=ending.error,
+                    stopped_reason=ending.stopped_reason,
+                )
+            else:
+                await self._store.set_turn(project_id, turn_id, status, error=ending.error)
         except Exception:
             logger.exception("Could not record turn %s %s", turn_id, status)
         try:
-            await hub.turn_ended(turn_id, status=status, error=ending.error)
+            await hub.turn_ended(
+                turn_id,
+                status=status,
+                error=ending.error,
+                stopped_reason=ending.stopped_reason,
+            )
         except Exception:
             logger.exception("Could not publish the end of turn %s", turn_id)
 
@@ -230,11 +251,22 @@ class TurnEnds:
         return replace(ending, failure_notice=None)
 
     async def _store_end(
-        self, project_id: str, turn_id: str, hub: SessionHub, status: TurnEnd, error: str | None
+        self,
+        project_id: str,
+        turn_id: str,
+        hub: SessionHub,
+        status: TurnEnd,
+        error: str | None,
+        stopped_reason: str | None = None,
     ) -> None:
         """Store a turn's decided end, other than interrupted, and publish it."""
-        await self._store.set_turn(project_id, turn_id, status, error=error)
-        await hub.turn_ended(turn_id, status=status, error=error)
+        if stopped_reason is not None:
+            await self._store.set_turn(
+                project_id, turn_id, status, error=error, stopped_reason=stopped_reason
+            )
+        else:
+            await self._store.set_turn(project_id, turn_id, status, error=error)
+        await hub.turn_ended(turn_id, status=status, error=error, stopped_reason=stopped_reason)
 
     async def _turn_ended(
         self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd
