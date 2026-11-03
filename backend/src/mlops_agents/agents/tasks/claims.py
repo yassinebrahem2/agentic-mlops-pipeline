@@ -42,14 +42,18 @@ async def claim_paths(
         return
 
     async with engine.begin() as conn:
+        current_agent = await conn.scalar(select(tasks.c.agent).where(tasks.c.id == task.id))
+        where_clauses = [
+            tasks.c.status.in_(("active", "in_review")),
+            tasks.c.id != task.id,
+            file_claims.c.path.in_(paths),
+        ]
+        if current_agent is not None:
+            where_clauses.append(tasks.c.agent != current_agent)
         stmt = (
             select(file_claims.c.path, tasks.c.id, tasks.c.agent)
             .join(tasks, tasks.c.id == file_claims.c.task_id)
-            .where(
-                tasks.c.status.in_(("active", "in_review")),
-                tasks.c.id != task.id,
-                file_claims.c.path.in_(paths),
-            )
+            .where(*where_clauses)
         )
         conflicts = (await conn.execute(stmt)).mappings().all()
         if conflicts:
