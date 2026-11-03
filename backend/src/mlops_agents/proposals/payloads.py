@@ -371,10 +371,19 @@ class HandoffPayload(_Strict):
         description="Project-level action commands (such as batch rerun, quarantine, or pipeline triggers) and their parameter templates."
     )
     data_roles: list[DataRole] = Field(
-        description="Mapping of data connections and tables to their roles (feature tables, training sets, inference inputs)."
+        description=(
+            "Mapping of data connections and tables to their roles ('training', "
+            "'serving_inputs', 'predictions', 'labels', 'other'). Every table used by "
+            "a model must be declared, especially predictions and labels tables so they "
+            "are never left unmapped."
+        )
     )
     tracking: list[TrackingSourceSpec] = Field(
-        description="Tracking systems (such as MLflow or GitHub Actions) and credentials used to log runs and artifacts."
+        description=(
+            "Tracking systems (such as MLflow or GitHub Actions) used to log runs and artifacts. "
+            "A tracking source holds no credentials ('auth' is 'none' or 'credential'; any secret "
+            "is entered by the human at proposal approval, never in this payload)."
+        )
     )
     pipeline: list[PipelineStage] = Field(
         description="Pipeline stages (such as data-prep, train, eval), their entry points, inputs, and outputs."

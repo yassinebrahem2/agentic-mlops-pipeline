@@ -3270,7 +3270,7 @@
             "type": "array"
           },
           "data_roles": {
-            "description": "Mapping of data connections and tables to their roles (feature tables, training sets, inference inputs).",
+            "description": "Mapping of data connections and tables to their roles ('training', 'serving_inputs', 'predictions', 'labels', 'other'). Every table used by a model must be declared, especially predictions and labels tables so they are never left unmapped.",
             "items": {
               "$ref": "#/components/schemas/DataRole"
             },
@@ -3318,7 +3318,7 @@
             "type": "array"
           },
           "tracking": {
-            "description": "Tracking systems (such as MLflow or GitHub Actions) and credentials used to log runs and artifacts.",
+            "description": "Tracking systems (such as MLflow or GitHub Actions) used to log runs and artifacts. A tracking source holds no credentials ('auth' is 'none' or 'credential'; any secret is entered by the human at proposal approval, never in this payload).",
             "items": {
               "$ref": "#/components/schemas/TrackingSourceSpec"
             },

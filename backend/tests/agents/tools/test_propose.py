@@ -128,7 +128,7 @@ async def _pending_approvals(services: Services, project_id: str, count: int = 1
 
 
 # ---------------------------------------------------------------------------
-# Unit tests on ProposeArgs and ProposeTool parsing
+# Unit tests on TypedProposeTool parsing
 # ---------------------------------------------------------------------------
 
 
@@ -1187,3 +1187,30 @@ async def test_proposal_kinds_matches_startup_registered_kinds(tmp_path: Path) -
     async with started_app(tmp_path) as app:
         services = app.state.services
         assert tuple(services.proposal_kinds.names()) == tuple(sorted(PROPOSAL_KINDS))
+
+
+def test_propose_handoff_serves_data_roles_and_tracking_descriptions() -> None:
+    from mlops_agents.agents.tools.propose import TypedProposeTool
+    from mlops_agents.proposals.contract import HANDOFF_KIND
+    from mlops_agents.proposals.payloads import HandoffPayload
+
+    kinds = ProposalKinds()
+    kinds.register(ScriptedTestKind(name=HANDOFF_KIND, payload_model=HandoffPayload))
+    tool = TypedProposeTool(kind=HANDOFF_KIND, proposals=MagicMock(), kinds=kinds)
+
+    schema = tool.schema()
+    props = schema["function"]["parameters"]["properties"]
+
+    data_roles_desc = props["data_roles"]["description"]
+    assert "training" in data_roles_desc
+    assert "serving_inputs" in data_roles_desc
+    assert "predictions" in data_roles_desc
+    assert "labels" in data_roles_desc
+    assert "other" in data_roles_desc
+    assert "feature tables" not in data_roles_desc
+    assert "unmapped" in data_roles_desc
+
+    tracking_desc = props["tracking"]["description"]
+    assert "holds no credential" in tracking_desc.lower()
+    assert "approval" in tracking_desc.lower()
+    assert "never in this payload" in tracking_desc.lower()
