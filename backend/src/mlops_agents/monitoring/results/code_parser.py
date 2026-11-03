@@ -283,6 +283,21 @@ def _parse_stdout(stdout: str, origin_ref: str, start_offset: int) -> ParseOutco
     for idx, item in enumerate(items):
         try:
             item_dict = dict(item)
+            if item_dict.get("origin") == "agent":
+                try:
+                    custom_key = item_dict.pop("source_key", None) or item_dict.pop("key", None)
+                    source_key = (
+                        str(custom_key)
+                        if custom_key is not None
+                        else f"{origin_ref}:{start_offset}:{idx}"
+                    )
+                    if not item_dict.get("source_ref"):
+                        item_dict["source_ref"] = origin_ref
+                    rec = ResultRecord.model_validate(item_dict)
+                    records.append((source_key, rec))
+                except Exception as exc:
+                    errors.append(f"Record {idx}: {exc}")
+                continue
             item_dict["origin"] = "team"
             if not item_dict.get("source_ref"):
                 item_dict["source_ref"] = origin_ref

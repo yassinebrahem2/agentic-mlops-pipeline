@@ -15,12 +15,19 @@ from mlops_agents.monitoring.incidents.contract import SignalDraft, SignalOutcom
 from mlops_agents.monitoring.results.contract import (
     ParserMapping,
     ParserSpec,
+    ResultQuery,
     SourceState,
     source_id,
 )
 from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
 from mlops_agents.proposals.contract import HandoffView
-from mlops_agents.proposals.payloads import FileResults, HandoffPayload, Operations
+from mlops_agents.proposals.payloads import (
+    Cadence,
+    CheckSpec,
+    FileResults,
+    HandoffPayload,
+    Operations,
+)
 from mlops_agents.storage.databases import Databases
 from tests.monitoring.results.conftest import FakeConnections, FakeHandoffs
 from tests.proposals.samples import handoff as sample_handoff_dict
@@ -484,3 +491,137 @@ async def test_results_service_source_state(databases: Databases, project_id: st
     assert st.source_id == s_id
     assert st.consecutive_failures == 0
     assert st.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_mixed_check_source_reread_stores_each_record_once_and_preserves_agent_origin(
+    databases: Databases,
+    project_id: str,
+    tmp_path: Path,
+) -> None:
+    events = SqliteEventLog(databases)
+    data_dir = tmp_path / "mixed_check_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "results.jsonl"
+
+    # Line 1: agent record with explicit custom source_key
+    agent_line_1 = (
+        b'{"check_id": "c1", "origin": "agent", "source_key": "agent-key-1", '
+        b'"ran_at": "2026-10-30T10:00:00Z", "fired": false, "category": "data_quality", '
+        b'"subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    # Line 2: agent record without custom source_key (key derived from rel_posix:offset)
+    agent_line_2 = (
+        b'{"check_id": "c2", "origin": "agent", '
+        b'"ran_at": "2026-10-30T10:05:00Z", "fired": true, "category": "operational", '
+        b'"subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    # Line 3: team record without origin: "agent"
+    team_line_3 = (
+        b'{"check_id": "c3", "ran_at": "2026-10-30T10:10:00Z", '
+        b'"fired": false, "category": "model_quality", "subject": "s", "detail": {}, "source_ref": "results.jsonl"}\n'
+    )
+    full_content = agent_line_1 + agent_line_2 + team_line_3
+    target.write_bytes(full_content)
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_mixed", data_dir)
+    ops = Operations(
+        scheduler=None,
+        feeds=[],
+        on_call=[],
+        checks=[
+            CheckSpec(
+                check_id="c1",
+                name="Mixed check",
+                category="data_quality",
+                cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+                timezone="UTC",
+                results=FileResults(connection="conn_mixed", path_pattern="*.jsonl"),
+            )
+        ],
+        results_location=FileResults(connection="conn_mixed", path_pattern="agent_results/*.jsonl"),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    handoffs = FakeHandoffs(
+        HandoffView(
+            proposal_id="prop_mixed",
+            version=1,
+            approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+            payload=payload,
+        )
+    )
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+    )
+
+    s_id = source_id("file", "*.jsonl", "conn_mixed")
+    now = datetime(2026, 10, 30, 10, 15, 0, tzinfo=UTC)
+
+    # 1. First collect (no parser): agent lines c1 and c2 are stored, team line c3 halts with SourceLevelError
+    # cursor is preserved at offset of c3
+    rep1 = await service.collect(project_id, now)
+    assert rep1.stored == 2
+    assert s_id in rep1.failures
+    st1 = await service.store.get_source_state(project_id, s_id)
+    assert st1 is not None
+    assert st1.cursor["files"]["results.jsonl"]["offset"] == len(agent_line_1) + len(agent_line_2)
+
+    # Verify the 2 stored records both have origin "agent"
+    stored_c1 = await service.store.query(project_id, ResultQuery(check_id="c1"))
+    assert len(stored_c1.rows) == 1
+    assert stored_c1.rows[0].origin == "agent"
+    assert stored_c1.rows[0].source_key == "agent-key-1"
+
+    stored_c2 = await service.store.query(project_id, ResultQuery(check_id="c2"))
+    assert len(stored_c2.rows) == 1
+    assert stored_c2.rows[0].origin == "agent"
+    assert stored_c2.rows[0].source_key == f"results.jsonl:{len(agent_line_1)}"
+
+    # 2. Store parser proposal for the source (resets cursor to {})
+    spec = ParserSpec(
+        source_id=s_id,
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check_id", "ran_at": "ran_at"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "operational", "subject": "s"},
+        ),
+    )
+    await service.parsers.store(project_id, spec, "prop_mixed_parser")
+    st_after = await service.store.get_source_state(project_id, s_id)
+    assert st_after is not None
+    assert st_after.cursor == {}
+
+    # 3. Second collect (with parser):
+    # c1 and c2 are recognized as agent origin, keys match earlier records -> skipped by dedup.
+    # c3 is parsed through mapping as origin "team" and inserted.
+    rep2 = await service.collect(project_id, now + timedelta(minutes=5))
+    assert rep2.stored == 1
+    assert s_id not in rep2.failures
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.cursor["files"]["results.jsonl"]["offset"] == len(full_content)
+
+    # Total rows in results table for project is 3
+    all_res = await service.store.query(project_id, ResultQuery(limit=50))
+    assert len(all_res.rows) == 3
+
+    # Check origin of all records: c1 and c2 remain agent, c3 is team
+    res_by_check = {r.check_id: r for r in all_res.rows}
+    assert res_by_check["c1"].origin == "agent"
+    assert res_by_check["c1"].source_key == "agent-key-1"
+    assert res_by_check["c2"].origin == "agent"
+    assert res_by_check["c2"].source_key == f"results.jsonl:{len(agent_line_1)}"
+    assert res_by_check["c3"].origin == "team"
+    assert res_by_check["c3"].source_key == f"results.jsonl:{len(agent_line_1) + len(agent_line_2)}"
+
+    # 4. Third collect: cursor is at EOF, 0 stored
+    rep3 = await service.collect(project_id, now + timedelta(minutes=10))
+    assert rep3.stored == 0
+    all_res3 = await service.store.query(project_id, ResultQuery(limit=50))
+    assert len(all_res3.rows) == 3
