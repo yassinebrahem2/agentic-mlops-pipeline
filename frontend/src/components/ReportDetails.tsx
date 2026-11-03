@@ -8,19 +8,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMetric as formatNumber } from "@/lib/format";
+import { formatMetric } from "@/lib/format";
 
 type ReportView = components["schemas"]["ReportView"];
 type MetricValue = components["schemas"]["MetricValue"];
 type MetricSet = components["schemas"]["MetricSet"];
 
-function formatMetric(val?: MetricValue | null): string {
+function formatMetricValue(val?: MetricValue | null): string {
   if (!val) return "-";
   const interval =
     val.ci_low != null && val.ci_high != null
-      ? ` [${formatNumber(val.ci_low)}, ${formatNumber(val.ci_high)}]`
+      ? ` [${formatMetric(val.ci_low)}, ${formatMetric(val.ci_high)}]`
       : "";
-  return `${formatNumber(val.value)}${interval} (n=${String(val.n)})`;
+  return `${formatMetric(val.value)}${interval} (n=${String(val.n)})`;
 }
 
 interface MetricsComparisonProps {
@@ -60,10 +60,10 @@ function MetricsComparison({ champion, challenger }: MetricsComparisonProps) {
                 <TableRow key={key} className="text-xs">
                   <TableCell className="py-1 font-mono">{key}</TableCell>
                   <TableCell className="py-1 font-mono text-muted-foreground">
-                    {champion ? formatMetric(champion.overall[key]) : "-"}
+                    {champion ? formatMetricValue(champion.overall[key]) : "-"}
                   </TableCell>
                   <TableCell className="py-1 font-mono font-medium text-foreground">
-                    {challenger ? formatMetric(challenger.overall[key]) : "-"}
+                    {challenger ? formatMetricValue(challenger.overall[key]) : "-"}
                   </TableCell>
                 </TableRow>
               ))}
@@ -98,10 +98,10 @@ function MetricsComparison({ champion, challenger }: MetricsComparisonProps) {
                       <TableRow key={mKey} className="text-xs">
                         <TableCell className="py-1 font-mono">{mKey}</TableCell>
                         <TableCell className="py-1 font-mono text-muted-foreground">
-                          {formatMetric(groupChamp[mKey])}
+                          {formatMetricValue(groupChamp[mKey])}
                         </TableCell>
                         <TableCell className="py-1 font-mono font-medium text-foreground">
-                          {formatMetric(groupChal[mKey])}
+                          {formatMetricValue(groupChal[mKey])}
                         </TableCell>
                       </TableRow>
                     ))}

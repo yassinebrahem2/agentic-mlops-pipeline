@@ -1,5 +1,6 @@
 import type { components } from "@/api/schema";
 import { Badge } from "@/components/ui/badge";
+import { formatMetric } from "@/lib/format";
 import type { ApprovalCardComponent } from "../ApprovalCard";
 import { ProposalShell } from "./ProposalShell";
 import { useProposal } from "./useProposal";
@@ -134,7 +135,7 @@ export const ParserProposalCard: ApprovalCardComponent = ({
                       </div>
                       {rec.value != null && (
                         <div>
-                          <span className="font-medium">Value:</span> {rec.value}
+                          <span className="font-medium">Value:</span> {formatMetric(rec.value)}
                         </div>
                       )}
                       {rec.threshold != null && (
