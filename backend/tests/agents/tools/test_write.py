@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from mlops_agents.agents.tools.base import RiskClass, ToolFailure
+from mlops_agents.agents.tools.edit import EditTool
 from mlops_agents.agents.tools.read import ReadTool
 from mlops_agents.agents.tools.write import WriteArgs, WriteTool
 from mlops_agents.paths import DataPaths
@@ -256,3 +257,35 @@ def test_safe_write_bytes_preserves_mode(tmp_path: Path) -> None:
 
     safe_write_bytes(target, worktree, b"updated")
     assert target.stat().st_mode == initial_mode
+
+
+async def test_write_then_edit_without_read_succeeds(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_write_then_edit"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Write then edit task")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    write_tool = WriteTool(service)
+    res_write = await write_tool.invoke(
+        ctx, {"file_path": "new_file.py", "content": "print('initial')\n"}
+    )
+    assert not res_write.is_error
+
+    edit_tool = EditTool(service)
+    res_edit = await edit_tool.invoke(
+        ctx, {"file_path": "new_file.py", "old_string": "initial", "new_string": "updated"}
+    )
+    assert not res_edit.is_error
+    assert (task.worktree / "new_file.py").read_text(encoding="utf-8") == "print('updated')\n"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -117,6 +118,8 @@ class WriteTool(AgentTool[WriteArgs]):
                 raise ToolFailure(str(exc)) from None
 
             safe_write_bytes(candidate, resolved_worktree, new_bytes)
+            sha256 = hashlib.sha256(new_bytes).hexdigest()
+            await self._tasks.record_read(ctx.project_id, current, rel, sha256)
             ctx.files.invalidate()
             content = cap_diff(diff_text)
             if note:
