@@ -652,7 +652,7 @@ async def build_services(
         )
     )
     proposal_kinds.register(PromotionKind(promotions))
-    proposal_kinds.register(HooksKind(hooks=hooks))
+    proposal_kinds.register(HooksKind(hooks=hooks, databases=databases))
     proposal_kinds.register(RuleKind(rules=rules, hooks=hooks))
     proposal_kinds.register(TrainingPolicyKind(training.policies_store, hooks=hooks, rules=rules))
     proposal_kinds.register(MaintenanceKind(windows=maintenance_windows))

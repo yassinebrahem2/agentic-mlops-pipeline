@@ -2,6 +2,10 @@ ARG PYTHON_VERSION=3.12
 FROM mambaorg/micromamba:1.5.10 as micromamba
 FROM python:${PYTHON_VERSION}-slim
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=micromamba /bin/micromamba /bin/micromamba
 
 ENV MAMBA_ROOT_PREFIX="/opt/conda" \

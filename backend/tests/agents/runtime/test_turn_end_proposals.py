@@ -7,6 +7,7 @@ Proposals with an approval are untouched by this draft cleanup.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock
@@ -453,15 +454,22 @@ async def test_failed_turn_leaves_preview_draft_rejected_integration(
     assert len(ended) == 1
     assert ended[0].data.status == "failed"
 
-    # Confirm the draft created in preview was rejected by TurnEnds
+    # The turn's end is published before the turn-end sweep runs, so wait for the sweep.
     assert tool.created_id is not None
-    record = await proposal_store.get(env.project_id, tool.created_id)
+    created_id = tool.created_id
+    record = await proposal_store.get(env.project_id, created_id)
+    decided_events = await event_log.history(env.project_id, types=["proposal.decided"])
+    for _ in range(100):
+        if record is not None and record.status == "rejected" and decided_events:
+            break
+        await asyncio.sleep(0.05)
+        record = await proposal_store.get(env.project_id, created_id)
+        decided_events = await event_log.history(env.project_id, types=["proposal.decided"])
     assert record is not None
     assert record.status == "rejected"
     assert record.decided_at is not None
 
     # Check event log recorded proposal.decided
-    decided_events = await event_log.history(env.project_id, types=["proposal.decided"])
     assert len(decided_events) == 1
     assert decided_events[0].payload["proposal_id"] == tool.created_id
     assert decided_events[0].payload["status"] == "rejected"
