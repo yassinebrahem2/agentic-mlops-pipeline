@@ -41,7 +41,11 @@ class BashArgs(BaseModel):
 
 class BashTool(AgentTool[BashArgs]):
     name: ClassVar[str] = "Bash"
-    description: ClassVar[str] = "Run a command in the task's Docker sandbox container."
+    description: ClassVar[str] = (
+        "Run a command in the task's Docker sandbox container. "
+        "Inside the sandbox 127.0.0.1 is the sandbox itself; reach a service on the user's machine at host.docker.internal "
+        "(needs the network grant; on Linux the service must listen on more than 127.0.0.1)."
+    )
     risk: ClassVar[RiskClass] = RiskClass.RUN
     args_model: ClassVar[type[BaseModel]] = BashArgs
 
