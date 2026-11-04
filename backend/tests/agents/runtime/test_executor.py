@@ -178,12 +178,13 @@ async def test_executor_fake_tools_on_orchestrator(
     )
     sink = RecordingSink()
 
-    end_status, error_text = await executor.run(
+    end_status, error_text, stopped_reason = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"
     assert error_text is None
+    assert stopped_reason is None
 
     # Check sink events
     assert len(sink.messages) == 2  # created=True and created=False
@@ -256,12 +257,13 @@ async def test_executor_secret_and_untracked_error_handled(
     monkeypatch.setitem(fake_openai_module.TOOL_ARGS, "Read", {"file_path": ".env"})
 
     sink = RecordingSink()
-    end_status, error_text = await executor.run(
+    end_status, error_text, stopped_reason = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"
     assert error_text is None
+    assert stopped_reason is None
     # Tool finished reported error
     assert len(sink.tools_finished) == 1
     assert sink.tools_finished[0].is_error
@@ -281,12 +283,13 @@ async def test_executor_secret_and_untracked_error_handled(
     )
     turn_id2 = await _store.add_turn(project_id, session_id, user_msg2.id, "running")
     sink2 = RecordingSink()
-    end_status2, error_text2 = await executor.run(
+    end_status2, error_text2, stopped_reason2 = await executor.run(
         project_id, session_id, "orchestrator", turn_id2, sink2, AsyncRLock()
     )
 
     assert end_status2 == "done"
     assert error_text2 is None
+    assert stopped_reason2 is None
     assert len(sink2.tools_finished) == 1
     assert sink2.tools_finished[0].is_error
 
@@ -319,11 +322,12 @@ async def test_executor_step_limit_override(
     )
 
     sink = RecordingSink()
-    end_status, _error_text = await executor.run(
+    end_status, _error_text, stopped_reason = await executor.run(
         project_id, session_id, "orchestrator", turn_id, sink, AsyncRLock()
     )
 
     assert end_status == "done"
+    assert stopped_reason == "max_steps"
     final_msg = sink.messages[-1][0]
     last_part = final_msg.parts[-1]
     assert isinstance(last_part, TextPart)

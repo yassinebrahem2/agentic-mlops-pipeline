@@ -11,8 +11,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from mlops_agents.agents.runtime.contract import TextPart, TurnEnd, TurnEnded
-from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor
+from mlops_agents.agents.runtime.contract import TextPart, TurnEnded
+from mlops_agents.agents.runtime.executor import UNEXPECTED_FAILURE_TEXT, TurnExecutor, TurnOutcome
 from mlops_agents.agents.runtime.graph import TurnSink
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.paths import DataPaths
@@ -150,7 +150,7 @@ async def _escaping_run(
     turn_id: str,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
-) -> tuple[TurnEnd, str | None]:
+) -> TurnOutcome:
     raise RuntimeError("an error that escapes the executor")
 
 
@@ -162,10 +162,10 @@ async def _self_recording_run(
     turn_id: str,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
-) -> tuple[TurnEnd, str | None]:
+) -> TurnOutcome:
     # As `fail()` and `TurnRefused` do: the executor writes its own notice, then returns failed.
     await self.record_failure(project_id, session_id, turn_id, sink, lock, "model said no")
-    return ("failed", "model said no")
+    return ("failed", "model said no", None)
 
 
 @pytest.mark.parametrize(
@@ -184,7 +184,7 @@ async def test_the_fallback_writes_no_second_failure_notice(
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
-    failing_run: Callable[..., Awaitable[tuple[TurnEnd, str | None]]],
+    failing_run: Callable[..., Awaitable[TurnOutcome]],
     notice: str,
 ) -> None:
     set_turn = SessionStore.set_turn
