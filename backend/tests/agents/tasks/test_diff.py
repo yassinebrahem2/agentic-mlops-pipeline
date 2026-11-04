@@ -63,6 +63,14 @@ async def test_staged_diff_and_cap(
     diff_with_conflict = await service.staged_diff(project_id, task)
     assert "Commit will refuse: files claimed by another task (claimed.py)." in diff_with_conflict
 
+    # Same agent, two tasks, same path: staged_diff includes the file with no "Commit will refuse" notice
+    task_same_agent = await service.start(project_id, "ses_1", "coder", "Same agent other task")
+    await service.claim(project_id, task_same_agent, ["same_agent.py"])
+    (task.worktree / "same_agent.py").write_text("same_agent_content = 1\n", encoding="utf-8")
+    diff_same_agent = await service.staged_diff(project_id, task)
+    assert "+same_agent_content = 1" in diff_same_agent
+    assert "files claimed by another task (same_agent.py)" not in diff_same_agent
+
     # Large diff capped at 30,000 characters
     (task.worktree / "large.txt").write_text("x" * 70000 + "\n", encoding="utf-8")
     large_diff = await service.staged_diff(project_id, task)

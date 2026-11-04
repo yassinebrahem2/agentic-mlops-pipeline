@@ -94,3 +94,35 @@ async def test_claim_conflict_ignores_closed_or_merged_tasks(
 
     # Now task2 can claim src/main.py
     await service.claim(project_id, task2, ["src/main.py"])
+
+
+async def test_claim_paths_same_agent_multiple_tasks_succeeds(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_same_agent"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task1 = await service.start(project_id, session_id, agent, "Task 1")
+    task2 = await service.start(project_id, session_id, agent, "Task 2")
+
+    await service.claim(project_id, task1, ["src/main.py"])
+    # Second claim for the same path by the same agent in another task succeeds
+    await service.claim(project_id, task2, ["src/main.py"])
+
+    # But another agent's claim still conflicts
+    await create_session(databases, project_id, "ses_other_agent", agent="reviewer")
+    task3 = await service.start(project_id, "ses_other_agent", "reviewer", "Task 3")
+
+    with pytest.raises(ClaimConflict) as exc_info:
+        await service.claim(project_id, task3, ["src/main.py"])
+
+    exc = exc_info.value
+    assert exc.agent == "coder"
+    assert "src/main.py is claimed by agent 'coder' in task " in str(exc)
+    assert "Use SendMessage to coordinate." in str(exc)

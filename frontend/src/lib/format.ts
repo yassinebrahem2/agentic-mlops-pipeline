@@ -47,3 +47,28 @@ export function shortCommit(sha: string | null | undefined): string | null | und
   }
   return sha.slice(0, 7);
 }
+
+const metricFormatter = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
+
+/**
+ * Formats a metric or numeric result for UI display:
+ * - 3 significant digits for decimals (e.g. 0.854, 12.3, 0.00123)
+ * - integers as integers with grouping (e.g. 1,234, 0, -5)
+ * - null/undefined/NaN/non-finite -> "–" (en-dash \u2013)
+ */
+export function formatMetric(val: number | string | undefined | null): string {
+  if (val === null || val === undefined) {
+    return "–";
+  }
+  if (typeof val === "string" && val.trim() === "") {
+    return "–";
+  }
+  const num = typeof val === "number" ? val : Number(val);
+  if (!Number.isFinite(num)) {
+    return "–";
+  }
+  if (Number.isInteger(num)) {
+    return num.toLocaleString("en-US");
+  }
+  return metricFormatter.format(num);
+}

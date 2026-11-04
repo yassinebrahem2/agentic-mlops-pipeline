@@ -15,18 +15,24 @@ const createMessage = (id: string, text: string): MessageView => ({
 });
 
 describe("MessageList stick-to-bottom", () => {
-  it("scrolls newest content into view when user is at the bottom", () => {
+  it("scrolls newest content into view when user is at the bottom without smooth scroll", () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
 
     const { rerender } = render(<MessageList messages={[createMessage("m1", "First")]} />);
     expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
 
     scrollIntoView.mockClear();
     rerender(
       <MessageList messages={[createMessage("m1", "First"), createMessage("m2", "Second")]} />,
     );
     expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
   });
 
   it("resumes following streamed text after the user returns to the bottom", () => {
@@ -48,7 +54,111 @@ describe("MessageList stick-to-bottom", () => {
     log.scrollTop = 500;
     fireEvent.scroll(log);
     rerender(<MessageList messages={[createMessage("m1", "First streamed chunk and more")]} />);
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
+    scrollIntoView.mockRestore();
+  });
+
+  it("renders at the bottom without behavior 'smooth' when switching sessions even if previously scrolled up", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { getByRole, rerender } = render(
+      <MessageList sessionAgent="agent-1" messages={[createMessage("m1", "Session 1 msg")]} />,
+    );
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
+
+    // User scrolls up in session 1
+    const log = getByRole("log", { name: "Messages" });
+    Object.defineProperties(log, {
+      scrollHeight: { value: 1000, configurable: true },
+      clientHeight: { value: 500, configurable: true },
+    });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+
+    scrollIntoView.mockClear();
+
+    // Now switch sessions (sessionAgent changes to "agent-2" with session 2 messages)
+    rerender(
+      <MessageList sessionAgent="agent-2" messages={[createMessage("m2", "Session 2 msg")]} />,
+    );
+
+    // It MUST scroll into view at the bottom, without behavior: "smooth"
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
+    scrollIntoView.mockRestore();
+  });
+
+  it("renders at the bottom on async message arrival after switching agents even if previously scrolled up", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { getByRole, rerender } = render(
+      <MessageList sessionAgent="agent-1" messages={[createMessage("m1", "Session 1 msg")]} />,
+    );
+    expect(scrollIntoView).toHaveBeenCalled();
+
+    // User scrolls up in session 1
+    const log = getByRole("log", { name: "Messages" });
+    Object.defineProperties(log, {
+      scrollHeight: { value: 1000, configurable: true },
+      clientHeight: { value: 500, configurable: true },
+    });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+
+    scrollIntoView.mockClear();
+
+    // In the real app: agent switches first (still rendering old messages before effect clears state)
+    rerender(
+      <MessageList sessionAgent="agent-2" messages={[createMessage("m1", "Session 1 msg")]} />,
+    );
+
+    // useSession clears state: messages become empty []
+    rerender(<MessageList sessionAgent="agent-2" messages={[]} />);
+
+    scrollIntoView.mockClear();
+
+    // Fetched messages for agent-2 arrive asynchronously
+    rerender(
+      <MessageList
+        sessionAgent="agent-2"
+        messages={[createMessage("m2", "Session 2 msg 1"), createMessage("m3", "Session 2 msg 2")]}
+      />,
+    );
+
+    // It MUST scroll into view at the bottom without behavior: "smooth"
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" }),
+    );
+
+    // If the user then scrolls up in session 2:
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    scrollIntoView.mockClear();
+
+    // Subsequent message arrives: should not scroll
+    rerender(
+      <MessageList
+        sessionAgent="agent-2"
+        messages={[
+          createMessage("m2", "Session 2 msg 1"),
+          createMessage("m3", "Session 2 msg 2"),
+          createMessage("m4", "Session 2 msg 3"),
+        ]}
+      />,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
     scrollIntoView.mockRestore();
   });
 

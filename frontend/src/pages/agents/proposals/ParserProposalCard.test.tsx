@@ -79,7 +79,7 @@ describe("ParserProposalCard", () => {
         origin: "team",
         ran_at: "2026-10-30T10:00:00Z",
         fired: true,
-        value: 0.6,
+        value: 0.12345678901,
         threshold: 0.5,
         category: "model_performance",
         subject: "model_churn",
@@ -161,6 +161,8 @@ describe("ParserProposalCard", () => {
     expect(screen.getByText(/metric.*loss.*val.*0.6/)).toBeInTheDocument();
     expect(screen.getByText("Sample Records")).toBeInTheDocument();
     expect(screen.getByText("loss")).toBeInTheDocument();
+    expect(screen.getByText("0.123")).toBeInTheDocument();
+    expect(screen.getByText("0.5")).toBeInTheDocument();
   });
 
   it("renders script and timeout for code parser", async () => {

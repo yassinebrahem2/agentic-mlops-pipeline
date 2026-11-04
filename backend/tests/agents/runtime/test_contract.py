@@ -20,6 +20,7 @@ from mlops_agents.agents.runtime.contract import (
     TextPart,
     ToolCallPart,
     ToolResultPart,
+    TurnEndedData,
 )
 from mlops_agents.agents.tools.base import Preview
 
@@ -176,6 +177,34 @@ def test_session_view_round_trip() -> None:
     assert restored == session
     assert len(restored.messages) == 1
     assert restored.messages[0].id == "msg_01"
+
+
+def test_session_view_last_stopped_reason_round_trip() -> None:
+    session = SessionView(
+        id="ses_01",
+        agent="orchestrator",
+        busy=False,
+        messages=[],
+        last_seq=10,
+        current_task=None,
+        last_stopped_reason="max_steps",
+    )
+    dumped = session.model_dump_json()
+    restored = SessionView.model_validate_json(dumped)
+    assert restored.last_stopped_reason == "max_steps"
+
+
+def test_turn_ended_data_carries_stopped_reason() -> None:
+    ended = TurnEndedData(
+        turn_id="trn_01",
+        status="done",
+        error=None,
+        stopped_reason="max_steps",
+    )
+    dumped = ended.model_dump_json()
+    restored = TurnEndedData.model_validate_json(dumped)
+    assert restored.stopped_reason == "max_steps"
+    assert restored.status == "done"
 
 
 class DummySessions:

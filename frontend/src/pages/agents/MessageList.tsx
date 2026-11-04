@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { MessageView } from "./MessageView";
 import type { MessageView as MessageViewType } from "./session/events";
@@ -47,9 +47,14 @@ export function MessageList({
     isAtBottomRef.current = distanceToBottom <= threshold;
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    isAtBottomRef.current = true;
+    bottomRef.current?.scrollIntoView();
+  }, [sessionAgent]);
+
+  useLayoutEffect(() => {
     if (isAtBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      bottomRef.current?.scrollIntoView();
     }
   }, [messages]);
 

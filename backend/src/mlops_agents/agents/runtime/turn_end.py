@@ -20,6 +20,7 @@ from mlops_agents.agents.runtime.waiting import (
     finish_waiting_message,
 )
 from mlops_agents.events.contract import AuditLog, EventLog
+from mlops_agents.proposals.store import ProposalStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class TurnEnds:
         approval_store: ApprovalStore,
         audit_log: AuditLog | None,
         event_log: EventLog | None,
+        proposal_store: ProposalStore | None = None,
     ) -> None:
         self._store = store
         self._executor = executor
@@ -49,6 +51,9 @@ class TurnEnds:
         self._approval_store = approval_store
         self._audit_log = audit_log
         self._event_log = event_log
+        self._proposal_store = (
+            proposal_store if proposal_store is not None else ProposalStore(self._store.databases)
+        )
 
     @shielded
     async def end(
@@ -83,7 +88,14 @@ class TurnEnds:
                 ending = await self._write_notice(
                     project_id, session_id, turn_id, hub, lock, ending
                 )
-                await self._store_end(project_id, turn_id, hub, status, ending.error)
+                await self._store_end(
+                    project_id,
+                    turn_id,
+                    hub,
+                    status,
+                    ending.error,
+                    stopped_reason=ending.stopped_reason,
+                )
             except Exception:
                 # As "disk full": the end is still recorded once more, with the writes it needs,
                 # and reported. It keeps its own status.
@@ -102,9 +114,8 @@ class TurnEnds:
         status: TurnEnd,
     ) -> None:
         """Cancel the ended turn's pending approvals (by the user for a Stop, else by the system),
-        then give a still-waiting agent message its final status. Neither raises: a sweep that
-        fails leaves its approvals decided and unsettled (the next start's repair settles them)
-        or pending (the next recovery expires them)."""
+        reject any pending proposal drafts without approval, then give a still-waiting agent message
+        its final status. None of these raises: a sweep that fails leaves its items to recovery."""
         try:
             await cancel_turn_approvals(
                 project_id,
@@ -120,6 +131,26 @@ class TurnEnds:
             )
         except Exception:
             logger.exception("Could not cancel the pending approvals of turn %s", turn_id)
+        try:
+            drafts = await self._proposal_store.list_pending_without_approval_for_turn(
+                project_id, turn_id
+            )
+            for draft in drafts:
+                await self._proposal_store.update_status(
+                    project_id, draft.id, status="rejected", expected_status="pending"
+                )
+                if self._event_log is not None:
+                    await self._event_log.record(
+                        project_id,
+                        source="system",
+                        type="proposal.decided",
+                        payload={"proposal_id": draft.id, "kind": draft.kind, "status": "rejected"},
+                        subject_id=draft.id,
+                    )
+        except Exception:
+            logger.exception(
+                "Could not reject pending proposal drafts without approval for turn %s", turn_id
+            )
         final = _WAITING_MESSAGE_ENDS.get(status)
         if final is None:
             return
@@ -204,11 +235,25 @@ class TurnEnds:
         except Exception:
             logger.exception("Could not write the failure notice of turn %s", turn_id)
         try:
-            await self._store.set_turn(project_id, turn_id, status, error=ending.error)
+            if ending.stopped_reason is not None:
+                await self._store.set_turn(
+                    project_id,
+                    turn_id,
+                    status,
+                    error=ending.error,
+                    stopped_reason=ending.stopped_reason,
+                )
+            else:
+                await self._store.set_turn(project_id, turn_id, status, error=ending.error)
         except Exception:
             logger.exception("Could not record turn %s %s", turn_id, status)
         try:
-            await hub.turn_ended(turn_id, status=status, error=ending.error)
+            await hub.turn_ended(
+                turn_id,
+                status=status,
+                error=ending.error,
+                stopped_reason=ending.stopped_reason,
+            )
         except Exception:
             logger.exception("Could not publish the end of turn %s", turn_id)
 
@@ -230,11 +275,22 @@ class TurnEnds:
         return replace(ending, failure_notice=None)
 
     async def _store_end(
-        self, project_id: str, turn_id: str, hub: SessionHub, status: TurnEnd, error: str | None
+        self,
+        project_id: str,
+        turn_id: str,
+        hub: SessionHub,
+        status: TurnEnd,
+        error: str | None,
+        stopped_reason: str | None = None,
     ) -> None:
         """Store a turn's decided end, other than interrupted, and publish it."""
-        await self._store.set_turn(project_id, turn_id, status, error=error)
-        await hub.turn_ended(turn_id, status=status, error=error)
+        if stopped_reason is not None:
+            await self._store.set_turn(
+                project_id, turn_id, status, error=error, stopped_reason=stopped_reason
+            )
+        else:
+            await self._store.set_turn(project_id, turn_id, status, error=error)
+        await hub.turn_ended(turn_id, status=status, error=error, stopped_reason=stopped_reason)
 
     async def _turn_ended(
         self, project_id: str, session_id: str, agent: str, turn_id: str, status: TurnEnd

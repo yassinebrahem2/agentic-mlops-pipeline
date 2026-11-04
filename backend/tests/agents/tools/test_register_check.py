@@ -9,6 +9,7 @@ from typing import Any, Literal, cast, get_args
 
 import pytest
 
+from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tools.base import FileAccess
 from mlops_agents.agents.tools.register_check import (
     RECORD_EXAMPLE_LABEL,
@@ -57,6 +58,14 @@ class FakeChecks:
 
     async def reconcile(self, project_id: str) -> None:
         return None
+
+
+class FakeTasks:
+    def __init__(self, tasks: list[TaskView] | None = None) -> None:
+        self.tasks = tasks or []
+
+    async def open_tasks(self, project_id: str) -> list[TaskView]:
+        return list(self.tasks)
 
 
 def _view(
@@ -310,3 +319,171 @@ async def test_register_check_output_carries_ran_at_description_and_old_wording_
     content = await _file_registration_output()
     assert "the time the result describes" not in content
     assert ran_at_desc in content
+
+
+async def test_refuses_pr_number_not_matching_calling_agents_open_tasks() -> None:
+    tasks = FakeTasks(
+        [
+            TaskView(
+                id="task_1",
+                agent="model-performance",
+                title="Add check",
+                branch="feat/check",
+                status="active",
+                review_kind="github",
+                pr_number=9,
+                pr_url="https://github.com/org/repo/pull/9",
+            ),
+            TaskView(
+                id="task_2",
+                agent="deployment",
+                title="Deploy model",
+                branch="feat/deploy",
+                status="active",
+                review_kind="github",
+                pr_number=17,
+                pr_url="https://github.com/org/repo/pull/17",
+            ),
+            TaskView(
+                id="task_3",
+                agent="model-performance",
+                title="No PR task",
+                branch="feat/nopr",
+                status="active",
+                review_kind="github",
+                pr_number=None,
+                pr_url=None,
+            ),
+        ]
+    )
+    checks = FakeChecks()
+    tool = RegisterCheck(checks, FakeHandoffs(None), tasks=tasks)
+
+    # Refuse an issue number or nonexistent PR
+    args_issue = RegisterCheckInput(
+        check_id="mp_check_1",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=1,
+    )
+    out_issue = await tool.run(CTX, args_issue)
+    assert out_issue.is_error is True
+    assert (
+        out_issue.content
+        == "pr_number must be the PR that delivers this check; open it with OpenPullRequest first"
+    )
+    assert checks.registered == []
+
+    # Refuse another agent's PR (pr_number=17 belongs to deployment, calling agent is model-performance)
+    args_other_agent = RegisterCheckInput(
+        check_id="mp_check_2",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=17,
+    )
+    out_other = await tool.run(CTX, args_other_agent)
+    assert out_other.is_error is True
+    assert (
+        out_other.content
+        == "pr_number must be the PR that delivers this check; open it with OpenPullRequest first"
+    )
+    assert checks.registered == []
+
+    # Calling agent's own open PR succeeds
+    args_own = RegisterCheckInput(
+        check_id="mp_check_3",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=9,
+    )
+    out_own = await tool.run(CTX, args_own)
+    assert out_own.is_error is False
+    assert "Registered check mp_check_3" in out_own.content
+    assert checks.registered == ["mp_check_3"]
+
+
+async def test_refuses_check_id_belonging_to_team_checks() -> None:
+    team_handoff = build_mlflow_handoff(
+        [
+            CheckSpec(
+                check_id="team_recall",
+                name="Team Recall Check",
+                category="model_performance",
+                cadence=CADENCE,
+                timezone="UTC",
+                results=MlflowResults(metric="recall", threshold=0.5, fires_when="below"),
+            )
+        ]
+    )
+    tasks = FakeTasks(
+        [
+            TaskView(
+                id="task_1",
+                agent="model-performance",
+                title="Add check",
+                branch="feat/check",
+                status="active",
+                review_kind="github",
+                pr_number=9,
+                pr_url=None,
+            )
+        ]
+    )
+    checks = FakeChecks()
+    tool = RegisterCheck(checks, FakeHandoffs(team_handoff), tasks=tasks)
+
+    # Refuse a check_id belonging to team checks
+    args_team = RegisterCheckInput(
+        check_id="team_recall",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=9,
+    )
+    out_team = await tool.run(CTX, args_team)
+    assert out_team.is_error is True
+    assert out_team.content == "this check is the team's; register only checks you deliver"
+    assert checks.registered == []
+
+    # Non-team check id succeeds
+    args_custom = RegisterCheckInput(
+        check_id="agent_recall",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=9,
+    )
+    out_custom = await tool.run(CTX, args_custom)
+    assert out_custom.is_error is False
+    assert "Registered check agent_recall" in out_custom.content
+    assert checks.registered == ["agent_recall"]
+
+
+async def test_failing_tasks_read_is_a_tool_error() -> None:
+    class _FailingTasks(FakeTasks):
+        async def open_tasks(self, project_id: str) -> list[TaskView]:
+            raise RuntimeError("tasks store unavailable")
+
+    checks = FakeChecks()
+    tool = RegisterCheck(checks, FakeHandoffs(None), tasks=_FailingTasks())
+
+    args = RegisterCheckInput(
+        check_id="mp_check",
+        category="model_performance",
+        cadence=CADENCE,
+        timezone="UTC",
+        results_location=FILE_LOCATION,
+        pr_number=9,
+    )
+    out = await tool.run(CTX, args)
+    assert out.is_error is True
+    assert "Failed to check open tasks: tasks store unavailable" in out.content
+    assert checks.registered == []
