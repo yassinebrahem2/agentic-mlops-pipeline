@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+import re
+import string
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mlops_agents.agents.approvals.authority import ActionCall
 from mlops_agents.agents.tools.base import (
     AgentTool,
     Preview,
@@ -20,6 +23,9 @@ from mlops_agents.sandbox.contract import (
     Sandbox,
     SandboxUnavailable,
 )
+
+if TYPE_CHECKING:
+    from mlops_agents.monitoring.hooks.contract import Hooks
 
 MAX_TITLE_CMD_LEN = 60
 
@@ -39,14 +45,68 @@ class BashArgs(BaseModel):
     )
 
 
+def _normalize_command_whitespace(s: str) -> str:
+    """Normalise whitespace and shell line continuations (\\ followed by newline)."""
+    s = re.sub(r"\\\r?\n", " ", s)
+    return " ".join(s.split())
+
+
 class BashTool(AgentTool[BashArgs]):
     name: ClassVar[str] = "Bash"
-    description: ClassVar[str] = "Run a command in the task's Docker sandbox container."
+    description: ClassVar[str] = (
+        "Run a command in the task's Docker sandbox container. "
+        "Inside the sandbox 127.0.0.1 is the sandbox itself; reach a service on the user's machine at host.docker.internal "
+        "(needs the network grant; on Linux the service must listen on more than 127.0.0.1)."
+    )
     risk: ClassVar[RiskClass] = RiskClass.RUN
     args_model: ClassVar[type[BaseModel]] = BashArgs
 
-    def __init__(self, sandbox: Sandbox | None = None) -> None:
+    def __init__(self, sandbox: Sandbox | None = None, hooks: Hooks | None = None) -> None:
         self._sandbox = sandbox
+        self._hooks = hooks
+
+    async def action_call(self, args: BashArgs, ctx: ToolContext) -> ActionCall | None:
+        if self._hooks is None:
+            return None
+        hooks = await self._hooks.list(ctx.project_id)
+        cmd_norm = _normalize_command_whitespace(args.command)
+        for hook in hooks:
+            if (
+                hook.status == "disabled"
+                or not hook.spec.deploys
+                or hook.spec.type != "command"
+                or hook.spec.template is None
+            ):
+                continue
+            template = re.sub(r"\\\r?\n", " ", hook.spec.template)
+            prefix_parts: list[str] = []
+            try:
+                for literal_text, field_name, _, _ in string.Formatter().parse(template):
+                    if literal_text:
+                        prefix_parts.append(literal_text)
+                    if field_name is not None:
+                        break
+            except ValueError:
+                continue
+            prefix = "".join(prefix_parts)
+            prefix_norm = _normalize_command_whitespace(prefix)
+            if not prefix_norm:
+                continue
+            if prefix_norm in cmd_norm:
+                return ActionCall(
+                    project_id=ctx.project_id,
+                    agent=ctx.agent,
+                    kind=hook.spec.kind,
+                    hook_id=hook.id,
+                    model=hook.model,
+                    incident_id=None,
+                    rule_id=None,
+                    policy_id=None,
+                    deploys=None,
+                    has_production_signal=None,
+                    team_gate_authority=None,
+                )
+        return None
 
     async def preview(self, ctx: ToolContext, args: BashArgs) -> Preview:
         cmd = args.command.strip()
@@ -80,9 +140,9 @@ class BashTool(AgentTool[BashArgs]):
             ctx.files.invalidate()
 
         if res.timed_out:
-            return ToolOutput(res.output)
+            return ToolOutput(res.output, is_error=True)
         if res.exit_code is not None and res.exit_code != 0:
             prefix = f"Command failed with exit code {res.exit_code}"
             msg = f"{prefix}:\n{res.output}" if res.output else f"{prefix}."
-            return ToolOutput(msg)
+            return ToolOutput(msg, is_error=True)
         return ToolOutput(res.output)

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mlops_agents.events.contract import AgentState
 from mlops_agents.monitoring.expectations.contract import ExpectationState
 from mlops_agents.monitoring.incidents.contract import Severity
+from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert
 from mlops_agents.proposals.payloads import PipelineEdge
 
 
@@ -48,3 +49,4 @@ class DashboardView(BaseModel):
     agents: list[AgentActivity]
     heartbeat_reachable: bool
     baseline_available: bool
+    team_alerts: list[SilentTeamAlert] = Field(default_factory=list[SilentTeamAlert])

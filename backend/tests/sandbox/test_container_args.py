@@ -6,6 +6,7 @@ from mlops_agents.agents.tools.base import TaskRef
 from mlops_agents.config import APP_NAME
 from mlops_agents.connections.contract import Mount
 from mlops_agents.sandbox.containers import (
+    build_one_shot_run_args,
     build_run_args,
     container_name,
     mounts_fingerprint,
@@ -72,6 +73,7 @@ def test_build_run_args_default_network_disabled(tmp_path: Path) -> None:
     assert "--network" in args
     net_idx = args.index("--network") + 1
     assert args[net_idx] == "none"
+    assert not any(a.startswith("--add-host") for a in args)
 
     # Environment
     env_vars = [args[i + 1] for i, v in enumerate(args) if v == "-e"]
@@ -102,8 +104,9 @@ def test_build_run_args_network_enabled_and_posix(tmp_path: Path) -> None:
     )
 
     assert "--init" in args
-    # When network=True, --network none is omitted
+    # When network=True, --network none is omitted and host-gateway mapping is present
     assert "--network" not in args
+    assert "--add-host=host.docker.internal:host-gateway" in args
     assert f"{APP_NAME}.network=true" in [args[i + 1] for i, v in enumerate(args) if v == "--label"]
 
     # When user="123:456", -u <uid>:<gid> is included
@@ -183,3 +186,43 @@ def test_build_run_args_with_mounts(tmp_path: Path) -> None:
     assert f"{APP_NAME}.mounts={expected_fp}" in [
         args_two[i + 1] for i, v in enumerate(args_two) if v == "--label"
     ]
+
+
+def test_build_run_args_host_gateway_mapping_when_network_enabled(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_123",
+        title="Test Task",
+        branch="task-branch",
+        worktree=worktree,
+        status="active",
+    )
+    args = build_run_args("prj_abc", task, "mlops-agents-env:tag", network=True, user=None)
+    assert "--add-host=host.docker.internal:host-gateway" in args
+
+
+def test_build_run_args_no_host_gateway_when_network_disabled(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    task = TaskRef(
+        id="task_123",
+        title="Test Task",
+        branch="task-branch",
+        worktree=worktree,
+        status="active",
+    )
+    args = build_run_args("prj_abc", task, "mlops-agents-env:tag", network=False, user=None)
+    assert not any(a.startswith("--add-host") for a in args)
+
+
+def test_build_one_shot_run_args_host_gateway_mapping_when_network_enabled() -> None:
+    args = build_one_shot_run_args(
+        "prj_abc", "mlops-agents-env:tag", ["python", "train.py"], network=True
+    )
+    assert "--add-host=host.docker.internal:host-gateway" in args
+
+
+def test_build_one_shot_run_args_no_host_gateway_when_network_disabled() -> None:
+    args = build_one_shot_run_args(
+        "prj_abc", "mlops-agents-env:tag", ["python", "train.py"], network=False
+    )
+    assert not any(a.startswith("--add-host") for a in args)

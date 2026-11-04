@@ -111,6 +111,12 @@ def test_bash_tool_metadata_and_schema() -> None:
     assert tool.name == "Bash"
     assert tool.risk == RiskClass.RUN
     assert "sandbox container" in tool.description.lower()
+    expected_desc = (
+        "Inside the sandbox 127.0.0.1 is the sandbox itself; "
+        "reach a service on the user's machine at host.docker.internal "
+        "(needs the network grant; on Linux the service must listen on more than 127.0.0.1)."
+    )
+    assert expected_desc in tool.description
     schema = tool.schema()
     params = schema["function"]["parameters"]
     assert "command" in params["required"]
@@ -197,11 +203,12 @@ async def test_bash_tool_successful_command(tmp_path: Path) -> None:
     assert sandbox.run_calls[0] == ("prj_1", task, "ls -la", 60)
 
 
-async def test_bash_tool_non_zero_exit_code(tmp_path: Path) -> None:
+@pytest.mark.parametrize("exit_code", [1, 2])
+async def test_bash_tool_non_zero_exit_code(tmp_path: Path, exit_code: int) -> None:
     sandbox = FakeSandbox(
         result=CommandResult(
             output="ls: cannot access 'nonexistent': No such file or directory\n",
-            exit_code=2,
+            exit_code=exit_code,
             timed_out=False,
             truncated=False,
         )
@@ -218,9 +225,35 @@ async def test_bash_tool_non_zero_exit_code(tmp_path: Path) -> None:
     ctx = make_context(tmp_path, task=task, file_access=mock_files)
 
     out = await tool.run(ctx, BashArgs(command="ls nonexistent"))
-    assert out.is_error is False
-    assert "Command failed with exit code 2:" in out.content
+    assert out.is_error is True
+    assert f"Command failed with exit code {exit_code}:" in out.content
     assert "No such file or directory" in out.content
+    assert mock_files.invalidated is True
+
+
+async def test_bash_tool_non_zero_exit_code_empty_output(tmp_path: Path) -> None:
+    sandbox = FakeSandbox(
+        result=CommandResult(
+            output="",
+            exit_code=1,
+            timed_out=False,
+            truncated=False,
+        )
+    )
+    tool = BashTool(sandbox=sandbox)
+    task = TaskRef(
+        id="tsk_1",
+        title="Task 1",
+        branch="b1",
+        worktree=tmp_path,
+        status="active",
+    )
+    mock_files = MockFileAccess(tmp_path)
+    ctx = make_context(tmp_path, task=task, file_access=mock_files)
+
+    out = await tool.run(ctx, BashArgs(command="false"))
+    assert out.is_error is True
+    assert out.content == "Command failed with exit code 1."
     assert mock_files.invalidated is True
 
 
@@ -245,7 +278,7 @@ async def test_bash_tool_timeout(tmp_path: Path) -> None:
     ctx = make_context(tmp_path, task=task, file_access=mock_files)
 
     out = await tool.run(ctx, BashArgs(command="sleep 200"))
-    assert out.is_error is False
+    assert out.is_error is True
     assert "Command took longer than 120 seconds and was stopped." in out.content
     assert mock_files.invalidated is True
 
@@ -352,9 +385,8 @@ async def test_container_operational_failure_becomes_tool_error(
     )
     task = TaskRef("tsk_container_failure", "Failure", "branch", tmp_path, "active")
     result = await BashTool(service).invoke(make_context(tmp_path, task), {"command": "ls"})
+    assert result.is_error
     if operation == "exec" and isinstance(error, TimeoutError):
-        assert not result.is_error
         assert "was stopped" in result.content
     else:
-        assert result.is_error
         assert "sandbox" in result.content.lower()
