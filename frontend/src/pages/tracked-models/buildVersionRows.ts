@@ -58,12 +58,4 @@ export function primaryMetric(handoff: HandoffView | null, modelName: string): s
   return spec ? spec.profile.primary_metric : null;
 }
 
-export function formatMetric(val: number | undefined | null): string {
-  if (val === undefined || val === null || Number.isNaN(val)) {
-    return "–";
-  }
-  if (!Number.isFinite(val)) {
-    return "–";
-  }
-  return val.toPrecision(4);
-}
+export { formatMetric } from "@/lib/format";

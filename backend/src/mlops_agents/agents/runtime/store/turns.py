@@ -42,7 +42,13 @@ class TurnsStore(StoreBase):
 
     @shielded
     async def set_turn(
-        self, project_id: str, turn_id: str, status: str, *, error: str | None = None
+        self,
+        project_id: str,
+        turn_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        stopped_reason: str | None = None,
     ) -> None:
         """Update turn status and error, setting started_at/ended_at appropriately."""
         engine = await self._databases.project(project_id)
@@ -56,6 +62,8 @@ class TurnsStore(StoreBase):
             values: dict[str, Any] = {"status": status}
             if error is not None:
                 values["error"] = error
+            if stopped_reason is not None:
+                values["stopped_reason"] = stopped_reason
 
             now = now_iso()
             if status == "running" and current["started_at"] is None:
@@ -135,3 +143,23 @@ class TurnsStore(StoreBase):
                 await conn.execute(select(turns.c.trigger_message_id).where(turns.c.id == turn_id))
             ).first()
         return None if row is None else str(row[0])
+
+    async def last_finished_turn_stopped_reason(
+        self, project_id: str, session_id: str
+    ) -> str | None:
+        """Return the stopped_reason of the latest finished turn for session_id, or None."""
+        engine = await self._databases.project(project_id)
+        query = (
+            select(turns.c.stopped_reason)
+            .where(
+                turns.c.session_id == session_id,
+                turns.c.ended_at.is_not(None),
+            )
+            .order_by(turns.c.ended_at.desc(), turns.c.created_at.desc(), turns.c.id.desc())
+            .limit(1)
+        )
+        async with engine.connect() as conn:
+            row = (await conn.execute(query)).first()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
