@@ -13,12 +13,27 @@ export interface ComposerProps {
   onSend: (text: string) => Promise<void>;
   onStop: () => Promise<void>;
   className?: string;
+  stoppedReason?: string | null;
 }
 
-export function Composer({ agentDisplayName, busy, onSend, onStop, className }: ComposerProps) {
+export function Composer({
+  agentDisplayName,
+  busy,
+  onSend,
+  onStop,
+  className,
+  stoppedReason,
+}: ComposerProps) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+
+  const stoppedMessage =
+    !busy && stoppedReason === "max_steps"
+      ? "Stopped at its step limit: send a message to continue"
+      : !busy && stoppedReason === "room_below_floor"
+        ? "Stopped: its context is full"
+        : null;
 
   const trimmed = text.trim();
   const canSend = trimmed.length > 0 && !sending;
@@ -61,6 +76,11 @@ export function Composer({ agentDisplayName, busy, onSend, onStop, className }: 
       <Label htmlFor="composer-textarea" className="sr-only">
         {labelText}
       </Label>
+      {stoppedMessage && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {stoppedMessage}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <Textarea
           id="composer-textarea"
