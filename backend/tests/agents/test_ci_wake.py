@@ -72,7 +72,9 @@ class FakeSessions:
         )
 
 
-async def get_ci_wake(databases: Databases, project_id: str, task_id: str) -> tuple[str | None, int]:
+async def get_ci_wake(
+    databases: Databases, project_id: str, task_id: str
+) -> tuple[str | None, int]:
     engine = await databases.project(project_id)
     async with engine.connect() as conn:
         row = (
