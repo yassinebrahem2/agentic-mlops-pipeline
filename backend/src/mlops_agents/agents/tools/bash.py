@@ -128,9 +128,9 @@ class BashTool(AgentTool[BashArgs]):
             ctx.files.invalidate()
 
         if res.timed_out:
-            return ToolOutput(res.output)
+            return ToolOutput(res.output, is_error=True)
         if res.exit_code is not None and res.exit_code != 0:
             prefix = f"Command failed with exit code {res.exit_code}"
             msg = f"{prefix}:\n{res.output}" if res.output else f"{prefix}."
-            return ToolOutput(msg)
+            return ToolOutput(msg, is_error=True)
         return ToolOutput(res.output)
