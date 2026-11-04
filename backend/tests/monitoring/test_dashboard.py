@@ -332,6 +332,15 @@ async def test_stage_nothing_is_known_about_is_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expectation_not_judged_yet_leaves_its_stage_unknown() -> None:
+    rig = Rig(current=payload(), states=[expectation("bookings", "not_judged")])
+
+    view = await rig.builder.build(PROJECT)
+
+    assert [s.status for s in view.stages] == ["unknown", "unknown", "unknown"]
+
+
+@pytest.mark.asyncio
 async def test_a_stored_result_on_a_stage_subject_makes_it_known() -> None:
     rig = Rig(current=payload(), states=[])
     rig.results.rows = [stored("c", 1.0, "cancel", subject="raw")]
