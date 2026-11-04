@@ -1288,3 +1288,13 @@ def test_deployment_definition_rollback_and_hook_rules() -> None:
     # propose a hook only for a command already on team's default branch, never one an open PR adds
     assert "default branch" in low
     assert "open pr adds" in low
+
+
+def test_model_performance_definition_rollback_rules() -> None:
+    defn = _load_definition("model-performance")
+    low = defn.prompt.lower()
+    # propose automatic rollback only for a model problem and only when an earlier version exists; never for drift in the input data
+    assert "automatic rollback" in low
+    assert "model problem" in low
+    assert "earlier version exists" in low
+    assert "drift in the input data" in low or "drift in input data" in low
