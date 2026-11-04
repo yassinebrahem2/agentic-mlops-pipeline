@@ -16,6 +16,8 @@ from mlops_agents.integrations.github.api import (
     unreadable,
 )
 
+PASSING_CONCLUSIONS: frozenset[str] = frozenset({"success", "neutral", "skipped"})
+
 
 class CheckRun(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -23,6 +25,8 @@ class CheckRun(BaseModel):
     name: str
     status: str
     conclusion: str | None = None
+    html_url: str | None = None
+    details_url: str | None = None
 
 
 class PullMergeDetails(BaseModel):

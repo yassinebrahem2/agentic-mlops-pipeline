@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from sqlalchemy import or_, update
+
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.agents.tasks import queries
 from mlops_agents.agents.tasks.claims import claim_paths, get_task_read_hash, record_task_read
@@ -37,6 +39,7 @@ from mlops_agents.ids import new_id
 from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import tasks
 from mlops_agents.workspace.service import WorkspaceService
 
 if TYPE_CHECKING:
@@ -294,6 +297,26 @@ class TasksService(Tasks):
     ) -> None:
         async with self._task_lock(project_id, task_id):
             await self._end_locked(project_id, task_id, status)
+
+    async def record_ci_wake(self, project_id: str, task_id: str, head_sha: str) -> int | None:
+        engine = await self._databases.project(project_id)
+        stmt = (
+            update(tasks)
+            .where(
+                tasks.c.id == task_id,
+                tasks.c.ci_wakes < 3,
+                or_(tasks.c.ci_woken_sha.is_(None), tasks.c.ci_woken_sha != head_sha),
+            )
+            .values(
+                ci_woken_sha=head_sha,
+                ci_wakes=tasks.c.ci_wakes + 1,
+            )
+            .returning(tasks.c.ci_wakes)
+        )
+        async with engine.begin() as conn:
+            res = await conn.execute(stmt)
+            row = res.one_or_none()
+            return int(row[0]) if row is not None else None
 
     async def decide_review(
         self,

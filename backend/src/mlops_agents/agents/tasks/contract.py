@@ -98,6 +98,8 @@ class Tasks(TaskWorkspaces, Protocol):
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None: ...
 
+    async def record_ci_wake(self, project_id: str, task_id: str, head_sha: str) -> int | None: ...
+
     async def decide_review(
         self,
         project_id: str,
