@@ -71,9 +71,6 @@ class PrSyncObserver:
     def bind_sessions(self, sessions: AgentSessions) -> None:
         self._sessions = sessions
 
-    def bind_workspace(self, workspace: WorkspaceService) -> None:
-        self._workspace = workspace
-
     def add_observer(self, observer: PrObserver) -> None:
         self._observers.append(observer)
 
@@ -244,10 +241,9 @@ class PrSyncObserver:
         token: str,
         repo_slug: str,
     ) -> None:
-        if task.pr_number is None:
+        if self._sessions is None:
             return
-        wakes = task.ci_wakes or 0
-        if wakes >= 3:
+        if task.pr_number is None:
             return
         try:
             merge_state = await get_pull_merge_state(self._http, token, repo_slug, task.pr_number)
@@ -261,7 +257,7 @@ class PrSyncObserver:
             return
 
         head_sha = merge_state.head_sha
-        if not head_sha or task.ci_woken_sha == head_sha:
+        if not head_sha:
             return
 
         try:
@@ -306,7 +302,7 @@ class PrSyncObserver:
                 repo_slug,
                 exc,
             )
-            main_runs = []
+            return
 
         main_failing_names = {
             r.name
@@ -317,13 +313,26 @@ class PrSyncObserver:
         if not failing_to_wake:
             return
 
+        try:
+            wake_count = await self._tasks.record_ci_wake(project_id, task.id, head_sha)
+        except Exception as exc:
+            logger.warning(
+                "PR sync could not record CI wake for task %s (sha %s): %s",
+                task.id,
+                head_sha,
+                exc,
+            )
+            return
+
+        if wake_count is None:
+            return
+
         check_lines: list[str] = []
         for r in failing_to_wake:
             link = r.details_url or r.html_url or ""
             link_str = f" ({link})" if link else ""
             check_lines.append(f"- {r.name}: {r.conclusion}{link_str}")
 
-        wake_count = (task.ci_wakes or 0) + 1
         msg_parts = [
             f"CI failed on PR #{task.pr_number} for task {task.id}:",
             *check_lines,
@@ -339,33 +348,21 @@ class PrSyncObserver:
             )
         text = "\n".join(msg_parts)
 
-        if self._sessions is not None:
-            try:
-                await self._sessions.post(
-                    project_id,
-                    task.agent,
-                    author_name="system",
-                    from_agent="system",
-                    text=text,
-                    exchange_id=None,
-                    hop=None,
-                    system=True,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "PR sync could not post CI wake message for task %s to session: %s",
-                    task.id,
-                    exc,
-                )
-                return
-
         try:
-            await self._tasks.record_ci_wake(project_id, task.id, head_sha)
+            await self._sessions.post(
+                project_id,
+                task.agent,
+                author_name="system",
+                from_agent="system",
+                text=text,
+                exchange_id=None,
+                hop=None,
+                system=True,
+            )
         except Exception as exc:
             logger.warning(
-                "PR sync could not record CI wake for task %s (sha %s): %s",
+                "PR sync could not post CI wake message for task %s to session: %s",
                 task.id,
-                head_sha,
                 exc,
             )
 

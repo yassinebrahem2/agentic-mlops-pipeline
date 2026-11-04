@@ -45,8 +45,6 @@ def task_view(row: RowMapping) -> TaskView:
         review_kind=row["review_kind"],
         pr_number=row["pr_number"],
         pr_url=row["pr_url"],
-        ci_woken_sha=row.get("ci_woken_sha", None),
-        ci_wakes=row.get("ci_wakes", 0),
     )
 
 

@@ -93,5 +93,5 @@ class FakeTasks(Tasks):
     ) -> None:
         raise NotImplementedError(_UNUSED)
 
-    async def record_ci_wake(self, project_id: str, task_id: str, head_sha: str) -> None:
+    async def record_ci_wake(self, project_id: str, task_id: str, head_sha: str) -> int | None:
         raise NotImplementedError(_UNUSED)

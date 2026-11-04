@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import httpx2
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
+from mlops_agents.agents import pr_sync
 from mlops_agents.agents.pr_sync import PrSyncObserver
 from mlops_agents.agents.tasks.service import TasksService
 from mlops_agents.agents.tools.pull_request import OpenPullRequestTool
@@ -18,6 +20,7 @@ from mlops_agents.integrations.github.git import GitRunner
 from mlops_agents.paths import DataPaths
 from mlops_agents.storage.databases import Databases
 from mlops_agents.storage.tables import integrations
+from mlops_agents.storage.tables import tasks as tasks_table
 from mlops_agents.workspace.service import WorkspaceService
 from tests.agents.tasks.helpers import FakeEventLog, cmd, create_session, settings
 from tests.agents.tools.test_pull_request import git_instead_of, make_bare_remote
@@ -67,6 +70,20 @@ class FakeSessions:
                 "system": system,
             }
         )
+
+
+async def get_ci_wake(databases: Databases, project_id: str, task_id: str) -> tuple[str | None, int]:
+    engine = await databases.project(project_id)
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                select(tasks_table.c.ci_woken_sha, tasks_table.c.ci_wakes).where(
+                    tasks_table.c.id == task_id
+                )
+            )
+        ).first()
+        assert row is not None
+        return row[0], int(row[1])
 
 
 async def setup_ci_test(
@@ -191,9 +208,9 @@ async def test_red_pr_wakes_agent_once(
         )
         assert post["text"] == expected_msg
 
-        view = await tasks.view(project_id, task.id)
-        assert view.ci_woken_sha == "sha_1"
-        assert view.ci_wakes == 1
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert woken_sha == "sha_1"
+        assert wakes == 1
 
 
 async def test_same_sha_does_not_wake_again(
@@ -242,9 +259,9 @@ async def test_same_sha_does_not_wake_again(
         await observer.sync_now(project_id)
         assert len(sessions.posts) == 1
 
-        view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 1
-        assert view.ci_woken_sha == "sha_1"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 1
+        assert woken_sha == "sha_1"
 
 
 async def test_new_red_sha_wakes_again_up_to_3(
@@ -309,9 +326,9 @@ async def test_new_red_sha_wakes_again_up_to_3(
             in sessions.posts[2]["text"]
         )
 
-        view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 3
-        assert view.ci_woken_sha == "sha_3"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 3
+        assert woken_sha == "sha_3"
 
 
 async def test_wake_capped_at_3(
@@ -366,9 +383,9 @@ async def test_wake_capped_at_3(
 
         # Still 3 posts, wakes remain 3
         assert len(sessions.posts) == 3
-        view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 3
-        assert view.ci_woken_sha == "sha_3"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 3
+        assert woken_sha == "sha_3"
 
 
 async def test_check_failing_on_default_branch_does_not_wake(
@@ -423,8 +440,10 @@ async def test_check_failing_on_default_branch_does_not_wake(
         # Should not wake because the failure is also present on default branch
         assert len(sessions.posts) == 0
         view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 0
-        assert view.ci_woken_sha is None
+        assert view.status == "in_review"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 0
+        assert woken_sha is None
 
 
 async def test_pending_runs_do_not_wake(
@@ -476,8 +495,10 @@ async def test_pending_runs_do_not_wake(
         # Should not wake because some runs are still in progress
         assert len(sessions.posts) == 0
         view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 0
-        assert view.ci_woken_sha is None
+        assert view.status == "in_review"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 0
+        assert woken_sha is None
 
 
 async def test_green_runs_do_not_wake(
@@ -532,5 +553,148 @@ async def test_green_runs_do_not_wake(
         # All conclusions in PASSING_CONCLUSIONS -> no wake
         assert len(sessions.posts) == 0
         view = await tasks.view(project_id, task.id)
-        assert view.ci_wakes == 0
-        assert view.ci_woken_sha is None
+        assert view.status == "in_review"
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 0
+        assert woken_sha is None
+
+
+async def test_concurrent_syncs_on_same_red_sha_post_once(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    with git_instead_of(tmp_path, bare):
+        observer, tasks, project_id, sessions, _ = await setup_ci_test(tmp_path, git_env)
+        session_id = "ses_1"
+        paths = DataPaths(tmp_path / "home")
+        databases = Databases(paths)
+        await create_session(databases, project_id, session_id, agent="coder")
+
+        task = await tasks.start(project_id, session_id, "coder", "Concurrent CI Task")
+        await tasks.set_review(
+            project_id,
+            task.id,
+            kind="github",
+            pr_number=10,
+            pr_url="https://github.com/test-owner/test-repo/pull/10",
+        )
+
+        fake_github.state.prs[("test-owner/test-repo", 10)] = {
+            "number": 10,
+            "title": "Concurrent CI Task",
+            "body": "Opened by coder",
+            "html_url": "https://github.com/test-owner/test-repo/pull/10",
+            "state": "open",
+            "merged": False,
+            "head": {"sha": "sha_1", "ref": "branch"},
+        }
+        fake_github.state.check_runs[("test-owner/test-repo", "sha_1")] = [
+            {
+                "name": "Backend / tests",
+                "status": "completed",
+                "conclusion": "failure",
+            }
+        ]
+
+        # Two concurrent syncs against the same red sha
+        await asyncio.gather(observer.sync_now(project_id), observer.sync_now(project_id))
+
+        assert len(sessions.posts) == 1
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 1
+        assert woken_sha == "sha_1"
+
+
+async def test_default_branch_lookup_failure_does_not_wake(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    with git_instead_of(tmp_path, bare):
+        observer, tasks, project_id, sessions, _ = await setup_ci_test(tmp_path, git_env)
+        session_id = "ses_1"
+        paths = DataPaths(tmp_path / "home")
+        databases = Databases(paths)
+        await create_session(databases, project_id, session_id, agent="coder")
+
+        task = await tasks.start(project_id, session_id, "coder", "Failing CI Task")
+        await tasks.set_review(
+            project_id,
+            task.id,
+            kind="github",
+            pr_number=10,
+            pr_url="https://github.com/test-owner/test-repo/pull/10",
+        )
+
+        fake_github.state.prs[("test-owner/test-repo", 10)] = {
+            "number": 10,
+            "title": "Failing CI Task",
+            "body": "Opened by coder",
+            "html_url": "https://github.com/test-owner/test-repo/pull/10",
+            "state": "open",
+            "merged": False,
+            "head": {"sha": "sha_1", "ref": "branch"},
+        }
+        fake_github.state.check_runs[("test-owner/test-repo", "sha_1")] = [
+            {"name": "Backend / tests", "status": "completed", "conclusion": "failure"}
+        ]
+
+        real_get_check_runs = pr_sync.get_check_runs
+
+        async def fail_main_runs(http: Any, token: str, repo: str, ref: str) -> Any:
+            if ref == "main":
+                raise RuntimeError("GitHub check runs error")
+            return await real_get_check_runs(http, token, repo, ref)
+
+        monkeypatch.setattr(pr_sync, "get_check_runs", fail_main_runs)
+
+        await observer.sync_now(project_id)
+
+        # Lookup failure on default branch causes early return without waking or recording
+        assert len(sessions.posts) == 0
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 0
+        assert woken_sha is None
+
+
+async def test_pr_with_no_check_runs_does_not_wake(
+    tmp_path: Path,
+    git_env: dict[str, str],
+    fake_github: RunningFakeGitHub,
+) -> None:
+    bare = make_bare_remote(tmp_path, git_env)
+    with git_instead_of(tmp_path, bare):
+        observer, tasks, project_id, sessions, _ = await setup_ci_test(tmp_path, git_env)
+        session_id = "ses_1"
+        paths = DataPaths(tmp_path / "home")
+        databases = Databases(paths)
+        await create_session(databases, project_id, session_id, agent="coder")
+
+        task = await tasks.start(project_id, session_id, "coder", "No CI Task")
+        await tasks.set_review(
+            project_id,
+            task.id,
+            kind="github",
+            pr_number=10,
+            pr_url="https://github.com/test-owner/test-repo/pull/10",
+        )
+
+        fake_github.state.prs[("test-owner/test-repo", 10)] = {
+            "number": 10,
+            "title": "No CI Task",
+            "state": "open",
+            "merged": False,
+            "head": {"sha": "sha_1", "ref": "branch"},
+        }
+        fake_github.state.check_runs[("test-owner/test-repo", "sha_1")] = []
+
+        await observer.sync_now(project_id)
+
+        assert len(sessions.posts) == 0
+        woken_sha, wakes = await get_ci_wake(databases, project_id, task.id)
+        assert wakes == 0
+        assert woken_sha is None
