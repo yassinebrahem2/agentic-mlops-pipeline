@@ -26,8 +26,16 @@ export function AtRiskList({ items }: { items: Dashboard["at_risk"] }) {
                   {item.next_deadline ? `, expected by ${formatTime(item.next_deadline)}` : ""}
                 </p>
               </div>
-              <Badge variant={item.status === "due" ? "outline" : "destructive"}>
-                {item.status}
+              <Badge
+                variant={
+                  item.status === "not_judged"
+                    ? "secondary"
+                    : item.status === "due"
+                      ? "outline"
+                      : "destructive"
+                }
+              >
+                {item.status === "not_judged" ? "Not judged yet" : item.status}
               </Badge>
             </li>
           ))}

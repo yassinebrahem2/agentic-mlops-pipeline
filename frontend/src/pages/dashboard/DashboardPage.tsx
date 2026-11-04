@@ -10,6 +10,7 @@ import { ModelCards } from "./ModelCards";
 import { Notices } from "./Notices";
 import { PipelineMap } from "./PipelineMap";
 import { SeverityCounts } from "./SeverityCounts";
+import { TeamAlerts } from "./TeamAlerts";
 import { useDashboard } from "./useDashboard";
 
 export function DashboardPage() {
@@ -64,6 +65,7 @@ function Dashboard({ projectId }: { projectId: string }) {
           <PipelineMap stages={view.stages} edges={view.edges} />
           <SeverityCounts counts={view.incidents_by_severity} />
           <ModelCards models={view.models} />
+          <TeamAlerts alerts={view.team_alerts} />
           <div className="grid gap-6 lg:grid-cols-2">
             <AtRiskList items={view.at_risk} />
             <AgentsList agents={view.agents} />
