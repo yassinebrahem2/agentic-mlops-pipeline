@@ -8386,6 +8386,22 @@
             "title": "Branch",
             "type": "string"
           },
+          "ci_wakes": {
+            "default": 0,
+            "title": "Ci Wakes",
+            "type": "integer"
+          },
+          "ci_woken_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Woken Sha"
+          },
           "id": {
             "title": "Id",
             "type": "string"
