@@ -293,7 +293,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "model-performance", "retraining"),
     },
     {
@@ -323,7 +323,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "data-quality", "retraining"),
     },
     {
@@ -353,7 +353,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "model-performance", "deployment"),
     },
     {
@@ -383,7 +383,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "retraining", "model-performance"),
     },
     {
@@ -436,7 +436,13 @@ TASK_3_COLUMN: dict[str, tuple[str, ...]] = {
     if OpenPullRequestTool.name in row["tools"]
 }
 TASK_4_COLUMN: dict[str, tuple[str, ...]] = {
-    "onboarding": ("ProposeConnections", "ProposeHandoff", "ProposeHooks", "ProposeParser"),
+    "onboarding": (
+        "ProposeConnections",
+        "ProposeHandoff",
+        "ProposeHooks",
+        "ProposeParser",
+        MONITORING_QUERY,
+    ),
     "data-quality": ("ProposeMaintenance", "ProposeParser"),
     "deployment": ("ProposeHooks", "ProposeRule"),
     "model-performance": ("ProposeRule",),
@@ -693,6 +699,35 @@ def test_onboarding_prompt_working_rules_and_behavior() -> None:
     assert "look in every folder" in prompt_low
     # report every step that failed in the final answer
     assert "report every step that failed" in prompt_low
+
+
+def test_onboarding_prompt_interview_and_after_approval_rules() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    defn = catalog.get("onboarding")
+    prompt = defn.prompt
+    low = prompt.lower()
+
+    # Interview: work out everything the repository, its config, its CI and (after connection approval)
+    # the data show; ask the person only what lives in people's heads.
+    assert "lives in people's heads" in low
+    assert "best reading" in low
+    assert "few questions at a time" in low
+    assert "`proposeconnections`" in low or "proposeconnections" in low
+
+    # Never invent: never fill in a value nobody gave and nothing shows.
+    assert "never fill in a value" in low
+    assert "leave it out and record a gap" in low
+
+    # After-approval parser rules: propose a parser for every results source the app lists as waiting for one,
+    # source id exactly as written, check with MonitoringQuery that results arrive, tell person what Dashboard shows.
+    assert "waiting for one" in low
+    assert "source id exactly as written" in low
+    assert f"`{MONITORING_QUERY}`" in prompt
+    assert "dashboard" in low
+
+    # Generic text only: no demo, dataset, company, or specific project names.
+    for name in ("demo-world", "hotel", "churn", "housing", "titanic", "iris", "acme"):
+        assert name not in low, f"Onboarding prompt contains specific project/demo name: '{name}'"
 
 
 def test_alert_prioritization_loads_in_catalog() -> None:
@@ -1231,3 +1266,35 @@ def test_no_definition_prompt_or_tool_names_propose_alone_or_proposal_shape() ->
             assert word in valid_propose_tools, (
                 f"{name} prompt mentions unexpected propose word '{word}'"
             )
+
+
+def test_audit_agents_have_max_steps_60() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for name in ("data-quality", "model-performance", "retraining", "deployment"):
+        defn = catalog.get(name)
+        assert defn.limits.max_steps == 60, (
+            f"{name} max_steps is {defn.limits.max_steps}, expected 60"
+        )
+
+
+def test_deployment_definition_rollback_and_hook_rules() -> None:
+    defn = _load_definition("deployment")
+    low = defn.prompt.lower()
+    # propose automatic rollback only for a model problem and only when an earlier version exists; never for drift in the input data
+    assert "automatic rollback" in low
+    assert "model problem" in low
+    assert "earlier version exists" in low
+    assert "drift in the input data" in low or "drift in input data" in low
+    # propose a hook only for a command already on team's default branch, never one an open PR adds
+    assert "default branch" in low
+    assert "open pr adds" in low
+
+
+def test_model_performance_definition_rollback_rules() -> None:
+    defn = _load_definition("model-performance")
+    low = defn.prompt.lower()
+    # propose automatic rollback only for a model problem and only when an earlier version exists; never for drift in the input data
+    assert "automatic rollback" in low
+    assert "model problem" in low
+    assert "earlier version exists" in low
+    assert "drift in the input data" in low or "drift in input data" in low
