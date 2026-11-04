@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatMetric } from "@/lib/format";
 import type { Dashboard } from "./useDashboard";
 
 export function ModelCards({ models }: Pick<Dashboard, "models">) {
@@ -27,7 +28,7 @@ export function ModelCards({ models }: Pick<Dashboard, "models">) {
                   {Object.entries(model.latest_metrics).map(([check, value]) => (
                     <div key={check} className="contents">
                       <dt className="truncate text-muted-foreground">{check}</dt>
-                      <dd className="font-mono">{value}</dd>
+                      <dd className="font-mono">{formatMetric(value)}</dd>
                     </div>
                   ))}
                 </dl>

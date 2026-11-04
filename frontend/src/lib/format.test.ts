@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatTime, shortCommit } from "./format";
+import { formatDuration, formatMetric, formatTime, shortCommit } from "./format";
 
 describe("formatDuration", () => {
   it("handles the required table cases: null, 0, 59, 60, 3665, 7260", () => {
@@ -51,5 +51,39 @@ describe("shortCommit", () => {
 
   it("handles strings shorter than 7 characters", () => {
     expect(shortCommit("abc")).toBe("abc");
+  });
+});
+
+describe("formatMetric", () => {
+  it("formats numbers to at most 3 significant digits", () => {
+    expect(formatMetric(0.8538461538461538)).toBe("0.854");
+    expect(formatMetric(12.34)).toBe("12.3");
+    expect(formatMetric(12.3)).toBe("12.3");
+    expect(formatMetric(0.001234)).toBe("0.00123");
+    expect(formatMetric(0.001236)).toBe("0.00124");
+    expect(formatMetric(0.85)).toBe("0.85");
+  });
+
+  it("formats integers as integers with grouping", () => {
+    expect(formatMetric(1234)).toBe("1,234");
+    expect(formatMetric(0)).toBe("0");
+    expect(formatMetric(-5)).toBe("-5");
+    expect(formatMetric(1000000)).toBe("1,000,000");
+  });
+
+  it("handles string numbers", () => {
+    expect(formatMetric("0.8538461538461538")).toBe("0.854");
+    expect(formatMetric("1234")).toBe("1,234");
+  });
+
+  it("returns en-dash for null, undefined, NaN, infinity, and empty string", () => {
+    expect(formatMetric(null)).toBe("–");
+    expect(formatMetric(undefined)).toBe("–");
+    expect(formatMetric(Number.NaN)).toBe("–");
+    expect(formatMetric(Number.POSITIVE_INFINITY)).toBe("–");
+    expect(formatMetric(Number.NEGATIVE_INFINITY)).toBe("–");
+    expect(formatMetric("")).toBe("–");
+    expect(formatMetric("   ")).toBe("–");
+    expect(formatMetric("not-a-number")).toBe("–");
   });
 });
