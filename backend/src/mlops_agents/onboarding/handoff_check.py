@@ -7,8 +7,12 @@ the payload model's and is not repeated here.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+from pathlib import PurePosixPath
+from typing import Final
 
-from mlops_agents.proposals.payloads import DataFeedRef, FileResults, HandoffPayload
+from mlops_agents.proposals.payloads import DataFeedRef, FileResults, HandoffPayload, JobFeedRef
+
+VALID_JOB_FEED_EXTENSIONS: Final = {".jsonl", ".json", ".csv", ".log"}
 
 
 def table_references(payload: HandoffPayload) -> list[tuple[str, str, str]]:
@@ -59,4 +63,33 @@ def check(
     for part, connection in _file_references(payload):
         if connection not in connections:
             problems.append(f"{part}: needs the connection {connection} first")
+
+    for feed in payload.operations.feeds:
+        if feed.kind == "job" and isinstance(feed.ref, JobFeedRef) and feed.ref.file is not None:
+            ext = PurePosixPath(feed.ref.file.path_pattern).suffix.lower()
+            if ext not in VALID_JOB_FEED_EXTENSIONS:
+                problems.append(
+                    f"feed {feed.name}: a job feed reads result lines; "
+                    "for a table that arrives each day use a data feed (connection, table)"
+                )
+
+    if isinstance(payload.operations.results_location, FileResults):
+        loc = payload.operations.results_location
+        loc_pattern = loc.path_pattern.strip("/")
+        for check_spec in payload.operations.checks:
+            if (
+                isinstance(check_spec.results, FileResults)
+                and check_spec.results.connection == loc.connection
+            ):
+                check_pattern = check_spec.results.path_pattern.strip("/")
+                check_parent = str(PurePosixPath(check_pattern).parent)
+                if check_pattern == loc_pattern or (
+                    check_parent != "." and check_parent == loc_pattern.rstrip("/*")
+                ):
+                    problems.append(
+                        "the results location is where the agents' own checks write; "
+                        "the team's results are read through their checks' sources"
+                    )
+                    break
+
     return problems

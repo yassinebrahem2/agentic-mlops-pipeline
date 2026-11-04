@@ -35,7 +35,7 @@ from tests.onboarding.handoff_env import (
     payload,
 )
 from tests.onboarding.kickoff_env import all_idle, handoff_messages
-from tests.proposals.samples import handoff
+from tests.proposals.samples import handoff, job_feed
 from tests.tracking.conftest import FakeHandoffs
 
 ALL_PARTS = ["handoff", "tracking:0", "tracking:1", "network", "level", "sync", "event", "kickoff"]
@@ -131,7 +131,7 @@ def test_warnings_name_an_unauthenticated_tracker_with_network_on(
     henv: HandoffEnv, tracking: list[dict[str, Any]], network: bool, warned: bool
 ) -> None:
     found = henv.kind().warnings(payload("http://x", tracking=tracking, grants=_grants(network)))
-    assert found == ([NETWORK_WARNING] if warned else [])
+    assert (NETWORK_WARNING in found) is warned
     if warned:
         assert "autonomous" in NETWORK_WARNING and "bypass" in NETWORK_WARNING
         assert "audit" in NETWORK_WARNING
@@ -160,9 +160,106 @@ def test_warnings_name_each_mistyped_on_call_contact(henv: HandoffEnv) -> None:
         },
     ]
     found = henv.kind().warnings(HandoffPayload.model_validate(base))
-    assert len(found) == 2
-    assert "Dana" in found[0] and "email" in found[0] and "dana-at-acme" not in found[0]
-    assert "Eli" in found[1] and "discord" in found[1]
+    contacts_found = [w for w in found if "contact" in w]
+    assert len(contacts_found) == 2
+    assert (
+        "Dana" in contacts_found[0]
+        and "email" in contacts_found[0]
+        and "dana-at-acme" not in contacts_found[0]
+    )
+    assert "Eli" in contacts_found[1] and "discord" in contacts_found[1]
+
+
+# Propose-time check (ProposalCheck)
+
+
+async def test_check_refuses_job_feed_on_parquet(henv: HandoffEnv) -> None:
+    bad_feed = job_feed(
+        name="daily-scoring",
+        ref={
+            "ci_workflow": None,
+            "file": {"connection": "hotel", "path_pattern": "bookings/*.parquet"},
+        },
+    )
+    bad_payload = payload("http://x", operations={**handoff()["operations"], "feeds": [bad_feed]})
+    refusals = await henv.kind().check(henv.project_id, bad_payload)
+    assert any(
+        "feed daily-scoring: a job feed reads result lines; for a table that arrives each day use a data feed (connection, table)"
+        in r
+        for r in refusals
+    )
+
+
+async def test_check_refuses_results_location_equal_to_team_checks_folder(henv: HandoffEnv) -> None:
+    bad_ops = {
+        **handoff()["operations"],
+        "results_location": {"connection": "hotel", "path_pattern": "dq/*.json"},
+    }
+    bad_payload = payload("http://x", operations=bad_ops)
+    refusals = await henv.kind().check(henv.project_id, bad_payload)
+    assert any(
+        "the results location is where the agents' own checks write; the team's results are read through their checks' sources"
+        in r
+        for r in refusals
+    )
+
+
+async def test_check_validates_connections_and_tables_at_propose_time(henv: HandoffEnv) -> None:
+    base = payload("http://x").model_dump(mode="json")
+    missing_conn = HandoffPayload.model_validate(
+        {
+            **base,
+            "models": [],
+            "data_roles": [
+                {
+                    "connection": "nowhere",
+                    "table": "bookings",
+                    "role": "other",
+                    "id_column": None,
+                    "time_column": None,
+                }
+            ],
+        }
+    )
+    refusals = await henv.kind().check(henv.project_id, missing_conn)
+    assert any("needs the connection nowhere first" in r for r in refusals)
+
+    missing_table = HandoffPayload.model_validate(
+        {
+            **base,
+            "models": [],
+            "data_roles": [
+                {
+                    "connection": "hotel",
+                    "table": "nonexistent",
+                    "role": "other",
+                    "id_column": None,
+                    "time_column": None,
+                }
+            ],
+        }
+    )
+    refusals = await henv.kind().check(henv.project_id, missing_table)
+    assert any("the connection hotel has no table nonexistent" in r for r in refusals)
+
+
+async def test_check_valid_handoff_returns_no_refusals(henv: HandoffEnv) -> None:
+    valid = payload("http://x")
+    refusals = await henv.kind().check(henv.project_id, valid)
+    assert refusals == []
+
+
+def test_warnings_include_unmonitored_stage_warning(henv: HandoffEnv) -> None:
+    found = henv.kind().warnings(payload("http://x"))
+    assert "pipeline stage 'prepare': no feed, check, model or data role can report on it" in found
+    assert "pipeline stage 'train': no feed, check, model or data role can report on it" in found
+
+    monitored_pipeline = [
+        {"name": "scoring", "entry": "score.py", "inputs": ["bookings"], "outputs": ["predictions"]}
+    ]
+    monitored = payload("http://x", pipeline=monitored_pipeline, edges=[])
+    stage_warnings = [w for w in henv.kind().warnings(monitored) if "pipeline stage" in w]
+    assert stage_warnings == []
 
 
 # Apply

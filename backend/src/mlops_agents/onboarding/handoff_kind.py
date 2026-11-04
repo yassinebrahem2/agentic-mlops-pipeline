@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Final
+from typing import Any, Final
 
 from pydantic import BaseModel
 
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.connections.contract import Connections
 from mlops_agents.credentials.project_secrets import ProjectSecrets
+from mlops_agents.errors import DomainError
 from mlops_agents.events.contract import EventLog
 from mlops_agents.notifications.constants import contact_problems
 from mlops_agents.onboarding import handoff_parts as part
+from mlops_agents.onboarding.handoff_check import check, table_references
 from mlops_agents.onboarding.handoff_parts import KickoffStarter, NetworkSetting
 from mlops_agents.onboarding.handoff_preview import render
 from mlops_agents.onboarding.kinds_common import PROJECT_KEY, Parts, SecretValues
-from mlops_agents.proposals.contract import HANDOFF_KIND, ApplyResult, CredentialSlot, Handoffs
-from mlops_agents.proposals.payloads import HandoffPayload, TrackingSourceSpec
+from mlops_agents.proposals.contract import (
+    HANDOFF_KIND,
+    ApplyResult,
+    CredentialSlot,
+    Handoffs,
+    ProposalCheck,
+)
+from mlops_agents.proposals.payloads import DataFeedRef, HandoffPayload, TrackingSourceSpec
 from mlops_agents.storage.databases import Databases
 from mlops_agents.tracking.contract import MlflowSettings, Tracking
 
@@ -30,10 +38,12 @@ NETWORK_WARNING: Final = (
 KICKOFF_NOT_STARTED: Final = "not started: the handoff was not stored"
 
 
-def _payload(payload: BaseModel) -> HandoffPayload:
-    if not isinstance(payload, HandoffPayload):
+def _payload(payload: Any) -> HandoffPayload:
+    if isinstance(payload, HandoffPayload):
+        return payload
+    if isinstance(payload, BaseModel):
         raise TypeError(f"the handoff kind got a {type(payload).__name__}")
-    return payload
+    return HandoffPayload.model_validate(payload)
 
 
 def _slot_label(spec: TrackingSourceSpec) -> str:
@@ -42,7 +52,7 @@ def _slot_label(spec: TrackingSourceSpec) -> str:
     return f"{spec.type} credential for {where}"
 
 
-class HandoffKind:
+class HandoffKind(ProposalCheck):
     name = HANDOFF_KIND
     payload_model: type[BaseModel] = HandoffPayload
 
@@ -72,6 +82,19 @@ class HandoffKind:
     def key(self, payload: BaseModel) -> str:
         return PROJECT_KEY
 
+    async def check(self, project_id: str, payload: Any) -> list[str]:
+        handoff = _payload(payload)
+        ids = {view.name: view.id for view in await self._connections.list(project_id)}
+        tables: dict[str, list[str] | str] = {}
+        for name in sorted({conn for _, conn, _ in table_references(handoff) if conn in ids}):
+            try:
+                tables[name] = [
+                    t.name for t in await self._connections.tables(project_id, ids[name])
+                ]
+            except DomainError as exc:
+                tables[name] = exc.message
+        return check(handoff, ids.keys(), tables)
+
     def preview(self, payload: BaseModel) -> Preview:
         """Pure and cheap: the renderer the kickoff uses too."""
         return Preview(kind="text", title="Handoff", body=render(_payload(payload)))
@@ -81,8 +104,34 @@ class HandoffKind:
         # A github_actions source is always auth "none" and uses the app's GitHub login.
         open_tracker = any(s.type == "mlflow" and s.auth == "none" for s in handoff.tracking)
         found = [NETWORK_WARNING] if open_tracker and handoff.grants.network else []
+
+        reporters: set[str] = set()
+        for feed in handoff.operations.feeds:
+            reporters.add(feed.name)
+            if isinstance(feed.ref, DataFeedRef):
+                reporters.add(feed.ref.table)
+        for check_spec in handoff.operations.checks:
+            reporters.add(check_spec.check_id)
+            reporters.add(check_spec.name)
+        for model_spec in handoff.models:
+            reporters.add(model_spec.name)
+            if model_spec.predictions is not None:
+                reporters.add(model_spec.predictions.table)
+            if model_spec.labels is not None:
+                reporters.add(model_spec.labels.table)
+        for role in handoff.data_roles:
+            reporters.add(role.role)
+            reporters.add(role.table)
+
+        stage_warnings: list[str] = []
+        for stage in handoff.pipeline:
+            if not ({stage.name, *stage.inputs, *stage.outputs} & reporters):
+                stage_warnings.append(
+                    f"pipeline stage '{stage.name}': no feed, check, model or data role can report on it"
+                )
+
         # Shown before approval, where it can still be fixed; the seeder skips these contacts.
-        return found + contact_problems(handoff.operations.on_call)
+        return found + contact_problems(handoff.operations.on_call) + stage_warnings
 
     def credentials_needed(self, payload: BaseModel) -> list[CredentialSlot]:
         return [

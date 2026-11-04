@@ -145,7 +145,8 @@ async def _onboard(
 ) -> None:
     await _send(http, project_id, f"{DATA_PATH_KEY}{folder}\n{MLFLOW_URL_KEY}{mlflow_url}")
     await _decide(http, project_id, CONNECTIONS_KIND, approve=approve)
-    await _decide(http, project_id, HANDOFF_KIND, approve=approve)
+    if approve:
+        await _decide(http, project_id, HANDOFF_KIND, approve=approve)
 
 
 async def _get(http: httpx2.AsyncClient, path: str) -> Any:
@@ -279,7 +280,7 @@ async def test_rejecting_the_proposals_creates_nothing(
         await _use_fake_models(services, fake_openai)
         project_id = await add_local_project(app, tmp_path, git_env)
 
-        # A rejected connection is still a step: the fake goes on to the handoff, rejected too.
+        # A rejected connection is still a step: the fake goes on to the handoff, refused at propose time.
         await _onboard(http, project_id, folder, mlflow.base_url, approve=False)
         await _replies(http, project_id, ONBOARDING_COMPLETE, 1)
 
