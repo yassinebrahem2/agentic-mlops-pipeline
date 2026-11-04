@@ -22,6 +22,7 @@ from mlops_agents.monitoring.incidents.contract import (
     stages_of,
 )
 from mlops_agents.monitoring.results.contract import ResultQuery, StoredResult
+from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.tracking.contract import ModelSummary, Page, TrackingQuery
@@ -63,6 +64,7 @@ class _ResultReader(Protocol):
 
 class _BaselineReader(Protocol):
     async def available(self, project_id: str) -> bool: ...
+    async def silent_alerts(self, project_id: str) -> list[SilentTeamAlert]: ...
 
 
 class _StatusReader(Protocol):
@@ -96,6 +98,8 @@ class DashboardBuilder:
         payload = handoff.payload if handoff is not None else None
         active = await self._active_incidents(project_id)
         states = await self._expectations.states(project_id)
+        alerts = await self._baseline.silent_alerts(project_id)
+        team_alerts = sorted(alerts, key=lambda a: a.ran_at, reverse=True)[:10]
         return DashboardView(
             stages=await self._stages(project_id, payload, active, states),
             edges=payload.edges if payload is not None else [],
@@ -110,6 +114,7 @@ class DashboardBuilder:
             ],
             heartbeat_reachable=self._mode is RunMode.SERVER,
             baseline_available=await self._baseline.available(project_id),
+            team_alerts=team_alerts,
         )
 
     async def _active_incidents(self, project_id: str) -> list[IncidentView]:

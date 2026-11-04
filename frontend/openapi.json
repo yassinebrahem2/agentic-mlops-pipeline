@@ -1696,6 +1696,13 @@
             },
             "title": "Stages",
             "type": "array"
+          },
+          "team_alerts": {
+            "items": {
+              "$ref": "#/components/schemas/SilentTeamAlert"
+            },
+            "title": "Team Alerts",
+            "type": "array"
           }
         },
         "required": [
@@ -2874,7 +2881,8 @@
               "late",
               "silent",
               "suspended",
-              "pending_pr"
+              "pending_pr",
+              "not_judged"
             ],
             "title": "Status",
             "type": "string"
