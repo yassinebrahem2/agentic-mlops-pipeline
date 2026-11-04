@@ -96,6 +96,8 @@ class TaskView(BaseModel):
     review_kind: Literal["github", "local"] | None
     pr_number: int | None
     pr_url: str | None
+    ci_woken_sha: str | None = None
+    ci_wakes: int = 0
 
 
 class SessionView(BaseModel):

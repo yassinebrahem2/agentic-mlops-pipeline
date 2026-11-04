@@ -36,7 +36,8 @@ class OpenPullRequestArgs(BaseModel):
 class OpenPullRequestTool(AgentTool[OpenPullRequestArgs]):
     name: ClassVar[str] = "OpenPullRequest"
     description: ClassVar[str] = (
-        "Open a pull request on GitHub or create a local review for the current task."
+        "Open a pull request on GitHub or create a local review for the current task. "
+        "CI runs on the PR; if it fails, you are woken with the failing checks."
     )
     risk: ClassVar[RiskClass] = RiskClass.GITHUB
     args_model: ClassVar[type[BaseModel]] = OpenPullRequestArgs

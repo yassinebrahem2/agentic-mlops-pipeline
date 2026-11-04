@@ -92,3 +92,6 @@ class FakeTasks(Tasks):
         self, project_id: str, task_id: str, status: Literal["merged", "closed", "discarded"]
     ) -> None:
         raise NotImplementedError(_UNUSED)
+
+    async def record_ci_wake(self, project_id: str, task_id: str, head_sha: str) -> None:
+        raise NotImplementedError(_UNUSED)

@@ -17,6 +17,7 @@ from mlops_agents.agents.tools.base import (
 )
 from mlops_agents.errors import DomainError
 from mlops_agents.integrations.github.merge import (
+    PASSING_CONCLUSIONS,
     PullMergeDetails,
     get_check_runs,
     get_pull_merge_state,
@@ -32,8 +33,6 @@ if TYPE_CHECKING:
     from mlops_agents.events.contract import EventLog
     from mlops_agents.integrations.github.auth import GitHubAuth
     from mlops_agents.promotion.contract import ProtectionSurfaces
-
-PASSING_CONCLUSIONS: frozenset[str] = frozenset({"success", "neutral", "skipped"})
 
 
 class MergePullRequestArgs(BaseModel):

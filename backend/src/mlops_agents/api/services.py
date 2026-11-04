@@ -483,7 +483,7 @@ async def build_services(
     )
 
     surfaces = GithubProtectionSurfaces(hooks, http, github, tasks)
-    pr_sync = PrSyncObserver(tasks, github, http, events)
+    pr_sync = PrSyncObserver(tasks, github, http, events, workspace=workspace)
     stack.push_async_callback(pr_sync.close)
     closed_unmerged = ClosedUnmergedObserver(knowledge, http, github, tasks)
     pr_sync.add_observer(closed_unmerged)
@@ -633,6 +633,7 @@ async def build_services(
     status_board.bind_sessions(sessions)
     wakeups.bind(sessions)
     waker.bind(sessions)
+    pr_sync.bind_sessions(sessions)
     stack.push_async_callback(sessions.close)
     kickoff = Kickoff(databases, sessions, handoffs)
     # Before recovery: it re-applies an approved proposal that has no result yet.
