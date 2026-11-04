@@ -293,7 +293,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "model-performance", "retraining"),
     },
     {
@@ -323,7 +323,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "data-quality", "retraining"),
     },
     {
@@ -353,7 +353,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("data_summary", "tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "model-performance", "deployment"),
     },
     {
@@ -383,7 +383,7 @@ STAGE_3_TABLE: list[dict[str, Any]] = [
             "ReadHandoff",
         ),
         "context_hooks": ("tracking_summary", "knowledge"),
-        "max_steps": 25,
+        "max_steps": 60,
         "can_message": ("orchestrator", "retraining", "model-performance"),
     },
     {
@@ -1266,3 +1266,25 @@ def test_no_definition_prompt_or_tool_names_propose_alone_or_proposal_shape() ->
             assert word in valid_propose_tools, (
                 f"{name} prompt mentions unexpected propose word '{word}'"
             )
+
+
+def test_audit_agents_have_max_steps_60() -> None:
+    catalog = AgentCatalog.load(STAGE_2_TOOLS, hook_names=STAGE_3_HOOKS)
+    for name in ("data-quality", "model-performance", "retraining", "deployment"):
+        defn = catalog.get(name)
+        assert defn.limits.max_steps == 60, (
+            f"{name} max_steps is {defn.limits.max_steps}, expected 60"
+        )
+
+
+def test_deployment_definition_rollback_and_hook_rules() -> None:
+    defn = _load_definition("deployment")
+    low = defn.prompt.lower()
+    # propose automatic rollback only for a model problem and only when an earlier version exists; never for drift in the input data
+    assert "automatic rollback" in low
+    assert "model problem" in low
+    assert "earlier version exists" in low
+    assert "drift in the input data" in low or "drift in input data" in low
+    # propose a hook only for a command already on team's default branch, never one an open PR adds
+    assert "default branch" in low
+    assert "open pr adds" in low

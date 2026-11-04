@@ -117,3 +117,19 @@ def test_each_brief_names_its_part_and_how_to_read_the_rest(agent: str, terms: l
     assert "ReadHandoff" in AUDIT_BRIEFS[agent]
     assert "re-audit" in brief  # a newer handoff starts a new kickoff
     assert set(BRIEF_SECTIONS[agent]) <= set(sections(sample_payload()))
+
+
+def test_audit_brief_holds_deliver_by_pr_and_notes_rules() -> None:
+    for agent in KICKOFF_AGENTS:
+        brief = AUDIT_BRIEFS[agent]
+        brief_low = brief.lower()
+        # deliver-by-PR rules
+        assert "RegisterCheck" in brief
+        assert "pr" in brief_low
+        assert "ci green" in brief_low
+        assert "mounted data" in brief_low
+        # notes-as-you-go rule
+        assert "after each finding, not at the end" in brief_low
+        # check open issues before opening one
+        assert "check open issues before opening one" in brief_low
+        assert "open an issue only for what you can" in brief_low

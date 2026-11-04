@@ -27,9 +27,11 @@ BRIEF_SECTIONS: Final[dict[str, tuple[str, ...]]] = {
 _HOW_TO_AUDIT: Final = (
     "Study your part first, then the rest of the handoff where it touches yours, with what you "
     "have: your context hooks, Bash with duckdb on the connections under /data, the tracking "
-    "record, the repository and the notes. Save what you learn with SaveNote. Open pull "
-    "requests or issues for fixes through your usual tools and their approvals. End with a "
-    "report: what is good, what is broken and what is missing, each with its evidence.\n"
+    "record, the repository and the notes. Save a note with SaveNote after each finding, not at "
+    "the end. A missing check is code you deliver (written, tested on the mounted data, the "
+    "team's CI green, by PR, registered with RegisterCheck naming that PR); open an issue only "
+    "for what you cannot fix in code; check open issues before opening one. End with the report: "
+    "what is good, what is broken and what is missing, each with its evidence.\n"
     "The summary above may be cut: use ReadHandoff for any part you need in full.\n"
     "If you audited an earlier handoff, re-audit what this one changes; the rest still stands."
 )
