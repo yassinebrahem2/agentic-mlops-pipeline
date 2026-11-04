@@ -19,7 +19,7 @@ from mlops_agents.integrations.github.issues import (
     create_issue,
     ensure_labels,
     get_issue,
-    search_issues,
+    list_open_issues,
 )
 from mlops_agents.storage.tables import project_settings
 
@@ -99,9 +99,18 @@ class SearchIssuesTool(AgentTool[SearchIssuesArgs]):
 
         repo_full_name = f"{ref.owner}/{ref.repo}"
         try:
-            issues = await search_issues(self._http, token, repo_full_name, query=args.query)
+            issues = await list_open_issues(self._http, token, repo_full_name, limit=300)
         except DomainError as err:
             return ToolOutput(content=str(err), is_error=True)
+
+        query = args.query.strip()
+        if query:
+            words = query.lower().split()
+            issues = [
+                issue
+                for issue in issues
+                if all(word in f"{issue.title} {issue.body or ''}".lower() for word in words)
+            ]
 
         if not issues:
             return ToolOutput(content="No open issues found.")

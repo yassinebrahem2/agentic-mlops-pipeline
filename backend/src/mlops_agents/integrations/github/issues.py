@@ -93,6 +93,73 @@ async def search_issues(
         raise unreadable() from None
 
 
+async def list_open_issues(
+    http: httpx2.AsyncClient,
+    token: str,
+    repo: str,
+    *,
+    limit: int = 300,
+) -> list[IssueSummary]:
+    """List open issues for repo, skipping pull requests (newest first, up to limit)."""
+    if limit <= 0:
+        return []
+
+    issues: list[IssueSummary] = []
+    page = 1
+    per_page = min(limit, 100)
+
+    while len(issues) < limit:
+        params: dict[str, Any] = {
+            "state": "open",
+            "sort": "created",
+            "direction": "desc",
+            "per_page": per_page,
+            "page": page,
+        }
+        response = await request(
+            http,
+            "GET",
+            f"/repos/{repo}/issues",
+            token,
+            params=params,
+            permission=PERMISSION_ISSUES_WRITE,
+        )
+        if response.status_code != 200:
+            raise DomainError(
+                "github_error", f"GitHub answered with HTTP {response.status_code}.", status=502
+            )
+        try:
+            data: object = response.json()
+            if not isinstance(data, list):
+                raise unreadable()
+            items = cast(list[object], data)
+        except (ValidationError, ValueError):
+            raise unreadable() from None
+
+        if not items:
+            break
+
+        for item in items:
+            if not isinstance(item, dict):
+                raise unreadable()
+            raw_item = cast(dict[str, Any], item)
+            if raw_item.get("pull_request") is not None:
+                continue
+            try:
+                issues.append(IssueSummary.model_validate(raw_item))
+            except ValidationError:
+                raise unreadable() from None
+            if len(issues) >= limit:
+                break
+
+        if len(items) < per_page:
+            break
+
+        page += 1
+
+    return issues
+
+
 async def create_issue(
     http: httpx2.AsyncClient,
     token: str,
