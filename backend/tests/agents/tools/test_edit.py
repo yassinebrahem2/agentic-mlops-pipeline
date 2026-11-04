@@ -348,3 +348,74 @@ async def test_edit_non_utf8_file_is_tool_error(
     )
     assert res.is_error
     assert "not a valid UTF-8 text file" in res.content
+
+
+async def test_edit_two_edits_in_a_row_succeed(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_two_edits"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Two edits task")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    read_tool = ReadTool(service)
+    await read_tool.invoke(ctx, {"file_path": "app.py"})
+
+    tool = EditTool(service)
+    res1 = await tool.invoke(
+        ctx, {"file_path": "app.py", "old_string": "hello", "new_string": "intermediate"}
+    )
+    assert not res1.is_error
+
+    res2 = await tool.invoke(
+        ctx, {"file_path": "app.py", "old_string": "intermediate", "new_string": "universe"}
+    )
+    assert not res2.is_error
+    assert (task.worktree / "app.py").read_text(encoding="utf-8") == "print('universe')\n"
+
+
+async def test_edit_outside_change_after_first_edit_fails(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    git_env: dict[str, str],
+) -> None:
+    service, project_id = await setup_service(tmp_path, paths, databases, keystore, git_env)
+    session_id = "ses_outside_change"
+    agent = "coder"
+    await create_session(databases, project_id, session_id, agent=agent)
+
+    task = await service.start(project_id, session_id, agent, "Outside change task")
+    task_files = await service.files(project_id, task)
+    ctx = tool_context(
+        task_files, project_id=project_id, agent=agent, session_id=session_id, task=task
+    )
+
+    read_tool = ReadTool(service)
+    await read_tool.invoke(ctx, {"file_path": "app.py"})
+
+    tool = EditTool(service)
+    res1 = await tool.invoke(
+        ctx, {"file_path": "app.py", "old_string": "hello", "new_string": "intermediate"}
+    )
+    assert not res1.is_error
+
+    # Outside change between them
+    (task.worktree / "app.py").write_text("print('tampered')\n", encoding="utf-8")
+
+    res2 = await tool.invoke(
+        ctx, {"file_path": "app.py", "old_string": "intermediate", "new_string": "universe"}
+    )
+    assert res2.is_error
+    assert "app.py changed since you read it." in res2.content
