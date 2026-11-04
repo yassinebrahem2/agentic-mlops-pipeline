@@ -19,6 +19,7 @@ const STATUS_LABELS: Record<State["status"], string> = {
   silent: "Silent",
   suspended: "Suspended by a maintenance window",
   pending_pr: "Waiting for its pull request",
+  not_judged: "Not judged yet",
 };
 const KIND_LABELS: Record<State["key"]["kind"], string> = {
   feed: "Feed",
