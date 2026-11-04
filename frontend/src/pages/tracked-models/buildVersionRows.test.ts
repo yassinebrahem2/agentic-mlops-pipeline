@@ -223,11 +223,11 @@ describe("primaryMetric", () => {
 });
 
 describe("formatMetric", () => {
-  it("formats numbers to 4 significant digits", () => {
-    expect(formatMetric(0.92346)).toBe("0.9235");
-    expect(formatMetric(12.3456)).toBe("12.35");
-    expect(formatMetric(1234)).toBe("1234");
-    expect(formatMetric(0.0012344)).toBe("0.001234");
+  it("formats numbers to 3 significant digits and integers as integers", () => {
+    expect(formatMetric(0.92346)).toBe("0.923");
+    expect(formatMetric(12.3456)).toBe("12.3");
+    expect(formatMetric(1234)).toBe("1,234");
+    expect(formatMetric(0.0012344)).toBe("0.00123");
   });
 
   it("returns en-dash for undefined, null, or NaN", () => {

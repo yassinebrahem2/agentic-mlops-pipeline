@@ -395,6 +395,7 @@ function Agents({ projectId }: { projectId: string }) {
           agentName={selectedAgentName}
           agentDisplayName={selectedAgentDisplayName}
           busy={session.state?.busy ?? false}
+          stoppedReason={session.state?.last_stopped_reason}
           onSend={(text) => session.send(text)}
           onStop={() => session.stop()}
         />
