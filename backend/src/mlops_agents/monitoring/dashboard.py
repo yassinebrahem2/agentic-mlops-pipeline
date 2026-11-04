@@ -201,7 +201,9 @@ class DashboardBuilder:
             # The signal a silent or late expectation raises carries its ref as subject, so
             # the ref is matched the way incident grouping matches a signal.
             belongs = set(map_stages_of(state.key.ref, payload))
-            with_expectation |= belongs
+            # An expectation nobody has judged yet says nothing about the stage being fine.
+            if state.status != "not_judged":
+                with_expectation |= belongs
             if state.status in _LATE:
                 late |= belongs
         stages: list[StageStatus] = []
