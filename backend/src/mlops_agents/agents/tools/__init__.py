@@ -170,7 +170,7 @@ def default_registry(
             ]
         )
     if sandbox is not None:
-        tools.append(BashTool(sandbox=sandbox))
+        tools.append(BashTool(sandbox=sandbox, hooks=hooks))
     if (
         tasks is not None
         and workspace is not None

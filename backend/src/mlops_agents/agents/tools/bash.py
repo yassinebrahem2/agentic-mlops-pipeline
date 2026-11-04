@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+import string
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mlops_agents.agents.approvals.authority import ActionCall
 from mlops_agents.agents.tools.base import (
     AgentTool,
     Preview,
@@ -20,6 +22,9 @@ from mlops_agents.sandbox.contract import (
     Sandbox,
     SandboxUnavailable,
 )
+
+if TYPE_CHECKING:
+    from mlops_agents.monitoring.hooks.contract import Hooks
 
 MAX_TITLE_CMD_LEN = 60
 
@@ -45,8 +50,51 @@ class BashTool(AgentTool[BashArgs]):
     risk: ClassVar[RiskClass] = RiskClass.RUN
     args_model: ClassVar[type[BaseModel]] = BashArgs
 
-    def __init__(self, sandbox: Sandbox | None = None) -> None:
+    def __init__(self, sandbox: Sandbox | None = None, hooks: Hooks | None = None) -> None:
         self._sandbox = sandbox
+        self._hooks = hooks
+
+    async def action_call(self, args: BashArgs, ctx: ToolContext) -> ActionCall | None:
+        if self._hooks is None:
+            return None
+        hooks = await self._hooks.list(ctx.project_id)
+        cmd_norm = " ".join(args.command.split())
+        for hook in hooks:
+            if (
+                hook.status == "disabled"
+                or not hook.spec.deploys
+                or hook.spec.type != "command"
+                or hook.spec.template is None
+            ):
+                continue
+            prefix_parts: list[str] = []
+            try:
+                for literal_text, field_name, _, _ in string.Formatter().parse(hook.spec.template):
+                    if literal_text:
+                        prefix_parts.append(literal_text)
+                    if field_name is not None:
+                        break
+            except ValueError:
+                continue
+            prefix = "".join(prefix_parts)
+            prefix_norm = " ".join(prefix.split())
+            if not prefix_norm:
+                continue
+            if prefix_norm in cmd_norm:
+                return ActionCall(
+                    project_id=ctx.project_id,
+                    agent=ctx.agent,
+                    kind=hook.spec.kind,
+                    hook_id=hook.id,
+                    model=hook.model,
+                    incident_id=None,
+                    rule_id=None,
+                    policy_id=None,
+                    deploys=None,
+                    has_production_signal=None,
+                    team_gate_authority=None,
+                )
+        return None
 
     async def preview(self, ctx: ToolContext, args: BashArgs) -> Preview:
         cmd = args.command.strip()
