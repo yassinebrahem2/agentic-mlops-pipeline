@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from mlops_agents.agents.constants import cap_diff
+from mlops_agents.agents.tasks.claims import find_conflicting_paths
 from mlops_agents.agents.tasks.git import task_git
 from mlops_agents.agents.temp_files import is_generated_temp_file
 from mlops_agents.agents.tools.files import is_secret
-from mlops_agents.storage.tables import file_claims, tasks
+from mlops_agents.storage.tables import tasks
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +74,7 @@ async def staged_diff_task(
     )
 
     denylisted = [p for p in candidate_paths if is_secret(p)]
-    conflicts: list[str] = []
-    if candidate_paths:
-        async with engine.connect() as conn:
-            stmt = (
-                select(file_claims.c.path)
-                .join(tasks, tasks.c.id == file_claims.c.task_id)
-                .where(
-                    tasks.c.status.in_(("active", "in_review")),
-                    tasks.c.id != task.id,
-                    file_claims.c.path.in_(candidate_paths),
-                )
-            )
-            conflicts = [str(r) for r in (await conn.execute(stmt)).scalars().all()]
+    conflicts: list[str] = await find_conflicting_paths(engine, task.id, candidate_paths)
 
     valid_paths = [p for p in candidate_paths if p not in denylisted and p not in conflicts]
 
