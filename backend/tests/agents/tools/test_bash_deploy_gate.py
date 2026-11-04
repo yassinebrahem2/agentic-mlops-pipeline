@@ -340,3 +340,70 @@ def test_default_registry_passes_hooks_to_bash(service: HooksService) -> None:
     bash_tool = reg.get("Bash")
     assert isinstance(bash_tool, BashTool)
     assert getattr(bash_tool, "_hooks", None) is service
+
+
+@pytest.mark.asyncio
+async def test_bash_matched_to_hold_hook_cannot_loosen_bash_own_decision(
+    databases: Databases,
+    service: HooksService,
+) -> None:
+    project_id = new_id("prj")
+    spec = _spec(
+        kind="hold",
+        template="uv run hold.py --model {model}",
+        placeholders=["model"],
+        deploys=True,
+    )
+    await service.register(project_id, spec, "hold_hook", "churn", "handoff")
+
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+    tool = BashTool(hooks=service)
+
+    # At "ask" level: Bash normally asks. A hold hook with no handoff facts (deploys=None)
+    # returns allow from decide_action. But the decision must remain "ask", never loosened to allow.
+    await set_permission_level(databases, project_id, "ask")
+    call_ask = make_call(
+        tool, "call_hold_1", project_id, args=BashArgs(command="uv run hold.py --model churn")
+    )
+    decisions_ask = await gate.decide([call_ask])
+    assert decisions_ask["call_hold_1"].outcome == "ask"
+
+    # At "suggest" level: Bash normally denies. A hold hook with deploys=None returns ask from decide_action.
+    # But the decision must remain "deny", never loosened to ask.
+    await set_permission_level(databases, project_id, "suggest")
+    call_sug = make_call(
+        tool, "call_hold_2", project_id, args=BashArgs(command="uv run hold.py --model churn")
+    )
+    decisions_sug = await gate.decide([call_sug])
+    assert decisions_sug["call_hold_2"].outcome == "deny"
+
+
+@pytest.mark.asyncio
+async def test_bash_hooks_lookup_error_asks_instead_of_crashing(
+    databases: Databases,
+) -> None:
+    project_id = new_id("prj")
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+
+    class BrokenHooks:
+        async def list(self, project_id: str):
+            raise RuntimeError("Database connection lost")
+
+    tool = BashTool(hooks=BrokenHooks())  # type: ignore
+
+    # At autonomous level: normally Bash is allow. On error, it fails closed to "ask" instead of crashing.
+    await set_permission_level(databases, project_id, "autonomous")
+    call_auto = make_call(tool, "call_err_1", project_id, args=BashArgs(command="ls -la"))
+    decisions_auto = await gate.decide([call_auto])
+    assert decisions_auto["call_err_1"].outcome == "ask"
+    assert decisions_auto["call_err_1"].approval_id is not None
+
+    # At suggest level: on error, it fails closed to "deny" instead of crashing.
+    await set_permission_level(databases, project_id, "suggest")
+    call_sug = make_call(tool, "call_err_2", project_id, args=BashArgs(command="ls -la"))
+    decisions_sug = await gate.decide([call_sug])
+    assert decisions_sug["call_err_2"].outcome == "deny"
