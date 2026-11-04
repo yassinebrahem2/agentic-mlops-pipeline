@@ -11,12 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatTime, shortCommit } from "@/lib/format";
+import { formatMetric, formatTime, shortCommit } from "@/lib/format";
 import type { RunRow } from "@/lib/useTracking";
 import { useRunByKey } from "@/lib/useTracking";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/pages/runs/StatusBadge";
-import { formatMetric, type VersionRow } from "./buildVersionRows";
+import type { VersionRow } from "./buildVersionRows";
 
 export interface VersionsTableProps {
   projectId: string;
@@ -145,7 +145,7 @@ function VersionRowItem({
         <TableCell className="text-sm text-muted-foreground">{formatTime(row.created)}</TableCell>
         {metricNames.map((name) => (
           <TableCell key={name} className="font-mono text-sm">
-            {row.metrics[name] !== undefined ? formatMetric(row.metrics[name]) : "–"}
+            {formatMetric(row.metrics[name])}
           </TableCell>
         ))}
       </TableRow>

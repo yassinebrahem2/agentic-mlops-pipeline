@@ -351,10 +351,10 @@ describe("TrackedModelsPage", () => {
     // Ensure no production badge for churn-predictor
     expect(screen.queryByText(/Production: null/)).not.toBeInTheDocument();
 
-    // Metrics formatted: 4 sig digits
-    expect(await screen.findByText("0.9412")).toBeInTheDocument();
-    expect(await screen.findByText("0.9654")).toBeInTheDocument();
-    expect(await screen.findByText("0.8951")).toBeInTheDocument();
+    // Metrics formatted: 3 sig digits
+    expect(await screen.findByText("0.941")).toBeInTheDocument();
+    expect(await screen.findByText("0.965")).toBeInTheDocument();
+    expect(await screen.findByText("0.895")).toBeInTheDocument();
     // Absent metric cell shows "–"
     const dashes = await screen.findAllByText("–");
     expect(dashes.length).toBeGreaterThan(0);
