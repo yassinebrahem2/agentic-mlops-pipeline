@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance } from "vitest";
 import { renderPage } from "@/test/render";
@@ -505,9 +505,39 @@ describe("AgentsPage", () => {
     await user.type(input, "please continue");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
+    // User message event from the stream clears the notice
+    act(() => {
+      fakeStream.emit(
+        "message.created",
+        {
+          message: {
+            id: "msg_user_1",
+            turn_id: "turn_1",
+            author_kind: "user",
+            author_name: "user",
+            from_agent: null,
+            parts: [{ type: "text", text: "please continue" }],
+            status: "completed",
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        },
+        11,
+      );
+    });
+
     await waitFor(() => {
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
+
+    // Subsequent turn.ended with stopped_reason brings notice back live without reload
+    act(() => {
+      fakeStream.emit("turn.ended", { turn_id: "trn_1", stopped_reason: "max_steps" }, 12);
+    });
+
+    const refreshedNotice = await screen.findByRole("status");
+    expect(refreshedNotice).toHaveTextContent(
+      "Stopped at its step limit: send a message to continue",
+    );
   });
 
   it("shows stopped notice when session is stopped because context is full", async () => {

@@ -316,13 +316,43 @@ describe("useSession", () => {
       await expect(result.current.send("Fail")).rejects.toThrow("Unauthorized");
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["auth"] });
+    expect(result.current.state?.busy).toBe(false);
 
     postSpy.mockRestore();
     invalidateSpy.mockRestore();
     unmount();
   });
 
-  it("populates last_stopped_reason on snapshot when idle and clears it on send", async () => {
+  it("failed send leaves busy false and keeps the stopped notice", async () => {
+    const postSpy = vi.spyOn(api, "POST").mockRejectedValue(new Error("Network error"));
+    getSpy = vi.spyOn(api, "GET").mockResolvedValue({
+      data: {
+        ...initialSession,
+        busy: false,
+        last_stopped_reason: "max_steps",
+      },
+      response: new Response(null, { status: 200 }),
+    });
+
+    const { result, unmount } = renderHook(() => useSession("prj_1", "orchestrator"), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.state?.last_stopped_reason).toBe("max_steps");
+      expect(result.current.state?.busy).toBe(false);
+    });
+
+    await act(async () => {
+      await expect(result.current.send("Continue")).rejects.toThrow("Network error");
+    });
+
+    expect(result.current.state?.busy).toBe(false);
+    expect(result.current.state?.last_stopped_reason).toBe("max_steps");
+
+    postSpy.mockRestore();
+    unmount();
+  });
+
+  it("populates last_stopped_reason on snapshot when idle and clears on message.created stream event", async () => {
     vi.spyOn(api, "POST").mockResolvedValue({
       data: {},
       response: new Response(null, { status: 200 }),
@@ -340,10 +370,28 @@ describe("useSession", () => {
 
     await waitFor(() => {
       expect(result.current.state?.last_stopped_reason).toBe("max_steps");
+      expect(result.current.state?.busy).toBe(false);
+      expect(createdStreams).toHaveLength(1);
     });
 
-    await act(async () => {
-      await result.current.send("Continue");
+    act(() => {
+      createdStreams[0]?.emitOpen();
+      createdStreams[0]?.emit(
+        "message.created",
+        {
+          message: {
+            id: "msg_user_1",
+            turn_id: "turn_1",
+            author_kind: "user",
+            author_name: "user",
+            from_agent: null,
+            parts: [{ type: "text", text: "Continue" }],
+            status: "completed",
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        },
+        5,
+      );
     });
 
     expect(result.current.state?.busy).toBe(true);

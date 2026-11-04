@@ -299,10 +299,6 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
 
   const send = useCallback(
     async (text: string) => {
-      setState((prev) => (prev ? { ...prev, busy: true, last_stopped_reason: null } : prev));
-      if (stateRef.current) {
-        stateRef.current = { ...stateRef.current, busy: true, last_stopped_reason: null };
-      }
       await sendMutation.mutateAsync(text);
     },
     [sendMutation],
