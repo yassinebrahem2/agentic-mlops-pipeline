@@ -111,6 +111,12 @@ def test_bash_tool_metadata_and_schema() -> None:
     assert tool.name == "Bash"
     assert tool.risk == RiskClass.RUN
     assert "sandbox container" in tool.description.lower()
+    expected_desc = (
+        "Inside the sandbox 127.0.0.1 is the sandbox itself; "
+        "reach a service on the user's machine at host.docker.internal "
+        "(needs the network grant; on Linux the service must listen on more than 127.0.0.1)."
+    )
+    assert expected_desc in tool.description
     schema = tool.schema()
     params = schema["function"]["parameters"]
     assert "command" in params["required"]
