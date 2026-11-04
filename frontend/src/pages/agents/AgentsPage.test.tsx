@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance } from "vitest";
 import { renderPage } from "@/test/render";
@@ -489,5 +489,77 @@ describe("AgentsPage", () => {
     expect(
       await screen.findByText("The agent is busy. Try again when it finishes."),
     ).toBeInTheDocument();
+  });
+
+  it("shows stopped notice above composer when session is stopped at step limit and clears when user sends a message", async () => {
+    const user = userEvent.setup();
+    setupDefaultMocks({
+      lastStoppedReason: "max_steps",
+    });
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("Stopped at its step limit: send a message to continue");
+
+    const input = screen.getByRole("textbox", { name: "Message Orchestrator" });
+    await user.type(input, "please continue");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // User message event from the stream clears the notice
+    act(() => {
+      fakeStream.emit(
+        "message.created",
+        {
+          message: {
+            id: "msg_user_1",
+            turn_id: "turn_1",
+            author_kind: "user",
+            author_name: "user",
+            from_agent: null,
+            parts: [{ type: "text", text: "please continue" }],
+            status: "completed",
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        },
+        11,
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    // Subsequent turn.ended with stopped_reason brings notice back live without reload
+    act(() => {
+      fakeStream.emit("turn.ended", { turn_id: "trn_1", stopped_reason: "max_steps" }, 12);
+    });
+
+    const refreshedNotice = await screen.findByRole("status");
+    expect(refreshedNotice).toHaveTextContent(
+      "Stopped at its step limit: send a message to continue",
+    );
+  });
+
+  it("shows stopped notice when session is stopped because context is full", async () => {
+    setupDefaultMocks({
+      lastStoppedReason: "room_below_floor",
+    });
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("Stopped: its context is full");
+  });
+
+  it("does not show stopped notice for normal session", async () => {
+    setupDefaultMocks({
+      lastStoppedReason: null,
+    });
+    renderPage("/projects/prj_1/agents", { routes: testRoutes });
+
+    await screen.findByRole("textbox", { name: "Message Orchestrator" });
+    expect(
+      screen.queryByText("Stopped at its step limit: send a message to continue"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Stopped: its context is full")).not.toBeInTheDocument();
   });
 });
