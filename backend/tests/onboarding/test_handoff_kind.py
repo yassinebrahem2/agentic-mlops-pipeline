@@ -204,6 +204,33 @@ async def test_check_refuses_results_location_equal_to_team_checks_folder(henv: 
     )
 
 
+async def test_check_refuses_results_location_case_insensitive(henv: HandoffEnv) -> None:
+    bad_ops = {
+        **handoff()["operations"],
+        "results_location": {"connection": "HOTEL", "path_pattern": "DQ/*.JSON"},
+    }
+    bad_payload = payload("http://x", operations=bad_ops)
+    refusals = await henv.kind().check(henv.project_id, bad_payload)
+    assert any(
+        "the results location is where the agents' own checks write; the team's results are read through their checks' sources"
+        in r
+        for r in refusals
+    )
+
+
+async def test_check_passes_job_feed_with_extensionless_pattern(henv: HandoffEnv) -> None:
+    feed = job_feed(
+        name="daily-scoring",
+        ref={
+            "ci_workflow": None,
+            "file": {"connection": "hotel", "path_pattern": "monitoring/*"},
+        },
+    )
+    valid_payload = payload("http://x", operations={**handoff()["operations"], "feeds": [feed]})
+    refusals = await henv.kind().check(henv.project_id, valid_payload)
+    assert not any("a job feed reads result lines" in r for r in refusals)
+
+
 async def test_check_validates_connections_and_tables_at_propose_time(henv: HandoffEnv) -> None:
     base = payload("http://x").model_dump(mode="json")
     missing_conn = HandoffPayload.model_validate(

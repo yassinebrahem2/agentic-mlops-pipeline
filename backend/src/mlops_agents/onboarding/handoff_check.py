@@ -67,7 +67,7 @@ def check(
     for feed in payload.operations.feeds:
         if feed.kind == "job" and isinstance(feed.ref, JobFeedRef) and feed.ref.file is not None:
             ext = PurePosixPath(feed.ref.file.path_pattern).suffix.lower()
-            if ext not in VALID_JOB_FEED_EXTENSIONS:
+            if ext and not any(c in ext for c in "*?[{") and ext not in VALID_JOB_FEED_EXTENSIONS:
                 problems.append(
                     f"feed {feed.name}: a job feed reads result lines; "
                     "for a table that arrives each day use a data feed (connection, table)"
@@ -75,13 +75,14 @@ def check(
 
     if isinstance(payload.operations.results_location, FileResults):
         loc = payload.operations.results_location
-        loc_pattern = loc.path_pattern.strip("/")
+        loc_conn = loc.connection.lower()
+        loc_pattern = loc.path_pattern.strip("/").lower()
         for check_spec in payload.operations.checks:
             if (
                 isinstance(check_spec.results, FileResults)
-                and check_spec.results.connection == loc.connection
+                and check_spec.results.connection.lower() == loc_conn
             ):
-                check_pattern = check_spec.results.path_pattern.strip("/")
+                check_pattern = check_spec.results.path_pattern.strip("/").lower()
                 check_parent = str(PurePosixPath(check_pattern).parent)
                 if check_pattern == loc_pattern or (
                     check_parent != "." and check_parent == loc_pattern.rstrip("/*")
