@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
@@ -30,6 +31,8 @@ from mlops_agents.tracking.contract import (
 
 if TYPE_CHECKING:
     from mlops_agents.tracking.contract import Tracking
+
+logger = logging.getLogger(__name__)
 
 TRACKING_HISTORY_MAX_CHARS: Final[int] = 8000
 
@@ -143,7 +146,20 @@ class TrackingHistory(AgentTool[TrackingHistoryInput]):
     name: ClassVar[str] = "TrackingHistory"
     description: ClassVar[str] = (
         "Query the project's tracking history for models, versions, runs, metrics, "
-        "deployments, ci-runs, or evaluations."
+        "deployments, ci_runs, or evaluations. "
+        "Reads the app's copy of project trackers (MLflow, CI) synced by the app, "
+        "so there is no need to reach them from the sandbox.\n\n"
+        "Queries and applicable filters:\n"
+        "- 'models': filter by 'model', 'source_id'.\n"
+        "- 'versions': filter by 'model', 'version', 'run_key', 'source_id', 'since'.\n"
+        "- 'runs': filter by 'run_key', 'source_id', 'since'.\n"
+        "- 'metrics': querying metrics requires 'run_key' (list 'runs' first to obtain one); "
+        "filter by 'metric', 'latest', 'source_id', 'since'.\n"
+        "- 'deployments': filter by 'model', 'source_id', 'since'.\n"
+        "- 'ci_runs': filter by 'source_id', 'since'.\n"
+        "- 'evaluations': filter by 'model', 'version', 'run_key', 'source_id', 'since'.\n"
+        "All queries support pagination via 'limit' and 'offset'.\n\n"
+        "'No X recorded yet' means none recorded; any source errors are listed after it."
     )
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = TrackingHistoryInput
@@ -175,13 +191,19 @@ class TrackingHistory(AgentTool[TrackingHistoryInput]):
             raise ToolFailure(err.message) from None
 
         if not page.rows:
+            source_errors: list[str] = []
             try:
                 sources = await self._tracking.sources(ctx.project_id)
                 source_errors = [
                     f"Source {s.id} error: {s.last_error}" for s in sources if s.last_error
                 ]
             except Exception:
-                source_errors = []
+                logger.warning(
+                    "Tracking sources could not be listed for project %s",
+                    ctx.project_id,
+                    exc_info=True,
+                )
+                source_errors = ["Tracking sources could not be listed."]
             if source_errors:
                 return ToolOutput(f"No {args.what} recorded yet.\n" + "\n".join(source_errors))
             return ToolOutput(f"No {args.what} recorded yet.")
