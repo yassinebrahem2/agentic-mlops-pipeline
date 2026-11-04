@@ -191,12 +191,69 @@ async def test_whitespace_normalisation(
     gate = ApprovalGate(databases, store=store)
 
     tool = BashTool(hooks=service)
-    args = BashArgs(command="uv run deploy.py --version 1.0.0")
-    call = make_call(tool, "call_ws_1", project_id, args=args)
+    # Template has extra whitespace, command is simple
+    args1 = BashArgs(command="uv run deploy.py --version 1.0.0")
+    call1 = make_call(tool, "call_ws_1", project_id, args=args1)
+    decisions1 = await gate.decide([call1])
+    assert decisions1["call_ws_1"].outcome == "ask"
 
-    decisions = await gate.decide([call])
-    dec = decisions["call_ws_1"]
-    assert dec.outcome == "ask"
+    # Command has extra spaces, tabs, and newlines
+    args2 = BashArgs(command="uv \t run\n  deploy.py\t\t--version \n 1.0.0")
+    call2 = make_call(tool, "call_ws_2", project_id, args=args2)
+    decisions2 = await gate.decide([call2])
+    assert decisions2["call_ws_2"].outcome == "ask"
+
+
+@pytest.mark.asyncio
+async def test_line_continuation_in_command_and_template(
+    databases: Databases,
+    service: HooksService,
+) -> None:
+    project_id = new_id("prj")
+    # 1. Normal template on one line
+    spec1 = _spec(
+        kind="deploy",
+        template="uv run deploy.py --version {candidate_version}",
+        placeholders=["candidate_version"],
+        deploys=True,
+    )
+    await service.register(project_id, spec1, "deploy_hook_1", "churn", "handoff")
+
+    # 2. Template stored with backslash line continuations (\n and \r\n)
+    spec2 = _spec(
+        kind="deploy",
+        template="uv run deploy_alt.py \\\n  --version {candidate_version}",
+        placeholders=["candidate_version"],
+        deploys=True,
+    )
+    await service.register(project_id, spec2, "deploy_hook_2", "churn", "handoff")
+
+    await setup_session_and_turn(databases, project_id, "ses_1", "trn_1")
+    await set_permission_level(databases, project_id, "autonomous")
+
+    store = ApprovalStore(databases)
+    gate = ApprovalGate(databases, store=store)
+    tool = BashTool(hooks=service)
+
+    # Command with \ + \n line continuation matching one-line template
+    cmd_cont_lf = "uv run deploy.py \\\n  --version 1.2"
+    call_lf = make_call(tool, "call_cont_lf", project_id, args=BashArgs(command=cmd_cont_lf))
+    dec_lf = await gate.decide([call_lf])
+    assert dec_lf["call_cont_lf"].outcome == "ask"
+
+    # Command with \ + \r\n line continuation matching one-line template
+    cmd_cont_crlf = "uv run deploy.py \\\r\n  --version 1.2"
+    call_crlf = make_call(tool, "call_cont_crlf", project_id, args=BashArgs(command=cmd_cont_crlf))
+    dec_crlf = await gate.decide([call_crlf])
+    assert dec_crlf["call_cont_crlf"].outcome == "ask"
+
+    # One-line command matching template with line continuation
+    cmd_oneline = "uv run deploy_alt.py --version 1.2"
+    call_tmpl_cont = make_call(
+        tool, "call_tmpl_cont", project_id, args=BashArgs(command=cmd_oneline)
+    )
+    dec_tmpl_cont = await gate.decide([call_tmpl_cont])
+    assert dec_tmpl_cont["call_tmpl_cont"].outcome == "ask"
 
 
 @pytest.mark.asyncio

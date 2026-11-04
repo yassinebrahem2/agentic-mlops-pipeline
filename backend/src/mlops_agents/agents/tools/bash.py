@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import string
 from typing import TYPE_CHECKING, ClassVar
 
@@ -44,6 +45,12 @@ class BashArgs(BaseModel):
     )
 
 
+def _normalize_command_whitespace(s: str) -> str:
+    """Normalise whitespace and shell line continuations (\\ followed by newline)."""
+    s = re.sub(r"\\\r?\n", " ", s)
+    return " ".join(s.split())
+
+
 class BashTool(AgentTool[BashArgs]):
     name: ClassVar[str] = "Bash"
     description: ClassVar[str] = "Run a command in the task's Docker sandbox container."
@@ -58,7 +65,7 @@ class BashTool(AgentTool[BashArgs]):
         if self._hooks is None:
             return None
         hooks = await self._hooks.list(ctx.project_id)
-        cmd_norm = " ".join(args.command.split())
+        cmd_norm = _normalize_command_whitespace(args.command)
         for hook in hooks:
             if (
                 hook.status == "disabled"
@@ -67,9 +74,10 @@ class BashTool(AgentTool[BashArgs]):
                 or hook.spec.template is None
             ):
                 continue
+            template = re.sub(r"\\\r?\n", " ", hook.spec.template)
             prefix_parts: list[str] = []
             try:
-                for literal_text, field_name, _, _ in string.Formatter().parse(hook.spec.template):
+                for literal_text, field_name, _, _ in string.Formatter().parse(template):
                     if literal_text:
                         prefix_parts.append(literal_text)
                     if field_name is not None:
@@ -77,7 +85,7 @@ class BashTool(AgentTool[BashArgs]):
             except ValueError:
                 continue
             prefix = "".join(prefix_parts)
-            prefix_norm = " ".join(prefix.split())
+            prefix_norm = _normalize_command_whitespace(prefix)
             if not prefix_norm:
                 continue
             if prefix_norm in cmd_norm:
