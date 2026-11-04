@@ -201,3 +201,13 @@ def test_dependency_file_exceeding_cap_is_refused(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_bytes(b"a" * (MAX_DEPENDENCY_FILE_BYTES + 10))
     with pytest.raises(OSError, match="exceeds size limit"):
         read_dependency_files(tmp_path)
+
+
+@pytest.mark.parametrize("template_name", ["base", "micromamba", "pyproject", "requirements", "uv"])
+def test_dockerfile_templates_install_libgomp1(template_name: str) -> None:
+    from mlops_agents.sandbox.images import load_template
+
+    rendered = load_template(template_name, "3.12")
+    assert "apt-get update" in rendered
+    assert "apt-get install -y --no-install-recommends libgomp1" in rendered
+    assert "rm -rf /var/lib/apt/lists/*" in rendered
