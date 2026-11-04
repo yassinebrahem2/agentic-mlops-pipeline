@@ -246,7 +246,8 @@ class PrSyncObserver:
     ) -> None:
         if task.pr_number is None:
             return
-        if task.ci_wakes >= 3:
+        wakes = task.ci_wakes or 0
+        if wakes >= 3:
             return
         try:
             merge_state = await get_pull_merge_state(self._http, token, repo_slug, task.pr_number)
@@ -322,7 +323,7 @@ class PrSyncObserver:
             link_str = f" ({link})" if link else ""
             check_lines.append(f"- {r.name}: {r.conclusion}{link_str}")
 
-        wake_count = task.ci_wakes + 1
+        wake_count = (task.ci_wakes or 0) + 1
         msg_parts = [
             f"CI failed on PR #{task.pr_number} for task {task.id}:",
             *check_lines,

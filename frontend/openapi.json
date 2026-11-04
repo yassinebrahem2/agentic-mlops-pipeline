@@ -8387,9 +8387,15 @@
             "type": "string"
           },
           "ci_wakes": {
-            "default": 0,
-            "title": "Ci Wakes",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Wakes"
           },
           "ci_woken_sha": {
             "anyOf": [

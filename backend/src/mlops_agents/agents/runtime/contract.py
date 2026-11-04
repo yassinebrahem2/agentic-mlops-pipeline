@@ -97,7 +97,7 @@ class TaskView(BaseModel):
     pr_number: int | None
     pr_url: str | None
     ci_woken_sha: str | None = None
-    ci_wakes: int = 0
+    ci_wakes: int | None = None
 
 
 class SessionView(BaseModel):
