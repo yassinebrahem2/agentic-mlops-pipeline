@@ -74,6 +74,15 @@ const PENDING: State = {
   status: "pending_pr",
   since: null,
 };
+const NOT_JUDGED: State = {
+  key: { kind: "check", ref: "drift_check", model: "churn" },
+  category: "drift",
+  active: true,
+  next_deadline: null,
+  last_seen: null,
+  status: "not_judged",
+  since: null,
+};
 
 let stream: ReturnType<typeof stubEventStream>;
 
@@ -149,6 +158,15 @@ describe("ChecksSection", () => {
     const pending = within(screen.getByRole("listitem", { name: "psi_age" }));
     expect(pending.getByText("Waiting for its pull request")).toBeInTheDocument();
     expect(pending.getByText("Inactive")).toBeInTheDocument();
+  });
+
+  it("renders not_judged expectation as Not judged yet with secondary badge", async () => {
+    setup([NOT_JUDGED]);
+
+    const item = within(await screen.findByRole("listitem", { name: "drift_check" }));
+    const badge = item.getByText("Not judged yet");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("data-variant", "secondary");
   });
 
   it("says so when nothing is expected yet", async () => {

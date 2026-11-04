@@ -2,10 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { components } from "@/api/schema";
 import { api } from "@/lib/api";
 import { ApprovalCard, type ApprovalPart } from "../ApprovalCard";
 import { ParserProposalCard } from "./ParserProposalCard";
 import type { ProposalView } from "./useProposal";
+
+type ParserPayload = components["schemas"]["ParserPayload"];
+type ParserMapping = components["schemas"]["ParserMapping"];
 
 function createTestQueryClient() {
   return new QueryClient({
@@ -42,6 +46,52 @@ describe("ParserProposalCard", () => {
     kind: "tool",
   };
 
+  const sampleMapping: ParserMapping = {
+    format: "jsonl",
+    fields: {
+      check_id: "metric.name",
+      value: "metric.val",
+      ran_at: "ts",
+    },
+    pattern: null,
+    fired_when: {
+      op: "gt",
+      field: "value",
+      value: 0.5,
+    },
+    categories: {},
+    defaults: {
+      category: "model_performance",
+      subject: "model_churn",
+    },
+  };
+
+  const sampleMappingPayload: ParserPayload = {
+    spec: {
+      source_id: "file:conn_data:logs/*.jsonl",
+      mapping: sampleMapping,
+      code: null,
+    },
+    sample_input: '{"metric": {"name": "loss", "val": 0.6}, "ts": "2026-10-30T10:00:00Z"}\n',
+    sample_records: [
+      {
+        check_id: "loss",
+        origin: "team",
+        ran_at: "2026-10-30T10:00:00Z",
+        fired: true,
+        value: 0.12345678901,
+        threshold: 0.5,
+        category: "model_performance",
+        subject: "model_churn",
+        model: null,
+        detail: {},
+        source_ref: "logs/001.jsonl",
+        version: null,
+        not_enough_data: false,
+      },
+    ],
+  };
+
   const sampleMappingProposal: ProposalView = {
     id: "prop_p1",
     key: "file:conn_data:logs/*.jsonl",
@@ -55,48 +105,7 @@ describe("ParserProposalCard", () => {
     warnings: [],
     slots: [],
     result: null,
-    payload: {
-      spec: {
-        source_id: "file:conn_data:logs/*.jsonl",
-        mapping: {
-          format: "jsonl",
-          fields: {
-            check_id: "metric.name",
-            value: "metric.val",
-            ran_at: "ts",
-          },
-          pattern: null,
-          fired_when: {
-            op: "gt",
-            field: "value",
-            value: 0.5,
-          },
-          defaults: {
-            category: "model_performance",
-            subject: "model_churn",
-          },
-        },
-        code: null,
-      },
-      sample_input: '{"metric": {"name": "loss", "val": 0.6}, "ts": "2026-10-30T10:00:00Z"}\n',
-      sample_records: [
-        {
-          check_id: "loss",
-          origin: "team",
-          ran_at: "2026-10-30T10:00:00Z",
-          fired: true,
-          value: 0.12345678901,
-          threshold: 0.5,
-          category: "model_performance",
-          subject: "model_churn",
-          model: null,
-          detail: {},
-          source_ref: "logs/001.jsonl",
-          version: null,
-          not_enough_data: false,
-        },
-      ],
-    },
+    payload: sampleMappingPayload,
   };
 
   const sampleCodeProposal: ProposalView = {
@@ -182,5 +191,71 @@ describe("ParserProposalCard", () => {
     renderWithClient(<ApprovalCard approval={baseApproval} projectId="prj_test" />);
 
     expect(await screen.findByText("file:conn_data:logs/*.jsonl")).toBeInTheDocument();
+  });
+
+  it("renders categories when present in mapping proposal", async () => {
+    const payloadWithCategories: ParserPayload = {
+      ...sampleMappingPayload,
+      spec: {
+        ...sampleMappingPayload.spec,
+        mapping: {
+          ...sampleMapping,
+          categories: {
+            drift_metric: "drift",
+            null_metric: "data_quality",
+          },
+        },
+      },
+    };
+
+    const proposalWithCategories: ProposalView = {
+      ...sampleMappingProposal,
+      payload: payloadWithCategories,
+    };
+
+    getSpy.mockImplementation(() =>
+      Promise.resolve({
+        data: proposalWithCategories,
+        response: new Response(JSON.stringify(proposalWithCategories), { status: 200 }),
+      }),
+    );
+
+    renderWithClient(<ParserProposalCard approval={baseApproval} projectId="prj_test" />);
+
+    expect(await screen.findByText("Categories:")).toBeInTheDocument();
+    expect(screen.getByText("drift_metric")).toBeInTheDocument();
+    expect(screen.getByText(/: drift$/)).toBeInTheDocument();
+    expect(screen.getByText("null_metric")).toBeInTheDocument();
+    expect(screen.getByText(/: data_quality$/)).toBeInTheDocument();
+  });
+
+  it("renders safely when categories is omitted/undefined on legacy proposal", async () => {
+    const mappingWithoutCategories = { ...sampleMapping };
+    delete (mappingWithoutCategories as { categories?: unknown }).categories;
+
+    const payloadWithoutCategories = {
+      ...sampleMappingPayload,
+      spec: {
+        ...sampleMappingPayload.spec,
+        mapping: mappingWithoutCategories,
+      },
+    };
+
+    const proposalWithoutCategories: ProposalView = {
+      ...sampleMappingProposal,
+      payload: payloadWithoutCategories,
+    };
+
+    getSpy.mockImplementation(() =>
+      Promise.resolve({
+        data: proposalWithoutCategories,
+        response: new Response(JSON.stringify(proposalWithoutCategories), { status: 200 }),
+      }),
+    );
+
+    renderWithClient(<ParserProposalCard approval={baseApproval} projectId="prj_test" />);
+
+    expect(await screen.findByText("file:conn_data:logs/*.jsonl")).toBeInTheDocument();
+    expect(screen.queryByText("Categories:")).not.toBeInTheDocument();
   });
 });

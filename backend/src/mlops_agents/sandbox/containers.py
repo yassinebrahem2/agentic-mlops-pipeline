@@ -85,6 +85,8 @@ def build_run_args(
         )
     if not network:
         args.extend(["--network", "none"])
+    else:
+        args.append("--add-host=host.docker.internal:host-gateway")
     args.extend(
         [
             "-e",
@@ -144,6 +146,8 @@ def build_one_shot_run_args(
         )
     if not network:
         args.extend(["--network", "none"])
+    else:
+        args.append("--add-host=host.docker.internal:host-gateway")
     if env_file is not None:
         args.extend(["--env-file", str(env_file)])
     args.extend(

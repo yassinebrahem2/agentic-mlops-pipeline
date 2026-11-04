@@ -20,6 +20,7 @@ from mlops_agents.monitoring.results.contract import (
     ParserMapping,
     ParserPayload,
     ParserSpec,
+    ResultRecord,
 )
 from mlops_agents.monitoring.results.mapping import evaluate_mapping
 from mlops_agents.monitoring.results.parser_kind import CODE_PARSER_CONTRACT, ParserKind
@@ -1545,3 +1546,195 @@ async def test_stored_parser_with_ran_at_default_still_loads_and_parses(
     assert len(outcome.errors) == 0
     assert len(outcome.records) == 1
     assert outcome.records[0][1].ran_at == datetime(2026, 11, 1, 6, 0, 0, tzinfo=UTC)
+
+
+def test_mapping_parser_categories_routes_records_to_declared_categories() -> None:
+    mapping = ParserMapping(
+        format="jsonl",
+        fields={"check_id": "check", "ran_at": "time", "value": "val"},
+        fired_when=Compare(op="gt", field="value", value=1.0),
+        categories={
+            "drift_check": "drift",
+            "null_check": "data_quality",
+        },
+        defaults={"category": "operational", "subject": "hotel_model"},
+    )
+    raw = (
+        '{"check": "drift_check", "time": "2026-11-03T10:00:00Z", "val": 0.5}\n'
+        '{"check": "null_check", "time": "2026-11-03T10:05:00Z", "val": 0.1}\n'
+        '{"check": "latency_check", "time": "2026-11-03T10:10:00Z", "val": 2.0}\n'
+    )
+    outcome = evaluate_mapping(mapping, raw, origin_ref="sample:mapping")
+    assert len(outcome.errors) == 0
+    assert len(outcome.records) == 3
+    assert outcome.records[0][1].category == "drift"
+    assert outcome.records[1][1].category == "data_quality"
+    assert outcome.records[2][1].category == "operational"
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_refuses_when_sample_records_differ_from_produced(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "model_performance", "subject": "tbl"},
+        ),
+    )
+    sample_input = '{"id": "drift_check", "ts": "2026-11-03T12:00:00Z", "fired": false}\n'
+    sample_records = [
+        ResultRecord(
+            check_id="drift_check",
+            origin="team",
+            ran_at=datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC),
+            fired=False,
+            category="drift",  # differs from model_performance
+            subject="tbl",
+            detail={},
+            source_ref="sample:mapping",
+        )
+    ]
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=sample_records)
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) > 0
+    assert "sample_records do not match what the parser produces from sample_input" in refusals[0]
+    assert "category" in refusals[0]
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_passes_when_sample_records_match_with_categories(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            categories={"drift_check": "drift"},
+            defaults={"category": "model_performance", "subject": "tbl"},
+        ),
+    )
+    sample_input = '{"id": "drift_check", "ts": "2026-11-03T12:00:00Z", "fired": false}\n'
+    sample_records = [
+        ResultRecord(
+            check_id="drift_check",
+            origin="team",
+            ran_at=datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC),
+            fired=False,
+            category="drift",
+            subject="tbl",
+            detail={},
+            source_ref="sample:mapping",
+        )
+    ]
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=sample_records)
+    refusals = await kind.check("prj_test", payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_ran_at_tolerance_seconds_dropped(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "data_quality", "subject": "tbl"},
+        ),
+    )
+    # Parser produces seconds 15
+    sample_input = '{"id": "chk_1", "ts": "2026-11-03T12:00:15Z", "fired": false}\n'
+    # sample_records written with seconds 00
+    sample_records = [
+        ResultRecord(
+            check_id="chk_1",
+            origin="team",
+            ran_at=datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC),
+            fired=False,
+            category="data_quality",
+            subject="tbl",
+            detail={},
+            source_ref="sample:mapping",
+        )
+    ]
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=sample_records)
+    refusals = await kind.check("prj_test", payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_refuses_when_sample_input_unparseable(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "data_quality", "subject": "tbl"},
+        ),
+    )
+    sample_input = "not a valid json object\n"
+    sample_records = [
+        ResultRecord(
+            check_id="chk_1",
+            origin="team",
+            ran_at=datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC),
+            fired=False,
+            category="data_quality",
+            subject="tbl",
+            detail={},
+            source_ref="sample:mapping",
+        )
+    ]
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=sample_records)
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) > 0
+    assert "sample_records do not match what the parser produces from sample_input" in refusals[0]
+
+
+def test_code_parser_preview_mentions_sample_records_not_run(databases: Databases) -> None:
+    spec = ParserSpec(source_id="file:conn_feed:feed.csv", code=ParserCode(script="print(1)"))
+    payload = ParserPayload(spec=spec, sample_input="", sample_records=[])
+
+    preview = ParserKind(SqliteParsers(databases)).preview(payload)
+    assert (
+        "The sample records were written by the agent; the app did not run this parser on the sample."
+        in preview.body
+    )
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_count_mismatch_shows_produced_records(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "model_performance", "subject": "tbl"},
+        ),
+    )
+    sample_input = '{"id": "c1", "ts": "2026-11-03T12:00:00Z", "fired": false}\n'
+    # sample_records has 0 records, but parser produces 1
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=[])
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) == 1
+    assert "expected 0 record(s), got 1:" in refusals[0]
+    assert "'check_id': 'c1'" in refusals[0]

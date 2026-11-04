@@ -183,6 +183,65 @@ describe("DashboardPage", () => {
     expect(screen.getByText("No agents yet.")).toBeInTheDocument();
   });
 
+  it("renders not_judged at-risk expectation as Not judged yet", async () => {
+    stubDashboard(() =>
+      ok(
+        view({
+          at_risk: [
+            {
+              key: { kind: "check", ref: "psi_drift", model: "churn" },
+              category: "drift",
+              active: true,
+              status: "not_judged",
+              next_deadline: null,
+              last_seen: null,
+              since: null,
+            },
+          ],
+        }),
+      ),
+    );
+    renderPage("/projects/prj_1/dashboard");
+
+    const risk = await screen.findByTestId("at-risk-check-psi_drift");
+    expect(within(risk).getByText("psi_drift")).toBeInTheDocument();
+    expect(within(risk).getByText("Not judged yet")).toBeInTheDocument();
+  });
+
+  it("renders your team's alerts when present", async () => {
+    stubDashboard(() =>
+      ok(
+        view({
+          team_alerts: [
+            {
+              result_id: "res_1",
+              check_id: "psi_age",
+              subject: "drift on features",
+              category: "drift",
+              ran_at: "2026-11-03T10:00:00Z",
+              verdict: "real_issue",
+            },
+          ],
+        }),
+      ),
+    );
+    renderPage("/projects/prj_1/dashboard");
+
+    expect(await screen.findByText("Your team's alerts")).toBeInTheDocument();
+    const alert = screen.getByTestId("team-alert-res_1");
+    expect(within(alert).getByText("psi_age")).toBeInTheDocument();
+    expect(within(alert).getByText("drift on features")).toBeInTheDocument();
+    expect(within(alert).getByText("Real issue")).toBeInTheDocument();
+  });
+
+  it("does not render your team's alerts when empty or omitted", async () => {
+    stubDashboard(() => ok(view({ team_alerts: [] })));
+    renderPage("/projects/prj_1/dashboard");
+
+    await screen.findByRole("region", { name: "Pipeline map" });
+    expect(screen.queryByText("Your team's alerts")).toBeNull();
+  });
+
   it("shows no notice when the heartbeat and the baseline are available", async () => {
     stubDashboard(() => ok(view()));
     renderPage("/projects/prj_1/dashboard");

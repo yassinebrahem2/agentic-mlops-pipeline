@@ -31,6 +31,7 @@ from mlops_agents.monitoring.results.contract import (
     StoredResult,
     parse_source_id,
     source_id,
+    waiting_for_parser_error,
 )
 from mlops_agents.monitoring.results.evaluation_copy import SqliteEvaluationCopies
 from mlops_agents.monitoring.results.file_source import (
@@ -362,18 +363,17 @@ class ResultsService(Results):
 
             if use_parser:
                 if cur_parser is None or not cur_parser.enabled:
-                    if state is None:
-                        await self._store.save_source_state(
-                            project_id,
-                            SourceState(
-                                source_id=s_id,
-                                kind=kind,
-                                cursor={},
-                                last_read=now,
-                                last_error=None,
-                                consecutive_failures=0,
-                            ),
-                        )
+                    await self._store.save_source_state(
+                        project_id,
+                        SourceState(
+                            source_id=s_id,
+                            kind=kind,
+                            cursor=current_cursor,
+                            last_read=now,
+                            last_error=waiting_for_parser_error(s_id),
+                            consecutive_failures=0,
+                        ),
+                    )
                     by_source[s_id] = 0
                     continue
 
@@ -388,8 +388,8 @@ class ResultsService(Results):
                     )
                     if raw_read.last_error:
                         failures[s_id] = raw_read.last_error
-                        prev_err = state.last_error if state else None
-                        if not prev_err and self._incidents is not None:
+                        prev_failures = state.consecutive_failures if state else 0
+                        if prev_failures == 0 and self._incidents is not None:
                             try:
                                 _k, _ref, conn_name = parse_source_id(s_id)
                                 scope = conn_name if conn_name is not None else s_id

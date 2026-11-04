@@ -15,6 +15,15 @@ ResultCategory = Literal["data_quality", "drift", "model_performance", "operatio
 ResultOrigin = Literal["team", "agent", "tracker"]
 SourceKind = Literal["file", "ci", "mlflow"]
 
+WAITING_FOR_PARSER_TEXT = (
+    "Waiting for a parser: propose one with ProposeParser for source {source_id}."
+)
+
+
+def waiting_for_parser_error(source_id: str) -> str:
+    """Standard error recorded on a source waiting for a parser."""
+    return WAITING_FOR_PARSER_TEXT.format(source_id=source_id)
+
 
 class ResultRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -146,6 +155,7 @@ class ParserMapping(BaseModel):
     fields: dict[str, str]
     pattern: str | None = None
     fired_when: Condition
+    categories: dict[str, ResultCategory] = {}
     defaults: dict[str, Any] = {}
 
 

@@ -170,7 +170,7 @@ def default_registry(
             ]
         )
     if sandbox is not None:
-        tools.append(BashTool(sandbox=sandbox))
+        tools.append(BashTool(sandbox=sandbox, hooks=hooks))
     if (
         tasks is not None
         and workspace is not None
@@ -256,5 +256,5 @@ def default_registry(
         registry.register(RequestFix(fixes))
         registry.register(RecordFixChoice(fixes))
     if checks is not None and handoffs is not None:
-        registry.register(RegisterCheck(checks, handoffs))
+        registry.register(RegisterCheck(checks, handoffs, tasks))
     return registry
