@@ -23,6 +23,7 @@ from mlops_agents.monitoring.results.contract import (
     ResultRecord,
     SourceState,
     source_id,
+    waiting_for_parser_error,
 )
 from mlops_agents.monitoring.results.parsers import SqliteParsers
 from mlops_agents.monitoring.results.service import ResultsService, SourceReadOutcome
@@ -835,3 +836,182 @@ for line in sys.stdin.read().splitlines():
     assert rep3.stored == 0
     all_res3 = await service.store.query(project_id, ResultQuery(limit=50))
     assert len(all_res3.rows) == 3
+
+
+def _build_handoff_with_check(
+    conn_name: str,
+    pattern: str,
+    check_pattern: str = "dq/*.jsonl",
+    check_conn: str | None = None,
+) -> HandoffView:
+    ops = Operations(
+        scheduler=None,
+        feeds=[],
+        on_call=[],
+        checks=[
+            CheckSpec(
+                check_id="chk_team",
+                name="Team Check",
+                category="data_quality",
+                cadence=Cadence(cron=None, every_minutes=60),
+                timezone="UTC",
+                results=FileResults(connection=check_conn or conn_name, path_pattern=check_pattern),
+            )
+        ],
+        results_location=FileResults(connection=conn_name, path_pattern=pattern),
+    )
+    payload = HandoffPayload.model_validate(sample_handoff_dict(operations=ops.model_dump()))
+    return HandoffView(
+        proposal_id="prop_wait",
+        version=1,
+        approved=datetime(2026, 10, 30, 0, 0, 0, tzinfo=UTC),
+        payload=payload,
+    )
+
+
+async def test_source_waiting_for_parser_stores_waiting_error_and_clears_when_parser_enabled(
+    databases: Databases, events: SqliteEventLog, project_id: str, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "metrics.jsonl"
+    target.write_bytes(b'{"check_id": "c1", "ran_at": "2026-10-30T10:00:00Z", "fired": true}\n')
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_team", data_dir)
+    handoffs = FakeHandoffs(
+        _build_handoff_with_check("conn_team", "agents/*.jsonl", check_pattern="metrics.jsonl")
+    )
+    incidents = FakeIncidents()
+    maintenance = FakeMaintenance()
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        incidents=incidents,
+        maintenance=maintenance,
+    )
+
+    s_id = source_id("file", "metrics.jsonl", "conn_team")
+    now = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+
+    # 1. First collection: source needs a parser, none is enabled.
+    rep1 = await service.collect(project_id, now)
+    assert rep1.stored == 0
+    assert s_id not in rep1.failures
+    assert len(incidents.signals) == 0
+
+    st1 = await service.store.get_source_state(project_id, s_id)
+    assert st1 is not None
+    assert st1.last_error == waiting_for_parser_error(s_id)
+    assert st1.consecutive_failures == 0
+    assert st1.cursor == {}
+
+    # 2. Second collection: keeps the waiting error and raises no signal.
+    rep2 = await service.collect(project_id, now + timedelta(minutes=1))
+    assert rep2.stored == 0
+    assert s_id not in rep2.failures
+    assert len(incidents.signals) == 0
+
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.last_error == waiting_for_parser_error(s_id)
+    assert st2.consecutive_failures == 0
+
+    # 3. Store an enabled parser for that source.
+    spec = ParserSpec(
+        source_id=s_id,
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check_id", "ran_at": "ran_at"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "operational", "subject": "s"},
+        ),
+    )
+    await service.parsers.store(project_id, spec, "prop_parser_1")
+
+    # 4. Third collection: parser is now enabled; reads record and clears waiting error.
+    rep3 = await service.collect(project_id, now + timedelta(minutes=2))
+    assert rep3.stored == 1
+    assert s_id not in rep3.failures
+    assert len(incidents.signals) == 0
+
+    st3 = await service.store.get_source_state(project_id, s_id)
+    assert st3 is not None
+    assert st3.last_error is None
+    assert st3.consecutive_failures == 0
+
+
+async def test_first_real_read_failure_after_waiting_for_parser_raises_source_failure(
+    databases: Databases, events: SqliteEventLog, project_id: str, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_ok", data_dir)
+    connections.add_local_folder("conn_fail", Path("non_existent_folder_xyz"))
+
+    handoff = _build_handoff_with_check(
+        "conn_ok", "agents/*.jsonl", check_conn="conn_fail", check_pattern="metrics.jsonl"
+    )
+    handoffs = FakeHandoffs(handoff)
+    incidents = FakeIncidents()
+    maintenance = FakeMaintenance()
+
+    service = ResultsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        events=events,
+        incidents=incidents,
+        maintenance=maintenance,
+    )
+
+    s_id = source_id("file", "metrics.jsonl", "conn_fail")
+    now = datetime(2026, 10, 30, 10, 0, 0, tzinfo=UTC)
+
+    # 1. First collection: source needs a parser, none is enabled.
+    rep1 = await service.collect(project_id, now)
+    assert rep1.stored == 0
+    assert len(incidents.signals) == 0
+
+    st1 = await service.store.get_source_state(project_id, s_id)
+    assert st1 is not None
+    assert st1.last_error == waiting_for_parser_error(s_id)
+    assert st1.consecutive_failures == 0
+
+    # 2. Store an enabled parser for that source.
+    spec = ParserSpec(
+        source_id=s_id,
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check_id", "ran_at": "ran_at"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "operational", "subject": "s"},
+        ),
+    )
+    await service.parsers.store(project_id, spec, "prop_parser_fail")
+
+    # 3. Next collection: parser is approved, but the file read fails.
+    # Because consecutive_failures was 0 (from waiting), this is the first real read failure!
+    # It must raise exactly one source_failure signal!
+    rep2 = await service.collect(project_id, now + timedelta(minutes=1))
+    assert s_id in rep2.failures
+    assert len(incidents.signals) == 1
+    p_id, draft, _seen_at = incidents.signals[0]
+    assert p_id == project_id
+    assert draft.kind == "source_failure"
+    assert draft.subject == s_id
+
+    st2 = await service.store.get_source_state(project_id, s_id)
+    assert st2 is not None
+    assert st2.consecutive_failures == 1
+
+    # 4. Third collection: second real read failure.
+    # Must NOT raise another source_failure signal (deduplicated).
+    rep3 = await service.collect(project_id, now + timedelta(minutes=2))
+    assert s_id in rep3.failures
+    assert len(incidents.signals) == 1

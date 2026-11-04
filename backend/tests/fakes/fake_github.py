@@ -54,6 +54,10 @@ class FakeGitHubState:
         default_factory=dict[tuple[str, str], tuple[int, dict[str, Any]]]
     )
 
+    @property
+    def pulls(self) -> dict[tuple[str, int], dict[str, Any]]:
+        return self.prs
+
     def merge_pull(self, repo: str, number: int) -> dict[str, Any]:
         key = (repo, number)
         if key not in self.prs:
@@ -322,6 +326,52 @@ def create_fake_github_app(state: FakeGitHubState) -> FastAPI:
         return JSONResponse(
             {"total_count": len(items), "incomplete_results": False, "items": items}
         )
+
+    @app.get("/repos/{owner}/{repo}/issues")
+    async def list_issues(owner: str, repo: str, request: Request) -> Response:
+        full_name = f"{owner}/{repo}"
+        state.requests.append(
+            {
+                "method": "GET",
+                "path": f"/repos/{full_name}/issues",
+                "params": dict(request.query_params),
+            }
+        )
+        err = _check_common(request, "issues: write")
+        if err is not None:
+            return err
+
+        state_param = request.query_params.get("state", "open")
+        page = int(request.query_params.get("page", 1))
+        per_page = int(request.query_params.get("per_page", 30))
+
+        items: list[dict[str, Any]] = []
+
+        # Issues
+        for (fn, _num), issue in state.issues.items():
+            if fn != full_name:
+                continue
+            if state_param == "all" or issue.get("state", "open") == state_param:
+                items.append(dict(issue))
+
+        # Pull requests
+        for (fn, num), pr in state.pulls.items():
+            if fn != full_name:
+                continue
+            if state_param == "all" or pr.get("state", "open") == state_param:
+                pr_item = dict(pr)
+                pr_item["pull_request"] = {
+                    "url": f"https://api.github.com/repos/{full_name}/pulls/{num}",
+                    "html_url": pr.get("html_url", f"https://github.com/{full_name}/pull/{num}"),
+                }
+                items.append(pr_item)
+
+        # Sorted by number descending
+        items.sort(key=lambda x: int(x.get("number", 0)), reverse=True)
+
+        start = (page - 1) * per_page
+        end = start + per_page
+        return JSONResponse(items[start:end])
 
     @app.post("/repos/{owner}/{repo}/issues")
     async def create_issue(owner: str, repo: str, request: Request) -> Response:

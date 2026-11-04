@@ -634,7 +634,7 @@ async def build_services(
     wakeups.bind(sessions)
     waker.bind(sessions)
     stack.push_async_callback(sessions.close)
-    kickoff = Kickoff(databases, sessions, handoffs)
+    kickoff = Kickoff(databases, sessions, handoffs, results=results)
     # Before recovery: it re-applies an approved proposal that has no result yet.
     proposal_kinds.register(ConnectionsKind(connections, secret_source))
     proposal_kinds.register(ParserKind(parsers, results))
