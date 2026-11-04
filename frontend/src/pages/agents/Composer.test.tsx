@@ -139,4 +139,33 @@ describe("Composer", () => {
     expect(error).toHaveTextContent("Stop failed");
     expect(error.previousElementSibling).toContainElement(screen.getByRole("textbox"));
   });
+
+  it("renders notice when turn is stopped by step limit (max_steps) and idle", () => {
+    renderComposer({ busy: false, stoppedReason: "max_steps" });
+    const notice = screen.getByRole("status");
+    expect(notice).toBeInTheDocument();
+    expect(notice).toHaveTextContent("Stopped at its step limit: send a message to continue");
+    expect(notice).toHaveClass("text-xs", "text-muted-foreground");
+  });
+
+  it("renders notice when turn is stopped because context is full (room_below_floor) and idle", () => {
+    renderComposer({ busy: false, stoppedReason: "room_below_floor" });
+    const notice = screen.getByRole("status");
+    expect(notice).toBeInTheDocument();
+    expect(notice).toHaveTextContent("Stopped: its context is full");
+    expect(notice).toHaveClass("text-xs", "text-muted-foreground");
+  });
+
+  it("does not render stopped notice when busy", () => {
+    renderComposer({ busy: true, stoppedReason: "max_steps" });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("does not render stopped notice when stoppedReason is empty or unknown", () => {
+    renderComposer({ busy: false, stoppedReason: null });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    renderComposer({ busy: false, stoppedReason: "other_reason" });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
 });

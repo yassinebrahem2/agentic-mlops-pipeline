@@ -268,4 +268,69 @@ describe("applyEvent", () => {
     expect(state.messages[1]?.status).toBe("complete");
     expect(state.messages[2]?.status).toBe("waiting");
   });
+
+  it("carries stopped_reason into last_stopped_reason on turn.ended", () => {
+    let state: SessionState = { messages: [], busy: true, lastSeq: 0 };
+    state = applyEvent(state, {
+      seq: 1,
+      type: "turn.ended",
+      turn_id: "t1",
+      status: "stopped",
+      stopped_reason: "max_steps",
+      error: null,
+    });
+    expect(state.last_stopped_reason).toBe("max_steps");
+
+    state = applyEvent(state, {
+      seq: 2,
+      type: "turn.ended",
+      turn_id: "t2",
+      status: "stopped",
+      stopped_reason: "room_below_floor",
+      error: null,
+    });
+    expect(state.last_stopped_reason).toBe("room_below_floor");
+
+    state = applyEvent(state, {
+      seq: 3,
+      type: "turn.ended",
+      turn_id: "t3",
+      status: "done",
+      error: null,
+    });
+    expect(state.last_stopped_reason).toBeNull();
+  });
+
+  it("clears last_stopped_reason on user message.created but preserves on other events", () => {
+    let state: SessionState = {
+      messages: [],
+      busy: false,
+      lastSeq: 0,
+      last_stopped_reason: "max_steps",
+    };
+
+    const agentMsg = createMessage("a1", "agent", []);
+    state = applyEvent(state, {
+      seq: 1,
+      type: "message.created",
+      message: agentMsg,
+    });
+    expect(state.last_stopped_reason).toBe("max_steps");
+
+    state = applyEvent(state, {
+      seq: 2,
+      type: "text.delta",
+      message_id: "a1",
+      text: "hello",
+    });
+    expect(state.last_stopped_reason).toBe("max_steps");
+
+    const userMsg = createMessage("u1", "user", [{ type: "text", text: "continue" }]);
+    state = applyEvent(state, {
+      seq: 3,
+      type: "message.created",
+      message: userMsg,
+    });
+    expect(state.last_stopped_reason).toBeNull();
+  });
 });

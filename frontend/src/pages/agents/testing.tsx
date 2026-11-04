@@ -35,6 +35,7 @@ export interface DefaultMockOverrides {
   permissionLevel?: "ask" | "bypass";
   currentTask?: unknown;
   clearedEvents?: unknown[];
+  lastStoppedReason?: string | null;
 }
 
 export function setupAgentsOpenStreamMock(fakeStream: FakeStream): MockInstance {
@@ -126,6 +127,7 @@ export function setupDefaultMocks(overrides?: DefaultMockOverrides): {
           messages: overrides?.messages ?? [],
           last_seq: 10,
           current_task: overrides?.currentTask ?? null,
+          last_stopped_reason: overrides?.lastStoppedReason ?? null,
         },
         response: new Response(null, { status: 200 }),
       });
