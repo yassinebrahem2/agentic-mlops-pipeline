@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from mlops_agents.errors import DomainError
 from mlops_agents.ids import new_id
@@ -14,8 +18,10 @@ from mlops_agents.monitoring.hooks.contract import (
 )
 from mlops_agents.monitoring.hooks.kind import HooksKind
 from mlops_agents.monitoring.hooks.service import HooksService
-from mlops_agents.proposals.contract import HOOKS_KIND, ProposalKind
+from mlops_agents.proposals.contract import HOOKS_KIND, ProposalCheck, ProposalKind
 from mlops_agents.proposals.payloads import CommandSpec
+from mlops_agents.storage.databases import Databases
+from mlops_agents.storage.tables import file_claims, sessions, tasks
 from tests.proposals.samples import command
 
 
@@ -58,6 +64,7 @@ def test_hooks_kind_conforms_to_proposal_kind(service: HooksService) -> None:
     assert kind.payload_model is HooksPayload
     for method in ("key", "preview", "warnings", "credentials_needed", "apply"):
         assert callable(getattr(kind, method))
+    assert isinstance(kind, ProposalCheck)
 
 
 def test_key(service: HooksService) -> None:
@@ -269,3 +276,292 @@ def test_type_error_on_invalid_payload(service: HooksService) -> None:
         kind.preview(bad)
     with pytest.raises(TypeError, match="the hooks kind got a OtherPayload"):
         kind.warnings(bad)
+
+
+async def _insert_task(
+    databases: Databases,
+    project_id: str,
+    task_id: str,
+    status: str = "active",
+    pr_number: int | None = None,
+    claimed_files: list[str] | None = None,
+) -> None:
+    engine = await databases.project(project_id)
+    async with engine.begin() as conn:
+        await conn.execute(
+            sqlite_insert(sessions)
+            .values(
+                id="ses_1",
+                agent="coder",
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            .on_conflict_do_nothing()
+        )
+        await conn.execute(
+            insert(tasks).values(
+                id=task_id,
+                session_id="ses_1",
+                agent="coder",
+                title="test task",
+                branch="feature/test",
+                worktree="wt_1",
+                base_ref="main",
+                base_sha="abc1234",
+                status=status,
+                pr_number=pr_number,
+                created_at=datetime.now(UTC).isoformat(),
+            )
+        )
+        if claimed_files:
+            for path in claimed_files:
+                await conn.execute(
+                    insert(file_claims).values(
+                        task_id=task_id,
+                        path=path,
+                    )
+                )
+
+
+@pytest.mark.asyncio
+async def test_check_passes_when_no_databases(service: HooksService) -> None:
+    kind = HooksKind(hooks=service)
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="ci-eval",
+                model=None,
+                spec=_sample_spec(kind="evaluate", cmd_type="ci_dispatch", workflow="eval.yml"),
+                why="Evaluate pipeline via CI",
+            )
+        ]
+    )
+    refusals = await kind.check("prj_1", payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_check_passes_when_no_claims(service: HooksService, databases: Databases) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="ci-eval",
+                model=None,
+                spec=_sample_spec(kind="evaluate", cmd_type="ci_dispatch", workflow="eval.yml"),
+                why="Evaluate pipeline via CI",
+            )
+        ]
+    )
+    refusals = await kind.check(project_id, payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_check_refuses_when_entry_file_claimed_by_open_task(
+    service: HooksService, databases: Databases
+) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_1",
+        status="active",
+        pr_number=17,
+        claimed_files=["workflows/hold.py"],
+    )
+
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="hold-predictions",
+                model=None,
+                spec=_sample_spec(
+                    kind="evaluate",
+                    cmd_type="ci_dispatch",
+                    workflow="workflows/hold.py",
+                ),
+                why="Hold predictions on drift",
+            )
+        ]
+    )
+
+    refusals = await kind.check(project_id, payload)
+    assert refusals == [
+        "workflows/hold.py is being changed in task task_1 (PR #17); propose this hook after that PR merges"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_check_passes_when_task_is_not_active_or_in_review(
+    service: HooksService, databases: Databases
+) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_merged",
+        status="merged",
+        pr_number=18,
+        claimed_files=["workflows/hold.py"],
+    )
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_closed",
+        status="closed",
+        pr_number=19,
+        claimed_files=["workflows/hold.py"],
+    )
+
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="hold-predictions",
+                model=None,
+                spec=_sample_spec(
+                    kind="evaluate",
+                    cmd_type="ci_dispatch",
+                    workflow="workflows/hold.py",
+                ),
+                why="Hold predictions on drift",
+            )
+        ]
+    )
+
+    refusals = await kind.check(project_id, payload)
+    assert refusals == []
+
+
+@pytest.mark.asyncio
+async def test_check_refuses_when_task_is_in_review(
+    service: HooksService, databases: Databases
+) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_review",
+        status="in_review",
+        pr_number=20,
+        claimed_files=["workflows/hold.py"],
+    )
+
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="hold-predictions",
+                model=None,
+                spec=_sample_spec(
+                    kind="evaluate",
+                    cmd_type="ci_dispatch",
+                    workflow="workflows/hold.py",
+                ),
+                why="Hold predictions on drift",
+            )
+        ]
+    )
+
+    refusals = await kind.check(project_id, payload)
+    assert refusals == [
+        "workflows/hold.py is being changed in task task_review (PR #20); propose this hook after that PR merges"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_check_with_entry_files_and_no_pr(
+    service: HooksService, databases: Databases
+) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_2",
+        status="active",
+        pr_number=None,
+        claimed_files=["scripts/train.py"],
+    )
+
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="train-hook",
+                model="churn",
+                spec=_sample_spec(
+                    kind="train",
+                    cmd_type="command",
+                    entry_files=["scripts/train.py"],
+                ),
+                why="Train model on new data",
+            )
+        ]
+    )
+
+    refusals = await kind.check(project_id, payload)
+    assert refusals == [
+        "scripts/train.py is being changed in task task_2 (no PR); propose this hook after that PR merges"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_check_multiple_hooks_and_order_preserved(
+    service: HooksService, databases: Databases
+) -> None:
+    kind = HooksKind(hooks=service, databases=databases)
+    project_id = new_id("prj")
+
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_b",
+        status="active",
+        pr_number=102,
+        claimed_files=["scripts/evaluate.py"],
+    )
+    await _insert_task(
+        databases,
+        project_id,
+        task_id="task_a",
+        status="active",
+        pr_number=101,
+        claimed_files=["workflows/pipeline.yml"],
+    )
+
+    payload = HooksPayload(
+        hooks=[
+            HookProposal(
+                name="hook-1",
+                model=None,
+                spec=_sample_spec(
+                    kind="evaluate",
+                    cmd_type="ci_dispatch",
+                    workflow="workflows/pipeline.yml",
+                ),
+                why="Run workflow",
+            ),
+            HookProposal(
+                name="hook-2",
+                model=None,
+                spec=_sample_spec(
+                    kind="evaluate",
+                    cmd_type="command",
+                    entry_files=["scripts/evaluate.py"],
+                ),
+                why="Run eval",
+            ),
+        ]
+    )
+
+    refusals = await kind.check(project_id, payload)
+    assert refusals == [
+        "workflows/pipeline.yml is being changed in task task_a (PR #101); propose this hook after that PR merges",
+        "scripts/evaluate.py is being changed in task task_b (PR #102); propose this hook after that PR merges",
+    ]
