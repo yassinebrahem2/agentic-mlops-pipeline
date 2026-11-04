@@ -32,6 +32,39 @@ async def release_claims(
         )
 
 
+def conflicting_claims_query(
+    task_id: str,
+    agent: str | None,
+    paths: Sequence[str],
+):
+    where_clauses = [
+        tasks.c.status.in_(("active", "in_review")),
+        tasks.c.id != task_id,
+        file_claims.c.path.in_(paths),
+    ]
+    if agent is not None:
+        where_clauses.append(tasks.c.agent != agent)
+    return (
+        select(file_claims.c.path, tasks.c.id, tasks.c.agent)
+        .join(tasks, tasks.c.id == file_claims.c.task_id)
+        .where(*where_clauses)
+    )
+
+
+async def find_conflicting_paths(
+    engine: AsyncEngine,
+    task_id: str,
+    paths: Sequence[str],
+) -> list[str]:
+    """Return paths claimed by other open tasks of a different agent."""
+    if not paths:
+        return []
+    async with engine.connect() as conn:
+        agent = await conn.scalar(select(tasks.c.agent).where(tasks.c.id == task_id))
+        stmt = conflicting_claims_query(task_id, agent, paths)
+        return [str(r[0]) for r in (await conn.execute(stmt)).all()]
+
+
 async def claim_paths(
     engine: AsyncEngine,
     task: TaskRef,
@@ -43,18 +76,7 @@ async def claim_paths(
 
     async with engine.begin() as conn:
         current_agent = await conn.scalar(select(tasks.c.agent).where(tasks.c.id == task.id))
-        where_clauses = [
-            tasks.c.status.in_(("active", "in_review")),
-            tasks.c.id != task.id,
-            file_claims.c.path.in_(paths),
-        ]
-        if current_agent is not None:
-            where_clauses.append(tasks.c.agent != current_agent)
-        stmt = (
-            select(file_claims.c.path, tasks.c.id, tasks.c.agent)
-            .join(tasks, tasks.c.id == file_claims.c.task_id)
-            .where(*where_clauses)
-        )
+        stmt = conflicting_claims_query(task.id, current_agent, paths)
         conflicts = (await conn.execute(stmt)).mappings().all()
         if conflicts:
             conflict = conflicts[0]
