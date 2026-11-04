@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -18,6 +19,7 @@ from mlops_agents.monitoring.results.contract import (
     Parsers,
     SourceKind,
 )
+from mlops_agents.monitoring.results.mapping import evaluate_mapping
 from mlops_agents.proposals.contract import (
     PARSER_KIND,
     ApplyResult,
@@ -68,6 +70,20 @@ def _payload(payload: Any) -> ParserPayload:
     return ParserPayload.model_validate(payload)
 
 
+def _normalize_datetime(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def _ran_at_matches(dt1: datetime, dt2: datetime) -> bool:
+    n1 = _normalize_datetime(dt1)
+    n2 = _normalize_datetime(dt2)
+    if n1 == n2:
+        return True
+    return n1.replace(second=0, microsecond=0) == n2.replace(second=0, microsecond=0)
+
+
 class ParserKind(ProposalCheck):
     """ProposalKind implementation for 'parser' proposals."""
 
@@ -104,6 +120,70 @@ class ParserKind(ProposalCheck):
                 refusals.append(
                     "Mapping parser must map 'ran_at' from a field; records need the time the check ran, mapped from a field."
                 )
+            if not refusals:
+                outcome = evaluate_mapping(m, p.sample_input, origin_ref="sample:mapping")
+                if outcome.errors:
+                    refusals.append(
+                        f"sample_records do not match what the parser produces from sample_input: {outcome.errors[0]}"
+                    )
+                elif len(outcome.records) != len(p.sample_records):
+                    produced = [r.model_dump(mode="json") for _, r in outcome.records]
+                    refusals.append(
+                        f"sample_records do not match what the parser produces from sample_input: "
+                        f"expected {len(p.sample_records)} record(s), got {len(outcome.records)}: {produced}"
+                    )
+                else:
+                    for idx, (exp, (_, got)) in enumerate(
+                        zip(p.sample_records, outcome.records, strict=True)
+                    ):
+                        if exp.check_id != got.check_id:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} check_id: expected {exp.check_id!r}, got {got.check_id!r}"
+                            )
+                            break
+                        if exp.category != got.category:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} category: expected {exp.category!r}, got {got.category!r}"
+                            )
+                            break
+                        if exp.fired != got.fired:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} fired: expected {exp.fired!r}, got {got.fired!r}"
+                            )
+                            break
+                        if exp.value != got.value:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} value: expected {exp.value!r}, got {got.value!r}"
+                            )
+                            break
+                        if exp.threshold != got.threshold:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} threshold: expected {exp.threshold!r}, got {got.threshold!r}"
+                            )
+                            break
+                        if exp.subject != got.subject:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} subject: expected {exp.subject!r}, got {got.subject!r}"
+                            )
+                            break
+                        if exp.model != got.model:
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} model: expected {exp.model!r}, got {got.model!r}"
+                            )
+                            break
+                        if not _ran_at_matches(exp.ran_at, got.ran_at):
+                            refusals.append(
+                                f"sample_records do not match what the parser produces from sample_input: "
+                                f"record {idx} ran_at: expected {exp.ran_at.isoformat()}, got {got.ran_at.isoformat()}"
+                            )
+                            break
         return refusals
 
     def key(self, payload: BaseModel) -> str:
@@ -126,6 +206,7 @@ class ParserKind(ProposalCheck):
             body = (
                 f"Source: {source_id}\n"
                 f"Timeout: {c.timeout_s}s\n"
+                "The sample records were written by the agent; the app did not run this parser on the sample.\n"
                 f"Script contract:\n{CODE_PARSER_CONTRACT}\n"
                 f"Script:\n{c.script}"
             )
