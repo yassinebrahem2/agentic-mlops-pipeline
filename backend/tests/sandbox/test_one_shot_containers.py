@@ -32,8 +32,9 @@ def test_build_one_shot_run_args_defaults() -> None:
     assert f"{APP_NAME}=true" in args
     assert f"{APP_NAME}.project={project_id}" in args
 
-    # Network enabled by default: --network none should NOT be present
+    # Network enabled by default: --network none should NOT be present, --add-host should be present
     assert "--network" not in args
+    assert "--add-host=host.docker.internal:host-gateway" in args
 
     # No env file by default: --env-file should NOT be present
     assert "--env-file" not in args
@@ -59,6 +60,7 @@ def test_build_one_shot_run_args_network_false_and_no_env_file() -> None:
     assert "--network" in args
     net_idx = args.index("--network")
     assert args[net_idx + 1] == "none"
+    assert not any(a.startswith("--add-host") for a in args)
     assert "--env-file" not in args
 
 
