@@ -155,6 +155,7 @@ class ParserMapping(BaseModel):
     fields: dict[str, str]
     pattern: str | None = None
     fired_when: Condition
+    categories: dict[str, ResultCategory] = {}
     defaults: dict[str, Any] = {}
 
 

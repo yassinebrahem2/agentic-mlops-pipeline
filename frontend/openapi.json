@@ -1697,6 +1697,13 @@
             },
             "title": "Stages",
             "type": "array"
+          },
+          "team_alerts": {
+            "items": {
+              "$ref": "#/components/schemas/SilentTeamAlert"
+            },
+            "title": "Team Alerts",
+            "type": "array"
           }
         },
         "required": [
@@ -2875,7 +2882,8 @@
               "late",
               "silent",
               "suspended",
-              "pending_pr"
+              "pending_pr",
+              "not_judged"
             ],
             "title": "Status",
             "type": "string"
@@ -5847,6 +5855,20 @@
       "ParserMapping": {
         "additionalProperties": false,
         "properties": {
+          "categories": {
+            "additionalProperties": {
+              "enum": [
+                "data_quality",
+                "drift",
+                "model_performance",
+                "operational"
+              ],
+              "type": "string"
+            },
+            "default": {},
+            "title": "Categories",
+            "type": "object"
+          },
           "defaults": {
             "additionalProperties": true,
             "default": {},

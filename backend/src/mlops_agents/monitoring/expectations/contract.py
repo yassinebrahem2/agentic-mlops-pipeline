@@ -51,7 +51,7 @@ class ExpectationState(BaseModel):
     active: bool
     next_deadline: datetime | None = None
     last_seen: datetime | None = None
-    status: Literal["ok", "due", "late", "silent", "suspended", "pending_pr"]
+    status: Literal["ok", "due", "late", "silent", "suspended", "pending_pr", "not_judged"]
     since: datetime | None = None
 
 

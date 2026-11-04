@@ -537,3 +537,64 @@ async def test_feed_miss_followed_by_multiple_successful_arrivals_emits_no_spuri
     signals4 = await service.evaluate(project_id, clock.now())
     assert len(signals4) == 0
     assert len(incidents.signals) == 1
+
+
+async def test_recurring_expectation_is_not_judged_until_first_deadline_passes(
+    databases: Databases, project_id: str, clock: FakeClock
+) -> None:
+    incidents = FakeIncidents()
+    connections = FakeConnections()
+    handoffs = FakeHandoffs()
+    service = ExpectationsService(
+        databases=databases,
+        handoffs=handoffs,
+        connections=connections,
+        incidents=incidents,
+        clock=clock,
+    )
+
+    # Hourly feed at :00, grace 15m. Clock starts at 12:00:00.
+    spec = _make_spec(
+        "hourly_feed",
+        kind="feed",
+        cadence=Cadence(cron=None, every_minutes=60),
+        grace_minutes=15,
+        second_deadline=False,
+    )
+    await service.register(project_id, spec, active=True)
+
+    # 1. Right after registration (12:00), first occurrence is at 13:00.
+    # At 12:30 (and even at 12:50 which is within grace of next deadline), status must be "not_judged".
+    clock.current = datetime(2026, 10, 31, 12, 30, tzinfo=UTC)
+    states = await service.states(project_id)
+    assert len(states) == 1
+    st = states[0]
+    assert st.status == "not_judged"
+    assert st.last_seen is None
+    assert st.since is None
+    assert st.next_deadline == datetime(2026, 10, 31, 13, 0, tzinfo=UTC)
+
+    # At 12:50 (due window for 13:00 deadline), still "not_judged"
+    clock.current = datetime(2026, 10, 31, 12, 50, tzinfo=UTC)
+    states = await service.states(project_id)
+    assert states[0].status == "not_judged"
+
+    # 2. Advance clock past first occurrence (13:00) into grace window (13:05) -> "late"
+    clock.current = datetime(2026, 10, 31, 13, 5, tzinfo=UTC)
+    states = await service.states(project_id)
+    assert states[0].status == "late"
+    assert states[0].next_deadline == datetime(2026, 10, 31, 13, 0, tzinfo=UTC)
+
+    # 3. Advance clock past grace window (13:20) and run evaluate() -> "silent"
+    clock.current = datetime(2026, 10, 31, 13, 20, tzinfo=UTC)
+    signals = await service.evaluate(project_id, clock.now())
+    assert len(signals) == 1
+    states = await service.states(project_id)
+    assert states[0].status == "silent"
+
+    # 4. Result arrives -> status becomes "ok"
+    t_seen = datetime(2026, 10, 31, 13, 25, tzinfo=UTC)
+    await service.note_seen(project_id, spec.key, t_seen)
+    states = await service.states(project_id)
+    assert states[0].status == "ok"
+    assert states[0].last_seen == t_seen

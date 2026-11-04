@@ -53,7 +53,7 @@ async def test_expectations_list_route(
     assert exp["key"] == {"kind": "feed", "ref": "daily_sales", "model": None}
     assert exp["category"] == "data_quality"
     assert exp["active"] is True
-    assert exp["status"] in {"ok", "due", "late", "silent"}
+    assert exp["status"] in {"ok", "due", "late", "silent", "not_judged"}
     assert "next_deadline" in exp
     assert exp["last_seen"] is None
 

@@ -474,7 +474,7 @@ class ExpectationsService(Expectations):
 
         states_list: list[ExpectationState] = []
 
-        for spec, active, last_seen, last_sig_first, _, _ in all_records:
+        for spec, active, last_seen, last_sig_first, _, registered_at in all_records:
             grace_mins = (
                 spec.grace_minutes
                 if spec.grace_minutes is not None
@@ -577,7 +577,18 @@ class ExpectationsService(Expectations):
 
                 st = "ok"
                 since_dt = last_seen
-                if recent_occs:
+                if last_seen is None and last_sig_first is None:
+                    first_occs = next_occurrences(
+                        spec.cadence,
+                        spec.timezone,
+                        after=registered_at,
+                        until=registered_at + timedelta(days=35),
+                    )
+                    if first_occs and now_utc < first_occs[0]:
+                        st = "not_judged"
+                        since_dt = None
+
+                if st != "not_judged" and recent_occs:
                     t_recent = recent_occs[-1]
                     if t_recent <= now_utc <= t_recent + grace:
                         prev_occ = (

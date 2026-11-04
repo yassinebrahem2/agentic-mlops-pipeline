@@ -19,6 +19,7 @@ from mlops_agents.monitoring.incidents.contract import (
     SignalView,
 )
 from mlops_agents.monitoring.results.contract import ResultQuery, StoredResult
+from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.tracking.contract import ModelSummary, Page, TrackingQuery
@@ -192,11 +193,15 @@ class FakeResults:
 
 
 class FakeBaseline:
-    def __init__(self, available: bool) -> None:
+    def __init__(self, available: bool, alerts: list[SilentTeamAlert] | None = None) -> None:
         self._available = available
+        self._alerts = alerts or []
 
     async def available(self, project_id: str) -> bool:
         return self._available
+
+    async def silent_alerts(self, project_id: str) -> list[SilentTeamAlert]:
+        return list(self._alerts)
 
 
 class FakeBoard:
@@ -215,6 +220,7 @@ class Rig:
         mode: RunMode = RunMode.SERVER,
         states: list[ExpectationState] | None = None,
         baseline: bool = True,
+        alerts: list[SilentTeamAlert] | None = None,
     ) -> None:
         self.incidents = FakeIncidents()
         self.results = FakeResults([])
@@ -230,7 +236,7 @@ class Rig:
                 else [expectation("bookings", "ok"), expectation("nightly", "ok", "job")]
             ),
             results=self.results,
-            baseline=FakeBaseline(baseline),
+            baseline=FakeBaseline(baseline, alerts=alerts),
             status_board=self.board,
             mode=mode,
         )
@@ -473,6 +479,24 @@ async def test_baseline_available_follows_the_baseline() -> None:
 
     assert yes.baseline_available is True
     assert no.baseline_available is False
+
+
+@pytest.mark.asyncio
+async def test_dashboard_team_alerts_sorted_newest_first_and_capped_at_ten() -> None:
+    alerts = [
+        SilentTeamAlert(
+            result_id=f"res_{i}",
+            check_id=f"chk_{i}",
+            subject="clean",
+            ran_at=datetime(2026, 10, 30, 10, i, tzinfo=UTC),
+            category="data_quality",
+        )
+        for i in range(15)
+    ]
+    rig = Rig(current=payload(), alerts=alerts)
+    view = await rig.builder.build(PROJECT)
+    assert len(view.team_alerts) == 10
+    assert [a.result_id for a in view.team_alerts] == [f"res_{i}" for i in range(14, 4, -1)]
 
 
 def walkthrough_3_payload() -> HandoffPayload:
