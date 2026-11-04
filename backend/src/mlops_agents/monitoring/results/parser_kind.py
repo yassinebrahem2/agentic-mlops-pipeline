@@ -127,9 +127,10 @@ class ParserKind(ProposalCheck):
                         f"sample_records do not match what the parser produces from sample_input: {outcome.errors[0]}"
                     )
                 elif len(outcome.records) != len(p.sample_records):
+                    produced = [r.model_dump(mode="json") for _, r in outcome.records]
                     refusals.append(
                         f"sample_records do not match what the parser produces from sample_input: "
-                        f"expected {len(p.sample_records)} record(s), got {len(outcome.records)}"
+                        f"expected {len(p.sample_records)} record(s), got {len(outcome.records)}: {produced}"
                     )
                 else:
                     for idx, (exp, (_, got)) in enumerate(

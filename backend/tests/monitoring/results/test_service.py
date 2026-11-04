@@ -17,6 +17,7 @@ from mlops_agents.monitoring.expr import Compare
 from mlops_agents.monitoring.results.contract import (
     ParserMapping,
     ParserSpec,
+    ResultQuery,
     ResultRecord,
     StoredResult,
     source_id,
@@ -553,3 +554,62 @@ async def test_team_source_without_parser_cursor_stays_at_zero(
     state = await service.store.get_source_state(project_id, s_id)
     assert state is not None
     assert state.cursor == {}
+
+
+async def test_collector_stores_drift_as_drift_with_categories(
+    databases: Databases,
+    events: SqliteEventLog,
+    project_id: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    data_dir = tmp_path / "feed"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "feed.jsonl"
+    target.write_bytes(b'{"check": "drift_score", "val": 0.42, "ts": "2026-11-03T10:00:00Z"}\n')
+
+    connections = FakeConnections()
+    connections.add_local_folder("conn_feed", data_dir)
+
+    handoff = _build_handoff(
+        feeds=[
+            Feed(
+                name="team_job_feed",
+                kind="job",
+                ref=JobFeedRef(
+                    ci_workflow=None,
+                    file=FileResults(connection="conn_feed", path_pattern="feed.jsonl"),
+                ),
+                cadence=Cadence(cron="0 0 * * *", every_minutes=None),
+                grace_minutes=30,
+                timezone="UTC",
+            )
+        ]
+    )
+    handoffs = FakeHandoffs(handoff)
+
+    service = ResultsService(databases, handoffs, connections, events)
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "check", "value": "val", "ran_at": "ts"},
+            fired_when=Compare(op="gt", field="value", value=1.0),
+            categories={"drift_score": "drift"},
+            defaults={"category": "model_performance", "subject": "tbl"},
+        ),
+    )
+    await service.parsers.store(project_id, spec, "prop_parser_drift")
+    observer = FakeObserver()
+    service.add_observer(observer)
+
+    rep = await service.collect(project_id, clock.now())
+    assert rep.stored == 1
+    assert len(observer.batches) == 1
+    assert len(observer.batches[0]) == 1
+    assert observer.batches[0][0].category == "drift"
+    assert observer.batches[0][0].check_id == "drift_score"
+
+    page = await service.query(project_id, ResultQuery())
+    assert len(page.rows) == 1
+    assert page.rows[0].category == "drift"

@@ -1715,3 +1715,26 @@ def test_code_parser_preview_mentions_sample_records_not_run(databases: Database
         "The sample records were written by the agent; the app did not run this parser on the sample."
         in preview.body
     )
+
+
+@pytest.mark.asyncio
+async def test_parser_kind_check_count_mismatch_shows_produced_records(
+    databases: Databases,
+) -> None:
+    kind = ParserKind(SqliteParsers(databases))
+    spec = ParserSpec(
+        source_id="file:conn_feed:feed.jsonl",
+        mapping=ParserMapping(
+            format="jsonl",
+            fields={"check_id": "id", "ran_at": "ts"},
+            fired_when=Compare(op="eq", field="fired", value=True),
+            defaults={"category": "model_performance", "subject": "tbl"},
+        ),
+    )
+    sample_input = '{"id": "c1", "ts": "2026-11-03T12:00:00Z", "fired": false}\n'
+    # sample_records has 0 records, but parser produces 1
+    payload = ParserPayload(spec=spec, sample_input=sample_input, sample_records=[])
+    refusals = await kind.check("prj_test", payload)
+    assert len(refusals) == 1
+    assert "expected 0 record(s), got 1:" in refusals[0]
+    assert "'check_id': 'c1'" in refusals[0]
