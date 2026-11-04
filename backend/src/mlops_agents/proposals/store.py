@@ -361,6 +361,26 @@ class ProposalStore:
             )
         return [_row_to_record(r) for r in rows]
 
+    async def list_pending_without_approval_for_turn(
+        self, project_id: str, turn_id: str
+    ) -> list[ProposalRecord]:
+        engine = await self._databases.project(project_id)
+        async with engine.connect() as conn:
+            rows = (
+                (
+                    await conn.execute(
+                        select(proposals).where(
+                            proposals.c.turn_id == turn_id,
+                            proposals.c.status == "pending",
+                            proposals.c.approval_id.is_(None),
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [_row_to_record(r) for r in rows]
+
     async def list_non_pending(self, project_id: str) -> list[ProposalRecord]:
         engine = await self._databases.project(project_id)
         async with engine.connect() as conn:
