@@ -101,6 +101,7 @@ export function useSession(projectId: string, agent: string): UseSessionResult {
         busy: session.busy,
         lastSeq: session.last_seq,
         current_task: session.current_task,
+        last_stopped_reason: session.busy ? null : (session.last_stopped_reason ?? null),
       };
     };
 

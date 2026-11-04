@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, get_args
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -21,8 +21,13 @@ from mlops_agents.monitoring.results.mlflow_source import handoff_metric_user
 from mlops_agents.proposals.payloads import Cadence, FileResults, MlflowResults
 
 if TYPE_CHECKING:
+    from mlops_agents.agents.runtime.contract import TaskView
     from mlops_agents.monitoring.expectations.checks import ChecksStore
-    from mlops_agents.proposals.contract import Handoffs
+    from mlops_agents.proposals.contract import Handoffs, HandoffView
+
+
+class _TasksReader(Protocol):
+    async def open_tasks(self, project_id: str) -> list[TaskView]: ...
 
 
 # The file reader keeps only an agent's records from a results file (file_source.py).
@@ -135,11 +140,23 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
     risk: ClassVar[RiskClass] = RiskClass.READ
     args_model: ClassVar[type[BaseModel]] = RegisterCheckInput
 
-    def __init__(self, checks: ChecksStore, handoffs: Handoffs) -> None:
+    def __init__(
+        self,
+        checks: ChecksStore,
+        handoffs: Handoffs,
+        tasks: _TasksReader | None = None,
+    ) -> None:
         self._checks = checks
         self._handoffs = handoffs
+        self._tasks = tasks
 
-    async def _metric_user(self, project_id: str, check_id: str, metric: str) -> str | None:
+    async def _metric_user(
+        self,
+        project_id: str,
+        check_id: str,
+        metric: str,
+        handoff: HandoffView | None,
+    ) -> str | None:
         """Who else already reads this MLflow metric, so two checks never share one source.
 
         The same check registering its metric again is not a conflict, even when the handoff
@@ -158,7 +175,7 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
                 return None
             others.append(f"registered check {chk.check_id!r}")
 
-        user = handoff_metric_user(await self._handoffs.current(project_id), metric)
+        user = handoff_metric_user(handoff, metric)
         if user is not None:
             if user.check is not None:
                 return f"handoff check {user.check.check_id!r}"
@@ -179,6 +196,34 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
                 is_error=True,
             )
 
+        if self._tasks is not None:
+            try:
+                open_tasks = await self._tasks.open_tasks(ctx.project_id)
+            except Exception as exc:
+                return ToolOutput(content=f"Failed to check open tasks: {exc}", is_error=True)
+
+            agent_prs = {
+                t.pr_number for t in open_tasks if t.agent == ctx.agent and t.pr_number is not None
+            }
+            if args.pr_number not in agent_prs:
+                return ToolOutput(
+                    content="pr_number must be the PR that delivers this check; open it with OpenPullRequest first",
+                    is_error=True,
+                )
+
+        try:
+            handoff = await self._handoffs.current(ctx.project_id)
+        except Exception as exc:
+            return ToolOutput(content=f"Failed to read handoff: {exc}", is_error=True)
+
+        if handoff is not None:
+            team_check_ids = {c.check_id for c in handoff.payload.operations.checks}
+            if args.check_id in team_check_ids:
+                return ToolOutput(
+                    content="this check is the team's; register only checks you deliver",
+                    is_error=True,
+                )
+
         # Validate results_location
         if isinstance(args.results_location, FileResults):
             if not args.results_location.connection or not args.results_location.path_pattern:
@@ -196,7 +241,7 @@ class RegisterCheck(AgentTool[RegisterCheckInput]):
         if isinstance(args.results_location, MlflowResults):
             try:
                 user = await self._metric_user(
-                    ctx.project_id, args.check_id, args.results_location.metric
+                    ctx.project_id, args.check_id, args.results_location.metric, handoff
                 )
             except Exception as exc:
                 return ToolOutput(

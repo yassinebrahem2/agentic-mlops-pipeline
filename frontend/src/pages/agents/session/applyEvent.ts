@@ -6,6 +6,7 @@ export type SessionState = {
   busy: boolean;
   lastSeq: number;
   current_task?: TaskView | null;
+  last_stopped_reason?: string | null;
 };
 export type SequencedEvent = { seq: number } & StreamEventData;
 
@@ -25,12 +26,16 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
   if (event.seq <= state.lastSeq) return state;
   let messages = state.messages;
   let busy = state.busy;
+  let last_stopped_reason = state.last_stopped_reason ?? null;
   switch (event.type) {
     case "message.created":
       if (!messages.some((message) => message.id === event.message.id)) {
         messages = [...messages, event.message];
       }
-      busy = busy || event.message.author_kind === "user";
+      if (event.message.author_kind === "user") {
+        busy = true;
+        last_stopped_reason = null;
+      }
       break;
     case "text.delta":
       messages = withMessage(messages, event.message_id, (message) => {
@@ -80,6 +85,7 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
       break;
     case "turn.ended":
       busy = queued(messages);
+      last_stopped_reason = event.stopped_reason ?? null;
       break;
     case "turn.waiting":
       messages = messages.map((message) =>
@@ -93,5 +99,11 @@ export function applyEvent(state: SessionState, event: SequencedEvent): SessionS
     case "resync":
       break;
   }
-  return { messages, busy, lastSeq: event.seq, current_task: state.current_task };
+  return {
+    messages,
+    busy,
+    lastSeq: event.seq,
+    current_task: state.current_task,
+    last_stopped_reason,
+  };
 }

@@ -248,3 +248,67 @@ def test_handoff_with_check_without_cadence_validates() -> None:
     stored_payload = HandoffPayload.model_validate(handoff())
     for check in stored_payload.operations.checks:
         assert check.cadence is not None
+
+
+def test_handoff_field_schema_descriptions() -> None:
+    schema = HandoffPayload.model_json_schema()
+    defs = schema.get("$defs", {})
+
+    # 1. CommandSpec.inputs
+    cmd_inputs_desc = defs["CommandSpec"]["properties"]["inputs"]["description"]
+    assert (
+        "only for a `ci_dispatch`; a command template takes no inputs." in cmd_inputs_desc.lower()
+    )
+
+    # 2. operations.on_call
+    on_call_desc = defs["Operations"]["properties"]["on_call"]["description"]
+    assert (
+        "when the team names no on-call people, pass an empty list and record a gap; never invent a contact."
+        in on_call_desc.lower()
+    )
+
+    # 3. data_roles
+    data_roles_desc = schema["properties"]["data_roles"]["description"]
+    assert (
+        "one table may have more than one role (a table of served inputs that is also trained on gets a `training` and a `serving_inputs` row)."
+        in data_roles_desc.lower()
+    )
+
+    # 4. CommandSpec.placeholders
+    placeholders_desc = defs["CommandSpec"]["properties"]["placeholders"]["description"]
+    assert (
+        "the team's own names (`{date}`, `{version}`, `{cutoff}`) map to the declared ones (`window_start`/`window_end`, `candidate_version`)."
+        in placeholders_desc.lower()
+    )
+
+    # 5. Profile.label_maturity_days
+    maturity_desc = defs["Profile"]["properties"]["label_maturity_days"]["description"]
+    assert (
+        "days after the event until a label is final (not zero when labels can still change)."
+        in maturity_desc.lower()
+    )
+
+    # 6. Operations.results_location
+    results_loc_desc = defs["Operations"]["properties"]["results_location"]["description"]
+    assert (
+        "where the agents' own checks write; the team's existing checks are read through their own `results`."
+        in results_loc_desc.lower()
+    )
+
+    # 7. Operations.feeds
+    feeds_desc = defs["Operations"]["properties"]["feeds"]["description"]
+    assert (
+        "a `data` feed for a table that arrives on a cadence; a `job` feed for a job's result lines."
+        in feeds_desc.lower()
+    )
+
+    # 8. PipelineStage.inputs / outputs
+    stage_inputs_desc = defs["PipelineStage"]["properties"]["inputs"]["description"]
+    assert "use the data roles' table names." in stage_inputs_desc.lower()
+    stage_outputs_desc = defs["PipelineStage"]["properties"]["outputs"]["description"]
+    assert "use the data roles' table names." in stage_outputs_desc.lower()
+
+    # Generic text check: no specific dataset, company, or demo project names in schema
+    schema_text = json.dumps(schema).lower()
+    for name in ("demo-world", "hotel", "churn", "housing", "titanic", "iris", "acme"):
+        assert name not in schema_text, f"Schema contains specific project/demo name: '{name}'"
