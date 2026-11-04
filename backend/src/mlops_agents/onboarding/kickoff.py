@@ -259,7 +259,16 @@ class Kickoff:
         if self._results is None:
             return
         sources = await self._results.sources(project_id)
-        needed_ids = [s_id for s_id, _kind, needs_parser in sources if needs_parser]
+        parsers = getattr(self._results, "parsers", None)
+        needed_ids: list[str] = []
+        for s_id, _kind, needs_parser in sources:
+            if not needs_parser:
+                continue
+            if parsers is not None:
+                cur = await parsers.current(project_id, s_id)
+                if cur is not None and cur.enabled:
+                    continue
+            needed_ids.append(s_id)
         if not needed_ids:
             return
         try:

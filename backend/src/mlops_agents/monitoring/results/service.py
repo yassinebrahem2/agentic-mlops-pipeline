@@ -31,6 +31,7 @@ from mlops_agents.monitoring.results.contract import (
     StoredResult,
     parse_source_id,
     source_id,
+    waiting_for_parser_error,
 )
 from mlops_agents.monitoring.results.evaluation_copy import SqliteEvaluationCopies
 from mlops_agents.monitoring.results.file_source import (
@@ -369,7 +370,7 @@ class ResultsService(Results):
                             kind=kind,
                             cursor=current_cursor,
                             last_read=now,
-                            last_error=f"Waiting for a parser: propose one with ProposeParser for source {s_id}.",
+                            last_error=waiting_for_parser_error(s_id),
                             consecutive_failures=0,
                         ),
                     )
@@ -387,8 +388,8 @@ class ResultsService(Results):
                     )
                     if raw_read.last_error:
                         failures[s_id] = raw_read.last_error
-                        prev_err = state.last_error if state else None
-                        if not prev_err and self._incidents is not None:
+                        prev_failures = state.consecutive_failures if state else 0
+                        if prev_failures == 0 and self._incidents is not None:
                             try:
                                 _k, _ref, conn_name = parse_source_id(s_id)
                                 scope = conn_name if conn_name is not None else s_id

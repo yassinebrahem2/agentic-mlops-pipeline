@@ -406,8 +406,13 @@ async def test_replies_stay_in_each_agents_session_and_onboarding_is_not_woken(
 
 
 class FakeResultsProvider:
-    def __init__(self, sources: list[tuple[str, SourceKind, bool]]) -> None:
+    def __init__(
+        self,
+        sources: list[tuple[str, SourceKind, bool]],
+        parsers: Any = None,
+    ) -> None:
         self._sources = sources
+        self.parsers = parsers
 
     async def sources(self, project_id: str) -> list[tuple[str, SourceKind, bool]]:
         return self._sources
@@ -502,3 +507,52 @@ async def test_start_without_sources_needing_parser_posts_nothing_to_onboarding(
             .where(sessions.c.agent == "onboarding")
         )
     assert onboarding_count == 0
+
+
+async def test_start_with_existing_enabled_parser_omits_that_source(
+    env: SessionEnv, databases: Databases, handoffs: SqliteHandoffs
+) -> None:
+    version, payload = await _stored(handoffs, env.project_id)
+    sources: list[tuple[str, SourceKind, bool]] = [
+        ("file:hotel:dq/*.json", "file", True),
+        ("file:hotel:metrics/*.json", "file", True),
+    ]
+
+    class FakeParsers:
+        async def current(self, project_id: str, source_id: str) -> Any:
+            if source_id == "file:hotel:dq/*.json":
+                from unittest.mock import MagicMock
+
+                return MagicMock(enabled=True)
+            return None
+
+    results = FakeResultsProvider(sources, parsers=FakeParsers())
+    kick = Kickoff(databases, env.manager, handoffs, results=results)
+
+    posted = await kick.start(env.project_id, version, PROPOSAL, payload)
+    await all_idle(env.manager, env.project_id)
+
+    assert posted == list(KICKOFF_AGENTS)
+
+    engine = await databases.project(env.project_id)
+    async with engine.connect() as conn:
+        onboarding_msgs = (
+            (
+                await conn.execute(
+                    select(messages)
+                    .join(sessions, sessions.c.id == messages.c.session_id)
+                    .where(sessions.c.agent == "onboarding")
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    system_msgs = [m for m in onboarding_msgs if m["from_agent"] == "system"]
+    assert len(system_msgs) == 1
+    parts_text = "".join(
+        p["text"] for p in json.loads(system_msgs[0]["parts"]) if p["type"] == "text"
+    )
+    # Only the source without an enabled parser is listed
+    assert "file:hotel:metrics/*.json" in parts_text
+    assert "file:hotel:dq/*.json" not in parts_text
