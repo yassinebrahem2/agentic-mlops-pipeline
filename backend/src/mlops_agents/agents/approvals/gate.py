@@ -12,7 +12,7 @@ from mlops_agents.agents.approvals.authority import Authority, AuthorityRegistry
 from mlops_agents.agents.approvals.settings import get_permission_level
 from mlops_agents.agents.approvals.store import ApprovalStore
 from mlops_agents.agents.policy.actions import PROPOSE_BYPASS_OVERRIDES, decide_action
-from mlops_agents.agents.policy.table import PermissionLevel
+from mlops_agents.agents.policy.table import PermissionLevel, PolicyDecision
 from mlops_agents.agents.policy.table import decide as policy_decide
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
 from mlops_agents.agents.runtime.tool_step import REJECTED_TEXT
@@ -38,6 +38,17 @@ def denial_message(level: PermissionLevel, risk: RiskClass) -> str:
             "Propose the change as a diff in your answer instead of modifying files directly."
         )
     return f"Action denied: permission level '{level}' denies '{risk.value}' actions."
+
+
+_STRICTNESS: dict[PolicyDecision, int] = {
+    "allow": 0,
+    "ask": 1,
+    "deny": 2,
+}
+
+
+def _stricter(a: PolicyDecision, b: PolicyDecision) -> PolicyDecision:
+    return max(a, b, key=_STRICTNESS.__getitem__)
 
 
 def _extract_target(tool_name: str, args: BaseModel) -> str:
@@ -98,8 +109,18 @@ class ApprovalGate(Gate):
             level = level_cache[project_id]
             risk = call.tool.risk
 
-            action = await call.action()
-            if action is None:
+            failed_closed = False
+            try:
+                action = await call.action()
+            except Exception as exc:
+                logger.warning("Action call resolution raised for tool %r: %s", call.tool.name, exc)
+                action = None
+                failed_closed = True
+
+            if failed_closed:
+                policy_dec = "deny" if level == "suggest" else "ask"
+                auth = None
+            elif action is None:
                 if risk == RiskClass.PROPOSE and level == "bypass":
                     proposal_kind = _proposal_kind(call)
                     if proposal_kind is not None and proposal_kind in PROPOSE_BYPASS_OVERRIDES:
@@ -110,7 +131,6 @@ class ApprovalGate(Gate):
                     policy_dec = policy_decide(risk, level)
                 auth: Authority | None = None
             else:
-                failed_closed = False
                 try:
                     deploys, has_prod, team_gate = await self._authorities.facts.facts(
                         project_id, action.hook_id
@@ -199,6 +219,10 @@ class ApprovalGate(Gate):
                     policy_dec = "deny" if level == "suggest" else "ask"
                 else:
                     policy_dec = decide_action(level, action, auth)
+
+            if call.tool.name == "Bash":
+                bash_dec = policy_decide(risk, level)
+                policy_dec = _stricter(bash_dec, policy_dec)
 
             target = _extract_target(call.tool.name, call.args)
             detail = call.args.model_dump(mode="json")
