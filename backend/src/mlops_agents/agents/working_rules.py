@@ -45,7 +45,6 @@ def sandbox_limits(*, sandbox_network: bool = SANDBOX_DEFAULT_NETWORK) -> str:
         f"Sandbox limits ({SANDBOX_CPUS} CPUs, {SANDBOX_MEMORY} memory, network {net_status}):\n"
         f"{net_bullet}\n"
         f"{pkg_bullet}\n"
-        "- The project's own test suite may not run there; report this as a gap rather than retried.\n"
         "- duckdb is the `duckdb` command (CLI, not Python `import duckdb`).\n"
         "- An environment failure is reported once and not retried in variants."
     )
