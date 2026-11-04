@@ -1186,6 +1186,7 @@
             "additionalProperties": {
               "type": "string"
             },
+            "description": "Only for a `ci_dispatch`; a command template takes no inputs.",
             "title": "Inputs",
             "type": "object"
           },
@@ -1203,7 +1204,7 @@
             "type": "string"
           },
           "placeholders": {
-            "description": "Declared placeholders used in the template or inputs. Must be drawn from: request_id, model, candidate_version, champion_version, window_start, window_end, mode, threshold",
+            "description": "Declared placeholders used in the template or inputs. Must be drawn from: request_id, model, candidate_version, champion_version, window_start, window_end, mode, threshold. The team's own names (`{date}`, `{version}`, `{cutoff}`) map to the declared ones (`window_start`/`window_end`, `candidate_version`).",
             "items": {
               "enum": [
                 "request_id",
@@ -3278,7 +3279,7 @@
             "type": "array"
           },
           "data_roles": {
-            "description": "Mapping of data connections and tables to their roles ('training', 'serving_inputs', 'predictions', 'labels', 'other'). Every table used by a model must be declared, especially predictions and labels tables so they are never left unmapped.",
+            "description": "Mapping of data connections and tables to their roles ('training', 'serving_inputs', 'predictions', 'labels', 'other'). Every table used by a model must be declared, especially predictions and labels tables so they are never left unmapped. One table may have more than one role (a table of served inputs that is also trained on gets a `training` and a `serving_inputs` row).",
             "items": {
               "$ref": "#/components/schemas/DataRole"
             },
@@ -5557,6 +5558,7 @@
             "type": "array"
           },
           "feeds": {
+            "description": "A `data` feed for a table that arrives on a cadence; a `job` feed for a job's result lines.",
             "items": {
               "$ref": "#/components/schemas/Feed"
             },
@@ -5564,7 +5566,7 @@
             "type": "array"
           },
           "on_call": {
-            "description": "On-call contacts for operational alerts and incidents. May be an empty list [] when nobody is known.",
+            "description": "On-call contacts for operational alerts and incidents. When the team names no on-call people, pass an empty list and record a gap; never invent a contact.",
             "items": {
               "$ref": "#/components/schemas/OnCall"
             },
@@ -5580,6 +5582,7 @@
                 "$ref": "#/components/schemas/MlflowResults"
               }
             ],
+            "description": "Where the agents' own checks write; the team's existing checks are read through their own `results`.",
             "title": "Results Location"
           },
           "scheduler": {
@@ -6156,6 +6159,7 @@
             "type": "string"
           },
           "inputs": {
+            "description": "Use the data roles' table names.",
             "items": {
               "type": "string"
             },
@@ -6167,6 +6171,7 @@
             "type": "string"
           },
           "outputs": {
+            "description": "Use the data roles' table names.",
             "items": {
               "type": "string"
             },
@@ -6288,6 +6293,7 @@
             "type": "integer"
           },
           "label_maturity_days": {
+            "description": "Days after the event until a label is final (not zero when labels can still change).",
             "title": "Label Maturity Days",
             "type": "integer"
           },
