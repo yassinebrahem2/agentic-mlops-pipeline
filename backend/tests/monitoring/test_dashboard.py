@@ -10,7 +10,7 @@ import pytest
 from mlops_agents.agents.runtime.contract import TaskView
 from mlops_agents.config import RunMode
 from mlops_agents.events.contract import AgentStatus
-from mlops_agents.monitoring.dashboard import DashboardBuilder
+from mlops_agents.monitoring.dashboard import DashboardBuilder, map_stages_of
 from mlops_agents.monitoring.expectations.contract import ExpectationState
 from mlops_agents.monitoring.incidents.contract import (
     IncidentStatus,
@@ -23,7 +23,7 @@ from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert
 from mlops_agents.proposals.contract import HandoffView
 from mlops_agents.proposals.payloads import HandoffPayload
 from mlops_agents.tracking.contract import ModelSummary, Page, TrackingQuery
-from tests.proposals.samples import handoff
+from tests.proposals.samples import cadence, data_feed, handoff, model
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
 PROJECT = "prj_a"
@@ -497,3 +497,176 @@ async def test_dashboard_team_alerts_sorted_newest_first_and_capped_at_ten() -> 
     view = await rig.builder.build(PROJECT)
     assert len(view.team_alerts) == 10
     assert [a.result_id for a in view.team_alerts] == [f"res_{i}" for i in range(14, 4, -1)]
+
+
+def walkthrough_3_payload() -> HandoffPayload:
+    return HandoffPayload.model_validate(
+        handoff(
+            models=[
+                model(
+                    name="hotel-cancellation",
+                    predictions={"connection": "hotel", "table": "predictions"},
+                    labels=None,
+                )
+            ],
+            pipeline=[
+                {
+                    "name": "bookings",
+                    "entry": "ingest.py",
+                    "inputs": ["raw"],
+                    "outputs": ["bookings"],
+                },
+                {
+                    "name": "predictions",
+                    "entry": "score.py",
+                    "inputs": ["features"],
+                    "outputs": ["predictions"],
+                },
+                {
+                    "name": "monitoring",
+                    "entry": "monitor.py",
+                    "inputs": ["metrics"],
+                    "outputs": ["monitoring"],
+                },
+            ],
+            edges=[
+                {"from_stage": "bookings", "to_stage": "predictions"},
+                {"from_stage": "predictions", "to_stage": "monitoring"},
+            ],
+            operations={
+                "scheduler": {"name": "cron", "config_location": "cron"},
+                "feeds": [
+                    {
+                        "name": "daily-scoring",
+                        "kind": "job",
+                        "ref": {
+                            "ci_workflow": None,
+                            "file": {
+                                "connection": "hotel",
+                                "path_pattern": "bookings/*.parquet",
+                            },
+                        },
+                        "cadence": cadence(),
+                        "grace_minutes": 60,
+                        "timezone": "UTC",
+                    },
+                    data_feed(
+                        name="bookings-table-feed",
+                        ref={"connection": "hotel", "table": "bookings"},
+                    ),
+                ],
+                "on_call": [],
+                "checks": [
+                    {
+                        "check_id": "chk-drift",
+                        "name": "Drift",
+                        "category": "drift",
+                        "cadence": cadence(),
+                        "timezone": "UTC",
+                        "results": {
+                            "connection": "hotel",
+                            "path_pattern": "monitoring/*.jsonl",
+                        },
+                    }
+                ],
+                "results_location": {
+                    "connection": "hotel",
+                    "path_pattern": "monitoring/results/*.jsonl",
+                },
+            },
+        )
+    )
+
+
+def test_map_stages_of_folder_patterns() -> None:
+    def with_pattern(pattern: str) -> HandoffPayload:
+        return HandoffPayload.model_validate(
+            handoff(
+                pipeline=[{"name": "bookings", "entry": "e.py", "inputs": [], "outputs": ["b"]}],
+                edges=[],
+                operations={
+                    "scheduler": None,
+                    "feeds": [
+                        {
+                            "name": "feed",
+                            "kind": "job",
+                            "ref": {
+                                "ci_workflow": None,
+                                "file": {"connection": "c", "path_pattern": pattern},
+                            },
+                            "cadence": cadence(),
+                            "grace_minutes": 1,
+                            "timezone": "UTC",
+                        }
+                    ],
+                    "on_call": [],
+                    "checks": [],
+                    "results_location": {"connection": "c", "path_pattern": "r/*.jsonl"},
+                },
+            )
+        )
+
+    assert map_stages_of("feed", with_pattern("bookings/*.parquet")) == ["bookings"]
+    assert map_stages_of("feed", with_pattern("/bookings/*.parquet")) == ["bookings"]
+    assert map_stages_of("feed", with_pattern("bookings/sub/*.parquet")) == ["bookings"]
+    assert map_stages_of("feed", with_pattern(r"bookings\sub\*.parquet")) == ["bookings"]
+    assert map_stages_of("feed", with_pattern("*.parquet")) == []
+    assert map_stages_of("feed", with_pattern("b*okings/*.parquet")) == []
+    assert map_stages_of("feed", with_pattern("b?okings/*.parquet")) == []
+    assert map_stages_of("feed", with_pattern("b[oo]kings/*.parquet")) == []
+
+
+def test_map_stages_of_walkthrough_3() -> None:
+    p = walkthrough_3_payload()
+    # Feed with job file pattern top folder "bookings" matches "bookings" stage
+    assert map_stages_of("daily-scoring", p) == ["bookings"]
+    # Feed with data table "bookings" matches "bookings" stage
+    assert map_stages_of("bookings-table-feed", p) == ["bookings"]
+    # Check by check_id with file pattern top folder "monitoring" matches "monitoring" stage
+    assert map_stages_of("chk-drift", p) == ["monitoring"]
+    # Check by name with file pattern top folder "monitoring" matches "monitoring" stage
+    assert map_stages_of("Drift", p) == ["monitoring"]
+    # Model with predictions table "predictions" matches "predictions" stage
+    assert map_stages_of("hotel-cancellation", p) == ["predictions"]
+    # Direct stage input/output matches via stages_of
+    assert map_stages_of("bookings", p) == ["bookings"]
+    assert map_stages_of("predictions", p) == ["predictions"]
+    # Unrelated subject matches nothing
+    assert map_stages_of("unrelated_feed_or_check", p) == []
+
+
+@pytest.mark.asyncio
+async def test_walkthrough_3_handoff_gives_no_unknown_stage_when_results_exist() -> None:
+    p = walkthrough_3_payload()
+
+    # When no results exist, all stages are unknown
+    empty_rig = Rig(current=p, states=[])
+    empty_view = await empty_rig.builder.build(PROJECT)
+    assert [s.status for s in empty_view.stages] == ["unknown", "unknown", "unknown"]
+
+    # When results exist for the feed, check, and model, no stage is unknown
+    rig = Rig(current=p, states=[])
+    rig.results.rows = [
+        stored("daily-scoring", 1.0, "hotel-cancellation", subject="daily-scoring"),
+        stored("chk-drift", 0.05, "hotel-cancellation", subject="chk-drift"),
+        stored("eval", 0.85, "hotel-cancellation", subject="hotel-cancellation"),
+    ]
+    view = await rig.builder.build(PROJECT)
+    assert [s.status for s in view.stages] == ["ok", "ok", "ok"]
+    assert all(s.status != "unknown" for s in view.stages)
+
+
+@pytest.mark.asyncio
+async def test_walkthrough_3_incident_and_late_signals_map_to_stages() -> None:
+    p = walkthrough_3_payload()
+    rig = Rig(
+        current=p,
+        states=[expectation("chk-drift", "late")],
+    )
+    rig.incidents.add("inc_1", subjects=("daily-scoring",))
+
+    view = await rig.builder.build(PROJECT)
+    by_name = {s.name: s for s in view.stages}
+    assert by_name["bookings"].status == "incident"
+    assert by_name["bookings"].incident_ids == ["inc_1"]
+    assert by_name["monitoring"].status == "late"

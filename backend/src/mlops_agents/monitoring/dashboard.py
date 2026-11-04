@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any, Protocol, get_args
 
 from mlops_agents.config import RunMode
@@ -24,13 +25,64 @@ from mlops_agents.monitoring.incidents.contract import (
 from mlops_agents.monitoring.results.contract import ResultQuery, StoredResult
 from mlops_agents.monitoring.verdicts.contract import SilentTeamAlert
 from mlops_agents.proposals.contract import HandoffView
-from mlops_agents.proposals.payloads import HandoffPayload
+from mlops_agents.proposals.payloads import (
+    DataFeedRef,
+    FileResults,
+    HandoffPayload,
+    PipelineStage,
+)
 from mlops_agents.tracking.contract import ModelSummary, Page, TrackingQuery
 
 # One page of incidents or results per read, so a project with many never loads them in one go.
 _PAGE = 200
 _AT_RISK = ("due", "late", "silent")
 _LATE = ("late", "silent")
+
+
+def _top_folder(pattern: str) -> str | None:
+    clean = pattern.replace("\\", "/").lstrip("/")
+    parts = PurePosixPath(clean).parts
+    if len(parts) > 1 and not any(char in parts[0] for char in "*?[]"):
+        return parts[0]
+    return None
+
+
+def map_stages_of(subject: str, payload: HandoffPayload) -> list[str]:
+    """Matches a subject to pipeline stages via its inputs, outputs, tables, or folders."""
+    matched: set[str] = set(stages_of(subject, payload))
+    targets: set[str] = set()
+
+    for feed in payload.operations.feeds:
+        if feed.name == subject:
+            if isinstance(feed.ref, DataFeedRef):
+                targets.add(feed.ref.table)
+            elif feed.ref.file is not None:
+                folder = _top_folder(feed.ref.file.path_pattern)
+                if folder:
+                    targets.add(folder)
+
+    for chk in payload.operations.checks:
+        if (chk.check_id == subject or chk.name == subject) and isinstance(
+            chk.results, FileResults
+        ):
+            folder = _top_folder(chk.results.path_pattern)
+            if folder:
+                targets.add(folder)
+
+    for m in payload.models:
+        if m.name == subject:
+            if m.predictions is not None:
+                targets.add(m.predictions.table)
+            if m.labels is not None:
+                targets.add(m.labels.table)
+
+    if targets:
+        for stage in payload.pipeline:
+            stage_elements = {stage.name, *stage.inputs, *stage.outputs}
+            if stage_elements & targets:
+                matched.add(stage.name)
+
+    return [s.name for s in payload.pipeline if s.name in matched]
 
 
 class _HandoffReader(Protocol):
@@ -140,7 +192,7 @@ class DashboardBuilder:
         for incident in active:
             affected: set[str] = set()
             for signal in await self._incidents.signals(project_id, incident.id):
-                affected.update(stages_of(signal.subject, payload))
+                affected.update(map_stages_of(signal.subject, payload))
             for stage in affected:
                 incident_ids.setdefault(stage, []).append(incident.id)
         late: set[str] = set()
@@ -148,7 +200,7 @@ class DashboardBuilder:
         for state in states:
             # The signal a silent or late expectation raises carries its ref as subject, so
             # the ref is matched the way incident grouping matches a signal.
-            belongs = set(stages_of(state.key.ref, payload))
+            belongs = set(map_stages_of(state.key.ref, payload))
             with_expectation |= belongs
             if state.status in _LATE:
                 late |= belongs
@@ -160,13 +212,28 @@ class DashboardBuilder:
             elif stage.name in late:
                 status = "late"
             elif stage.name in with_expectation or await self._has_results(
-                project_id, [*stage.inputs, *stage.outputs]
+                project_id, self._stage_subjects(stage, payload)
             ):
                 status = "ok"
             else:
                 status = "unknown"
             stages.append(StageStatus(name=stage.name, status=status, incident_ids=ids))
         return stages
+
+    def _stage_subjects(self, stage: PipelineStage, payload: HandoffPayload) -> list[str]:
+        subjects: set[str] = {stage.name, *stage.inputs, *stage.outputs}
+        for feed in payload.operations.feeds:
+            if stage.name in map_stages_of(feed.name, payload):
+                subjects.add(feed.name)
+        for chk in payload.operations.checks:
+            if stage.name in map_stages_of(chk.check_id, payload):
+                subjects.add(chk.check_id)
+            if stage.name in map_stages_of(chk.name, payload):
+                subjects.add(chk.name)
+        for m in payload.models:
+            if stage.name in map_stages_of(m.name, payload):
+                subjects.add(m.name)
+        return list(subjects)
 
     async def _has_results(self, project_id: str, subjects: list[str]) -> bool:
         for subject in subjects:
