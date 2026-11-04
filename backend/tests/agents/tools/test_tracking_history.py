@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import cast
 
@@ -43,6 +44,7 @@ class FakeTrackingService:
         self.sources_list: list[TrackingSourceView] = []
         self.last_query: TrackingQuery | None = None
         self.raise_on_query: Exception | None = None
+        self.raise_on_sources: Exception | None = None
 
     async def query(self, project_id: str, q: TrackingQuery) -> Page[object]:
         if self.raise_on_query is not None:
@@ -57,6 +59,8 @@ class FakeTrackingService:
         return self.pages.get(q.what, Page(rows=[], total=0, truncated=False))
 
     async def sources(self, project_id: str) -> list[TrackingSourceView]:
+        if self.raise_on_sources is not None:
+            raise self.raise_on_sources
         return self.sources_list
 
 
@@ -325,3 +329,55 @@ def test_tracking_history_default_registry_registration() -> None:
     assert "TrackingHistory" not in default_registry().names()
     reg = default_registry(tracking=FakeTrackingService())  # type: ignore[arg-type]
     assert "TrackingHistory" in reg.names()
+
+
+def test_tracking_history_description() -> None:
+    desc = TrackingHistory.description
+    # Reads app's copy of project trackers (MLflow, CI) synced by app, no need to reach from sandbox
+    assert "MLflow" in desc
+    assert "CI" in desc
+    assert "sandbox" in desc
+    assert "synced" in desc
+
+    # run_key rule (metrics needs run_key, list runs first)
+    assert "run_key" in desc
+    assert "list 'runs' first" in desc or "list `runs` first" in desc
+
+    # Which filters apply to which what
+    for what in [
+        "models",
+        "versions",
+        "runs",
+        "metrics",
+        "deployments",
+        "ci_runs",
+        "evaluations",
+    ]:
+        assert what in desc
+
+    # "No X recorded yet" means none recorded, source errors listed after
+    assert "No X recorded yet" in desc
+    assert "source errors" in desc
+
+
+@pytest.mark.asyncio
+async def test_tracking_history_sources_failure_logged_and_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracking = FakeTrackingService()
+    tracking.pages["models"] = Page(rows=[], total=0, truncated=False)
+    tracking.raise_on_sources = RuntimeError("Network timeout contacting tracking database")
+    tool = TrackingHistory(tracking=tracking)  # type: ignore[arg-type]
+    ctx = _tool_ctx()
+
+    with caplog.at_level(logging.WARNING):
+        res = await tool.invoke(ctx, {"what": "models"})
+
+    assert not res.is_error
+    assert "No models recorded yet" in res.content
+    assert "sources could not be listed" in res.content.lower()
+
+    # Verify warning was logged
+    warnings = [rec for rec in caplog.records if rec.levelno >= logging.WARNING]
+    assert len(warnings) >= 1
+    assert any("sources" in rec.message.lower() for rec in warnings)
