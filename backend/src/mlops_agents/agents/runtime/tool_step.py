@@ -14,6 +14,7 @@ from mlops_agents.agents.runtime.agent import Agent
 from mlops_agents.agents.runtime.budget import cut_text, tool_result_max_chars
 from mlops_agents.agents.runtime.contract import Part, ToolResultPart
 from mlops_agents.agents.runtime.hooks import Gate, GateCall, GateDecision
+from mlops_agents.agents.runtime.turn_message import TurnMessage
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import (
     AgentTool,
@@ -60,6 +61,7 @@ class ToolStep:
         approval_store: ApprovalStore,
         fixed: int = 0,
         model: ResolvedModel | None = None,
+        message: TurnMessage | None = None,
     ) -> None:
         self._agent = agent
         self._model = model or getattr(agent, "model", None)
@@ -74,8 +76,10 @@ class ToolStep:
         self._project_id = project_id
         self._session_id = session_id
         self._turn_id = turn_id
-        self._message_id = message_id
-        self._parts = current_parts
+        # The turn's agent message, read when written to: a message taken mid-turn moves the
+        # turn to a new one (`TurnMessage`).
+        self._message = message or TurnMessage(id=message_id, parts=current_parts)
+        self._parts = self._message.parts
         self._lock = lock
         self._update_parts = update_parts
         self._approval_store = approval_store
@@ -131,7 +135,7 @@ class ToolStep:
             gate_calls.append(
                 GateCall(
                     tool_call_id=call_id,
-                    message_id=self._message_id,
+                    message_id=self._message.current_id(),
                     tool=tool,
                     args=args,
                     ctx=ctx,
@@ -176,7 +180,7 @@ class ToolStep:
                 is_error=output.is_error,
             )
             async with self._lock:
-                await self._sink.tool_finished(self._message_id, result)
+                await self._sink.tool_finished(self._message.current_id(), result)
             self._parts.append(result)
             tool_messages.append(ToolMessage(tool_call_id=call_id, content=result.content))
 
