@@ -516,3 +516,66 @@ async def test_a_message_taken_by_a_running_turn_is_redelivered_on_crash_recover
             .all()
         )
     assert len(turn_rows) == 1
+
+
+async def test_an_app_note_waits_for_its_own_turn_and_shows_after_the_reply(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    gate = HoldingGate()
+    env, _ = await build_inbound_env(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, gate=gate
+    )
+    project_id = env.session.project_id
+    manager = env.session.manager
+
+    view = await manager.get(project_id, "beta")
+    sub = manager.subscribe(project_id, "beta", after_seq=view.last_seq)
+
+    await manager.send(project_id, "beta", "Initial turn message.")
+    await gate.entered.wait()
+
+    # Two app notes (as a CI wake posts them) arrive while beta is held mid-turn.
+    for n in (1, 2):
+        await manager.post(
+            project_id,
+            "beta",
+            author_name="system",
+            from_agent="system",
+            text=f"CI failed, note {n}.",
+            exchange_id=None,
+            hop=None,
+            system=True,
+        )
+    gate.release.set()
+
+    events1 = await collect_until_turn_ended(sub)
+    turn_1_id = next(e for e in events1 if isinstance(e, TurnEnded)).data.turn_id
+    beta_requests = [
+        r for r in fake_openai.state.requests if "You are beta" in json.dumps(r["messages"])
+    ]
+    assert len(beta_requests) >= 2
+    assert "CI failed" not in json.dumps(beta_requests[1]["messages"])
+
+    # The notes start the next turn, and the reply to them is stored after them.
+    events2 = await collect_until_turn_ended(sub)
+    turn_2_id = next(e for e in events2 if isinstance(e, TurnEnded)).data.turn_id
+    assert turn_2_id != turn_1_id
+    assert "CI failed, note 1." in json.dumps(fake_openai.state.requests[-1]["messages"])
+
+    store = env.session.store
+    stored = await store.messages(project_id, await store.session_id(project_id, "beta"))
+    notes = [i for i, m in enumerate(stored) if m.from_agent == "system"]
+    first_reply = next(
+        i for i, m in enumerate(stored) if m.author_kind == "agent" and m.turn_id == turn_1_id
+    )
+    second_reply = next(
+        i for i, m in enumerate(stored) if m.author_kind == "agent" and m.turn_id == turn_2_id
+    )
+    assert first_reply < notes[0] < notes[1] < second_reply
+    await manager.close()
