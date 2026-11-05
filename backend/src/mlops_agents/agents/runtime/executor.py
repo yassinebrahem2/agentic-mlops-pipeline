@@ -4,7 +4,6 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mlops_agents.agents.runtime.agent import Agent, AgentBuilder, TurnRefused, resume_command
@@ -22,6 +21,7 @@ from mlops_agents.agents.runtime.graph_run import run_turn_graph
 from mlops_agents.agents.runtime.hooks import TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller, TurnFailed
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.turn_message import TurnMessage
 from mlops_agents.agents.runtime.waiting import UNEXPECTED_FAILURE_TEXT, delete_checkpoint_thread
 from mlops_agents.credentials.scrub import error_text
 from mlops_agents.providers.errors import ProviderCallError, ProviderErrorKind
@@ -38,12 +38,7 @@ __all__ = [
 TurnOutcome = tuple[TurnEnd, str | None, str | None] | tuple[Literal["waiting"], None, None]
 
 
-@dataclass
-class _AgentMessage:
-    """A turn's agent message as its run builds it: its id once stored, and its live parts."""
-
-    id: str | None = None
-    parts: list[Part] = field(default_factory=lambda: [])
+_AgentMessage = TurnMessage
 
 
 class TurnExecutor:
@@ -148,8 +143,7 @@ class TurnExecutor:
                 project_id,
                 session_id,
                 turn_id,
-                agent_msg.id,
-                message.parts,
+                message,
                 initial_state,
                 sink,
                 lock,
@@ -216,8 +210,7 @@ class TurnExecutor:
                 project_id,
                 session_id,
                 turn_id,
-                agent_msg.id,
-                message.parts,
+                message,
                 command,
                 sink,
                 lock,
@@ -377,8 +370,7 @@ class TurnExecutor:
         project_id: str,
         session_id: str,
         turn_id: str,
-        message_id: str,
-        parts: list[Part],
+        message: TurnMessage,
         graph_input: Any,
         sink: TurnSink,
         lock: AbstractAsyncContextManager[Any],
@@ -394,13 +386,14 @@ class TurnExecutor:
             project_id=project_id,
             session_id=session_id,
             turn_id=turn_id,
-            message_id=message_id,
-            parts=parts,
+            message=message,
             graph_input=graph_input,
             sink=sink,
             lock=lock,
         )
         if waits:
             return ("waiting", None, None)
-        await self._finish_message(project_id, sink, lock, message_id, parts, "complete")
+        await self._finish_message(
+            project_id, sink, lock, message.current_id(), message.parts, "complete"
+        )
         return ("done", None, stopped_reason)

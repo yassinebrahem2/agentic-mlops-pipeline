@@ -13,12 +13,12 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Durability
 
 from mlops_agents.agents.runtime.agent import Agent
-from mlops_agents.agents.runtime.contract import Part
 from mlops_agents.agents.runtime.graph import TurnHooks, TurnSink, create_turn_graph
 from mlops_agents.agents.runtime.hooks import GateDecision, TurnObserver
 from mlops_agents.agents.runtime.model_caller import ModelCaller
 from mlops_agents.agents.runtime.stall import StallState, pending_stall
 from mlops_agents.agents.runtime.store import SessionStore
+from mlops_agents.agents.runtime.turn_message import TurnMessage
 from mlops_agents.agents.runtime.waiting import handle_turn_waiting, open_checkpointer
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,7 @@ async def run_turn_graph(
     project_id: str,
     session_id: str,
     turn_id: str,
-    message_id: str,
-    parts: list[Part],
+    message: TurnMessage,
     graph_input: Any,
     sink: TurnSink,
     lock: AbstractAsyncContextManager[Any],
@@ -68,8 +67,9 @@ async def run_turn_graph(
             project_id=project_id,
             session_id=session_id,
             turn_id=turn_id,
-            message_id=message_id,
-            current_parts=parts,
+            message_id=message.current_id(),
+            current_parts=message.parts,
+            message=message,
             checkpointer=cp.saver,
             lock=lock,
             hooks=hooks,
@@ -111,8 +111,8 @@ async def run_turn_graph(
             session_id=session_id,
             agent=agent.definition.name,
             turn_id=turn_id,
-            message_id=message_id,
-            current_parts=parts,
+            message_id=message.current_id(),
+            current_parts=message.parts,
             decisions=decisions_to_record,
             stall=stall,
             lock=lock,

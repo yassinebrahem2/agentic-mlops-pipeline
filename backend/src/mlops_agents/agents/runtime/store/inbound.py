@@ -19,11 +19,6 @@ from mlops_agents.storage.tables import messages, turns
 
 _PARTS_ADAPTER: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
 
-# The sender of the app's own notes (CI wakes, the onboarding kickoff, monitoring wakes, review
-# results). A note is not taken mid-turn: it waits for its own turn, so the agent's reaction is
-# shown after the note instead of above it in the message the running turn started earlier.
-_APP_SENDER = "system"
-
 
 def _view(row: RowMapping) -> MessageView:
     return MessageView(
@@ -55,7 +50,6 @@ class InboundStore(StoreBase):
                     messages.c.session_id == session_id,
                     messages.c.status == "queued",
                     messages.c.from_agent.is_not(None),
-                    messages.c.from_agent != _APP_SENDER,
                 )
                 .order_by(messages.c.seq.asc())
             )

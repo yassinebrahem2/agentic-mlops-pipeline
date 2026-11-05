@@ -518,7 +518,7 @@ async def test_a_message_taken_by_a_running_turn_is_redelivered_on_crash_recover
     assert len(turn_rows) == 1
 
 
-async def test_an_app_note_waits_for_its_own_turn_and_shows_after_the_reply(
+async def _held_turn_with_two_notes(
     tmp_path: Path,
     paths: DataPaths,
     databases: Databases,
@@ -526,21 +526,18 @@ async def test_an_app_note_waits_for_its_own_turn_and_shows_after_the_reply(
     fake_openai: RunningFake,
     model_http: httpx2.AsyncClient,
     git_env: dict[str, str],
-) -> None:
+) -> tuple[BusEnv, str, HoldingGate, AsyncGenerator[StreamEvent, None]]:
+    """beta's turn held at its first tool call, then two app notes (as a CI wake posts them)."""
     gate = HoldingGate()
     env, _ = await build_inbound_env(
         tmp_path, paths, databases, keystore, fake_openai, model_http, git_env, gate=gate
     )
     project_id = env.session.project_id
     manager = env.session.manager
-
     view = await manager.get(project_id, "beta")
     sub = manager.subscribe(project_id, "beta", after_seq=view.last_seq)
-
     await manager.send(project_id, "beta", "Initial turn message.")
     await gate.entered.wait()
-
-    # Two app notes (as a CI wake posts them) arrive while beta is held mid-turn.
     for n in (1, 2):
         await manager.post(
             project_id,
@@ -552,30 +549,74 @@ async def test_an_app_note_waits_for_its_own_turn_and_shows_after_the_reply(
             hop=None,
             system=True,
         )
-    gate.release.set()
+    return env, project_id, gate, sub
 
-    events1 = await collect_until_turn_ended(sub)
-    turn_1_id = next(e for e in events1 if isinstance(e, TurnEnded)).data.turn_id
+
+async def test_a_note_taken_mid_turn_splits_the_reply_around_it(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    env, project_id, gate, sub = await _held_turn_with_two_notes(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
+    )
+    gate.release.set()
+    events = await collect_until_turn_ended(sub)
+    turn_id = next(e for e in events if isinstance(e, TurnEnded)).data.turn_id
+
+    # The notes reach the running turn at its next model step.
     beta_requests = [
         r for r in fake_openai.state.requests if "You are beta" in json.dumps(r["messages"])
     ]
-    assert len(beta_requests) >= 2
-    assert "CI failed" not in json.dumps(beta_requests[1]["messages"])
-
-    # The notes start the next turn, and the reply to them is stored after them.
-    events2 = await collect_until_turn_ended(sub)
-    turn_2_id = next(e for e in events2 if isinstance(e, TurnEnded)).data.turn_id
-    assert turn_2_id != turn_1_id
-    assert "CI failed, note 1." in json.dumps(fake_openai.state.requests[-1]["messages"])
+    assert "CI failed, note 1." in json.dumps(beta_requests[1]["messages"])
 
     store = env.session.store
     stored = await store.messages(project_id, await store.session_id(project_id, "beta"))
+    replies = [i for i, m in enumerate(stored) if m.author_kind == "agent"]
     notes = [i for i, m in enumerate(stored) if m.from_agent == "system"]
-    first_reply = next(
-        i for i, m in enumerate(stored) if m.author_kind == "agent" and m.turn_id == turn_1_id
+    # One turn, its reply split where the notes were read: the reply so far, the notes, the rest.
+    assert len(replies) == 2
+    assert all(stored[i].turn_id == turn_id for i in replies)
+    assert replies[0] < notes[0] < notes[1] < replies[1]
+    first, second = stored[replies[0]], stored[replies[1]]
+    assert first.status == "complete"
+    assert second.status == "complete"
+    assert any(p.type == "tool_call" for p in first.parts)
+    assert any(p.type == "tool_result" for p in first.parts)
+    # The rest of the turn went to the second message, not back into the first.
+    assert second.parts
+    assert not any(p in first.parts for p in second.parts)
+    await env.session.manager.close()
+
+
+async def test_a_failure_after_a_split_ends_the_second_message_and_keeps_the_first(
+    tmp_path: Path,
+    paths: DataPaths,
+    databases: Databases,
+    keystore: MemoryKeyStore,
+    fake_openai: RunningFake,
+    model_http: httpx2.AsyncClient,
+    git_env: dict[str, str],
+) -> None:
+    env, project_id, gate, sub = await _held_turn_with_two_notes(
+        tmp_path, paths, databases, keystore, fake_openai, model_http, git_env
     )
-    second_reply = next(
-        i for i, m in enumerate(stored) if m.author_kind == "agent" and m.turn_id == turn_2_id
-    )
-    assert first_reply < notes[0] < notes[1] < second_reply
-    await manager.close()
+    fake_openai.state.auth_fail = True
+    gate.release.set()
+    await collect_until_turn_ended(sub)
+
+    store = env.session.store
+    stored = await store.messages(project_id, await store.session_id(project_id, "beta"))
+    replies = [m for m in stored if m.author_kind == "agent"]
+    assert len(replies) == 2
+    first, second = replies
+    assert first.status == "complete"
+    assert second.status == "complete"
+    assert any(p.type == "tool_result" for p in first.parts)
+    assert not any(p.type in ("tool_call", "tool_result") for p in second.parts)
+    assert any(m.author_kind == "system" for m in stored)
+    await env.session.manager.close()

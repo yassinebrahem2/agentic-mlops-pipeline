@@ -49,6 +49,7 @@ from mlops_agents.agents.runtime.model_caller import (
 from mlops_agents.agents.runtime.stall import StallState, await_stall, pending_stall, record_stall
 from mlops_agents.agents.runtime.store import SessionStore
 from mlops_agents.agents.runtime.tool_step import ToolStep, needs_wait
+from mlops_agents.agents.runtime.turn_message import TurnMessage
 from mlops_agents.agents.tasks.contract import TaskWorkspaces
 from mlops_agents.agents.tools.base import Preview
 from mlops_agents.events.contract import EventLog
@@ -118,12 +119,43 @@ def create_turn_graph(
     lock: AbstractAsyncContextManager[Any],
     hooks: TurnHooks,
     checkpointer: AsyncSqliteSaver | None = None,
+    message: TurnMessage | None = None,
 ) -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
     """Build and compile the StateGraph for a single turn."""
+    # The turn's agent message, read when written to: a message taken mid-turn finishes it and
+    # moves the rest of the turn to a new one (`split_message`).
+    turn_message = message or TurnMessage(id=message_id, parts=current_parts)
+    current_parts = turn_message.parts
+
+    def of_this_turn(m: MessageView) -> bool:
+        """The turn's own agent messages: its live state holds them, so history leaves them out."""
+        return m.author_kind == "agent" and m.turn_id == turn_id
+
+    async def split_message() -> None:
+        """A message was taken into the running turn: the agent's message so far ends where it
+        was read and the turn goes on in a new message, so the conversation shows the reply so
+        far, the message, then the rest of the reply."""
+        async with lock:
+            done = await store.update_message(
+                project_id, turn_message.current_id(), parts=list(current_parts), status="complete"
+            )
+            await sink.message(done, created=False)
+            nxt = await store.add_message(
+                project_id,
+                session_id,
+                turn_id=turn_id,
+                author_kind="agent",
+                author_name=agent.definition.name,
+                parts=[],
+                status="streaming",
+            )
+            await sink.message(nxt, created=True)
+            current_parts.clear()
+            turn_message.id = nxt.id
 
     async def _update_parts() -> None:
         async with lock:
-            await store.update_message(project_id, message_id, parts=current_parts)
+            await store.update_message(project_id, turn_message.current_id(), parts=current_parts)
 
     async def prepare_node(state: TurnState) -> dict[str, Any]:
         """The turn's first node: compact the session when it needs it, then build the turn's
@@ -140,7 +172,7 @@ def create_turn_graph(
                 agent.model,
                 project_id,
                 session_id,
-                [m for m in history if m.id != message_id],
+                [m for m in history if not of_this_turn(m)],
                 str(system_message(agent, summary).content),
                 turn_id=turn_id,
                 agent_name=agent.definition.name,
@@ -164,7 +196,7 @@ def create_turn_graph(
             raise
         summary, compacted_through = await store.summary(project_id, session_id)
         active = await store.messages(project_id, session_id, after=compacted_through)
-        active_msgs = [m for m in active if m.id != message_id]
+        active_msgs = [m for m in active if not of_this_turn(m)]
 
         sys_msg = system_message(agent, summary)
         fixed = fixed_tokens(str(sys_msg.content), tool_schemas)
@@ -198,8 +230,10 @@ def create_turn_graph(
             stop_part = TextPart(type="text", text=stop_text)
             current_parts.append(stop_part)
             async with lock:
-                await sink.text(message_id, stop_text)
-                await store.update_message(project_id, message_id, parts=current_parts)
+                await sink.text(turn_message.current_id(), stop_text)
+                await store.update_message(
+                    project_id, turn_message.current_id(), parts=current_parts
+                )
             return {
                 "stopped_reason": "max_steps",
             }
@@ -226,13 +260,17 @@ def create_turn_graph(
             floor_part = TextPart(type="text", text=floor_text)
             current_parts.append(floor_part)
             async with lock:
-                await sink.text(message_id, floor_text)
-                await store.update_message(project_id, message_id, parts=current_parts)
+                await sink.text(turn_message.current_id(), floor_text)
+                await store.update_message(
+                    project_id, turn_message.current_id(), parts=current_parts
+                )
             return {
                 "stopped_reason": "room_below_floor",
             }
 
         inbound = await hooks.inbound.take(project_id, session_id, turn_id)
+        if inbound and current_parts:
+            await split_message()
         request = [*messages_list, *inbound]
         if end_note:
             request.append(HumanMessage(content=end_note))
@@ -244,14 +282,16 @@ def create_turn_graph(
         async def on_text(delta: str) -> None:
             streamed_chunks.append(delta)
             async with lock:
-                await sink.text(message_id, delta)
+                await sink.text(turn_message.current_id(), delta)
 
         async def take_back() -> None:
             """Take back the attempt's text: the stored message and its live copy (in the hub
             and the client) go back to the step's finished parts."""
             streamed_chunks.clear()
             async with lock:
-                updated = await store.update_message(project_id, message_id, parts=current_parts)
+                updated = await store.update_message(
+                    project_id, turn_message.current_id(), parts=current_parts
+                )
                 await sink.message(updated, created=False)
 
         retried_too_large = False
@@ -276,8 +316,10 @@ def create_turn_graph(
                 floor_part = TextPart(type="text", text=floor_text)
                 current_parts.append(floor_part)
                 async with lock:
-                    await sink.text(message_id, floor_text)
-                    await store.update_message(project_id, message_id, parts=current_parts)
+                    await sink.text(turn_message.current_id(), floor_text)
+                    await store.update_message(
+                        project_id, turn_message.current_id(), parts=current_parts
+                    )
                 return {
                     "stopped_reason": "room_below_floor",
                 }
@@ -305,7 +347,7 @@ def create_turn_graph(
                 # Compact the session (force compaction if turns exist before last 2; trim tool results of last 2 turns if needed)
                 all_history = await store.messages(project_id, session_id)
                 old_summary, compacted_through = await store.summary(project_id, session_id)
-                uncompacted = [m for m in all_history if m.id != message_id]
+                uncompacted = [m for m in all_history if not of_this_turn(m)]
                 compacted_idx = -1
                 if compacted_through:
                     for idx, m in enumerate(uncompacted):
@@ -353,7 +395,7 @@ def create_turn_graph(
                 summary, compacted_through = await store.summary(project_id, session_id)
                 active = await store.messages(project_id, session_id, after=compacted_through)
                 trimmed_history = history_messages(
-                    [m for m in active if m.id != message_id],
+                    [m for m in active if not of_this_turn(m)],
                     current_turn_id=turn_id,
                     trim_current_turn_tools=True,
                     model=agent.model.address,
@@ -427,7 +469,7 @@ def create_turn_graph(
             notice = f"{prefix}{REPLY_CUT_NOTICE}"
             content_str += notice
             async with lock:
-                await sink.text(message_id, notice)
+                await sink.text(turn_message.current_id(), notice)
 
         if content_str:
             current_parts.append(TextPart(type="text", text=content_str))
@@ -486,7 +528,7 @@ def create_turn_graph(
                 )
                 current_parts.append(tc_part)
                 async with lock:
-                    await sink.tool_started(message_id, tc_part)
+                    await sink.tool_started(turn_message.current_id(), tc_part)
 
             additional_kwargs = dict(reply.message.additional_kwargs)
             if tool_errors:
@@ -533,8 +575,9 @@ def create_turn_graph(
         project_id=project_id,
         session_id=session_id,
         turn_id=turn_id,
-        message_id=message_id,
+        message_id=turn_message.current_id(),
         current_parts=current_parts,
+        message=turn_message,
         lock=lock,
         update_parts=_update_parts,
         approval_store=hooks.approval_store,
